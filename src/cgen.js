@@ -301,8 +301,7 @@ function genC(ast) {
     else if (d.type === "SpawnStmt") {
       const callee = d.callee;
       if (callee.type !== "CallExpr" || callee.callee.type !== "Ident") throw new Error("C 后端暂不支持复杂 spawn——请用 h run");
-      if (callee.args.length > 0) throw new Error("C 后端暂不支持带参 spawn——请用 h run");
-      spawns.push(callee.callee.name === "main" ? "h_main" : callee.callee.name);
+      spawns.push({ fname: callee.callee.name === "main" ? "h_main" : callee.callee.name, args: callee.args });
     }
     else if (d.type === "ExprStmt") {
       const isMainCall = d.expr.type === "CallExpr" && d.expr.callee.type === "Ident" && d.expr.callee.name === "main";
@@ -320,12 +319,32 @@ function genC(ast) {
   for (const n of Object.keys(structFields)) fwdDecls.push(`typedef struct ${n} ${n};`);
   for (const n of Object.keys(classes)) fwdDecls.push(`typedef struct ${n} ${n};`);
   const typeDefs = structs.concat(genClassDecls(ast, ctx));
-  // 全局 Channel 声明 + 初始化 + spawn 入口包装（void(void*)，供 Fiber 调用）
+  // 带参 spawn：参数打包结构体（按函数签名）+ Fiber 入口 trampoline（解包 + free）
+  const topScope = new Scope(null, ctx);
+  const ctypeOf = (t) => ctx.classes[t] ? cType(t) + "*" : cType(t);
+  const spawnStructs = new Map();
+  for (const s of spawns) {
+    if (!spawnStructs.has(s.fname)) spawnStructs.set(s.fname, s.args.map(a => inferType(a, topScope)));
+  }
+  const spawnCtxDefs = [...spawnStructs].filter(([, ts]) => ts.length).map(([fname, ts]) =>
+    `typedef struct { ${ts.map((t, i) => `${ctypeOf(t)} a${i};`).join(" ")} } h_sp_ctx_${fname};`
+  ).join("\n");
+  const spawnTramps = [...spawnStructs].map(([fname, ts]) => {
+    if (!ts.length) return `static void h_task_${fname}(void* arg) { ${fname}(); }`;
+    const unpack = ts.map((_, i) => `c->a${i}`).join(", ");
+    return `static void h_task_${fname}(void* arg) { h_sp_ctx_${fname}* c = (h_sp_ctx_${fname}*)arg; ${fname}(${unpack}); free(c); }`;
+  }).join("\n");
+  const topSpawns = spawns.map((s, idx) => {
+    const ts = spawnStructs.get(s.fname);
+    if (!ts.length) return `  h_spawn(h_task_${s.fname}, NULL);`;
+    const vn = `c${idx}`;
+    const init = s.args.map((a, i) => `  ${vn}->a${i} = ${genExpr(a, topScope)};`).join("\n");
+    return `  h_sp_ctx_${s.fname}* ${vn} = (h_sp_ctx_${s.fname}*)malloc(sizeof(h_sp_ctx_${s.fname}));\n${init}\n  h_spawn(h_task_${s.fname}, ${vn});`;
+  }).join("\n");
+  // 全局 Channel 声明 + 初始化
   const globalDecls = Object.keys(globals).map(n => `static h_chan* ${n};`).join("\n");
   const globalInitFun = ["static void h_global_init(void) {",
     ...Object.keys(globals).map(n => `  ${n} = h_chan_new(${globals[n].cap});`), "}", ""].join("\n");
-  const spawnWrappers = spawns.map(f => `static void h_task_${f}(void* arg) { ${f}(); }`).join("\n");
-  const topSpawns = spawns.map(f => `  h_spawn(h_task_${f}, NULL);`).join("\n");
   const body = [
     '#include <stdio.h>',
     '#include <stdbool.h>',
@@ -356,9 +375,10 @@ function genC(ast) {
     CONCURRENCY_RUNTIME,
   ];
   const hasMain = ctx.retKinds["main"] !== undefined;
+  const spawnGlue = [spawnCtxDefs, spawnTramps].filter(Boolean).join("\n");
   return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
     errorDefs, [""], printProtos, [""], printFns, [""], classDefs, funcs,
-    spawnWrappers ? [spawnWrappers, ""] : [], globalInitFun ? [globalInitFun] : [],
+    spawnGlue ? [spawnGlue, ""] : [], globalInitFun ? [globalInitFun] : [],
     ["int main(void) {",
       "  h_global_init();",
       hasMain && ctx.retKinds["main"] === "error"

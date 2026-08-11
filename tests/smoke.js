@@ -234,6 +234,23 @@ if (require("fs").existsSync(exeY)) {
 process.chdir(cwd);
 t("yield 双后端一致性（让出调度权）", builtY === runOutY, "\n--- run ---\n" + runOutY + "\n--- build ---\n" + builtY);
 
+// 19. C 后端带参 spawn（参数打包结构体 + Fiber 入口解包）
+const spPath = path.join(ROOT, "examples", "spawn_args.hc");
+r = h(["run", spPath]);
+const runOutSP = r.out;
+t("spawn_args.hc h run 运行", r.code === 0 && runOutSP.includes("求和: 5"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "spawn_args.hc"), require("fs").readFileSync(spPath, "utf8"));
+const rSP = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "spawn_args.hc"], { encoding: "utf8" });
+const exeSP = path.join(require("os").tmpdir(), "spawn_args" + (process.platform === "win32" ? ".exe" : ""));
+let builtSP = "";
+if (require("fs").existsSync(exeSP)) {
+  const r3 = require("child_process").spawnSync(exeSP, [], { encoding: "utf8" });
+  builtSP = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("带参 spawn 双后端一致性", builtSP === runOutSP, "\n--- run ---\n" + runOutSP + "\n--- build ---\n" + builtSP);
+
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));
 

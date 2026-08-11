@@ -26,10 +26,10 @@
 - **动态块 `[T]`**：连续数据区 + 长度（`T_Array`）——数组字面量 → 复合字面量、索引 → `.data[i]`、`.len` → `.len`。
 - `h build <file>`：探测编译器 `zig cc`（自带 clang）→ `gcc` → `cc` → `clang`，编译为原生二进制；无 C 编译器时回退 `jsgen`（JS 目标）。
 - **最短往返浮点格式化**（`h_print_f64`）：%.*g 循环至往返一致——与解释器 JS 输出逐位对齐。
-- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）、`ref.hc`（ref 字段双向引用通知）、`ref_param.hc`（ref/move 参数）、`error.hc`（error 未处理即终止）、`concurrency.hc`（Fiber 协作式并发 + Channel 交替）编译后输出与 `h run` 逐行一致（smoke 断言，43 项全绿）。
+- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）、`ref.hc`（ref 字段双向引用通知）、`ref_param.hc`（ref/move 参数）、`error.hc`（error 未处理即终止）、`concurrency.hc`（Fiber 协作式并发 + Channel 交替）、`spawn_args.hc`（带参 spawn）编译后输出与 `h run` 逐行一致（smoke 断言，45 项全绿）。
 - 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）；枚举比较统一为 `类型.变体`。
 - 文件后缀：H 语言源码统一使用 `.hc`（区别于 C 头文件）。
-- 限制（编译时拒绝并提示用 `h run`）：带参 spawn、非 Channel 的 global/访问模式、非 Windows 平台并发运行时。
+- 限制（编译时拒绝并提示用 `h run`）：非 Channel 的 global/访问模式、非 Windows 平台并发运行时。
 - 环境注：Windows 下推荐 `zig cc`（Zig 自带 clang 21）；直接运行 exe 时中文输出需 UTF-8 代码页（`chcp 65001`）。
 
 ## C 目标映射（设计，待编译器环境）
@@ -56,8 +56,8 @@
   - **ref 参数 = 写透别名**：`ref T` 参数 → `T**`（指向调用者变量），函数内使用自动解引用（`(*p)->f` / `(*p)`）；实参传 `&var`；checker R3 强制实参为可写变量（消灭求值器退化路径，两端统一严格）
   - **move 参数 = 所有权转移**：`move T` 参数拥有所有权，函数退出时销毁；`foo(move x)` 后源失效（已从销毁表移除）
   - **error union**：`-> error T` → `h_err_T{ ok, val, name }`；`return error.X` / `return 值` 分别生成 ok=false/true 包装；调用 error 函数自动解包（语句表达式），未处理时打印 `❌ error.X（未处理）` 到 stderr 并以退出码 1 终止（与解释器一致）；error 入口同样检查
-  - **并发（协作式，M=1）**：Windows Fiber 协作式协程运行时（`#ifdef _WIN32`）——`spawn f()` → Fiber 入队（入口包装 `h_task_f(void*)`，原型仅无参）；`yield` → `h_yield()` 切回调度器重入队；`Channel(n)` → `h_chan`（容量缓冲 + 等待者 FIFO）；`send` 满挂起、`recv` 空挂起，调度器空转时按等待者队列唤醒——与求值器单线程调度逐行一致；全局 `Channel<T>` 声明为 `h_chan*` 并在 `h_global_init` 构造（原型仅 u64 值）；执行体生命周期归属根（主线程调度器），作用域退出不影响已入队执行体
-- 限制：带参 spawn、非 Channel 的 global（Exclusive/SharedRead）、非 Windows 平台编译时拒绝（提示用 h run）
+  - **并发（协作式，M=1）**：Windows Fiber 协作式协程运行时（`#ifdef _WIN32`）——`spawn f()` → Fiber 入队（入口包装 `h_task_f`；带参 spawn 经打包结构体 `h_sp_ctx_f` 传参、入口解包并 free）；`yield` → `h_yield()` 切回调度器重入队；`Channel(n)` → `h_chan`（容量缓冲 + 等待者 FIFO）；`send` 满挂起、`recv` 空挂起，调度器空转时按等待者队列唤醒——与求值器单线程调度逐行一致；全局 `Channel<T>` 声明为 `h_chan*` 并在 `h_global_init` 构造（原型仅 u64 值）；执行体生命周期归属根（主线程调度器），作用域退出不影响已入队执行体
+- 限制：非 Channel 的 global（Exclusive/SharedRead）、非 Windows 平台编译时拒绝（提示用 h run）
 
 ## 解释器定位
 
