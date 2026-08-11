@@ -109,7 +109,7 @@ function findCC() {
   return null;
 }
 
-function doBuild(src, file, execIt) {
+function doBuild(src, file, execIt, threads) {
   // 静态检查先行
   const r = check(src);
   if (r.errors.length > 0) {
@@ -122,7 +122,7 @@ function doBuild(src, file, execIt) {
   if (cc) {
     // C 后端：生成 C → 编译为原生二进制
     let c;
-    try { c = genC(parse(src)); }
+    try { c = genC(parse(src), threads); }
     catch (e) { console.error("❌ C 编译失败：" + e.message); return 1; }
     const cFile = path.join(process.cwd(), base + ".c");
     const exeFile = path.join(process.cwd(), base + (process.platform === "win32" ? ".exe" : ""));
@@ -199,7 +199,7 @@ function main() {
     if (cmd === "run") code = doRun(src, trace);
     else if (cmd === "check") code = doCheck(src);
     else if (cmd === "parse") doParse(src);
-    else if (cmd === "build") code = doBuild(src, file, execIt);
+    else if (cmd === "build") code = doBuild(src, file, execIt, threads);
     else { console.error("h: 未知命令 '" + cmd + "'"); console.log(HELP); process.exit(1); }
     process.exit(code);
   } catch (e) {

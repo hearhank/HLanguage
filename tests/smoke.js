@@ -218,6 +218,15 @@ if (require("fs").existsSync(exeCC)) {
 process.chdir(cwd);
 t("并发双后端一致性（Channel 交替）", builtCC === runOutCC, "\n--- run ---\n" + runOutCC + "\n--- build ---\n" + builtCC);
 
+// 17b. C 后端 M:N 多线程（--threads 2）：关键行齐全 + 退出 0（顺序不保证，SPEC 04）
+process.chdir(require("os").tmpdir());
+const rMT = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "concurrency.hc", "--threads", "2", "--exec"], { encoding: "utf8", timeout: 30000 });
+const mtOut = (rMT.stdout || "") + (rMT.stderr || "");
+process.chdir(cwd);
+t("M:N 多线程（C 后端）完成且关键行齐全",
+  rMT.status === 0 && mtOut.includes("生产者启动") && mtOut.includes("生产者完成") && mtOut.includes("消费者启动") && mtOut.includes("消费者完成") && mtOut.includes("收到 1") && mtOut.includes("收到 3"),
+  "status=" + rMT.status + "\n" + mtOut.slice(0, 400));
+
 // 18. C 后端 yield：让出调度权（与 eval 单线程逐字一致）
 const yieldSrc = "fun w() {\n    print(\"开始\")\n    yield\n    print(\"继续\")\n}\nfun x() {\n    print(\"另一执行体\")\n}\nspawn w()\nspawn x()\n";
 r = h(["run"], yieldSrc);

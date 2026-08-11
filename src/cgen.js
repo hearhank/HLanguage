@@ -5,132 +5,296 @@
 
 const { parse } = require("./parser");
 
-/* Windows Fiber 协作式协程运行时（M=1：与求值器单线程调度语义一致） */
-const CONCURRENCY_RUNTIME = [
-  '/* ---------- 并发运行时：Windows Fiber 协作式协程（M=1，对齐求值器单线程调度） ---------- */',
-  '#ifdef _WIN32',
-  '#include <windows.h>',
-  'typedef struct h_task h_task;',
-  'struct h_task {',
-  '  void* fiber;',
-  '  h_task* next;',
-  '  int suspended;',
-  '  int done;',
-  '  void* send_val;',
-  '  void* recv_val;',
-  '  void (*entry)(void*);',
-  '  void* arg;',
-  '};',
-  'typedef struct h_chan {',
-  '  int cap, count, head, tail;',
-  '  void** buf;',
-  '  h_task* wait_send;',
-  '  h_task* wait_recv;',
-  '} h_chan;',
-  '',
-  'static h_task* g_ready_head = NULL;',
-  'static h_task* g_ready_tail = NULL;',
-  'static void* g_sched_fiber = NULL;',
-  'static h_task* g_cur = NULL;',
-  'static h_chan** g_chans = NULL;',
-  'static int g_chan_count = 0, g_chan_cap = 0;',
-  '',
-  'static void h_chan_register(h_chan* c) {',
-  '  if (g_chan_count == g_chan_cap) {',
-  '    g_chan_cap = g_chan_cap ? g_chan_cap * 2 : 8;',
-  '    g_chans = (h_chan**)realloc(g_chans, g_chan_cap * sizeof(h_chan*));',
-  '  }',
-  '  g_chans[g_chan_count++] = c;',
-  '}',
-  'static h_chan* h_chan_new(int cap) {',
-  '  h_chan* c = (h_chan*)malloc(sizeof(h_chan));',
-  '  c->cap = cap < 1 ? 1 : cap; c->count = 0; c->head = 0; c->tail = 0;',
-  '  c->buf = (void**)malloc(sizeof(void*) * c->cap);',
-  '  c->wait_send = NULL; c->wait_recv = NULL;',
-  '  h_chan_register(c);',
-  '  return c;',
-  '}',
-  'static void h_ready_push(h_task* t) {',
-  '  t->next = NULL;',
-  '  if (g_ready_tail) g_ready_tail->next = t; else g_ready_head = t;',
-  '  g_ready_tail = t;',
-  '}',
-  'static h_task* h_ready_pop(void) {',
-  '  h_task* t = g_ready_head;',
-  '  if (t) { g_ready_head = t->next; if (!g_ready_head) g_ready_tail = NULL; }',
-  '  return t;',
-  '}',
-  'static void h_wait_push(h_task** head, h_task* t) {',
-  '  t->next = NULL;',
-  '  if (!*head) { *head = t; return; }',
-  '  h_task* p = *head;',
-  '  while (p->next) p = p->next;',
-  '  p->next = t;',
-  '}',
-  'static h_task* h_wait_pop(h_task** head) {',
-  '  h_task* t = *head;',
-  '  if (t) *head = t->next;',
-  '  return t;',
-  '}',
-  'static void WINAPI h_task_enter(void* param) {',
-  '  h_task* t = (h_task*)param;',
-  '  t->entry(t->arg);',
-  '  t->done = 1;',
-  '  SwitchToFiber(g_sched_fiber);',
-  '}',
-  'static void h_yield(void) { SwitchToFiber(g_sched_fiber); }',
-  'static int h_chan_send(h_chan* c, void* v) {',
-  '  if (c->count < c->cap) { c->buf[c->tail] = v; c->tail = (c->tail + 1) % c->cap; c->count++; return 1; }',
-  '  g_cur->suspended = 1; g_cur->send_val = v;',
-  '  h_wait_push(&c->wait_send, g_cur);',
-  '  SwitchToFiber(g_sched_fiber);',
-  '  return 1;',
-  '}',
-  'static void* h_chan_recv(h_chan* c) {',
-  '  if (c->count > 0) { void* v = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--; return v; }',
-  '  g_cur->suspended = 2;',
-  '  h_wait_push(&c->wait_recv, g_cur);',
-  '  SwitchToFiber(g_sched_fiber);',
-  '  return g_cur->recv_val;',
-  '}',
-  'static void h_spawn(void (*entry)(void*), void* arg) {',
-  '  h_task* t = (h_task*)malloc(sizeof(h_task));',
-  '  t->entry = entry; t->arg = arg; t->done = 0; t->suspended = 0; t->next = NULL;',
-  '  t->fiber = CreateFiber(0, h_task_enter, t);',
-  '  h_ready_push(t);',
-  '}',
-  'static void h_sched_run(void) {',
-  '  if (!g_sched_fiber) g_sched_fiber = ConvertThreadToFiber(NULL);',
-  '  while (1) {',
-  '    h_task* t;',
-  '    while ((t = h_ready_pop()) != NULL) {',
-  '      g_cur = t;',
-  '      SwitchToFiber(t->fiber);',
-  '      g_cur = NULL;',
-  '      if (t->done) { DeleteFiber(t->fiber); free(t); continue; }',
-  '      if (!t->suspended) h_ready_push(t);',
-  '    }',
-  '    for (int i = 0; i < g_chan_count; i++) {',
-  '      h_chan* c = g_chans[i];',
-  '      while (c->wait_recv && c->count > 0) {',
-  '        h_task* w = h_wait_pop(&c->wait_recv);',
-  '        w->recv_val = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--;',
-  '        w->suspended = 0;',
-  '        h_ready_push(w);',
-  '      }',
-  '      while (c->wait_send && c->count < c->cap) {',
-  '        h_task* w = h_wait_pop(&c->wait_send);',
-  '        c->buf[c->tail] = w->send_val; c->tail = (c->tail + 1) % c->cap; c->count++;',
-  '        w->suspended = 0;',
-  '        h_ready_push(w);',
-  '      }',
-  '    }',
-  '    if (!g_ready_head) break;',
-  '  }',
-  '}',
-  '#endif',
-  '',
-].join('\n');
+/* Windows Fiber 协程 + M:N worker 线程运行时（H_THREADS=1 时与求值器单线程调度一致） */
+const CONCURRENCY_RUNTIME = `
+/* ---------- 并发运行时：Windows Fiber 协程 + M:N worker 线程 ---------- */
+#ifdef _WIN32
+#include <windows.h>
+#ifndef H_THREADS
+#define H_THREADS 1
+#endif
+typedef struct h_task h_task;
+struct h_task {
+  void* fiber;
+  h_task* next;
+  int suspended;
+  int done;
+  void* send_val;
+  void* recv_val;
+  void (*entry)(void*);
+  void* arg;
+  struct h_worker* owner;
+};
+typedef struct h_wait h_wait;
+struct h_wait {
+  int type;
+  h_task* task;
+  void* value;
+  h_wait* next;
+};
+typedef struct h_spawn_req {
+  void (*entry)(void*);
+  void* arg;
+  struct h_spawn_req* next;
+} h_spawn_req;
+typedef struct h_chan {
+  int cap, count, head, tail;
+  void** buf;
+  CRITICAL_SECTION lock;
+  h_wait* waits;
+} h_chan;
+typedef struct h_worker {
+  void* sched_fiber;
+  HANDLE thread;
+  h_task* ready_head;
+  h_task* ready_tail;
+  struct h_spawn_req* spawn_head;
+  struct h_spawn_req* spawn_tail;
+  CRITICAL_SECTION lock;
+  CONDITION_VARIABLE cv;
+  int shutdown;
+} h_worker;
+
+static CRITICAL_SECTION g_out_lock;
+static h_worker* g_workers = NULL;
+static int g_nworkers = H_THREADS;
+static volatile LONG g_active = 0;
+static int g_spawn_round = 0;
+#if H_THREADS == 1
+static h_chan** g_chans = NULL;
+static int g_chan_count = 0, g_chan_cap = 0;
+#endif
+
+static h_task* h_cur_task(void) { return (h_task*)GetFiberData(); }
+
+static void h_print_lock(void) { EnterCriticalSection(&g_out_lock); }
+static void h_print_unlock(void) { LeaveCriticalSection(&g_out_lock); }
+static void h_task_started(void) { InterlockedIncrement(&g_active); }
+static void h_task_finished(void) {
+  if (InterlockedDecrement(&g_active) == 0) {
+    for (int i = 0; i < g_nworkers; i++) {
+      EnterCriticalSection(&g_workers[i].lock);
+      g_workers[i].shutdown = 1;
+      LeaveCriticalSection(&g_workers[i].lock);
+      WakeAllConditionVariable(&g_workers[i].cv);
+    }
+  }
+}
+static h_chan* h_chan_new(int cap) {
+  h_chan* c = (h_chan*)malloc(sizeof(h_chan));
+  c->cap = cap < 1 ? 1 : cap; c->count = 0; c->head = 0; c->tail = 0;
+  c->buf = (void**)malloc(sizeof(void*) * c->cap);
+  InitializeCriticalSection(&c->lock);
+  c->waits = NULL;
+#if H_THREADS == 1
+  if (g_chan_count == g_chan_cap) {
+    g_chan_cap = g_chan_cap ? g_chan_cap * 2 : 8;
+    g_chans = (h_chan**)realloc(g_chans, g_chan_cap * sizeof(h_chan*));
+  }
+  g_chans[g_chan_count++] = c;
+#endif
+  return c;
+}
+/* 唤醒最早等待者（1=send 等待者被腾位，2=recv 等待者被供值）；须持 channel 锁调用 */
+static void h_chan_wake(h_chan* c, int type) {
+  h_wait** pp = &c->waits;
+  while (*pp) {
+    if ((*pp)->type == type) {
+      h_wait* w = *pp;
+      *pp = w->next;
+      h_task* wt = w->task;
+      if (type == 1) { c->buf[c->tail] = w->value; c->tail = (c->tail + 1) % c->cap; c->count++; }
+      else { wt->recv_val = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--; }
+      free(w);
+      wt->suspended = 0;
+      h_worker* wker = wt->owner;
+      EnterCriticalSection(&wker->lock);
+      wt->next = NULL;
+      if (wker->ready_tail) wker->ready_tail->next = wt; else wker->ready_head = wt;
+      wker->ready_tail = wt;
+      LeaveCriticalSection(&wker->lock);
+      WakeConditionVariable(&wker->cv);
+      return;
+    }
+    pp = &(*pp)->next;
+  }
+}
+static void WINAPI h_task_enter(void* param) {
+  h_task* t = (h_task*)param;
+  t->entry(t->arg);
+  t->done = 1;
+  h_task_finished();
+  SwitchToFiber(t->owner->sched_fiber);
+}
+static void h_yield(void) { SwitchToFiber(h_cur_task()->owner->sched_fiber); }
+static int h_chan_has_wait(h_chan* c, int type) {
+  for (h_wait* w = c->waits; w; w = w->next) if (w->type == type) return 1;
+  return 0;
+}
+static int h_chan_send(h_chan* c, void* v) {
+  h_task* t = h_cur_task();
+  EnterCriticalSection(&c->lock);
+  if (c->count < c->cap) {
+    c->buf[c->tail] = v; c->tail = (c->tail + 1) % c->cap; c->count++;
+#if H_THREADS > 1
+    h_chan_wake(c, 2);
+#endif
+    LeaveCriticalSection(&c->lock);
+    return 1;
+  }
+  h_wait* w = (h_wait*)malloc(sizeof(h_wait));
+  w->type = 1; w->task = t; w->value = v; w->next = NULL;
+  h_wait** pp = &c->waits;
+  while (*pp) pp = &(*pp)->next;
+  *pp = w;
+  t->suspended = 1;
+  LeaveCriticalSection(&c->lock);
+  SwitchToFiber(t->owner->sched_fiber);
+  return 1;
+}
+static void* h_chan_recv(h_chan* c) {
+  h_task* t = h_cur_task();
+  EnterCriticalSection(&c->lock);
+  if (c->count > 0) {
+    void* v = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--;
+#if H_THREADS > 1
+    h_chan_wake(c, 1);
+#endif
+    LeaveCriticalSection(&c->lock);
+    return v;
+  }
+  h_wait* w = (h_wait*)malloc(sizeof(h_wait));
+  w->type = 2; w->task = t; w->value = NULL; w->next = NULL;
+  h_wait** pp = &c->waits;
+  while (*pp) pp = &(*pp)->next;
+  *pp = w;
+  t->suspended = 2;
+  LeaveCriticalSection(&c->lock);
+  SwitchToFiber(t->owner->sched_fiber);
+  return t->recv_val;
+}
+/* spawn：请求投递到 worker（round-robin）；fiber 须在创建线程运行，故由 worker 线程自建 */
+static void h_spawn(void (*entry)(void*), void* arg) {
+  h_worker* w = &g_workers[g_spawn_round++ % g_nworkers];
+  h_spawn_req* r = (h_spawn_req*)malloc(sizeof(h_spawn_req));
+  r->entry = entry; r->arg = arg; r->next = NULL;
+  h_task_started();
+  EnterCriticalSection(&w->lock);
+  if (w->spawn_tail) w->spawn_tail->next = r; else w->spawn_head = r;
+  w->spawn_tail = r;
+  LeaveCriticalSection(&w->lock);
+  WakeConditionVariable(&w->cv);
+}
+/* 调度循环：处理 spawn 请求（本线程建 fiber）→ 跑就绪 fiber；挂起者等唤醒、yield 者重入队 */
+static void h_sched_loop(h_worker* w) {
+#if H_THREADS == 1
+  /* 单线程：与求值器单线程调度逐字一致（FIFO + 空转延迟唤醒） */
+  while (1) {
+    EnterCriticalSection(&w->lock);
+    h_spawn_req* r = w->spawn_head;
+    w->spawn_head = w->spawn_tail = NULL;
+    h_task* newt = NULL, *newtail = NULL;
+    while (r) {
+      h_spawn_req* nx = r->next;
+      h_task* t = (h_task*)malloc(sizeof(h_task));
+      t->entry = r->entry; t->arg = r->arg; t->done = 0; t->suspended = 0; t->next = NULL;
+      t->owner = w;
+      t->fiber = CreateFiber(0, h_task_enter, t);
+      if (newtail) newtail->next = t; else newt = t;
+      newtail = t;
+      free(r);
+      r = nx;
+    }
+    if (w->ready_tail) w->ready_tail->next = newt; else w->ready_head = newt;
+    if (newtail) w->ready_tail = newtail;
+    LeaveCriticalSection(&w->lock);
+    while (1) {
+      EnterCriticalSection(&w->lock);
+      h_task* t = w->ready_head;
+      if (t) { w->ready_head = t->next; if (!w->ready_head) w->ready_tail = NULL; }
+      LeaveCriticalSection(&w->lock);
+      if (!t) break;
+      SwitchToFiber(t->fiber);
+      if (t->done) { DeleteFiber(t->fiber); free(t); continue; }
+      if (!t->suspended) {
+        EnterCriticalSection(&w->lock);
+        t->next = NULL;
+        if (w->ready_tail) w->ready_tail->next = t; else w->ready_head = t;
+        w->ready_tail = t;
+        LeaveCriticalSection(&w->lock);
+      }
+    }
+    /* 空转：延迟唤醒（旧版语义：recv 等待者先、send 等待者后） */
+    int woke = 0;
+    for (int i = 0; i < g_chan_count; i++) {
+      h_chan* c = g_chans[i];
+      while (h_chan_has_wait(c, 2) && c->count > 0) { h_chan_wake(c, 2); woke = 1; }
+      while (h_chan_has_wait(c, 1) && c->count < c->cap) { h_chan_wake(c, 1); woke = 1; }
+    }
+    if (!woke && !w->spawn_head) break;
+  }
+#else
+  /* 多线程：即时唤醒（send/recv 成功即唤醒跨线程等待者），空转 condvar 等待 */
+  while (1) {
+    EnterCriticalSection(&w->lock);
+    while (!w->ready_head && !w->spawn_head && !w->shutdown) SleepConditionVariableCS(&w->cv, &w->lock, INFINITE);
+    h_spawn_req* r = w->spawn_head;
+    w->spawn_head = w->spawn_tail = NULL;
+    h_task* newt = NULL, *newtail = NULL;
+    while (r) {
+      h_spawn_req* nx = r->next;
+      h_task* t = (h_task*)malloc(sizeof(h_task));
+      t->entry = r->entry; t->arg = r->arg; t->done = 0; t->suspended = 0; t->next = NULL;
+      t->owner = w;
+      t->fiber = CreateFiber(0, h_task_enter, t);
+      if (newtail) newtail->next = t; else newt = t;
+      newtail = t;
+      free(r);
+      r = nx;
+    }
+    if (w->ready_tail) w->ready_tail->next = newt; else w->ready_head = newt;
+    if (newtail) w->ready_tail = newtail;
+    if (!w->ready_head) { LeaveCriticalSection(&w->lock); break; }
+    h_task* t = w->ready_head;
+    w->ready_head = t->next;
+    if (!w->ready_head) w->ready_tail = NULL;
+    LeaveCriticalSection(&w->lock);
+    SwitchToFiber(t->fiber);
+    if (t->done) { DeleteFiber(t->fiber); free(t); continue; }
+    if (!t->suspended) {
+      EnterCriticalSection(&w->lock);
+      t->next = NULL;
+      if (w->ready_tail) w->ready_tail->next = t; else w->ready_head = t;
+      w->ready_tail = t;
+      LeaveCriticalSection(&w->lock);
+    }
+  }
+#endif
+}
+static DWORD WINAPI h_worker_main(void* param) {
+  h_worker* w = (h_worker*)param;
+  w->sched_fiber = ConvertThreadToFiber(NULL);
+  h_sched_loop(w);
+  return 0;
+}
+static void h_runtime_init(void) {
+  InitializeCriticalSection(&g_out_lock);
+  g_nworkers = H_THREADS < 1 ? 1 : H_THREADS;
+  g_workers = (h_worker*)calloc(g_nworkers, sizeof(h_worker));
+  for (int i = 0; i < g_nworkers; i++) {
+    InitializeCriticalSection(&g_workers[i].lock);
+    InitializeConditionVariable(&g_workers[i].cv);
+    g_workers[i].thread = NULL;
+  }
+  for (int i = 1; i < g_nworkers; i++) {
+    g_workers[i].thread = CreateThread(NULL, 0, h_worker_main, &g_workers[i], 0, NULL);
+  }
+}
+static void h_runtime_join(void) {
+  for (int i = 1; i < g_nworkers; i++) WaitForSingleObject(g_workers[i].thread, INFINITE);
+}
+#endif
+`;
 
 /* 字节化（to_bytes/from_bytes）：可逆自描述 JSON（与求值器 JSON.stringify 逐字节一致） */
 /* 字节化（to_bytes/from_bytes）：可逆自描述 JSON（与求值器 JSON.stringify 逐字节一致） */
@@ -349,7 +513,7 @@ function computeClassMethods(classes) {
   return out;
 }
 
-function genC(ast) {
+function genC(ast, threads) {
   const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), paramKinds = {}, retKinds = {}, globals = {};
   const spawns = [];
   const collectTypes = (t) => {
@@ -510,6 +674,7 @@ function genC(ast) {
   const globalInitFun = ["static void h_global_init(void) {",
     ...Object.keys(globals).map(n => `  ${n} = h_chan_new(${globals[n].cap});`), "}", ""].join("\n");
   const body = [
+    threads && threads > 1 ? `#define H_THREADS ${threads}` : "",
     '#include <stdio.h>',
     '#include <stdbool.h>',
     '#include <stdint.h>',
@@ -540,18 +705,29 @@ function genC(ast) {
     JSON_RUNTIME,
   ];
   const hasMain = ctx.retKinds["main"] !== undefined;
+  const mainErrT = hasMain && ctx.retKinds["main"] === "error" ? shortName(ctx.rets["main"] || "void") : null;
+  const mainEntry = [
+    `static void WINAPI h_task_main_entry(void* arg) {`,
+    hasMain ? (mainErrT
+      ? `  h_err_${mainErrT} _he = h_main(); if (!_he.ok) { fprintf(stderr, "\\u274c error.%s（未处理）\\n", _he.name); h_task_finished(); exit(1); }`
+      : "  h_main();")
+      : "",
+    topSpawns,
+    `  h_task_finished();`,
+    `}`,
+  ].join("\n");
   const spawnGlue = [spawnCtxDefs, spawnTramps].filter(Boolean).join("\n");
   return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
     errorDefs, [""], printProtos, [""], printFns, [""], classDefs,
     bytesFns ? [bytesFns.join("\n"), ""] : [], funcs,
-    spawnGlue ? [spawnGlue, ""] : [], globalInitFun ? [globalInitFun] : [],
+    spawnGlue ? [spawnGlue, ""] : [], mainEntry ? [mainEntry, ""] : [], globalInitFun ? [globalInitFun] : [],
     ["int main(void) {",
+      "  h_runtime_init();",
       "  h_global_init();",
-      hasMain && ctx.retKinds["main"] === "error"
-        ? `  h_err_${shortName(ctx.rets["main"] || "void")} _he = h_main(); if (!_he.ok) { fprintf(stderr, "\\u274c error.%s（未处理）\\n", _he.name); return 1; }`
-        : hasMain ? "  h_main();" : "",
-      topSpawns,
-      "  h_sched_run();",
+      "  g_workers[0].sched_fiber = ConvertThreadToFiber(NULL);",
+      "  h_spawn(h_task_main_entry, NULL);",
+      "  h_sched_loop(&g_workers[0]);",
+      "  h_runtime_join();",
       "  return 0;", "}", ""]).join("\n");
 }
 
@@ -1046,7 +1222,7 @@ function genPrint(args, scope) {
     else parts.push(`printf("%s", ${code});`);
   }
   parts.push('printf("\\n");');
-  return parts.join("\n  ");
+  return "h_print_lock();\n  " + parts.join("\n  ") + "\n  h_print_unlock();";
 }
 
 /* 数组字面量 → 复合字面量（可强制元素类型：空数组/字段类型已知时） */
