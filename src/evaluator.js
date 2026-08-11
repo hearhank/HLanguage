@@ -707,12 +707,19 @@ class Evaluator {
       for (const [k, fv] of Object.entries(x.__fields)) out.__fields[k] = clean(fv);
       return out;
     };
-    const json = JSON.stringify(clean(v));
+    const body = clean(v);
+    // 格式版本字段：顶层对象带 __ver:1（块/数组等非对象数据不带，原型）
+    const payload = body && typeof body === "object" && !Array.isArray(body) ? { __ver: 1, ...body } : body;
+    const json = JSON.stringify(payload);
     this.event("to_bytes", { val: valueToStr(v), bytes: json.length });
     return json;
   }
   fromBytes(s) {
     const data = JSON.parse(s);
+    // 格式版本字段：顶层 __ver（缺失视为 v1，向后兼容旧数据）
+    if (data && typeof data === "object" && !Array.isArray(data) && data.__ver !== undefined && data.__ver !== 1) {
+      this.rerr("不支持的字节格式版本 " + data.__ver, null);
+    }
     const revive = (x) => {
       if (x && typeof x === "object" && x.__shape) {
         const fields = {};

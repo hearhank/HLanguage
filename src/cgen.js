@@ -606,16 +606,16 @@ function tbValue(t, e, ctx) {
   if (t === "f64" || t === "u64") return `h_sb_num(b, ${e});`;
   if (t === "bool") return `h_sb_puts(b, (${e}) ? \"true\" : \"false\");`;
   if (t === "Str") return `h_sb_json_str(b, ${e});`;
-  if (t.startsWith("[") && t.endsWith("]")) return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b);`;
-  if (ctx.classes[t]) return `if (${e}) h_tb_${t}(${e}, b); else h_sb_puts(b, \"null\");`;
-  if (ctx.structs[t]) return `h_tb_${t}(&${e}, b);`;
-  if (ctx.enums[t]) return `h_tb_${t}(${e}, b);`;
+  if (t.startsWith("[") && t.endsWith("]")) return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b, 0);`;
+  if (ctx.classes[t]) return `if (${e}) h_tb_${t}(${e}, b, 0); else h_sb_puts(b, \"null\");`;
+  if (ctx.structs[t]) return `h_tb_${t}(&${e}, b, 0);`;
+  if (ctx.enums[t]) return `h_tb_${t}(${e}, b, 0);`;
   return `h_sb_puts(b, \"null\");`;
 }
 function genTB(name, shape, fields, ctx) {
   const L = [];
-  L.push(`static void h_tb_${name}(const ${name}* p, h_strbuf* b) {`);
-  L.push(`  h_sb_puts(b, \"{\\\"__shape\\\":\\\"${shape}\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__fields\\\":{\");`);
+  L.push(`static void h_tb_${name}(const ${name}* p, h_strbuf* b, int top) {`);
+  L.push(`  h_sb_puts(b, top ? "{\\\"__ver\\\":1,\\\"__shape\\\":\\\"${shape}\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__fields\\\":{" : "{\\\"__shape\\\":\\\"${shape}\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__fields\\\":{");`);
   fields.forEach((f, i) => {
     if (i) L.push(`  h_sb_puts(b, \",\");`);
     L.push(`  h_sb_puts(b, \"\\\"${f.name}\\\":\");`);
@@ -628,14 +628,14 @@ function genTB(name, shape, fields, ctx) {
 function genTBArray(elem, ctx) {
   const an = shortName(elem) + "_Array";
   const el = tbValue(elem, "a->data[i]", ctx);
-  return `static void h_tb_${an}(const ${an}* a, h_strbuf* b) {\n  h_sb_char(b, '[');\n  for (unsigned long long i = 0; i < a->len; i++) {\n    if (i) h_sb_char(b, ',');\n    ${el}\n  }\n  h_sb_char(b, ']');\n}`;
+  return `static void h_tb_${an}(const ${an}* a, h_strbuf* b, int top) {\n  h_sb_char(b, '[');\n  for (unsigned long long i = 0; i < a->len; i++) {\n    if (i) h_sb_char(b, ',');\n    ${el}\n  }\n  h_sb_char(b, ']');\n}`;
 }
 function genTBEnum(name, variants) {
   const cases = variants.map(v => `    case ${name}_${v}: h_sb_puts(b, \"${v}\"); break;`).join("\n");
-  return `static void h_tb_${name}(${name} v, h_strbuf* b) {\n  h_sb_puts(b, \"{\\\"__shape\\\":\\\"enum\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__variant\\\":\\\"\");\n  switch (v) {\n${cases}\n  }\n  h_sb_puts(b, \"\\\"}\");\n}`;
+  return `static void h_tb_${name}(${name} v, h_strbuf* b, int top) {\n  h_sb_puts(b, \"{\\\"__shape\\\":\\\"enum\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__variant\\\":\\\"\");\n  switch (v) {\n${cases}\n  }\n  h_sb_puts(b, \"\\\"}\");\n}`;
 }
 function genToBytesEntry(name, sig) {
-  return `static char* h_to_bytes_${name}(${sig}) { h_strbuf b = {0}; h_tb_${name}(p, &b); return h_sb_done(&b); }`;
+  return `static char* h_to_bytes_${name}(${sig}) { h_strbuf b = {0}; h_tb_${name}(p, &b, 1); return h_sb_done(&b); }`;
 }
 function revValue(t, fname, ctx) {
   if (t === "f64") return `h_jnum(F, \"${fname}\")`;
@@ -693,7 +693,7 @@ function genRevEnum(name, variants) {
   return L.join("\n");
 }
 function genFromBytes(name, retT) {
-  return `static ${retT} h_from_bytes_${name}(const char* s) {\n  const char* p = s;\n  h_json* j = h_json_parse_value(&p);\n  ${retT} r = h_jrev_${name}(j);\n  h_json_free(j);\n  return r;\n}`;
+  return `static ${retT} h_from_bytes_${name}(const char* s) {\n  const char* p = s;\n  h_json* j = h_json_parse_value(&p);\n  h_json* vv = h_json_find(j, \"__ver\");\n  if (vv && vv->kind == 2 && vv->num > 1) { fprintf(stderr, \"\\u274c 不支持的字节格式版本 %.0f\\n\", vv->num); exit(1); }\n  ${retT} r = h_jrev_${name}(j);\n  h_json_free(j);\n  return r;\n}`;
 }
 
 /* ---------- class（树）：构造/释放/引用通知 + 方法（typedef 见 genClassDecls） ---------- */

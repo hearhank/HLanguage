@@ -268,6 +268,19 @@ if (require("fs").existsSync(exeBY)) {
 process.chdir(cwd);
 t("字节化双后端一致性（JSON 逐字节）", builtBY === runOutBY, "\n--- run ---\n" + runOutBY + "\n--- build ---\n" + builtBY);
 
+// 20b. 字节格式版本字段（白盒：语言层无法构造含引号的 JSON 字面量）
+const { Evaluator } = require(path.join(ROOT, "src", "evaluator.js"));
+const { parse } = require(path.join(ROOT, "src", "parser.js"));
+const evW = new Evaluator(parse("struct P { x: f64 }"));
+evW.register();
+const legacy = evW.fromBytes('{"__shape":"block","__type":"P","__fields":{"x":5}}');
+t("旧格式字节（无 __ver）兼容 v1", legacy && legacy.__fields && legacy.__fields.x === 5, "");
+const newBytes = evW.toBytes(legacy);
+t("to_bytes 顶层带 __ver:1", newBytes.includes('"__ver":1'), newBytes.slice(0, 60));
+let verErr = "";
+try { evW.fromBytes('{"__ver":99,"__shape":"block","__type":"P","__fields":{"x":1}}'); } catch (e) { verErr = e.msg || ""; }
+t("未知字节格式版本报错", verErr.includes("不支持的字节格式版本 99"), verErr);
+
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));
 

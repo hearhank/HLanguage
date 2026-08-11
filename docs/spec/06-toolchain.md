@@ -57,7 +57,7 @@
   - **move 参数 = 所有权转移**：`move T` 参数拥有所有权，函数退出时销毁；`foo(move x)` 后源失效（已从销毁表移除）
   - **error union**：`-> error T` → `h_err_T{ ok, val, name }`；`return error.X` / `return 值` 分别生成 ok=false/true 包装；调用 error 函数自动解包（语句表达式），未处理时打印 `❌ error.X（未处理）` 到 stderr 并以退出码 1 终止（与解释器一致）；error 入口同样检查
   - **并发（协作式，M=1）**：Windows Fiber 协作式协程运行时（`#ifdef _WIN32`）——`spawn f()` → Fiber 入队（入口包装 `h_task_f`；带参 spawn 经打包结构体 `h_sp_ctx_f` 传参、入口解包并 free）；`yield` → `h_yield()` 切回调度器重入队；`Channel(n)` → `h_chan`（容量缓冲 + 等待者 FIFO）；`send` 满挂起、`recv` 空挂起，调度器空转时按等待者队列唤醒——与求值器单线程调度逐行一致；全局 `Channel<T>` 声明为 `h_chan*` 并在 `h_global_init` 构造（原型仅 u64 值）；执行体生命周期归属根（主线程调度器），作用域退出不影响已入队执行体
-  - **字节化（to_bytes/from_bytes）**：可逆自描述 JSON（与求值器 `JSON.stringify` 逐字节一致）——per-type 生成 `h_tb_T`（序列化，最短往返数字、`\x` 转义字符串）+ `h_jrev_T`（反序列化，递归重建）+ `h_to_bytes_T`/`h_from_bytes_T` 入口；`x.to_bytes()` → 字符串，`Type.from_bytes(s)` → 恢复实例（ref 字段经 setter 重新注册）；块=连续数据直接映射、树=序列化压平
+  - **字节化（to_bytes/from_bytes）**：可逆自描述 JSON（与求值器 `JSON.stringify` 逐字节一致）——per-type 生成 `h_tb_T`（序列化，最短往返数字、`\x` 转义字符串）+ `h_jrev_T`（反序列化，递归重建）+ `h_to_bytes_T`/`h_from_bytes_T` 入口；**顶层带格式版本字段 `"__ver":1`**（未知版本报错、缺失视为 v1 兼容旧数据）；`x.to_bytes()` → 字符串，`Type.from_bytes(s)` → 恢复实例（ref 字段经 setter 重新注册）；块=连续数据直接映射、树=序列化压平
 - 限制：非 Channel 的 global（Exclusive/SharedRead）、非 Windows 平台编译时拒绝（提示用 h run）
 
 ## 解释器定位
