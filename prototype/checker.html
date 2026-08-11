@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>H 原型 #4 · 语义检查器（可丢弃）</title>
+<style>
+  :root { --accent:#2f6fed; --bg:#f7f8fa; --card:#fff; --line:#e3e6eb; --ok:#1a9e5c; --warn:#d64545; --muted:#7a8494; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:#1c2430; padding:24px; line-height:1.55; }
+  header { max-width:1100px; margin:0 auto 16px; }
+  h1 { font-size:22px; }
+  header p { color:var(--muted); margin-top:6px; font-size:14px; }
+  main { max-width:1100px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  section h2 { font-size:15px; margin-bottom:10px; color:#33404f; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:820px){ .cols{grid-template-columns:1fr;} }
+  textarea { width:100%; height:300px; font-family:ui-monospace,Consolas,monospace; font-size:12px; border:1px solid var(--line); border-radius:8px; padding:10px; resize:vertical; background:#fbfcfe; }
+  button { font:inherit; font-size:13px; cursor:pointer; border:1px solid #c9d2dd; background:#fff; color:#24303d; border-radius:6px; padding:4px 12px; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.primary:hover { background:#2558c4; color:#fff; }
+  .toolbar { display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap; }
+  .toolbar .hint { font-size:12px; color:var(--muted); }
+  .badge { font-size:11px; border-radius:4px; padding:1px 6px; background:#eef0f4; color:#5a6572; }
+  .badge.warn { background:#fde8e8; color:var(--warn); }
+  .errlist { font-size:12px; max-height:340px; overflow-y:auto; }
+  .errlist table { width:100%; border-collapse:collapse; }
+  .errlist th, .errlist td { text-align:left; padding:5px 8px; border-bottom:1px solid #eef1f5; }
+  .errlist th { color:var(--muted); font-weight:600; font-size:11px; }
+  .errlist .rule { font-family:ui-monospace,Consolas,monospace; color:var(--warn); font-weight:600; white-space:nowrap; }
+  .errlist .loc { font-family:ui-monospace,Consolas,monospace; color:var(--muted); white-space:nowrap; }
+  .empty { color:var(--muted); font-size:13px; }
+  .types { font-size:12px; max-height:340px; overflow-y:auto; }
+  .types .t { border:1px solid var(--line); border-radius:6px; padding:5px 9px; margin-bottom:5px; background:#fbfcfe; }
+  .types .t b { color:#1b5fc4; }
+  .banner { font-size:13px; border-radius:8px; padding:10px 14px; display:none; }
+  .banner.show { display:block; }
+  .banner.ok { background:#e7f6ee; color:var(--ok); }
+  .banner.err { background:#fde8e8; color:var(--warn); }
+  .banner code { font-family:ui-monospace,Consolas,monospace; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>H 原型 #4 · 语义检查器</h1>
+  <p>验证设计规则能否静态检查：<b>块只含块</b>、<b>写指针需可写源</b>、<b>只读不能写</b>、<b>接口实现</b>、<b>全局需模式</b>、<b>move 后失效</b>。下方"违规用例"按钮演示每种规则的拦截。</p>
+</header>
+
+<main>
+  <section>
+    <h2>源码</h2>
+    <div class="toolbar">
+      <button class="primary" id="check-btn">解析 + 检查</button>
+      <button id="reset-btn">恢复示例</button>
+      <span class="hint">违规用例：</span>
+      <button class="badge" data-case="r1">R1 块含引用</button>
+      <button class="badge" data-case="r1b">R1b 块含树</button>
+      <button class="badge" data-case="r2">R2 ref 字段指块</button>
+      <button class="badge" data-case="r3">R3 只读源 ref</button>
+      <button class="badge" data-case="r4">R4 只读写</button>
+      <button class="badge" data-case="r5">R5 未定义类型</button>
+      <button class="badge" data-case="r6">R6 接口未实现</button>
+      <button class="badge" data-case="r7">R7 未定义变量</button>
+      <button class="badge" data-case="r8">R8 全局无模式</button>
+      <button class="badge" data-case="r9">R9 move 后使用</button>
+    </div>
+    <textarea id="src" spellcheck="false"></textarea>
+  </section>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="cols">
+    <section>
+      <h2>检查结果（静态规则）</h2>
+      <div class="errlist" id="errors"></div>
+    </section>
+    <section>
+      <h2>类型注册表</h2>
+      <div class="types" id="types"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+ * 纯逻辑模块 —— 词法 + 语法 + 语义检查（可移植）
+ * 不引用 DOM。
+ * ============================================================ */
+
+/* ---------- 词法（同原型 #3） ---------- */
+function lex(src) {
+  const toks = [];
+  let i = 0, line = 1, col = 1;
+  const KW = new Set(["struct","class","enum","interface","fun","mut","ref","move","error","return","if","else","global","spawn","import","hide","alias","use","pub","yield","match","try","catch","true","false"]);
+  const OPS = ["->","+=","-=","*=","/=","==","!=","<=",">=","&&","||","::","=","<",">","+","-","*","/","%","!","{","}","(",")","[","]",";",",",":",".","?"];
+  const push = (kind, value, ln, cl) => toks.push({ kind, value, line: ln, col: cl });
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "\n") { push("NEWLINE", "\n", line, col); line++; col = 1; i++; continue; }
+    if (c === " " || c === "\t" || c === "\r") { col++; i++; continue; }
+    if (c === "/" && src[i+1] === "/") { while (i < src.length && src[i] !== "\n") i++; continue; }
+    if (c === '"') { let s = "", j = i + 1; while (j < src.length && src[j] !== '"') { s += src[j]; j++; } push("STRING", s, line, col); col += (j - i) + 1; i = j + 1; continue; }
+    if (/\d/.test(c)) { let s = ""; while (i < src.length && /[\d.]/.test(src[i])) s += src[i++]; push("NUMBER", parseFloat(s), line, col); col += s.length; continue; }
+    if (/[A-Za-z_]/.test(c)) { let s = ""; while (i < src.length && /[A-Za-z0-9_]/.test(src[i])) s += src[i++]; push(KW.has(s) ? "KEYWORD" : "IDENT", s, line, col); col += s.length; continue; }
+    let matched = null;
+    for (const op of OPS) { if (src.startsWith(op, i)) { matched = op; break; } }
+    if (matched) { push("OP", matched, line, col); i += matched.length; col += matched.length; continue; }
+    throw { lex: true, msg: "无法识别的字符 '" + c + "'", line, col };
+  }
+  push("EOF", "", line, col);
+  return toks;
+}
+
+/* ---------- 语法（同原型 #3，节点附带 loc） ---------- */
+class Parser {
+  constructor(toks) { this.t = toks; this.p = 0; }
+  peek(off) { return this.t[Math.min(this.p + (off || 0), this.t.length - 1)]; }
+  next() { return this.t[this.p++]; }
+  skipNL() { while (this.peek().kind === "NEWLINE") this.p++; }
+  check(kind, value) { const tk = this.peek(); return tk.kind === kind && (value === undefined || tk.value === value); }
+  match(kind, value) { if (this.check(kind, value)) { this.p++; return true; } return false; }
+  expect(kind, value, what) {
+    const tk = this.peek();
+    if (tk.kind === kind && (value === undefined || tk.value === value)) { this.p++; return tk; }
+    throw { parse: true, msg: "期望 " + (what || (value !== undefined ? "'" + value + "'" : kind)) + "，但遇到 '" + (tk.value || tk.kind) + "'", line: tk.line, col: tk.col };
+  }
+  err(msg, tk) { throw { parse: true, msg, line: tk.line, col: tk.col }; }
+  parseProgram() {
+    const decls = [];
+    while (true) { this.skipNL(); if (this.check("EOF")) break; decls.push(this.parseTopLevel()); }
+    return { type: "Program", decls };
+  }
+  parseTopLevel() {
+    if (this.match("KEYWORD", "struct")) return this.parseStruct();
+    if (this.match("KEYWORD", "class")) return this.parseClass();
+    if (this.match("KEYWORD", "enum")) return this.parseEnum();
+    if (this.match("KEYWORD", "interface")) return this.parseInterface();
+    if (this.match("KEYWORD", "fun")) return this.parseFun(true);
+    if (this.match("KEYWORD", "global")) return this.parseGlobal();
+    if (this.match("KEYWORD", "spawn")) { const e = this.parseExpr(); this.optSemi(); return { type: "SpawnStmt", callee: e }; }
+    return this.parseStmt();
+  }
+  parseStruct() {
+    const tk = this.expect("IDENT", undefined, "结构体名"); const name = tk.value;
+    this.expect("OP", "{");
+    const fields = [];
+    while (true) { this.skipNL(); if (this.match("OP", "}")) break; fields.push(this.parseField()); this.fieldSep(); }
+    return { type: "StructDecl", name, fields, loc: { line: tk.line, col: tk.col } };
+  }
+  parseField() {
+    let isMut = false;
+    if (this.match("KEYWORD", "mut")) isMut = true;
+    const tk = this.expect("IDENT", undefined, "字段名"); const name = tk.value;
+    this.expect("OP", ":", "':'");
+    return { type: "FieldDecl", name, fieldType: this.parseType(), isMut, loc: { line: tk.line, col: tk.col } };
+  }
+  fieldSep() {
+    if (this.match("OP", ";") || this.match("OP", ",")) return;
+    if (this.peek().kind === "NEWLINE") { this.skipNL(); return; }
+    if (this.peek().value === "}") return;
+    const tk = this.peek();
+    this.err("期望字段分隔（换行/分号）或 '}'，但遇到 '" + (tk.value || tk.kind) + "'", tk);
+  }
+  parseClass() {
+    const tk = this.expect("IDENT", undefined, "类名"); const name = tk.value;
+    const interfaces = [];
+    if (this.match("OP", ":")) { do { interfaces.push(this.expect("IDENT", undefined, "接口名").value); } while (this.match("OP", ",")); }
+    this.expect("OP", "{");
+    const imports = [], hides = [], aliases = [], fields = [], methods = [];
+    while (true) {
+      this.skipNL();
+      if (this.match("OP", "}")) break;
+      if (this.match("KEYWORD", "import")) { imports.push({ type: "ImportSpec", name: this.expect("IDENT", undefined, "类名").value }); continue; }
+      if (this.match("KEYWORD", "hide")) { hides.push({ type: "HideSpec", path: this.parsePath() }); continue; }
+      if (this.match("KEYWORD", "alias")) {
+        const alias = this.expect("IDENT", undefined, "别名").value;
+        this.expect("OP", "=", "'='");
+        aliases.push({ type: "AliasSpec", alias, path: this.parsePath() });
+        continue;
+      }
+      if (this.peek().kind === "KEYWORD" && this.peek().value === "fun") { this.next(); methods.push(this.parseFun(false)); continue; }
+      fields.push(this.parseField());
+      this.fieldSep();
+    }
+    return { type: "ClassDecl", name, interfaces, imports, hides, aliases, fields, methods, loc: { line: tk.line, col: tk.col } };
+  }
+  parsePath() {
+    const parts = [this.expect("IDENT", undefined, "名称").value];
+    while (this.match("OP", "::")) parts.push(this.expect("IDENT", undefined, "名称").value);
+    return { type: "Path", parts };
+  }
+  parseEnum() {
+    const tk = this.expect("IDENT", undefined, "枚举名"); const name = tk.value;
+    this.expect("OP", "{");
+    const variants = [];
+    this.skipNL();
+    if (!this.check("OP", "}")) { do { variants.push(this.expect("IDENT", undefined, "变体名").value); this.skipNL(); } while (this.match("OP", ",") || this.match("NEWLINE")); }
+    this.expect("OP", "}");
+    return { type: "EnumDecl", name, variants, loc: { line: tk.line, col: tk.col } };
+  }
+  parseInterface() {
+    const tk = this.expect("IDENT", undefined, "接口名"); const name = tk.value;
+    this.expect("OP", "{");
+    const methods = [];
+    while (true) {
+      this.skipNL();
+      if (this.match("OP", "}")) break;
+      if (this.match("KEYWORD", "fun")) methods.push(this.parseFunSig());
+      else { const t2 = this.peek(); this.err("接口体内只允许 fun 签名，但遇到 '" + (t2.value || t2.kind) + "'", t2); }
+    }
+    return { type: "InterfaceDecl", name, methods, loc: { line: tk.line, col: tk.col } };
+  }
+  parseFunSig() {
+    const tk = this.expect("IDENT", undefined, "函数名"); const name = tk.value;
+    const params = this.parseParams();
+    const ret = this.peek().value === "->" ? this.parseRet() : null;
+    return { type: "FunSig", name, params, ret, loc: { line: tk.line, col: tk.col } };
+  }
+  parseFun() {
+    const tk = this.expect("IDENT", undefined, "函数名"); const name = tk.value;
+    const params = this.parseParams();
+    const ret = this.peek().value === "->" ? this.parseRet() : null;
+    const body = this.parseBlock();
+    return { type: "FunDecl", name, params, ret, body, loc: { line: tk.line, col: tk.col } };
+  }
+  parseParams() {
+    this.expect("OP", "(");
+    const params = [];
+    this.skipNL();
+    if (!this.check("OP", ")")) {
+      do {
+        this.skipNL();
+        const ptk = this.expect("IDENT", undefined, "参数名"); const pname = ptk.value;
+        this.expect("OP", ":");
+        let kind = "val";
+        if (this.match("KEYWORD", "ref")) kind = "ref";
+        else if (this.match("KEYWORD", "move")) kind = "move";
+        params.push({ type: "Param", name: pname, kind, ptype: this.parseType(), loc: { line: ptk.line, col: ptk.col } });
+        this.skipNL();
+      } while (this.match("OP", ","));
+    }
+    this.expect("OP", ")");
+    return params;
+  }
+  parseRet() {
+    this.expect("OP", "->", "'->'");
+    let kind = "val";
+    if (this.match("KEYWORD", "error")) kind = "error";
+    else if (this.match("KEYWORD", "move")) kind = "move";
+    else if (this.match("KEYWORD", "ref")) kind = "ref";
+    return { type: "RetType", kind, rtype: this.parseType() };
+  }
+  parseGlobal() {
+    const tk = this.expect("IDENT", undefined, "全局名"); const name = tk.value;
+    this.expect("OP", ":");
+    const gtype = this.parseType();
+    let init = null;
+    if (this.match("OP", "=")) init = this.parseExpr();
+    this.optSemi();
+    return { type: "GlobalDecl", name, gtype, init, loc: { line: tk.line, col: tk.col } };
+  }
+  parseType() {
+    if (this.check("OP", "[")) { this.next(); const elem = this.parseType(); this.expect("OP", "]", "']'"); return { type: "ArrayType", elem }; }
+    let mutable = false;
+    if (this.match("KEYWORD", "ref")) mutable = true;
+    const name = this.expect("IDENT", undefined, "类型名").value;
+    if (this.match("OP", "<")) {
+      const args = [];
+      do { args.push(this.parseType()); } while (this.match("OP", ","));
+      this.expect("OP", ">", "'>'");
+      return { type: "GenericType", name, args, mutable };
+    }
+    return { type: "NamedType", name, mutable };
+  }
+  parseBlock() {
+    this.expect("OP", "{", "'{'");
+    const stmts = [];
+    while (true) {
+      this.skipNL();
+      if (this.match("OP", "}")) break;
+      if (this.check("EOF")) this.err("块未闭合（缺少 '}'）", this.peek());
+      stmts.push(this.parseStmt());
+    }
+    return { type: "Block", stmts };
+  }
+  optSemi() { this.match("OP", ";"); this.skipNL(); }
+  parseStmt() {
+    if (this.match("KEYWORD", "return")) {
+      const tk = this.t[this.p - 1];
+      let expr = null;
+      if (!this.check("OP", ";") && !this.check("OP", "}") && this.peek().kind !== "NEWLINE") expr = this.parseExpr();
+      this.optSemi();
+      return { type: "ReturnStmt", expr, loc: { line: tk.line, col: tk.col } };
+    }
+    if (this.match("KEYWORD", "yield")) { this.optSemi(); return { type: "YieldStmt" }; }
+    if (this.match("KEYWORD", "spawn")) { const callee = this.parseExpr(); this.optSemi(); return { type: "SpawnStmt", callee }; }
+    if (this.check("KEYWORD", "if")) {
+      this.next();
+      const cond = this.parseExpr();
+      const then = this.parseBlock();
+      let els = null;
+      this.skipNL();
+      if (this.match("KEYWORD", "else")) { if (this.check("KEYWORD", "if")) els = this.parseStmt(); else els = this.parseBlock(); }
+      return { type: "IfStmt", cond, then, els };
+    }
+    if (this.match("OP", "{")) { this.p--; return this.parseBlock(); }
+    if (this.match("KEYWORD", "mut") || this.match("KEYWORD", "ref")) {
+      const kind = this.t[this.p - 1].value;
+      return this.parseVarDecl(kind);
+    }
+    if (this.check("IDENT")) {
+      const save = this.p;
+      const id = this.next();
+      this.skipNL();
+      if (this.match("OP", "=")) {
+        const init = this.parseExpr();
+        this.optSemi();
+        return { type: "VarDecl", name: id.value, kind: "val", annotation: null, init, loc: { line: id.line, col: id.col } };
+      }
+      if (this.match("OP", ":")) {
+        const ann = this.parseType();
+        let init = null;
+        if (this.match("OP", "=")) init = this.parseExpr();
+        this.optSemi();
+        return { type: "VarDecl", name: id.value, kind: "val", annotation: ann, init, loc: { line: id.line, col: id.col } };
+      }
+      this.p = save;
+    }
+    const e = this.parseExpr();
+    this.optSemi();
+    return { type: "ExprStmt", expr: e };
+  }
+  parseVarDecl(kind) {
+    const tk = this.expect("IDENT", undefined, "变量名"); const name = tk.value;
+    let ann = null;
+    if (this.match("OP", ":")) ann = this.parseType();
+    let init = null;
+    if (this.match("OP", "=")) init = this.parseExpr();
+    this.optSemi();
+    return { type: "VarDecl", name, kind, annotation: ann, init, loc: { line: tk.line, col: tk.col } };
+  }
+  parseExpr() { return this.parseAssign(); }
+  parseAssign() {
+    const left = this.parseBinary(1);
+    if (this.check("OP", "=") || this.check("OP", "+=") || this.check("OP", "-=") || this.check("OP", "*=") || this.check("OP", "/=")) {
+      const tk = this.next();
+      return { type: "AssignExpr", op: tk.value, left, right: this.parseAssign(), loc: { line: tk.line, col: tk.col } };
+    }
+    return left;
+  }
+  parseBinary(minPrec) {
+    const PREC = { "||":1, "&&":2, "==":3, "!=":3, "<":4, "<=":4, ">":4, ">=":4, "+":5, "-":5, "*":6, "/":6, "%":6 };
+    let left = this.parseUnary();
+    while (true) {
+      const tk = this.peek();
+      if (tk.kind !== "OP") break;
+      const prec = PREC[tk.value];
+      if (prec === undefined || prec < minPrec) break;
+      this.next();
+      left = { type: "BinExpr", op: tk.value, left, right: this.parseBinary(prec + 1) };
+    }
+    return left;
+  }
+  parseUnary() {
+    if (this.check("OP", "!") || this.check("OP", "-")) { const op = this.next().value; return { type: "UnaryExpr", op, operand: this.parseUnary() }; }
+    if (this.match("KEYWORD", "move")) return { type: "MoveExpr", expr: this.parseUnary() };
+    return this.parsePostfix();
+  }
+  parsePostfix() {
+    let e = this.parsePrimary();
+    while (true) {
+      if (this.match("OP", ".")) { const prop = this.expect("IDENT", undefined, "属性名").value; e = { type: "MemberExpr", obj: e, prop }; }
+      else if (this.check("OP", "(")) { e = { type: "CallExpr", callee: e, args: this.parseArgs() }; }
+      else if (this.check("OP", "[")) { this.next(); const idx = this.parseExpr(); this.expect("OP", "]", "']'"); e = { type: "IndexExpr", obj: e, index: idx }; }
+      else break;
+    }
+    return e;
+  }
+  parseArgs() {
+    this.expect("OP", "(");
+    const args = [];
+    this.skipNL();
+    if (!this.check("OP", ")")) { do { this.skipNL(); args.push(this.parseExpr()); this.skipNL(); } while (this.match("OP", ",")); }
+    this.expect("OP", ")");
+    return args;
+  }
+  parsePrimary() {
+    const tk = this.peek();
+    if (tk.kind === "NUMBER") { this.next(); return { type: "Literal", kind: "number", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
+    if (tk.kind === "STRING") { this.next(); return { type: "Literal", kind: "string", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
+    if (tk.kind === "KEYWORD" && (tk.value === "true" || tk.value === "false")) { this.next(); return { type: "Literal", kind: "bool", value: tk.value === "true", loc: { line: tk.line, col: tk.col } }; }
+    if (tk.kind === "KEYWORD" && tk.value === "error") {
+      this.next();
+      this.expect("OP", ".", "'.'");
+      return { type: "ErrorLit", name: this.expect("IDENT", undefined, "错误名").value, loc: { line: tk.line, col: tk.col } };
+    }
+    if (this.check("OP", "(")) { this.next(); const e = this.parseExpr(); this.expect("OP", ")", "')'"); return e; }
+    if (this.check("OP", "[")) {
+      this.next();
+      const items = [];
+      this.skipNL();
+      if (!this.check("OP", "]")) { do { this.skipNL(); items.push(this.parseExpr()); this.skipNL(); } while (this.match("OP", ",")); }
+      this.expect("OP", "]", "']'");
+      return { type: "ArrayLiteral", items };
+    }
+    if (tk.kind === "IDENT") {
+      this.next();
+      if (this.check("OP", "{")) {
+        this.next();
+        const fields = [];
+        this.skipNL();
+        if (!this.check("OP", "}")) {
+          do {
+            this.skipNL();
+            const fname = this.expect("IDENT", undefined, "字段名").value;
+            this.expect("OP", ":");
+            fields.push({ name: fname, expr: this.parseExpr() });
+            this.skipNL();
+          } while (this.match("OP", ","));
+        }
+        this.expect("OP", "}", "'}'");
+        return { type: "ConstructExpr", name: tk.value, fields, loc: { line: tk.line, col: tk.col } };
+      }
+      return { type: "Ident", name: tk.value, loc: { line: tk.line, col: tk.col } };
+    }
+    this.err("期望表达式，但遇到 '" + (tk.value || tk.kind) + "'", tk);
+  }
+}
+function parse(src) { return new Parser(lex(src)).parseProgram(); }
+
+/* ---------- 语义检查 ---------- */
+const BUILTIN_BLOCK = ["u64", "f64", "Str", "bool", "void"];
+const PATTERN_TYPES = ["Exclusive", "SharedRead", "Channel"];
+const BUILTIN_METHODS = ["to_bytes", "from_bytes", "to_str", "to_string", "len", "push", "pop", "send", "recv", "alloc", "free", "clone"];
+const BUILTIN_FUNCS = ["store", "load", "transmit"];
+
+class Scope {
+  constructor(parent) { this.parent = parent; this.vars = {}; }
+  define(name, info) { this.vars[name] = info; }
+  lookup(name) { return this.vars[name] || (this.parent && this.parent.lookup(name)); }
+}
+
+class Checker {
+  constructor(ast) {
+    this.ast = ast;
+    this.types = {};   // name -> {shape, kind, fields:{name->{type,isMut}}, methods, interfaces, loc}
+    this.funcs = {};   // name -> FunDecl
+    this.errors = [];
+  }
+  err(rule, msg, loc) { this.errors.push({ rule, msg, line: loc ? loc.line : 0, col: loc ? loc.col : 0 }); }
+
+  /* 注册类型 */
+  register() {
+    for (const d of this.ast.decls) {
+      if (d.type === "StructDecl") {
+        const fields = {};
+        for (const f of d.fields) fields[f.name] = { fieldType: f.fieldType, isMut: f.isMut };
+        this.types[d.name] = { shape: "block", kind: "struct", fields, methods: [], interfaces: [], loc: d.loc };
+      } else if (d.type === "ClassDecl") {
+        const fields = {};
+        for (const f of d.fields) fields[f.name] = { fieldType: f.fieldType, isMut: f.isMut };
+        this.types[d.name] = { shape: "tree", kind: "class", fields, methods: d.methods, interfaces: d.interfaces, loc: d.loc };
+      } else if (d.type === "EnumDecl") {
+        this.types[d.name] = { shape: "block", kind: "enum", fields: {}, methods: [], interfaces: [], variants: d.variants, loc: d.loc };
+      } else if (d.type === "InterfaceDecl") {
+        this.types[d.name] = { shape: "iface", kind: "interface", fields: {}, methods: d.methods, interfaces: [], loc: d.loc };
+      } else if (d.type === "FunDecl") {
+        this.funcs[d.name] = d;
+      }
+    }
+  }
+
+  /* 类型引用 → 形状（'block'|'tree'|'unknown'） */
+  shapeOf(t) {
+    if (t.type === "ArrayType") {
+      const es = this.shapeOf(t.elem);
+      if (es !== "block" && es !== "unknown") this.err("R1", "动态块元素必须是块类型（连续内存），但 " + t.elem.name + " 是" + (es === "tree" ? "树" : "未知") + "类型", null);
+      return "block";
+    }
+    if (t.type === "GenericType") return "block";
+    const def = this.types[t.name];
+    if (!def) {
+      if (!BUILTIN_BLOCK.includes(t.name)) this.err("R5", "未定义的类型 '" + t.name + "'", null);
+      return "unknown";
+    }
+    return def.shape;
+  }
+  nameOf(t) { return t.type === "NamedType" ? t.name : t.type === "ArrayType" ? "[" + t.elem.name + "]" : t.type === "GenericType" ? t.name + "<>" : "?"; }
+
+  /* 字段形状规则：R1 块只含块；R2 class 字段分型 */
+  checkTypeShapes() {
+    for (const d of this.ast.decls) {
+      if (d.type === "StructDecl") {
+        for (const f of d.fields) {
+          if (f.fieldType.mutable) this.err("R1", "块（struct）不能有 ref 字段：'" + f.name + "'", f.loc);
+          const sh = this.shapeOf(f.fieldType);
+          if (sh === "tree") this.err("R1", "块只含块：字段 '" + f.name + "' 引用了树类型 " + (f.fieldType.name || "?") + "（树有生命周期，块是纯数据）", f.loc);
+        }
+      } else if (d.type === "ClassDecl") {
+        for (const f of d.fields) {
+          const sh = this.shapeOf(f.fieldType);
+          if (f.fieldType.mutable) {
+            if (sh !== "tree") this.err("R2", "引用字段（ref）必须指向树类型，但 '" + f.name + "' 是 " + (this.nameOf(f.fieldType) || "未知") + "（" + (sh === "block" ? "块" : "未知") + "）", f.loc);
+          } else {
+            if (sh === "tree") this.err("R2", "class 的值字段必须是块，但 '" + f.name + "' 是树类型 " + (f.fieldType.name || "?") + "（树只能通过 ref 引用字段连接）", f.loc);
+          }
+        }
+      }
+    }
+  }
+
+  /* 接口实现检查：R6 */
+  checkInterfaces() {
+    for (const d of this.ast.decls) {
+      if (d.type !== "ClassDecl") continue;
+      for (const iname of d.interfaces) {
+        const iface = this.types[iname];
+        if (!iface) { this.err("R5", "接口 '" + iname + "' 未定义", d.loc); continue; }
+        for (const sig of iface.methods) {
+          const m = d.methods.find(x => x.name === sig.name);
+          if (!m) { this.err("R6", "class " + d.name + " 声明实现接口 " + iname + "，但缺少方法 '" + sig.name + "'", d.loc); continue; }
+          if (m.params.length !== sig.params.length) {
+            this.err("R6", "方法 '" + sig.name + "' 的参数数量与接口签名不符（期望 " + sig.params.length + "，实际 " + m.params.length + "）", m.loc);
+          }
+          const sr = sig.ret, mr = m.ret;
+          if (sr && mr && this.shapeOf(sr.rtype) !== "unknown" && this.shapeOf(mr.rtype) !== this.shapeOf(sr.rtype)) {
+            this.err("R6", "方法 '" + sig.name + "' 返回类型不匹配接口（期望 " + this.nameOf(sr.rtype) + "）", m.loc);
+          }
+        }
+      }
+    }
+  }
+
+  /* 全局：R8 */
+  checkGlobals() {
+    for (const d of this.ast.decls) {
+      if (d.type !== "GlobalDecl") continue;
+      const gt = d.gtype;
+      if (gt.type !== "GenericType" || !PATTERN_TYPES.includes(gt.name)) {
+        this.err("R8", "global 必须声明访问模式（Exclusive<T>/SharedRead<T>/Channel<T> 等内建包装类型）", d.loc);
+      }
+    }
+  }
+
+  /* 函数体 */
+  checkFuncs() {
+    for (const d of this.ast.decls) {
+      if (d.type !== "FunDecl") continue;
+      const scope = new Scope(null);
+      for (const p of d.params) {
+        const sh = this.shapeOf(p.ptype);
+        scope.define(p.name, { shape: sh, name: this.nameOf(p.ptype), mutable: p.kind === "ref" || p.kind === "move", moved: false });
+      }
+      this.checkBlock(d.body, scope, d);
+    }
+  }
+
+  checkBlock(block, scope, fun) {
+    const local = new Scope(scope);
+    for (const st of block.stmts) {
+      switch (st.type) {
+        case "VarDecl": this.checkVarDecl(st, local); break;
+        case "ReturnStmt":
+          if (st.expr) {
+            const r = this.checkExpr(st.expr, local);
+            if (fun && fun.ret) this.checkReturnShape(fun.ret, r, st);
+          } else if (fun && fun.ret && fun.ret.kind !== "val") {
+            /* 无返回值的 return —— error 返回允许 */
+          }
+          break;
+        case "IfStmt":
+          this.checkExpr(st.cond, local);
+          this.checkBlock(st.then, local, fun);
+          if (st.els) this.checkBlock(st.els, local, fun);
+          break;
+        case "Block": this.checkBlock(st, local, fun); break;
+        case "ExprStmt": this.checkExpr(st.expr, local); break;
+        case "SpawnStmt": this.checkExpr(st.callee, local); break;
+        case "YieldStmt": break;
+      }
+    }
+  }
+
+  checkReturnShape(ret, r, st) {
+    if (ret.kind === "error") {
+      if (st.expr && st.expr.type === "ErrorLit") return;   // error.X ✓
+      if (r.shape === "unknown") return;
+      if (this.shapeOf(ret.rtype) === "unknown") return;
+      if (r.shape !== this.shapeOf(ret.rtype)) this.err("R4", "返回值形状不匹配（期望 " + this.nameOf(ret.rtype) + "）", st.loc);
+      return;
+    }
+    if (ret.kind === "move" || ret.kind === "ref") return;  // 宽松：所有权语义复杂，暂不检查
+    if (r.shape === "unknown" || this.shapeOf(ret.rtype) === "unknown") return;
+    if (r.shape !== this.shapeOf(ret.rtype)) this.err("R4", "返回值形状不匹配（期望 " + this.nameOf(ret.rtype) + "，实际 " + r.name + "）", st.loc);
+  }
+
+  checkVarDecl(v, scope) {
+    if (!v.init) return;
+    const init = this.checkExpr(v.init, scope);
+    if (v.annotation) this.shapeOf(v.annotation);   // R5：注解类型必须已定义
+    if (v.kind === "ref") {
+      if (!init.mutable) this.err("R3", "只能对可写变量/数据声明可写指针（ref）—— '" + (v.init.type === "Ident" ? v.init.name : "该表达式") + "' 不可写", v.loc);
+    }
+    if (v.kind === "mut") {
+      /* mut 声明可写 —— 若初始化是树且只读……宽松开 */
+    }
+    scope.define(v.name, { shape: init.shape, name: init.name, mutable: v.kind === "mut" || v.kind === "ref", moved: false });
+  }
+
+  checkExpr(e, scope) {
+    if (!e) return { shape: "unknown", name: "?", mutable: false };
+    switch (e.type) {
+      case "Literal":
+        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : "u64", mutable: false };
+      case "Ident": {
+        const v = scope.lookup(e.name);
+        if (!v) { this.err("R7", "未定义的变量 '" + e.name + "'", e.loc); return { shape: "unknown", name: e.name, mutable: false }; }
+        if (v.moved) this.err("R9", "变量 '" + e.name + "' 已被 move，不能再使用", e.loc);
+        return { shape: v.shape, name: v.name, mutable: v.mutable };
+      }
+      case "MemberExpr": {
+        // 先处理静态调用（obj 是类型名，如 Account.from_bytes）——避免误报未定义变量
+        if (e.obj.type === "Ident" && this.types[e.obj.name]) {
+          if (BUILTIN_METHODS.includes(e.prop)) return { shape: "unknown", name: "?", mutable: false };
+          this.err("R5", "类型 '" + e.obj.name + "' 没有静态方法 '" + e.prop + "'", e.loc);
+          return { shape: "unknown", name: "?", mutable: false };
+        }
+        const obj = this.checkExpr(e.obj, scope);
+        // 字节方法：to_bytes 等 —— 内建，不查字段
+        if (BUILTIN_METHODS.includes(e.prop)) return { shape: "unknown", name: "?", mutable: false };
+        const def = obj.shape === "unknown" ? null : this.types[obj.name];
+        if (obj.shape === "unknown") return { shape: "unknown", name: "?", mutable: false };
+        if (!def || !def.fields) {
+          if (def && def.kind === "enum") this.err("R5", "枚举 " + def.name + " 没有字段 '" + e.prop + "'", e.loc);
+          return { shape: "unknown", name: "?", mutable: false };
+        }
+        const f = def.fields[e.prop];
+        if (!f) { this.err("R5", "类型 " + obj.name + " 没有字段 '" + e.prop + "'", e.loc); return { shape: "unknown", name: "?", mutable: false }; }
+        return { shape: this.shapeOf(f.fieldType), name: this.nameOf(f.fieldType), mutable: obj.mutable && f.isMut };
+      }
+      case "CallExpr": {
+        const callee = e.callee;
+        if (callee.type === "Ident") {
+          const fn = this.funcs[callee.name];
+          if (fn && fn.ret) return { shape: this.shapeOf(fn.ret.rtype), name: this.nameOf(fn.ret.rtype), mutable: false };
+          if (BUILTIN_FUNCS.includes(callee.name)) return { shape: "unknown", name: "?", mutable: false };
+          /* 未知自由函数 —— 宽松（内建/外部），不报错 */
+          return { shape: "unknown", name: "?", mutable: false };
+        }
+        if (callee.type === "MemberExpr") { /* MemberExpr 分支已检查 obj，不重复 */ }
+        return { shape: "unknown", name: "?", mutable: false };
+      }
+      case "BinExpr": {
+        this.checkExpr(e.left, scope);
+        this.checkExpr(e.right, scope);
+        return { shape: "block", name: "u64", mutable: false };
+      }
+      case "UnaryExpr": { const r = this.checkExpr(e.operand, scope); return { shape: r.shape, name: r.name, mutable: false }; }
+      case "MoveExpr": {
+        const inner = this.checkExpr(e.expr, scope);
+        if (e.expr.type === "Ident") {
+          const v = scope.lookup(e.expr.name);
+          if (v) v.moved = true;
+          if (v && v.shape === "block" && !v.mutable) { /* 块只读复制可 move？宽松开 */ }
+        }
+        return { shape: inner.shape, name: inner.name, mutable: true };
+      }
+      case "AssignExpr": {
+        const left = this.checkExpr(e.left, scope);
+        const right = this.checkExpr(e.right, scope);
+        if (!left.mutable) this.err("R4", "赋值目标不可写（只读变量 / 只读指针 / 非 mut 字段）", e.loc);
+        else if (left.shape !== "unknown" && right.shape !== "unknown" && left.shape !== right.shape) {
+          this.err("R4", "赋值类型不匹配：" + left.name + " ← " + right.name, e.loc);
+        }
+        return { shape: left.shape, name: left.name, mutable: false };
+      }
+      case "ConstructExpr": {
+        const def = this.types[e.name];
+        if (!def) { this.err("R5", "未定义的类型 '" + e.name + "'", e.loc); return { shape: "unknown", name: e.name, mutable: true }; }
+        for (const f of e.fields) {
+          if (!def.fields[f.name]) this.err("R5", "类型 " + e.name + " 没有字段 '" + f.name + "'", e.loc);
+          else this.checkExpr(f.expr, scope);
+        }
+        return { shape: def.shape, name: e.name, mutable: true };
+      }
+      case "ErrorLit":
+        return { shape: "error", name: "error", mutable: false };
+      case "ArrayLiteral": {
+        for (const it of e.items) this.checkExpr(it, scope);
+        return { shape: "block", name: "[]", mutable: false };
+      }
+      case "IndexExpr": { this.checkExpr(e.obj, scope); this.checkExpr(e.index, scope); return { shape: "unknown", name: "?", mutable: false }; }
+      default: return { shape: "unknown", name: "?", mutable: false };
+    }
+  }
+}
+
+function check(src) {
+  const ast = parse(src);
+  const c = new Checker(ast);
+  c.register();
+  c.checkTypeShapes();
+  c.checkInterfaces();
+  c.checkGlobals();
+  c.checkFuncs();
+  return { ast, types: c.types, funcs: c.funcs, errors: c.errors };
+}
+/* ============ 纯逻辑模块结束 ============ */
+
+/* ============ 页面壳（可丢弃） ============ */
+const DEFAULT_SRC = `// 命名空间 = 文件路径（orders/billing.h → orders.billing）
+
+// 块（连续内存，复制语义）
+struct Order {
+    id: u64
+    amount: f64
+    items: [Str]
+}
+
+// 枚举（块的一种，穷尽 match）
+enum OrderStatus { Pending, Paid, Refunded }
+
+// 接口（纯静态契约）
+interface Payable {
+    fun amount() -> f64
+}
+
+// class = 树（值字段 + 引用字段 + 方法集）
+class Account : Payable {
+    mut balance: f64
+    orders: [Order]
+    next: ref Account
+
+    fun amount() -> f64 {
+        return balance
+    }
+}
+
+// 函数契约
+fun process(order: Order, account: ref Account) -> error bool {
+    if order.amount > account.balance {
+        return error.InsufficientFunds
+    }
+    account.balance -= order.amount
+    return true
+}
+
+fun describe(acc: Account) -> Str {
+    return "balance=" + acc.balance.to_str()
+}
+
+fun build_account(initial: f64) -> move Account {
+    mut acc = Account{ balance: initial }
+    return move acc
+}
+
+// 作用域 / 字节化 / move
+fun demo() -> error void {
+    mut acc = build_account(1000.0)
+    {
+        ref view = acc
+        view.balance += 50
+    }
+    bytes = acc.to_bytes()
+    restored = Account.from_bytes(bytes)
+    store("account.bin", bytes)
+    other = move acc
+}
+
+// 并发
+global ledger: Exclusive<[Str]> = []
+
+fun worker() {
+    yield
+}
+
+spawn worker()
+`;
+
+const CASES = {
+  r1: "// R1：块不能有 ref 字段\nstruct Bad {\n    next: ref Account\n}",
+  r1b: "// R1：块只含块（树不能作为块字段）\nclass Account {\n    mut balance: f64\n}\nstruct Bad {\n    acc: Account\n}",
+  r2: "// R2：ref 引用字段必须指向树\nstruct Order {\n    id: u64\n}\nclass Bad {\n    next: ref Order\n}",
+  r3: "// R3：只能对可写源声明可写指针\nfun f() {\n    x = 1\n    ref r = x\n}",
+  r4: "// R4：只读指针不能写\nclass Account {\n    mut balance: f64\n}\nfun f(acc: Account) {\n    acc.balance = 5\n}",
+  r5: "// R5：类型必须已定义\nfun f() {\n    x: Foo = 1\n}",
+  r6: "// R6：声明实现接口必须实现全部方法\ninterface I {\n    fun x() -> u64\n}\nclass C : I {\n}",
+  r7: "// R7：变量使用前必须已定义\nfun f() {\n    return y\n}",
+  r8: "// R8：global 必须声明访问模式\nglobal counter: u64 = 0",
+  r9: "// R9：move 后变量失效\nclass Account {\n    mut balance: f64\n}\nfun f() -> move Account {\n    mut acc = Account{ balance: 0 }\n    other = move acc\n    return acc.balance\n}",
+};
+
+const SRC = document.getElementById("src");
+SRC.value = DEFAULT_SRC;
+
+function esc(v) { return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function render(errors, types) {
+  const box = document.getElementById("errors");
+  const tbox = document.getElementById("types");
+  if (!errors.length) {
+    box.innerHTML = '<span class="empty">✅ 全部静态规则通过——无错误</span>';
+  } else {
+    box.innerHTML = '<table><tr><th>规则</th><th>消息</th><th>位置</th></tr>' +
+      errors.map(e => `<tr><td class="rule">${e.rule}</td><td>${esc(e.msg)}</td><td class="loc">${e.line}:${e.col}</td></tr>`).join("") +
+      "</table>";
+  }
+  const rows = Object.entries(types).map(([name, t]) =>
+    `<div class="t"><b>${esc(name)}</b> <span class="badge">${t.kind}</span> <span class="badge">${t.shape}</span>${t.kind === "class" && t.interfaces.length ? ' <span class="badge">implements ' + esc(t.interfaces.join(",")) + "</span>" : ""}${t.fields && Object.keys(t.fields).length ? ' — 字段: ' + esc(Object.keys(t.fields).join(", ")) : ""}${t.methods && t.methods.length ? ' — 方法: ' + esc(t.methods.map(m => m.name).join(", ")) : ""}${t.variants ? ' — 变体: ' + esc(t.variants.join(", ")) : ""}</div>`
+  ).join("");
+  tbox.innerHTML = rows || '<span class="empty">无类型声明</span>';
+}
+
+document.getElementById("check-btn").addEventListener("click", () => {
+  const b = document.getElementById("banner");
+  try {
+    const { types, funcs, errors } = check(SRC.value);
+    render(errors, types);
+    if (errors.length) {
+      b.className = "banner show err";
+      b.innerHTML = "❌ 发现 <b>" + errors.length + "</b> 个静态错误（第一条定位精确到行列）";
+    } else {
+      b.className = "banner show ok";
+      b.innerHTML = "✅ 语义检查通过：类型 " + Object.keys(types).length + " 个，函数 " + Object.keys(funcs).length + " 个";
+    }
+  } catch (e) {
+    if (e.lex || e.parse) {
+      b.className = "banner show err";
+      b.innerHTML = "❌ 语法错误：<code>" + esc(e.msg) + "</code> —— 第 " + e.line + " 行，第 " + e.col + " 列";
+    } else {
+      console.error(e);
+      b.className = "banner show err";
+      b.innerHTML = "内部错误：" + esc(e.message);
+    }
+  }
+});
+
+document.getElementById("reset-btn").addEventListener("click", () => { SRC.value = DEFAULT_SRC; document.getElementById("check-btn").click(); });
+document.querySelectorAll("[data-case]").forEach(btn => {
+  btn.addEventListener("click", () => { SRC.value = CASES[btn.dataset.case]; document.getElementById("check-btn").click(); });
+});
+
+document.getElementById("check-btn").click();
+</script>
+</body>
+</html>

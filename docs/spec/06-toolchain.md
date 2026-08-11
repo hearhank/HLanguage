@@ -13,6 +13,29 @@
 - `h build foo.h`——编译器产出原生二进制。
 - 多文件项目 = 命名空间树目录整体构建。
 
+## 运行时雏形（已交付）
+
+- `src/`：lexer/parser/checker/evaluator 四模块 + `h.js` CLI。
+- 命令：`node src/h.js run|check|parse|build <file>`（无文件读 stdin；`--trace` 输出执行轨迹；`build --exec` 编译后直接运行）。
+- 示例：`examples/demo.h`（生命周期/字节化/并发演示）、`error.h`、`wrong.h`、`match.h`、`import.h`、`concurrency.h`、`calc.h`。
+- 冒烟测试：`tests/smoke.js`（28 项断言通过）。
+
+## 编译后端（已交付：JS 目标；C 目标待编译器环境）
+
+- `src/jsgen.js`：AST → 独立可执行 JS（纯块子集：struct/enum/match/函数/表达式）。
+- **双后端一致性已验证**：`h run calc.h` 与 `h build calc.h --exec` 输出逐行一致（smoke 断言）。
+- 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）。
+- 枚举比较统一为 `类型.变体`（两后端一致）。
+- 不支持的结构（class/并发/error/ref/move/顶层语句）编译时拒绝并提示用 `h run`。
+
+## C 目标映射（设计，待编译器环境）
+
+- `struct` → C struct（块 = 连续内存的直接映射，C 天然值语义）
+- `enum` + 穷尽 `match` → C enum + switch
+- `u64`/`f64`/`bool` → `uint64_t`/`double`/`bool`；`Str` → `const char*`
+- 函数/表达式 → C 函数/表达式；`print` → printf
+- 树/并发/error：需运行时支持（双向引用通知/调度器），后续切片
+
 ## 解释器定位
 
 - 独立脚本执行为主（命令行直接运行源文件）。
