@@ -126,5 +126,22 @@ t("M:N 并行运行 concurrency.h", r.code === 0 && r.out.includes("生产者完
 r = h(["run", "--threads=2"], "global ch: Channel<u64> = Channel(1)\nfun w(id: u64) {\n    print(\"执行体\", id.to_str())\n    ch.send(id)\n}\nfun reader() {\n    a = ch.recv()\n    b = ch.recv()\n    c = ch.recv()\n    print(\"读者\", a.to_str(), b.to_str(), c.to_str())\n}\nspawn w(1)\nspawn w(2)\nspawn w(3)\nspawn reader()\n");
 t("跨线程 Channel 路由", r.code === 0 && r.out.includes("执行体 1") && r.out.includes("执行体 2") && r.out.includes("执行体 3") && r.out.includes("读者"), r.out);
 
+// 13. C 后端动态数组 [T]
+const arrPath = path.join(ROOT, "examples", "array.h");
+r = h(["run", arrPath]);
+const runOutA = r.out;
+t("array.h h run 运行", r.code === 0 && runOutA.includes("整数数组: 60"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "array.h"), require("fs").readFileSync(arrPath, "utf8"));
+const rA = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "array.h"], { encoding: "utf8" });
+const exeA = path.join(require("os").tmpdir(), "array" + (process.platform === "win32" ? ".exe" : ""));
+let builtA = "";
+if (require("fs").existsSync(exeA)) {
+  const r3 = require("child_process").spawnSync(exeA, [], { encoding: "utf8" });
+  builtA = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("数组双后端一致性（C 原生）", builtA === runOutA, "\n--- run ---\n" + runOutA + "\n--- build ---\n" + builtA);
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

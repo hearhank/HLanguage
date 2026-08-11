@@ -7,7 +7,7 @@ const { parse } = require("./parser");
 
 function typeName(t) {
   if (t.type === "NamedType") return t.name;
-  if (t.type === "ArrayType") return "[]";
+  if (t.type === "ArrayType") return "[" + typeName(t.elem) + "]";
   if (t.type === "GenericType") return t.name;
   return "?";
 }
@@ -19,21 +19,69 @@ function cType(tname) {
     case "bool": return "bool";
     case "Str": return "const char*";
     case "void": return "void";
-    default: return tname;   // struct 类型名（typedef 已定义）
+    default: {
+      // 动态块 [T] → 短名_Array（元素短名：u64/f64/Str/结构体名）
+      if (tname.startsWith("[") && tname.endsWith("]")) {
+        return shortName(tname.slice(1, -1)) + "_Array";
+      }
+      return tname;   // struct 类型名（typedef 已定义）
+    }
   }
+}
+function shortName(tname) {
+  // 元素类型短名（用于数组 typedef 名）：u64/f64/Str/bool/结构体名 本身即是短名
+  return tname;
 }
 
 function genC(ast) {
-  const enums = {}, rets = {}, structFields = {};
+  const enums = {}, rets = {}, structFields = {}, arrayElems = new Set();
+  const collectTypes = (t) => {
+    if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); collectTypes(t.elem); }
+  };
+  // 从字面量推断数组元素类型（函数体内的 [10,20,30] 无类型注解）
+  const literalElemType = (items) => {
+    for (const it of items) {
+      if (it.type === "Literal") {
+        if (typeof it.value === "number") return Number.isInteger(it.value) ? "u64" : "f64";
+        if (typeof it.value === "string") return "Str";
+      }
+      if (it.type === "ArrayLiteral") return "[" + literalElemType(it.items) + "]";
+    }
+    return "u64";
+  };
+  const scanExpr = (e) => {
+    if (!e || typeof e !== "object") return;
+    if (e.type === "ArrayLiteral") {
+      arrayElems.add(literalElemType(e.items));
+      e.items.forEach(scanExpr);
+      return;
+    }
+    for (const v of Object.values(e)) {
+      if (Array.isArray(v)) v.forEach(scanExpr);
+      else if (v && typeof v === "object" && v.type) scanExpr(v);
+    }
+  };
   for (const d of ast.decls) {
     if (d.type === "EnumDecl") enums[d.name] = d.variants;
-    if (d.type === "FunDecl") rets[d.name] = d.ret ? typeName(d.ret.rtype) : "void";
+    if (d.type === "FunDecl") {
+      rets[d.name] = d.ret ? typeName(d.ret.rtype) : "void";
+      collectTypes(d.ret.rtype);
+      for (const p of d.params) collectTypes(p.ptype);
+      d.body.stmts.forEach(scanExpr);
+    }
     if (d.type === "StructDecl") {
       structFields[d.name] = {};
-      for (const f of d.fields) structFields[d.name][f.name] = typeName(f.fieldType);
+      for (const f of d.fields) {
+        structFields[d.name][f.name] = typeName(f.fieldType);
+        collectTypes(f.fieldType);
+      }
     }
   }
   const ctx = { enums, rets, structs: structFields };
+  // 数组 typedef（动态块：连续数据区 + 长度）
+  const arrayDefs = [...arrayElems].map(e =>
+    `typedef struct { unsigned long long len; ${cType(e)}* data; } ${shortName(e)}_Array;`
+  ).join("\n");
   const pre = [];
   const structs = [], enumsDefs = [], funcs = [];
   for (const d of ast.decls) {
@@ -67,7 +115,7 @@ function genC(ast) {
     '}',
     '',
   ];
-  return body.concat(structs, enumsDefs, funcs, ["int main(void) {", "  h_main();", "  return 0;", "}", ""]).join("\n");
+  return body.concat(arrayDefs ? [arrayDefs, ""] : [], structs, enumsDefs, funcs, ["int main(void) {", "  h_main();", "  return 0;", "}", ""]).join("\n");
 }
 
 function genStruct(d) {
@@ -135,7 +183,11 @@ function genExpr(e, scope) {
     case "Literal": return cLiteral(e);
     case "Ident": return e.name;
     case "MemberExpr": {
+      // 枚举值 Type.Variant → 常量名
       if (e.obj.type === "Ident" && !scope.declared(e.obj.name)) return e.obj.name + "_" + e.prop;
+      // 数组 .len → .len 字段
+      const ot = inferType(e.obj, scope);
+      if (ot && ot.startsWith("[") && e.prop === "len") return genExpr(e.obj, scope) + ".len";
       return genExpr(e.obj, scope) + "." + e.prop;
     }
     case "CallExpr": return genCall(e, scope);
@@ -155,8 +207,14 @@ function genExpr(e, scope) {
     case "MatchExpr": return genMatch(e, scope);
     case "ErrorLit": throw new Error("C 后端暂不支持 error——请用 h run");
     case "MoveExpr": throw new Error("C 后端暂不支持 move——请用 h run");
-    case "ArrayLiteral": throw new Error("C 后端暂不支持数组——请用 h run");
-    case "IndexExpr": throw new Error("C 后端暂不支持数组——请用 h run");
+    case "ArrayLiteral": {
+      const t = inferType(e, scope);   // "[f64]" 等
+      const items = e.items.map(x => genExpr(x, scope)).join(", ");
+      const et = cType(t.slice(1, -1));
+      return `(${cType(t)}){ .len = ${e.items.length}, .data = (${et}[]){ ${items} } }`;
+    }
+    case "IndexExpr":
+      return genExpr(e.obj, scope) + ".data[" + genExpr(e.index, scope) + "]";
     default: throw new Error("C 后端暂不支持表达式 " + e.type);
   }
 }
@@ -229,12 +287,22 @@ function inferType(e, scope) {
     case "MemberExpr": {
       // 枚举值 Type.Variant → 枚举名
       if (e.obj.type === "Ident" && !scope.declared(e.obj.name)) return e.obj.name;
-      // struct 字段类型推断
+      // 数组 .len → 数组类型
       const ot = inferType(e.obj, scope);
+      if (ot && ot.startsWith("[") && e.prop === "len") return "u64";
+      // struct 字段类型推断
       if (scope.ctx.structs && scope.ctx.structs[ot] && scope.ctx.structs[ot][e.prop]) {
         return scope.ctx.structs[ot][e.prop];
       }
       return "?";
+    }
+    case "ArrayLiteral": {
+      const et = e.items.length ? inferType(e.items[0], scope) : "u64";
+      return "[" + et + "]";
+    }
+    case "IndexExpr": {
+      const ot = inferType(e.obj, scope);
+      return ot && ot.startsWith("[") ? ot.slice(1, -1) : "?";
     }
     case "MatchExpr": return e.arms.length ? inferType(e.arms[0].expr, scope) : "?";
     case "BinExpr": {

@@ -405,6 +405,10 @@ class Evaluator {
           this.rerr("类型 '" + e.obj.name + "' 不能作为值（静态方法仅限内建）", e.loc);
         }
         const obj = yield* this.evalExpr(e.obj);
+        if (Array.isArray(obj)) {
+          if (e.prop === "len") return obj.length;
+          this.rerr("动态块没有属性 '" + e.prop + "'（仅 len）", e.loc);
+        }
         if (obj === null || obj === undefined || typeof obj !== "object" || obj.__shape === "void") this.rerr("无法访问字段 '" + e.prop + "'", e.loc);
         if (!(e.prop in obj.__fields)) this.rerr("类型 " + obj.__type + " 没有字段 '" + e.prop + "'", e.loc);
         return obj.__fields[e.prop];

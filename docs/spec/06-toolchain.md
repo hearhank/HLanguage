@@ -22,12 +22,13 @@
 
 ## 编译后端（已交付：C 原生 + JS 回退）
 
-- `src/cgen.js`：AST → C 源码（纯块子集）——**"块 = 连续内存"在 C 中零运行时开销原样兑现**（struct → C struct、enum + 穷尽 match → typedef enum + switch、u64/f64/bool/Str → 原生类型）。
+- `src/cgen.js`：AST → C 源码（块子集）——**"块 = 连续内存"在 C 中零运行时开销原样兑现**（struct → C struct、enum + 穷尽 match → typedef enum + switch、u64/f64/bool/Str → 原生类型）。
+- **动态块 `[T]`**：连续数据区 + 长度（`T_Array`）——数组字面量 → 复合字面量、索引 → `.data[i]`、`.len` → `.len`。
 - `h build <file>`：探测编译器 `zig cc`（自带 clang）→ `gcc` → `cc` → `clang`，编译为原生二进制；无 C 编译器时回退 `jsgen`（JS 目标）。
 - **最短往返浮点格式化**（`h_print_f64`）：%.*g 循环至往返一致——与解释器 JS 输出逐位对齐。
-- **双后端一致性已验证（原生级）**：`h run calc.h` 与编译后的 `calc.exe` 输出逐行一致（smoke 断言，31 项全绿）。
+- **双后端一致性已验证（原生级）**：`calc.h`（enum/match/struct）与 `array.h`（动态块）编译后输出与 `h run` 逐行一致（smoke 断言，33 项全绿）。
 - 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）；枚举比较统一为 `类型.变体`。
-- 不支持的结构（class/并发/error/ref/move/数组/顶层语句）编译时拒绝并提示用 `h run`。
+- 不支持的结构（class/并发/error/ref/move/顶层语句）编译时拒绝并提示用 `h run`。
 - 环境注：Windows 下推荐 `zig cc`（Zig 自带 clang 21）；直接运行 exe 时中文输出需 UTF-8 代码页（`chcp 65001`）。
 
 ## C 目标映射（设计，待编译器环境）
