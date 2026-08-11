@@ -74,7 +74,7 @@ function computeClassMethods(classes) {
 }
 
 function genC(ast) {
-  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), paramKinds = {};
+  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), paramKinds = {}, retKinds = {};
   const collectTypes = (t) => {
     if (!t) return;
     if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); collectTypes(t.elem); }
@@ -102,6 +102,7 @@ function genC(ast) {
     if (d.type === "FunDecl") {
       rets[d.name] = d.ret ? typeName(d.ret.rtype) : "void";
       paramKinds[d.name] = d.params.map(p => p.kind);
+      retKinds[d.name] = d.ret ? d.ret.kind : "val";
       collectTypes(d.ret && d.ret.rtype);
       for (const p of d.params) collectTypes(p.ptype);
       d.body.stmts.forEach(scanExpr);
@@ -119,13 +120,31 @@ function genC(ast) {
       classes[d.name] = { fields, methods: d.methods, imports: d.imports, hides: d.hides, aliases: d.aliases };
       for (const m of d.methods) {
         paramKinds[d.name + "_" + m.name] = m.params.map(p => p.kind);
+        retKinds[d.name + "_" + m.name] = m.ret ? m.ret.kind : "val";
         collectTypes(m.ret && m.ret.rtype);
         for (const p of m.params) collectTypes(p.ptype);
         m.body.stmts.forEach(scanExpr);
       }
     }
   }
-  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds };
+  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds, retKinds };
+  // error 返回类型结构体：struct h_err_T { ok, val, name }（未处理时调用点 fail-fast，与求值器一致）
+  const errTypes = {};
+  const collectErr = (ret) => {
+    if (ret && ret.kind === "error") {
+      const T = ret.rtype ? typeName(ret.rtype) : "void";
+      if (!(T in errTypes)) errTypes[T] = T === "void" ? null : (ctx.classes[T] ? cType(T) + "*" : cType(T));
+    }
+  };
+  for (const d of ast.decls) {
+    if (d.type === "FunDecl") collectErr(d.ret);
+    if (d.type === "ClassDecl") for (const m of d.methods) collectErr(m.ret);
+  }
+  const errorDefs = Object.keys(errTypes).map(T =>
+    T === "void"
+      ? "typedef struct { bool ok; const char* name; } h_err_void;"
+      : `typedef struct { bool ok; ${errTypes[T]} val; const char* name; } h_err_${shortName(T)};`
+  );
   const arrayDefs = [...arrayElems].map(e =>
     `typedef struct { unsigned long long len; ${cType(e)}* data; } ${shortName(e)}_Array;`
   ).join("\n");
@@ -184,8 +203,12 @@ function genC(ast) {
     '',
   ];
   return body.concat(fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
-    printProtos, [""], printFns, [""], classDefs, funcs,
-    ["int main(void) {", "  h_main();", "  return 0;", "}", ""]).join("\n");
+    errorDefs, [""], printProtos, [""], printFns, [""], classDefs, funcs,
+    ["int main(void) {",
+      ctx.retKinds["main"] === "error"
+        ? `  h_err_${shortName(ctx.rets["main"] || "void")} _he = h_main(); if (!_he.ok) { fprintf(stderr, "\\u274c error.%s（未处理）\\n", _he.name); return 1; }`
+        : "  h_main();",
+      "  return 0;", "}", ""]).join("\n");
 }
 
 function genStruct(d) {
@@ -271,9 +294,23 @@ function genClass(d, ctx) {
 }
 
 /* ---------- 函数 / 方法 ---------- */
+function findRetType(scope) { let s = scope; while (s) { if (s.retType) return s.retType; s = s.parent; } return null; }
+function resolveFname(callee, scope) {
+  if (callee.type === "Ident") {
+    if (callee.name === "print" || callee.name === "store" || callee.name === "load") return null;
+    return callee.name === "main" ? "h_main" : callee.name;
+  }
+  if (callee.type === "MemberExpr") {
+    const t = inferType(callee.obj, scope);
+    const entry = scope.ctx.classMethods[t] && scope.ctx.classMethods[t][callee.prop];
+    return entry ? entry.source + "_" + entry.name : null;
+  }
+  return null;
+}
 function genFun(d, ctx, className) {
   const scope = new Scope(null, ctx);
   if (className) scope.receiverType = className;
+  if (d.ret && d.ret.kind === "error") scope.retType = { kind: "error", T: d.ret.rtype ? typeName(d.ret.rtype) : "void" };
   const params = d.params.map(p => {
     const t = typeName(p.ptype);
     let ct = ctx.classes[t] ? cType(t) + "*" : cType(t);
@@ -287,7 +324,11 @@ function genFun(d, ctx, className) {
   // 函数最外层作用域：树变量销毁（move 后跳过——已从 trees 移除；视图参数从不进入）
   const frees = [...scope.trees].map(n => `  h_free_${scope.typeOf(n)}(${n});`).join("\n");
   const retT = d.ret ? typeName(d.ret.rtype) : "void";
-  const ret = d.ret ? (ctx.classes[retT] ? cType(retT) + "*" : cType(retT)) : "void";
+  const ret = d.ret
+    ? (d.ret.kind === "error"
+      ? `h_err_${shortName(retT)}`
+      : (ctx.classes[retT] ? cType(retT) + "*" : cType(retT)))
+    : "void";
   let fname = className ? className + "_" + d.name : d.name;
   if (!className && fname === "main") fname = "h_main";
   return `${ret} ${fname}(${allParams.join(", ")}) {\n${body}${frees ? "\n" + frees : ""}\n}`;
@@ -296,7 +337,7 @@ function genFun(d, ctx, className) {
 class Scope {
   constructor(parent, ctx) {
     this.parent = parent || null; this.ctx = ctx;
-    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null; this.refParams = new Set();
+    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null; this.refParams = new Set(); this.retType = null;
   }
   declared(name) { let s = this; while (s) { if (s.vars.has(name)) return true; s = s.parent; } return false; }
   declareType(name, t, owned = true) { this.vars.add(name); this.types.set(name, t); if (owned && this.classType(t)) this.trees.add(name); }
@@ -321,6 +362,19 @@ function genStmt(st, scope) {
       return `  ${ct} ${st.name} = ${init};`;
     }
     case "ReturnStmt": {
+      const rt = findRetType(scope);
+      if (rt) {
+        // error 返回：return error.X / return 值（ok 包装）
+        if (st.expr && st.expr.type === "ErrorLit") {
+          return `  return (h_err_${shortName(rt.T)}){ .ok = false, .name = "${st.expr.name}" };`;
+        }
+        if (rt.T === "void") return "  return (h_err_void){ .ok = true };";
+        if (st.expr && st.expr.type === "Ident") {
+          const t = scope.typeOf(st.expr.name);
+          if (scope.classType(t)) scope.releaseTree(st.expr.name);
+        }
+        return `  return (h_err_${shortName(rt.T)}){ .ok = true, .val = ${st.expr ? genExpr(st.expr, scope) : "0"} };`;
+      }
       // 返回树（含 -> move T 的无 move 关键字逃逸）：所有权随返回值转移，函数退出不销毁
       if (st.expr && st.expr.type === "Ident") {
         const t = scope.typeOf(st.expr.name);
@@ -375,12 +429,26 @@ function genExpr(e, scope) {
       if (scope.classType(ot)) return genExpr(e.obj, scope) + "->" + e.prop;
       return genExpr(e.obj, scope) + "." + e.prop;
     }
-    case "CallExpr": return genCall(e, scope);
+    case "CallExpr": {
+      const code = genCall(e, scope);
+      // error 函数调用：语句表达式包装——调用点 fail-fast（未处理即终止，对齐求值器）
+      const fname = resolveFname(e.callee, scope);
+      if (fname && scope.ctx.retKinds[fname] === "error") {
+        const T = shortName(scope.ctx.rets[fname] || "void");
+        const val = T === "void" ? "(void)0" : "_he.val";
+        return `({ h_err_${T} _he = ${code}; if (!_he.ok) { fprintf(stderr, "\\u274c error.%s（未处理）\\n", _he.name); exit(1); } ${val}; })`;
+      }
+      return code;
+    }
     case "BinExpr": {
       const l = genExpr(e.left, scope), r = genExpr(e.right, scope);
       return `(${l} ${e.op} ${r})`;
     }
-    case "UnaryExpr": return `(${e.op}${genExpr(e.operand, scope)})`;
+    case "UnaryExpr": {
+      // 负整数字面量：不能用 ULL（无符号取负变巨大数），直接 (-n) 转 double
+      if (e.op === "-" && e.operand.type === "Literal" && Number.isInteger(e.operand.value)) return `(-${e.operand.value})`;
+      return `(${e.op}${genExpr(e.operand, scope)})`;
+    }
     case "AssignExpr": {
       // ref 字段赋值 → setter（先注销旧目标、再注册新目标，双向引用通知）
       if (e.op === "=" && e.left.type === "MemberExpr") {
@@ -438,7 +506,7 @@ function cLiteral(e) {
   if (e.kind === "string") return '"' + e.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
   if (e.kind === "bool") return e.value ? "true" : "false";
   if (typeof e.value === "number") {
-    if (Number.isInteger(e.value)) return e.value + "ULL";
+    if (Number.isInteger(e.value)) return e.value < 0 ? `(${e.value})` : e.value + "ULL";   // 负数不能用 ULL（无符号取负变巨大数）
     return e.value + "";
   }
   return String(e.value);

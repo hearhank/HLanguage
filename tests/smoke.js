@@ -130,8 +130,8 @@ if (require("fs").existsSync(exeC)) {
 process.chdir(cwd);
 t("build 支持 class（树）：编译运行输出 1", builtC.includes("1"), "\n--- build 日志 ---\n" + (rC.stdout || "") + (rC.stderr || "") + "\n--- exe 输出 ---\n" + builtC);
 
-r = h(["build"], "fun f() -> error bool {\n    return error.X\n}\n");
-t("build 拒绝 error（提示用 h run）", r.code === 1 && r.out.includes("暂不支持 error"), r.out.slice(0, 120));
+r = h(["build"], "fun f() {}\nspawn f()\n");
+t("build 拒绝并发 spawn（提示用 h run）", r.code === 1 && r.out.includes("暂不支持并发"), r.out.slice(0, 120));
 
 // 12. M:N 并行（worker_threads）
 r = h(["run", path.join(ROOT, "examples", "concurrency.hc"), "--threads", "2"]);
@@ -190,6 +190,16 @@ if (require("fs").existsSync(exeRP)) {
 }
 process.chdir(cwd);
 t("ref/move 参数双后端一致性", builtRP === runOutRP, "\n--- run ---\n" + runOutRP + "\n--- build ---\n" + builtRP);
+
+// 16. C 后端 error：未处理即终止（含 stderr 格式 + 退出码 1）
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "error.hc"), require("fs").readFileSync(path.join(ROOT, "examples", "error.hc"), "utf8"));
+const rE = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "error.hc", "--exec"], { encoding: "utf8" });
+const errOut = (rE.stdout || "") + (rE.stderr || "");
+process.chdir(cwd);
+t("error 双后端一致：合法输出 + 未处理终止 + 退出码 1",
+  rE.status === 1 && errOut.includes("先算一个合法的") && errOut.includes("❌ error.NegativeAmount（未处理）") && !errOut.includes("这行不会执行"),
+  "status=" + rE.status + "\n" + errOut.slice(0, 300));
 
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));
