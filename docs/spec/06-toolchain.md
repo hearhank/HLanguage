@@ -59,7 +59,7 @@
   - **并发**：Windows Fiber 协程 + **M:N worker 线程**运行时（`h build --threads N`；`#ifdef _WIN32`）——`spawn f()` 请求投递到 worker（round-robin），**fiber 须在创建线程运行故由 worker 线程自建**（`h_spawn_req`）；`yield` → 切回本 worker 调度器重入队；`Channel(n)` → 全局状态 + `CRITICAL_SECTION`/`CONDITION_VARIABLE`：send 满/recv 空挂起（fiber 挂到等待队列），成功路径即时唤醒跨线程等待者（入队其所属 worker + 条件变量）；`print` 经输出锁原子输出；执行体完成计数（`h_task_finished`）归零后广播 shutdown
   - **单线程模式（H_THREADS=1，默认）**：延迟唤醒（空转时 recv/send 等待者按序唤醒）——与求值器单线程调度**逐字一致**；多线程模式顺序不保证（SPEC 04），验证关键行集合
   - 带参 spawn 经打包结构体 `h_sp_ctx_f` 传参；全局 `Channel<T>` 在 `h_global_init` 构造（原型仅 u64 值）
-  - **字节化（to_bytes/from_bytes）**：可逆自描述 JSON（与求值器 `JSON.stringify` 逐字节一致）——per-type 生成 `h_tb_T`（序列化，最短往返数字、`\x` 转义字符串）+ `h_jrev_T`（反序列化，递归重建）+ `h_to_bytes_T`/`h_from_bytes_T` 入口；**顶层带格式版本字段 `"__ver":1`**（未知版本报错、缺失视为 v1 兼容旧数据）；`x.to_bytes()` → 字符串，`Type.from_bytes(s)` → 恢复实例（ref 字段经 setter 重新注册）；块=连续数据直接映射、树=序列化压平
+  - **字节化（to_bytes/from_bytes）**：可逆自描述 JSON（与求值器 `JSON.stringify` 逐字节一致）——per-type 生成 `h_tb_T`（序列化，最短往返数字、`\x` 转义字符串）+ `h_jrev_T`（反序列化，递归重建）+ `h_to_bytes_T`/`h_from_bytes_T` 入口；**顶层带格式版本字段 `"__ver":1`**（未知版本报错、缺失视为 v1 兼容旧数据）；**类型标签注册机制**——生成 `h_type_registry`（类型名→元数据，运行时可见）+ `from_bytes` 校验 `__type` 匹配目标类型（两端一致）；`x.to_bytes()` → 字符串，`Type.from_bytes(s)` → 恢复实例（ref 字段经 setter 重新注册）；块=连续数据直接映射、树=序列化压平
 - 限制：非 Channel 的 global（Exclusive/SharedRead）、非 Windows 平台编译时拒绝（提示用 h run）
 
 ## 解释器定位

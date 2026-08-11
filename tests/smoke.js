@@ -289,6 +289,12 @@ t("to_bytes 顶层带 __ver:1", newBytes.includes('"__ver":1'), newBytes.slice(0
 let verErr = "";
 try { evW.fromBytes('{"__ver":99,"__shape":"block","__type":"P","__fields":{"x":1}}'); } catch (e) { verErr = e.msg || ""; }
 t("未知字节格式版本报错", verErr.includes("不支持的字节格式版本 99"), verErr);
+let tagErr = "";
+try { evW.fromBytes('{"__shape":"block","__type":"Q","__fields":{"x":1}}', "P"); } catch (e) { tagErr = e.msg || ""; }
+t("字节类型标签不匹配报错", tagErr.includes("字节类型标签不匹配：期望 P，实际 Q"), tagErr);
+const { genC } = require(path.join(ROOT, "src", "cgen.js"));
+const genC2 = genC(parse("struct P { x: f64 }\nclass C { a: u64 }\n"));
+t("C 生成类型注册表（h_type_registry）", genC2.includes("h_type_registry") && genC2.includes('{ "P", sizeof(P) }') && genC2.includes('{ "C", sizeof(C) }'), "");
 
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));

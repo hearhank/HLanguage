@@ -603,7 +603,7 @@ class Evaluator {
       const mname = callee.prop;
       const isStatic = callee.obj.type === "Ident" && this.types[callee.obj.name];
       if (isStatic) {
-        if (mname === "from_bytes") return this.fromBytes(args[0]);
+        if (mname === "from_bytes") return this.fromBytes(args[0], callee.obj.name);
         this.rerr("类型 '" + callee.obj.name + "' 没有静态方法 '" + mname + "'", e.loc);
       }
       const obj = yield* this.evalExpr(callee.obj);
@@ -714,11 +714,15 @@ class Evaluator {
     this.event("to_bytes", { val: valueToStr(v), bytes: json.length });
     return json;
   }
-  fromBytes(s) {
+  fromBytes(s, typeName) {
     const data = JSON.parse(s);
     // 格式版本字段：顶层 __ver（缺失视为 v1，向后兼容旧数据）
     if (data && typeof data === "object" && !Array.isArray(data) && data.__ver !== undefined && data.__ver !== 1) {
       this.rerr("不支持的字节格式版本 " + data.__ver, null);
+    }
+    // 类型标签注册校验：__type 必须与目标类型匹配
+    if (typeName && data && typeof data === "object" && !Array.isArray(data) && data.__type !== undefined && data.__type !== typeName) {
+      this.rerr("字节类型标签不匹配：期望 " + typeName + "，实际 " + data.__type, null);
     }
     const revive = (x) => {
       if (x && typeof x === "object" && x.__shape) {

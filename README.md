@@ -73,8 +73,8 @@ node tests/smoke.js                          # 34 项回归测试
 
 ## 状态
 
-- ✅ 设计树完整（每支走到叶子）· 5 个原型验证 · 全功能运行时 · M:N 并行 · **C 原生编译（zig cc/gcc）** · 双后端一致性（块/enum/match/数组/class 树/ref 字段通知/ref·move 参数/error/并发 M:N/字节化+版本字段）
-- ⏳ 未启动：真竞争检测、类型标签注册机制、C 后端跨平台（当前 Fiber/线程运行时仅 Windows）
+- ✅ 设计树完整（每支走到叶子）· 5 个原型验证 · 全功能运行时 · M:N 并行 · **C 原生编译（zig cc/gcc）** · 双后端一致性（块/enum/match/数组/class 树/ref 字段通知/ref·move 参数/error/并发 M:N/字节化+版本字段+类型注册表）
+- ⏳ 未启动：真竞争检测、C 后端跨平台（当前 Fiber/线程运行时仅 Windows）
 - 已知取舍：多线程模式 print 输出顺序不保证（单线程默认确定）；Windows 直接运行 exe 中文输出需 UTF-8 代码页（`chcp 65001`）
 
 ## 设计旅程

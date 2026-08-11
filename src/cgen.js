@@ -642,6 +642,22 @@ function genC(ast, threads) {
   for (const [n, vs] of Object.entries(enums)) {
     bytesFns.push(genTBEnum(n, vs), genRevEnum(n, vs), genToBytesEntry(n, `${n} p`), genFromBytes(n, n));
   }
+  // 类型注册表（类型标签注册机制）：类型名 → 元数据，运行时可见（互操作/诊断入口）
+  const regEntries = [];
+  for (const n of Object.keys(structFields)) regEntries.push(`  { \"${n}\", sizeof(${n}) }`);
+  for (const e of arrayElems) { const an = shortName(e) + "_Array"; regEntries.push(`  { \"${an}\", sizeof(${an}) }`); }
+  for (const n of Object.keys(classes)) regEntries.push(`  { \"${n}\", sizeof(${n}) }`);
+  for (const n of Object.keys(enums)) regEntries.push(`  { \"${n}\", sizeof(${n}) }`);
+  const registry = [
+    "/* 类型注册表（类型标签注册机制）：类型名 → 元数据 */",
+    "typedef struct { const char* name; size_t size; } h_type_entry;",
+    "static h_type_entry h_type_registry[] = {",
+    regEntries.join(",\n"),
+    "};",
+    "static const int h_type_count = (int)(sizeof(h_type_registry) / sizeof(h_type_registry[0]));",
+    "static const char* h_type_lookup(const char* name) { for (int i = 0; i < h_type_count; i++) if (strcmp(h_type_registry[i].name, name) == 0) return h_type_registry[i].name; return NULL; }",
+    "",
+  ].join("\n");
   // 类型顺序：前向声明（struct/class tag）→ enum → 数组 → struct 定义 → class 定义 → 打印/方法/函数
   const fwdDecls = [];
   for (const n of Object.keys(structFields)) fwdDecls.push(`typedef struct ${n} ${n};`);
@@ -719,6 +735,7 @@ function genC(ast, threads) {
   const spawnGlue = [spawnCtxDefs, spawnTramps].filter(Boolean).join("\n");
   return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
     errorDefs, [""], printProtos, [""], printFns, [""], classDefs,
+    registry ? [registry] : [],
     bytesFns ? [bytesFns.join("\n"), ""] : [], funcs,
     spawnGlue ? [spawnGlue, ""] : [], mainEntry ? [mainEntry, ""] : [], globalInitFun ? [globalInitFun] : [],
     ["int main(void) {",
@@ -869,7 +886,7 @@ function genRevEnum(name, variants) {
   return L.join("\n");
 }
 function genFromBytes(name, retT) {
-  return `static ${retT} h_from_bytes_${name}(const char* s) {\n  const char* p = s;\n  h_json* j = h_json_parse_value(&p);\n  h_json* vv = h_json_find(j, \"__ver\");\n  if (vv && vv->kind == 2 && vv->num > 1) { fprintf(stderr, \"\\u274c 不支持的字节格式版本 %.0f\\n\", vv->num); exit(1); }\n  ${retT} r = h_jrev_${name}(j);\n  h_json_free(j);\n  return r;\n}`;
+  return `static ${retT} h_from_bytes_${name}(const char* s) {\n  const char* p = s;\n  h_json* j = h_json_parse_value(&p);\n  h_json* vv = h_json_find(j, \"__ver\");\n  if (vv && vv->kind == 2 && vv->num > 1) { fprintf(stderr, \"\\u274c 不支持的字节格式版本 %.0f\\n\", vv->num); exit(1); }\n  h_json* tt = h_json_find(j, \"__type\");\n  if (tt && tt->kind == 3 && strcmp(tt->str, \"${name}\") != 0) { fprintf(stderr, \"\\u274c 字节类型标签不匹配：期望 ${name}，实际 %s\\n\", tt->str); exit(1); }\n  ${retT} r = h_jrev_${name}(j);\n  h_json_free(j);\n  return r;\n}`;
 }
 
 /* ---------- class（树）：构造/释放/引用通知 + 方法（typedef 见 genClassDecls） ---------- */
