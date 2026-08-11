@@ -16,6 +16,7 @@ const { parse } = require("./parser");
 const { check } = require("./checker");
 const { run } = require("./evaluator");
 const { jsgen } = require("./jsgen");
+const { genC } = require("./cgen");
 const { ParallelRunner } = require("./parallel");
 
 const HELP = `h —— H 语言运行时雏形
@@ -91,6 +92,23 @@ function doRun(src, trace) {
   return 0;
 }
 
+function findCC() {
+  // zig cc 优先（自带 clang）；然后 gcc/cc/clang
+  const tries = [
+    ["zig", ["cc", "--version"]],
+    ["gcc", ["--version"]],
+    ["cc", ["--version"]],
+    ["clang", ["--version"]],
+  ];
+  for (const [cc, args] of tries) {
+    try {
+      const r = spawnSync(cc, args, { encoding: "utf8" });
+      if (r.status === 0) return cc === "zig" ? ["zig", "cc"] : [cc];
+    } catch (e) { /* 未找到 */ }
+  }
+  return null;
+}
+
 function doBuild(src, file, execIt) {
   // 静态检查先行
   const r = check(src);
@@ -99,16 +117,38 @@ function doBuild(src, file, execIt) {
     console.error("❌ " + r.errors.length + " 个静态错误，拒绝编译");
     return 1;
   }
+  const base = file ? path.basename(file, path.extname(file)) : "h_prog";
+  const cc = findCC();
+  if (cc) {
+    // C 后端：生成 C → 编译为原生二进制
+    let c;
+    try { c = genC(parse(src)); }
+    catch (e) { console.error("❌ C 编译失败：" + e.message); return 1; }
+    const cFile = path.join(process.cwd(), base + ".c");
+    const exeFile = path.join(process.cwd(), base + (process.platform === "win32" ? ".exe" : ""));
+    fs.writeFileSync(cFile, c);
+    const comp = spawnSync(cc[0], [...cc.slice(1), cFile, "-o", exeFile], { encoding: "utf8" });
+    if (comp.status !== 0) {
+      console.error("❌ 编译失败（" + cc.join(" ") + "）：");
+      process.stderr.write(comp.stderr || "");
+      return 1;
+    }
+    console.log("✅ 编译成功（" + cc.join(" ") + "）→ " + exeFile + "（C 源码 " + base + ".c 已保留）");
+    if (execIt) {
+      const r2 = spawnSync(exeFile, [], { encoding: "utf8" });
+      process.stdout.write(r2.stdout || "");
+      if (r2.stderr) process.stderr.write(r2.stderr);
+      return r2.status || 0;
+    }
+    return 0;
+  }
+  // 无 C 编译器：回退 JS 后端
   let js;
   try { js = jsgen(parse(src)); }
-  catch (e) {
-    console.error("❌ 编译失败：" + e.message);
-    return 1;
-  }
-  const base = file ? path.basename(file, path.extname(file)) : "h_prog";
+  catch (e) { console.error("❌ 编译失败：" + e.message); return 1; }
   const outFile = path.join(process.cwd(), base + ".js");
   fs.writeFileSync(outFile, js);
-  console.log("✅ 编译成功 → " + outFile);
+  console.log("✅ 编译成功（JS 目标，未找到 C 编译器）→ " + outFile);
   if (execIt) {
     const r2 = spawnSync(process.execPath, [outFile], { encoding: "utf8" });
     process.stdout.write(r2.stdout || "");

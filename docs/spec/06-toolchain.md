@@ -20,13 +20,15 @@
 - 示例：`examples/demo.h`（生命周期/字节化/并发演示）、`error.h`、`wrong.h`、`match.h`、`import.h`、`concurrency.h`、`calc.h`。
 - 冒烟测试：`tests/smoke.js`（28 项断言通过）。
 
-## 编译后端（已交付：JS 目标；C 目标待编译器环境）
+## 编译后端（已交付：C 原生 + JS 回退）
 
-- `src/jsgen.js`：AST → 独立可执行 JS（纯块子集：struct/enum/match/函数/表达式）。
-- **双后端一致性已验证**：`h run calc.h` 与 `h build calc.h --exec` 输出逐行一致（smoke 断言）。
-- 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）。
-- 枚举比较统一为 `类型.变体`（两后端一致）。
-- 不支持的结构（class/并发/error/ref/move/顶层语句）编译时拒绝并提示用 `h run`。
+- `src/cgen.js`：AST → C 源码（纯块子集）——**"块 = 连续内存"在 C 中零运行时开销原样兑现**（struct → C struct、enum + 穷尽 match → typedef enum + switch、u64/f64/bool/Str → 原生类型）。
+- `h build <file>`：探测编译器 `zig cc`（自带 clang）→ `gcc` → `cc` → `clang`，编译为原生二进制；无 C 编译器时回退 `jsgen`（JS 目标）。
+- **最短往返浮点格式化**（`h_print_f64`）：%.*g 循环至往返一致——与解释器 JS 输出逐位对齐。
+- **双后端一致性已验证（原生级）**：`h run calc.h` 与编译后的 `calc.exe` 输出逐行一致（smoke 断言，31 项全绿）。
+- 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）；枚举比较统一为 `类型.变体`。
+- 不支持的结构（class/并发/error/ref/move/数组/顶层语句）编译时拒绝并提示用 `h run`。
+- 环境注：Windows 下推荐 `zig cc`（Zig 自带 clang 21）；直接运行 exe 时中文输出需 UTF-8 代码页（`chcp 65001`）。
 
 ## C 目标映射（设计，待编译器环境）
 
@@ -35,6 +37,12 @@
 - `u64`/`f64`/`bool` → `uint64_t`/`double`/`bool`；`Str` → `const char*`
 - 函数/表达式 → C 函数/表达式；`print` → printf
 - 树/并发/error：需运行时支持（双向引用通知/调度器），后续切片
+
+## C 目标映射（已实现，见上）
+
+- struct → C struct（typedef）；enum + match → typedef enum + switch（GNU 语句表达式）
+- u64/f64/bool/Str → unsigned long long/double/bool/const char*
+- 树/并发/error：需运行时支持，编译时拒绝（提示用 h run）
 
 ## 解释器定位
 

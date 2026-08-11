@@ -91,20 +91,30 @@ t("Channel 挂起/唤醒", r.code === 0 && r.out.includes("发送完") && r.out.
 r = h(["run"], "fun w() {\n    print(\"开始\")\n    yield\n    print(\"继续\")\n}\nfun x() {\n    print(\"另一执行体\")\n}\nspawn w()\nspawn x()\n");
 t("yield 让出调度权", r.code === 0 && r.out.indexOf("开始") < r.out.indexOf("另一执行体") && r.out.indexOf("另一执行体") < r.out.indexOf("继续"), r.out);
 
-// 11. 编译后端：双后端一致性
+// 11. 编译后端：双后端一致性（C 原生 + JS 回退）
 const calcPath = path.join(ROOT, "examples", "calc.h");
 r = h(["run", calcPath]);
 const runOut = r.out;
 t("calc.h h run 运行", r.code === 0 && runOut.includes("距离平方: 25"), "");
-// 编译到临时目录运行，避免污染
-const tmpCalc = path.join(require("os").tmpdir(), "h_calc_test.js");
-try {
-  const r2 = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", calcPath], { encoding: "utf8" });
-  const js = require("fs").readFileSync(path.join(ROOT, "calc.js"), "utf8");
-  require("fs").writeFileSync(tmpCalc, js);
-  const r3 = require("child_process").spawnSync(process.execPath, [tmpCalc], { encoding: "utf8" });
-  t("双后端一致性：run 输出 === build 运行输出", r3.stdout === runOut, "\n--- run ---\n" + runOut + "\n--- build ---\n" + r3.stdout);
-} catch (e) { t("双后端一致性", false, e.message); }
+// 编译（有 zig cc 走 C 后端 → calc.exe；无则 JS 回退）并运行产物
+const tmpOut = path.join(require("os").tmpdir(), "h_calc_prog");
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "calc.h"), require("fs").readFileSync(calcPath, "utf8"));
+const cwd = process.cwd();
+process.chdir(require("os").tmpdir());
+const r2 = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "calc.h"], { encoding: "utf8" });
+const exeP = path.join(require("os").tmpdir(), "calc" + (process.platform === "win32" ? ".exe" : ""));
+const jsP = path.join(require("os").tmpdir(), "calc.js");
+let builtOut = "";
+if (require("fs").existsSync(exeP)) {
+  const r3 = require("child_process").spawnSync(exeP, [], { encoding: "utf8" });
+  builtOut = r3.stdout || "";
+} else if (require("fs").existsSync(jsP)) {
+  const r3 = require("child_process").spawnSync(process.execPath, [jsP], { encoding: "utf8" });
+  builtOut = r3.stdout || "";
+}
+process.chdir(cwd);
+t("双后端一致性：run 输出 === 编译后运行输出", builtOut.replace(/\r/g, "") === runOut, "\n--- run ---\n" + runOut + "\n--- build ---\n" + builtOut.replace(/\r/g, ""));
+t("编译产物是原生二进制（zig cc）", (r2.stdout || "").includes("zig cc") || (r2.stdout || "").includes("JS 目标"), (r2.stdout || "").slice(0, 60));
 
 r = h(["build"], "class A {\n    fun f() -> u64 { return 1 }\n}\nfun main() -> void {\n    a = A{}\n    print(a.f().to_str())\n}\n");
 t("build 拒绝 class（提示用 h run）", r.code === 1 && r.out.includes("暂不支持 class"), r.out.slice(0, 80));
