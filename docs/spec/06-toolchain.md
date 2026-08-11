@@ -61,6 +61,7 @@
   - 带参 spawn 经打包结构体 `h_sp_ctx_f` 传参；全局 `Channel<T>` 在 `h_global_init` 构造（原型仅 u64 值）
   - **字节化（to_bytes/from_bytes）**：可逆自描述 JSON（与求值器 `JSON.stringify` 逐字节一致）——per-type 生成 `h_tb_T`（序列化，最短往返数字、`\x` 转义字符串）+ `h_jrev_T`（反序列化，递归重建）+ `h_to_bytes_T`/`h_from_bytes_T` 入口；**顶层带格式版本字段 `"__ver":1`**（未知版本报错、缺失视为 v1 兼容旧数据）；**类型标签注册机制**——生成 `h_type_registry`（类型名→元数据，运行时可见）+ `from_bytes` 校验 `__type` 匹配目标类型（两端一致）；`x.to_bytes()` → 字符串，`Type.from_bytes(s)` → 恢复实例（ref 字段经 setter 重新注册）；块=连续数据直接映射、树=序列化压平
 - 限制：非 Channel 的 global（Exclusive/SharedRead）编译时拒绝（提示用 h run）。Windows 平台运行验证（Fiber）；POSIX 平台经 zig cc 交叉编译验证（x86_64/aarch64 Linux），运行验证待真实环境。
+- 元组/切片（ADR 0007/0008）：设计已定，两后端实现待排期（parser/checker/evaluator/cgen 同步落地）。
 
 ## 解释器定位
 
