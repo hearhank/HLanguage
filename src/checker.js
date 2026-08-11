@@ -21,11 +21,13 @@ class Checker {
     this.types = {};
     this.funcs = {};
     this.errors = [];
+    this.globals = new Set();
   }
   err(rule, msg, loc) { this.errors.push({ rule, msg, line: loc ? loc.line : 0, col: loc ? loc.col : 0 }); }
 
   register() {
     for (const d of this.ast.decls) {
+      if (d.type === "GlobalDecl") { this.globals.add(d.name); continue; }
       if (d.type === "StructDecl") {
         const fields = {};
         for (const f of d.fields) fields[f.name] = { fieldType: f.fieldType, isMut: f.isMut };
@@ -251,7 +253,10 @@ class Checker {
         return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : "u64", mutable: false };
       case "Ident": {
         const v = scope.lookup(e.name);
-        if (!v) { this.err("R7", "未定义的变量 '" + e.name + "'", e.loc); return { shape: "unknown", name: e.name, mutable: false }; }
+        if (!v) {
+          if (this.globals.has(e.name) || this.types[e.name]) return { shape: "unknown", name: e.name, mutable: true };  // global/类型名放行
+          this.err("R7", "未定义的变量 '" + e.name + "'", e.loc); return { shape: "unknown", name: e.name, mutable: false };
+        }
         if (v.moved) this.err("R9", "变量 '" + e.name + "' 已被 move，不能再使用", e.loc);
         return { shape: v.shape, name: v.name, mutable: v.mutable };
       }
@@ -282,11 +287,36 @@ class Checker {
         const callee = e.callee;
         if (callee.type === "Ident") {
           const fn = this.funcs[callee.name];
-          if (fn && fn.ret) return { shape: this.shapeOf(fn.ret.rtype), name: this.nameOf(fn.ret.rtype), mutable: false };
+          if (fn) {
+            // R3：ref 参数实参必须是可写变量（写透别名需要可写源；否则运行时退化，禁止）
+            fn.params.forEach((p, i) => {
+              if (p.kind !== "ref") return;
+              const arg = e.args[i];
+              if (!arg || arg.type !== "Ident") { this.err("R3", "ref 参数 '" + p.name + "' 的实参必须是可写变量（不能是表达式）", e.loc); return; }
+              const av = scope.lookup(arg.name);
+              if (!av || !av.mutable) this.err("R3", "ref 参数 '" + p.name + "' 的实参 '" + arg.name + "' 不可写（需要 mut 变量）", e.loc);
+            });
+            if (fn.ret) return { shape: this.shapeOf(fn.ret.rtype), name: this.nameOf(fn.ret.rtype), mutable: false };
+          }
           if (BUILTIN_FUNCS.includes(callee.name)) return { shape: "unknown", name: "?", mutable: false };
           return { shape: "unknown", name: "?", mutable: false };
         }
-        if (callee.type === "MemberExpr") { /* MemberExpr 分支已检查 obj */ }
+        if (callee.type === "MemberExpr") {
+          // 静态调用（Type.from_bytes 等）：类型名放行，不查变量
+          if (callee.obj.type === "Ident" && this.types[callee.obj.name]) return { shape: "unknown", name: "?", mutable: false };
+          const obj = this.checkExpr(callee.obj, scope);
+          const table = obj.shape === "unknown" ? null : this.methods[obj.name];
+          const entry = table && table[callee.prop];
+          if (entry && entry.func) {
+            entry.func.params.forEach((p, i) => {
+              if (p.kind !== "ref") return;
+              const arg = e.args[i];
+              if (!arg || arg.type !== "Ident") { this.err("R3", "ref 参数 '" + p.name + "' 的实参必须是可写变量（不能是表达式）", e.loc); return; }
+              const av = scope.lookup(arg.name);
+              if (!av || !av.mutable) this.err("R3", "ref 参数 '" + p.name + "' 的实参 '" + arg.name + "' 不可写（需要 mut 变量）", e.loc);
+            });
+          }
+        }
         return { shape: "unknown", name: "?", mutable: false };
       }
       case "BinExpr": {

@@ -130,8 +130,8 @@ if (require("fs").existsSync(exeC)) {
 process.chdir(cwd);
 t("build 支持 class（树）：编译运行输出 1", builtC.includes("1"), "\n--- build 日志 ---\n" + (rC.stdout || "") + (rC.stderr || "") + "\n--- exe 输出 ---\n" + builtC);
 
-r = h(["build"], "class A {\n    fun f(x: ref A) -> u64 { return 1 }\n}\nfun main() -> void {\n    a = A{}\n    print(a.f(a).to_str())\n}\n");
-t("build 拒绝 ref 参数（提示用 h run）", r.code === 1 && r.out.includes("暂不支持 ref 参数"), r.out.slice(0, 120));
+r = h(["build"], "fun f() -> error bool {\n    return error.X\n}\n");
+t("build 拒绝 error（提示用 h run）", r.code === 1 && r.out.includes("暂不支持 error"), r.out.slice(0, 120));
 
 // 12. M:N 并行（worker_threads）
 r = h(["run", path.join(ROOT, "examples", "concurrency.hc"), "--threads", "2"]);
@@ -173,6 +173,26 @@ if (require("fs").existsSync(exeR)) {
 }
 process.chdir(cwd);
 t("ref 字段双后端一致性（双向引用通知）", builtR === runOutR, "\n--- run ---\n" + runOutR + "\n--- build ---\n" + builtR);
+
+// 15. C 后端 ref/move 参数（写透别名 + 所有权转移）
+const rpPath = path.join(ROOT, "examples", "ref_param.hc");
+r = h(["run", rpPath]);
+const runOutRP = r.out;
+t("ref_param.hc h run 运行", r.code === 0 && runOutRP.includes("写透后: 150"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "ref_param.hc"), require("fs").readFileSync(rpPath, "utf8"));
+const rP = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "ref_param.hc"], { encoding: "utf8" });
+const exeRP = path.join(require("os").tmpdir(), "ref_param" + (process.platform === "win32" ? ".exe" : ""));
+let builtRP = "";
+if (require("fs").existsSync(exeRP)) {
+  const r3 = require("child_process").spawnSync(exeRP, [], { encoding: "utf8" });
+  builtRP = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("ref/move 参数双后端一致性", builtRP === runOutRP, "\n--- run ---\n" + runOutRP + "\n--- build ---\n" + builtRP);
+
+r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
+t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));
 
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

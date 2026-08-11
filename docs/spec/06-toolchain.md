@@ -26,10 +26,10 @@
 - **动态块 `[T]`**：连续数据区 + 长度（`T_Array`）——数组字面量 → 复合字面量、索引 → `.data[i]`、`.len` → `.len`。
 - `h build <file>`：探测编译器 `zig cc`（自带 clang）→ `gcc` → `cc` → `clang`，编译为原生二进制；无 C 编译器时回退 `jsgen`（JS 目标）。
 - **最短往返浮点格式化**（`h_print_f64`）：%.*g 循环至往返一致——与解释器 JS 输出逐位对齐。
-- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）、`ref.hc`（ref 字段双向引用通知）编译后输出与 `h run` 逐行一致（smoke 断言，36 项全绿）。
+- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）、`ref.hc`（ref 字段双向引用通知）、`ref_param.hc`（ref/move 参数）编译后输出与 `h run` 逐行一致（smoke 断言，39 项全绿）。
 - 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）；枚举比较统一为 `类型.变体`。
 - 文件后缀：H 语言源码统一使用 `.hc`（区别于 C 头文件）。
-- 不支持的结构（ref/move 参数/并发/error/顶层语句）编译时拒绝并提示用 `h run`。
+- 不支持的结构（并发/error/顶层语句）编译时拒绝并提示用 `h run`。
 - 环境注：Windows 下推荐 `zig cc`（Zig 自带 clang 21）；直接运行 exe 时中文输出需 UTF-8 代码页（`chcp 65001`）。
 
 ## C 目标映射（设计，待编译器环境）
@@ -53,7 +53,9 @@
   - 方法 → 静态派发 `Type_method(self, ...)`；方法体内裸字段名 → `self->field`（含嵌套块）
   - **打印一致性**：`print(树)` 生成 `h_print_Type`（递归输出 `Type{字段: 值, ...}`，数组 `[...]`、字符串带引号）——与解释器 valueToStr 逐字一致
   - **ref 字段（双向引用通知）**：`next: ref T` → `T*` + 对象内嵌被引用链表（`_refs` 头 + 每 ref 字段一个 `h_ref_link` 节点，零额外 malloc）；写字段经 setter（先注销旧目标、再注册新目标）；`h_free_Type` 先遍历链表把所有指向本对象的 ref 字段置 NULL（防悬垂），再注销自身持有的 ref 字段；访问已失效字段 = NULL 解引用（原型）；循环引用天然安全（先销毁者通知置空）
-- 树/并发/error：ref/move 参数、并发调度、error 传播需运行时支持，编译时拒绝（提示用 h run）
+  - **ref 参数 = 写透别名**：`ref T` 参数 → `T**`（指向调用者变量），函数内使用自动解引用（`(*p)->f` / `(*p)`）；实参传 `&var`；checker R3 强制实参为可写变量（消灭求值器退化路径，两端统一严格）
+  - **move 参数 = 所有权转移**：`move T` 参数拥有所有权，函数退出时销毁；`foo(move x)` 后源失效（已从销毁表移除）
+- 树/并发/error：并发调度、error 传播需运行时支持，编译时拒绝（提示用 h run）
 
 ## 解释器定位
 

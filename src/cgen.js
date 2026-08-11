@@ -74,7 +74,7 @@ function computeClassMethods(classes) {
 }
 
 function genC(ast) {
-  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set();
+  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), paramKinds = {};
   const collectTypes = (t) => {
     if (!t) return;
     if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); collectTypes(t.elem); }
@@ -101,6 +101,7 @@ function genC(ast) {
     if (d.type === "EnumDecl") enums[d.name] = d.variants;
     if (d.type === "FunDecl") {
       rets[d.name] = d.ret ? typeName(d.ret.rtype) : "void";
+      paramKinds[d.name] = d.params.map(p => p.kind);
       collectTypes(d.ret && d.ret.rtype);
       for (const p of d.params) collectTypes(p.ptype);
       d.body.stmts.forEach(scanExpr);
@@ -117,13 +118,14 @@ function genC(ast) {
       for (const f of d.fields) { fields.push({ name: f.name, type: typeName(f.fieldType), fieldType: f.fieldType }); collectTypes(f.fieldType); }
       classes[d.name] = { fields, methods: d.methods, imports: d.imports, hides: d.hides, aliases: d.aliases };
       for (const m of d.methods) {
+        paramKinds[d.name + "_" + m.name] = m.params.map(p => p.kind);
         collectTypes(m.ret && m.ret.rtype);
         for (const p of m.params) collectTypes(p.ptype);
         m.body.stmts.forEach(scanExpr);
       }
     }
   }
-  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes) };
+  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds };
   const arrayDefs = [...arrayElems].map(e =>
     `typedef struct { unsigned long long len; ${cType(e)}* data; } ${shortName(e)}_Array;`
   ).join("\n");
@@ -273,9 +275,9 @@ function genFun(d, ctx, className) {
   const scope = new Scope(null, ctx);
   if (className) scope.receiverType = className;
   const params = d.params.map(p => {
-    if (p.kind === "ref") throw new Error("C 后端暂不支持 ref 参数——请用 h run");
     const t = typeName(p.ptype);
-    const ct = ctx.classes[t] ? cType(t) + "*" : cType(t);
+    let ct = ctx.classes[t] ? cType(t) + "*" : cType(t);
+    if (p.kind === "ref") { scope.refParams.add(p.name); ct += "*"; }   // ref 参数 = 指向调用者变量的指针（写透别名）
     // 树参数语义：val/ref = 视图（不拥有，不销毁）；move = 拥有（函数退出时销毁）
     scope.declareType(p.name, t, p.kind === "move");
     return `${ct} ${p.name}`;
@@ -294,7 +296,7 @@ function genFun(d, ctx, className) {
 class Scope {
   constructor(parent, ctx) {
     this.parent = parent || null; this.ctx = ctx;
-    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null;
+    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null; this.refParams = new Set();
   }
   declared(name) { let s = this; while (s) { if (s.vars.has(name)) return true; s = s.parent; } return false; }
   declareType(name, t, owned = true) { this.vars.add(name); this.types.set(name, t); if (owned && this.classType(t)) this.trees.add(name); }
@@ -308,7 +310,11 @@ function genStmt(st, scope) {
     case "VarDecl": {
       if (st.kind === "ref" || st.kind === "move") throw new Error("C 后端暂不支持 ref/move 参数——请用 h run");
       const init = genExpr(st.init, scope);
-      if (scope.declared(st.name)) return `  ${st.name} = ${init};`;
+      if (scope.declared(st.name)) {
+        // 覆盖声明 = 赋值；ref 参数写透调用者变量
+        const tgt = scope.refParams.has(st.name) ? "(*" + st.name + ")" : st.name;
+        return `  ${tgt} = ${init};`;
+      }
       const t = inferType(st.init, scope) || "void";
       scope.declareType(st.name, t);
       const ct = scope.classType(t) ? cType(t) + "*" : cType(t);
@@ -350,6 +356,8 @@ function genExpr(e, scope) {
   switch (e.type) {
     case "Literal": return cLiteral(e);
     case "Ident": {
+      // ref 参数：解引用写透（调用者变量）
+      if (scope.refParams.has(e.name)) return "(*" + e.name + ")";
       // 方法体内裸字段名 → self->field（变量优先）
       if (scope.receiverType && !scope.declared(e.name)) {
         const f = scope.ctx.classes[scope.receiverType].fields.find(x => x.name === e.name);
@@ -451,25 +459,29 @@ function genCall(e, scope) {
   const callee = e.callee;
   // print 特殊：参数走 genPrint（to_str 剥皮/树/struct 整值打印），勿预先 genExpr
   if (callee.type === "Ident" && callee.name === "print") return genPrint(e.args, scope);
-  const args = e.args.map(a => genExpr(a, scope));
+  let fname = null;
   if (callee.type === "Ident") {
     if (callee.name === "store" || callee.name === "load") throw new Error("C 后端暂不支持 store/load——请用 h run");
-    const fn = scope.ctx.rets[callee.name];
-    return `${callee.name === "main" ? "h_main" : callee.name}(${args.join(", ")})`;
-  }
-  if (callee.type === "MemberExpr") {
-    // 方法调用：静态派发 type_method(self, ...)
+    fname = callee.name === "main" ? "h_main" : callee.name;
+  } else if (callee.type === "MemberExpr") {
     const t = inferType(callee.obj, scope);
     const table = scope.ctx.classMethods[t];
     const entry = table && table[callee.prop];
-    if (entry) {
-      const mname = entry.source + "_" + entry.name;
-      return `${mname}(${genExpr(callee.obj, scope)}${args.length ? ", " + args.join(", ") : ""})`;
+    if (entry) fname = entry.source + "_" + entry.name;
+    else if (callee.prop === "to_str") throw new Error("C 后端暂不支持 to_str（print 参数内自动处理）——请用 h run");
+    else throw new Error("C 后端暂不支持方法调用 " + callee.prop);
+  } else throw new Error("C 后端暂不支持该调用");
+  const kinds = scope.ctx.paramKinds[fname];
+  const args = e.args.map((a, i) => {
+    if (kinds && kinds[i] === "ref") {
+      // ref 参数：实参必须是可写变量 → 传地址（写透别名）
+      if (a.type !== "Ident") throw new Error("ref 实参必须是可写变量（checker R3）——请用 h run");
+      return "&" + genExpr(a, scope);
     }
-    if (callee.prop === "to_str") throw new Error("C 后端暂不支持 to_str（print 参数内自动处理）——请用 h run");
-    throw new Error("C 后端暂不支持方法调用 " + callee.prop);
-  }
-  throw new Error("C 后端暂不支持该调用");
+    return genExpr(a, scope);
+  });
+  if (callee.type === "Ident") return `${fname}(${args.join(", ")})`;
+  return `${fname}(${genExpr(callee.obj, scope)}${args.length ? ", " + args.join(", ") : ""})`;
 }
 
 function genPrint(args, scope) {
