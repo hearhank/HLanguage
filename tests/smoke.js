@@ -130,8 +130,8 @@ if (require("fs").existsSync(exeC)) {
 process.chdir(cwd);
 t("build 支持 class（树）：编译运行输出 1", builtC.includes("1"), "\n--- build 日志 ---\n" + (rC.stdout || "") + (rC.stderr || "") + "\n--- exe 输出 ---\n" + builtC);
 
-r = h(["build"], "class A {\n    next: ref A\n}\nfun main() -> void {\n    a = A{}\n}\n");
-t("build 拒绝 class 的 ref 字段（提示用 h run）", r.code === 1 && r.out.includes("暂不支持 class 的 ref 字段"), r.out.slice(0, 120));
+r = h(["build"], "class A {\n    fun f(x: ref A) -> u64 { return 1 }\n}\nfun main() -> void {\n    a = A{}\n    print(a.f(a).to_str())\n}\n");
+t("build 拒绝 ref 参数（提示用 h run）", r.code === 1 && r.out.includes("暂不支持 ref 参数"), r.out.slice(0, 120));
 
 // 12. M:N 并行（worker_threads）
 r = h(["run", path.join(ROOT, "examples", "concurrency.hc"), "--threads", "2"]);
@@ -156,6 +156,23 @@ if (require("fs").existsSync(exeA)) {
 }
 process.chdir(cwd);
 t("数组双后端一致性（C 原生）", builtA === runOutA, "\n--- run ---\n" + runOutA + "\n--- build ---\n" + builtA);
+
+// 14. C 后端 class ref 字段（双向引用通知）
+const refPath = path.join(ROOT, "examples", "ref.hc");
+r = h(["run", refPath]);
+const runOutR = r.out;
+t("ref.hc h run 运行", r.code === 0 && runOutR.includes("通知后: Node{val: 2, next: null}"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "ref.hc"), require("fs").readFileSync(refPath, "utf8"));
+const rR = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "ref.hc"], { encoding: "utf8" });
+const exeR = path.join(require("os").tmpdir(), "ref" + (process.platform === "win32" ? ".exe" : ""));
+let builtR = "";
+if (require("fs").existsSync(exeR)) {
+  const r3 = require("child_process").spawnSync(exeR, [], { encoding: "utf8" });
+  builtR = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("ref 字段双后端一致性（双向引用通知）", builtR === runOutR, "\n--- run ---\n" + runOutR + "\n--- build ---\n" + builtR);
 
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

@@ -34,7 +34,7 @@ function scalarPrint(t, e, ctx) {
   if (t === "bool") return `printf("%s", (${e}) ? "true" : "false");`;
   if (t === "Str") return 'printf("\\\"%s\\\"", ' + e + ');';
   if (t.startsWith("[") && t.endsWith("]")) return `h_print_${shortName(t.slice(1, -1))}_Array(&${e});`;
-  if (ctx.classes[t]) return `h_print_${t}(${e});`;
+  if (ctx.classes[t]) return `if (${e}) { h_print_${t}(${e}); } else { printf("null"); }`;   // ref 字段可能为 NULL（目标已销毁被通知置空）
   if (ctx.structs[t]) return `h_print_${t}(&${e});`;
   return `printf("?");`;   // 枚举等：占位（示例避开）
 }
@@ -160,7 +160,15 @@ function genC(ast) {
     '#include <stdlib.h>',
     '#include <string.h>',
     '',
-    '/* 最短往返浮点格式化（与解释器 JS 输出一致） */',
+    '/* 双向引用通知：树对象内嵌被引用链表，销毁时通知所有 ref 字段置 NULL */',
+    'struct h_ref_link { void** pslot; struct h_ref_link* next; };',
+    'static void h_ref_detach(struct h_ref_link** head, struct h_ref_link* ln) {',
+    '  struct h_ref_link** p = head;',
+    '  while (*p && *p != ln) p = &(*p)->next;',
+    '  if (*p) *p = ln->next;',
+    '  ln->next = NULL;',
+    '}',
+    '',
     'static void h_print_f64(double d) {',
     '  char buf[64];',
     '  int prec;',
@@ -184,8 +192,14 @@ function genStruct(d) {
 }
 function genClassDecls(ast, ctx) {
   return ast.decls.filter(d => d.type === "ClassDecl").map(d => {
-    const fields = d.fields.map(f => `  ${cType(typeName(f.fieldType))} ${f.name};`).join("\n");
-    return `struct ${d.name} {\n${fields}\n};`;
+    const refs = d.fields.filter(f => f.fieldType.mutable);
+    const fields = d.fields.map(f => {
+      const ft = typeName(f.fieldType);
+      const ct = f.fieldType.mutable ? cType(ft) + "*" : cType(ft);
+      return `  ${ct} ${f.name};`;
+    }).join("\n");
+    const links = refs.map(f => `  struct h_ref_link _${f.name}_link;`).join("\n");
+    return `struct ${d.name} {\n${fields}\n  struct h_ref_link* _refs;\n${links ? links + "\n" : ""}};`;
   });
 }
 
@@ -218,29 +232,40 @@ function genEnum(d) {
   return `typedef enum {\n${names}\n} ${d.name};`;
 }
 
-/* ---------- class（树）：构造/释放 helper + 方法（typedef 见 genClassDecls） ---------- */
+/* ---------- class（树）：构造/释放/引用通知 + 方法（typedef 见 genClassDecls） ---------- */
 function genClass(d, ctx) {
-  for (const f of d.fields) {
-    if (f.fieldType.mutable) throw new Error("C 后端暂不支持 class 的 ref 字段（双向引用）——请用 h run");
-  }
-  // 构造：h_new_Type(field1, field2, ...)；数组字段深拷贝（参数处复合字面量生命周期仅到表达式结束）
-  const newArgs = d.fields.map(f => `${cType(typeName(f.fieldType))} ${f.name}_v`).join(", ");
+  const refFields = d.fields.filter(f => f.fieldType.mutable);
+  // 构造：h_new_Type(字段按声明序)；数组字段深拷贝；ref 字段经 setter 注册（双向引用）
+  const newArgs = d.fields.map(f => {
+    const ft = typeName(f.fieldType);
+    const ct = f.fieldType.mutable ? cType(ft) + "*" : cType(ft);
+    return `${ct} ${f.name}_v`;
+  }).join(", ");
   const newInit = d.fields.map(f => {
     const ft = typeName(f.fieldType);
+    if (f.fieldType.mutable) return `  p->${f.name} = NULL;\n  h_set_${d.name}_${f.name}(p, ${f.name}_v);`;
     if (ft.startsWith("[") && ft.endsWith("]")) {
       const et = cType(ft.slice(1, -1));
       return `  p->${f.name} = ${f.name}_v;\n  p->${f.name}.data = (${et}*)malloc(sizeof(${et}) * ${f.name}_v.len);\n  memcpy(p->${f.name}.data, ${f.name}_v.data, sizeof(${et}) * ${f.name}_v.len);`;
     }
     return `  p->${f.name} = ${f.name}_v;`;
   }).join("\n");
-  const ctor = `static ${d.name}* h_new_${d.name}(${newArgs || "void"}) {\n  ${d.name}* p = (${d.name}*)malloc(sizeof(${d.name}));\n${newInit}\n  return p;\n}`;
+  const ctor = `static ${d.name}* h_new_${d.name}(${newArgs || "void"}) {\n  ${d.name}* p = (${d.name}*)malloc(sizeof(${d.name}));\n  p->_refs = NULL;\n${newInit}\n  return p;\n}`;
+  // setter：先注销旧目标，再注册到新目标（ref 字段双向引用）
+  const setters = refFields.map(f => {
+    const t = typeName(f.fieldType);
+    return `static void h_set_${d.name}_${f.name}(${d.name}* h, ${t}* v) {\n  if (h->${f.name}) h_ref_detach(&h->${f.name}->_refs, &h->_${f.name}_link);\n  h->${f.name} = v;\n  if (v) { h->_${f.name}_link.pslot = (void**)&h->${f.name}; h->_${f.name}_link.next = v->_refs; v->_refs = &h->_${f.name}_link; }\n}`;
+  }).join("\n");
+  // 析构：通知所有指向本对象的 ref 字段置 NULL（防悬垂）；再注销本对象持有的 ref 字段
+  const notify = `  struct h_ref_link* l = p->_refs;\n  while (l) { struct h_ref_link* nx = l->next; *(void**)l->pslot = NULL; l = nx; }`;
+  const detaches = refFields.map(f => `  if (p->${f.name}) h_ref_detach(&p->${f.name}->_refs, &p->_${f.name}_link);`).join("\n");
   const dtorFrees = d.fields.map(f => {
     const ft = typeName(f.fieldType);
     return ft.startsWith("[") && ft.endsWith("]") ? `  free(p->${f.name}.data);` : "";
   }).filter(Boolean).join("\n");
-  const dtor = `static void h_free_${d.name}(${d.name}* p) {\n${dtorFrees}${dtorFrees ? "\n" : ""}  free(p);\n}`;
+  const dtor = `static void h_free_${d.name}(${d.name}* p) {\n${notify}\n${detaches}${detaches ? "\n" : ""}${dtorFrees}${dtorFrees ? "\n" : ""}  free(p);\n}`;
   const methods = d.methods.map(m => genFun(m, ctx, d.name)).join("\n");
-  return ctor + "\n" + dtor + (methods ? "\n" + methods : "");
+  return (setters ? setters + "\n" : "") + ctor + "\n" + dtor + (methods ? "\n" + methods : "");
 }
 
 /* ---------- 函数 / 方法 ---------- */
@@ -349,6 +374,14 @@ function genExpr(e, scope) {
     }
     case "UnaryExpr": return `(${e.op}${genExpr(e.operand, scope)})`;
     case "AssignExpr": {
+      // ref 字段赋值 → setter（先注销旧目标、再注册新目标，双向引用通知）
+      if (e.op === "=" && e.left.type === "MemberExpr") {
+        const ot = inferType(e.left.obj, scope);
+        const fld = scope.ctx.classes[ot] && scope.ctx.classes[ot].fields.find(x => x.name === e.left.prop);
+        if (fld && fld.fieldType.mutable) {
+          return `h_set_${ot}_${e.left.prop}(${genExpr(e.left.obj, scope)}, ${genExpr(e.right, scope)});`;
+        }
+      }
       const target = e.left.type === "Ident" ? genExpr(e.left, scope) : genExpr(e.left, scope);
       return `${target} ${e.op === "=" ? "=" : e.op} ${genExpr(e.right, scope)}`;
     }
@@ -456,7 +489,7 @@ function genPrint(args, scope) {
     else if (t === "u64") parts.push(`printf("%llu", ${code});`);
     else if (t === "bool") parts.push(`printf("%s", (${code}) ? "true" : "false");`);
     else if (t === "Str") parts.push(fromToStr ? `printf("\\\"%s\\\"", ${code});` : `printf("%s", ${code});`);
-    else if (scope.classType(t)) parts.push(`h_print_${t}(${code});`);
+    else if (scope.classType(t)) parts.push(`if (${code}) { h_print_${t}(${code}); } else { printf("null"); }`);
     else if (scope.ctx.structs[t]) parts.push(`h_print_${t}(&${code});`);
     else if (t && t.startsWith("[") && t.endsWith("]")) parts.push(`h_print_${shortName(t.slice(1, -1))}_Array(&${code});`);
     else parts.push(`printf("%s", ${code});`);

@@ -327,7 +327,14 @@ class Evaluator {
       if (!v.owned) { v.alive = false; this.event("view_released", { name: vname }); continue; }
       if (escapedValue && escapedValue.__shape === "tree" && v.value === escapedValue) continue;
       v.alive = false;
-      if (v.value && v.value.__shape === "tree") v.value.__alive = false;
+      if (v.value && v.value.__shape === "tree") {
+        v.value.__alive = false;
+        // 双向引用通知：所有指向本树的 ref 字段失效（置 null）——避免悬垂引用
+        if (v.value.__refs && v.value.__refs.size) {
+          for (const r of v.value.__refs) { if (r.holder && r.holder.__fields) r.holder.__fields[r.field] = null; }
+          v.value.__refs.clear();
+        }
+      }
       destroyed.push(vname);
       this.invalidateRefsTo(v);
       this.event("destroy", { name: vname, shape: v.value && v.value.__shape === "tree" ? "树" : "块" });
@@ -520,9 +527,20 @@ class Evaluator {
       const f = def && def.fields[e.prop];
       if (!f) this.rerr("类型 " + obj.__type + " 没有字段 '" + e.prop + "'", loc);
       const objWritable = this.objWritable(e.obj);
+      const refEntry = { holder: obj, field: e.prop };
       return {
         mutable: objWritable && f.isMut, label: valueToStr(obj).split("{")[0] + "." + e.prop,
-        get: () => obj.__fields[e.prop], set: (x) => { obj.__fields[e.prop] = x; },
+        get: () => obj.__fields[e.prop],
+        set: (x) => {
+          // ref 字段（双向引用）：写时注销旧目标、注册新目标
+          const fd = def.fields[e.prop];
+          if (fd && fd.fieldType.mutable) {
+            const old = obj.__fields[e.prop];
+            if (old && old.__shape === "tree" && old.__refs) old.__refs.delete(refEntry);
+            if (x && x.__shape === "tree" && x.__refs) x.__refs.add(refEntry);
+          }
+          obj.__fields[e.prop] = x;
+        },
       };
     }
     this.rerr("无法解析赋值目标", loc);
@@ -562,12 +580,17 @@ class Evaluator {
     const def = this.types[e.name];
     if (!def) this.rerr("未定义的类型 '" + e.name + "'", e.loc);
     const fields = {};
+    const refRegs = [];   // (字段名, 目标树)——ref 字段指向的树需要注册（双向引用）
     for (const [k, fd] of Object.entries(def.fields)) fields[k] = deepCopyBlock(defaultValue(fd.fieldType));
     for (const f of e.fields) {
       if (!(f.name in fields)) this.rerr("类型 " + e.name + " 没有字段 '" + f.name + "'", e.loc);
       fields[f.name] = deepCopyBlock(yield* this.evalExpr(f.expr));
+      const fd = def.fields[f.name];
+      const val = fields[f.name];
+      if (fd && fd.fieldType.mutable && val && val.__shape === "tree" && val.__refs) refRegs.push([f.name, val]);
     }
-    const inst = { __shape: def.shape, __type: e.name, __fields: fields, __alive: true };
+    const inst = { __shape: def.shape, __type: e.name, __fields: fields, __alive: true, __refs: new Set() };
+    for (const [fn, val] of refRegs) val.__refs.add({ holder: inst, field: fn });
     this.event("construct", { name: e.name, val: valueToStr(inst) });
     return inst;
   }
