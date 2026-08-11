@@ -1,5 +1,5 @@
 // 纯块子集：编译后端验证（双后端一致性）
-// h run examples/calc.h 与 h build examples/calc.h --exec 输出必须完全一致
+// h run examples/calc.hc 与 h build examples/calc.hc --exec 输出必须完全一致
 
 struct Point {
     x: f64

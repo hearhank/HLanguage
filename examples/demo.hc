@@ -1,5 +1,5 @@
 // H 语言演示程序：数据模型 + 生命周期 + 字节化
-// 运行：node src/h.js run examples/demo.h
+// 运行：node src/h.js run examples/demo.hc
 
 // 块（连续内存，复制语义）
 struct Order {

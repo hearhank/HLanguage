@@ -1,5 +1,5 @@
 // class 导入机制：import / 深度传递 / hide / alias / 同名冲突
-// 运行：node src/h.js run examples/import.h
+// 运行：node src/h.js run examples/import.hc
 
 // 基础类：可支付（amount 访问 receiver 的 balance 字段）
 class PayableBase {

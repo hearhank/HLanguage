@@ -1,5 +1,5 @@
 // match 枚举匹配：穷尽性由编译期保证（缺变体在 h run / h check 时拒绝）
-// 运行：node src/h.js run examples/match.h
+// 运行：node src/h.js run examples/match.hc
 
 enum OrderStatus { Pending, Paid, Refunded }
 

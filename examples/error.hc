@@ -1,5 +1,5 @@
 // error 传播演示：error union 显式返回，未处理时传播并终止
-// 运行：node src/h.js run examples/error.h
+// 运行：node src/h.js run examples/error.hc
 
 fun risky(amount: f64) -> error f64 {
     if amount < 0 {

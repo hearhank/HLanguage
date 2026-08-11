@@ -1,5 +1,5 @@
 // 动态块 [T]：C 后端验证（双后端一致性）
-// h run examples/array.h 与 h build examples/array.h --exec 输出必须完全一致
+// h run examples/array.hc 与 h build examples/array.hc --exec 输出必须完全一致
 // [T] 在 C 中 = 连续数据区 + 长度（动态块三件套的 C 兑现）
 
 struct Scores {

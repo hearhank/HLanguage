@@ -9,11 +9,11 @@
 无需安装——Node.js 直接运行：
 
 ```bash
-node src/h.js run examples/demo.h            # 解释器执行
-node src/h.js run examples/concurrency.h --threads 4   # M:N 多线程并行
-node src/h.js build examples/calc.h --exec   # 编译为原生二进制（zig cc/gcc）并运行
-node src/h.js check examples/wrong.h         # 静态检查（R1-R11）
-node tests/smoke.js                          # 31 项回归测试
+node src/h.js run examples/demo.hc            # 解释器执行
+node src/h.js run examples/concurrency.hc --threads 4   # M:N 多线程并行
+node src/h.js build examples/tree.hc --exec   # 编译为原生二进制（zig cc/gcc）并运行
+node src/h.js check examples/wrong.hc         # 静态检查（R1-R11）
+node tests/smoke.js                          # 34 项回归测试
 ```
 
 ## 语言核心（60 秒）
@@ -45,8 +45,8 @@ node tests/smoke.js                          # 31 项回归测试
 │   ├── parallel.js       主线程协调器（M:N Channel 路由）
 │   ├── worker_host.js    worker 执行体宿主
 │   └── h.js              CLI
-├── examples/             七个示例程序
-└── tests/smoke.js        30 项断言回归
+├── examples/             八个示例程序（含 tree.hc：class 双后端一致性验证）
+└── tests/smoke.js        34 项断言回归
 ```
 
 ## 静态规则（R1-R11）
@@ -73,8 +73,8 @@ node tests/smoke.js                          # 31 项回归测试
 
 ## 状态
 
-- ✅ 设计树完整（每支走到叶子）· 5 个原型验证 · 全功能运行时 · M:N 并行 · **C 原生编译（zig cc/gcc）** · 双后端一致性
-- ⏳ 未启动：树/并发的 C 代码生成（需运行时支持）、真竞争检测、类型标签版本字段
+- ✅ 设计树完整（每支走到叶子）· 5 个原型验证 · 全功能运行时 · M:N 并行 · **C 原生编译（zig cc/gcc）** · 双后端一致性（块/enum/match/数组/class 树）
+- ⏳ 未启动：class 的 ref 字段/并发/error 的 C 代码生成（需运行时支持）、真竞争检测、类型标签版本字段
 - 已知取舍：多线程模式 print 输出顺序不保证（单线程默认确定）；Windows 直接运行 exe 中文输出需 UTF-8 代码页（`chcp 65001`）
 
 ## 设计旅程

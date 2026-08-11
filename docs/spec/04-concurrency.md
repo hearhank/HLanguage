@@ -13,7 +13,7 @@
 - `spawn fn()`：创建执行体入队，不立即执行；`yield`：让出调度权；主执行体结束后调度器跑完队列。
 - `Channel(n)`：容量缓冲 + 等待者队列——`send` 满挂起、`recv` 空挂起，空位/数据就绪唤醒。
 - 跨执行体数据：Channel 传深拷贝（树跨执行体边界近似 move；ref 参数在 spawn 场景退化为值绑定——符合"引用不跨执行体"）。
-- 示例：`examples/concurrency.h`（生产者/消费者经典交替）。
+- 示例：`examples/concurrency.hc`（生产者/消费者经典交替）。
 
 ## M:N 并行（已交付，`h run --threads N`）
 

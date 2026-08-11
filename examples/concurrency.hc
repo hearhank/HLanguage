@@ -1,5 +1,5 @@
 // 并发：协作式调度 + Channel 通信
-// 运行：node src/h.js run examples/concurrency.h
+// 运行：node src/h.js run examples/concurrency.hc
 //
 // 生产者向 Channel(2) 发送 3 个值；消费者接收 3 个值。
 // Channel 容量 2：第 3 次 send 时缓冲满 → 生产者挂起；

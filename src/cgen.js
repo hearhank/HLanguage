@@ -1,7 +1,7 @@
 // H 语言编译后端（C 目标）——从 AST 生成 C 源码，经 zig cc / gcc 编译为原生二进制
-// 纯块子集：struct/enum/match/函数/表达式/print
-// "块 = 连续内存"在 C 中零运行时开销原样兑现
-// 不支持的（class/并发/error/ref/move/数组）编译时拒绝
+// 支持：struct（块）/enum + match/动态数组 [T]/class（树：堆分配 + 生命周期 + move + 静态派发）
+// 树在 C 中 = 指针（Type*）：构造 h_new_Type / 作用域退出 h_free_Type / 方法静态派发 Type_method(self,...)
+// 不支持的（并发/error/ref 指针/ref 字段/顶层语句）编译时拒绝
 
 const { parse } = require("./parser");
 
@@ -20,25 +20,65 @@ function cType(tname) {
     case "Str": return "const char*";
     case "void": return "void";
     default: {
-      // 动态块 [T] → 短名_Array（元素短名：u64/f64/Str/结构体名）
-      if (tname.startsWith("[") && tname.endsWith("]")) {
-        return shortName(tname.slice(1, -1)) + "_Array";
-      }
-      return tname;   // struct 类型名（typedef 已定义）
+      if (tname.startsWith("[") && tname.endsWith("]")) return shortName(tname.slice(1, -1)) + "_Array";
+      return tname;   // struct/class 类型名（typedef 已定义）
     }
   }
 }
-function shortName(tname) {
-  // 元素类型短名（用于数组 typedef 名）：u64/f64/Str/bool/结构体名 本身即是短名
-  return tname;
+function shortName(tname) { return tname; }
+
+/* 标量/复合值的打印语句（双后端一致：对齐求值器 valueToStr） */
+function scalarPrint(t, e, ctx) {
+  if (t === "f64") return `h_print_f64(${e});`;
+  if (t === "u64") return `printf("%llu", ${e});`;
+  if (t === "bool") return `printf("%s", (${e}) ? "true" : "false");`;
+  if (t === "Str") return 'printf("\\\"%s\\\"", ' + e + ');';
+  if (t.startsWith("[") && t.endsWith("]")) return `h_print_${shortName(t.slice(1, -1))}_Array(&${e});`;
+  if (ctx.classes[t]) return `h_print_${t}(${e});`;
+  if (ctx.structs[t]) return `h_print_${t}(&${e});`;
+  return `printf("?");`;   // 枚举等：占位（示例避开）
+}
+
+/* 类方法表提升（与求值器一致的简化版：自己 + 导入深度传递，hide/alias） */
+function computeClassMethods(classes) {
+  const cache = {};
+  const resolve = (clsName, visiting) => {
+    if (cache[clsName]) return cache[clsName];
+    if (visiting.has(clsName)) return cache[clsName] || {};
+    visiting.add(clsName);
+    const cls = classes[clsName];
+    const table = {};
+    for (const m of cls.methods) table[m.name] = { source: clsName, name: m.name };
+    for (const imp of cls.imports) {
+      const sub = resolve(imp.name, visiting);
+      for (const [n, entry] of Object.entries(sub)) if (!table[n]) table[n] = entry;
+    }
+    for (const h of cls.hides) {
+      if (h.path.parts.length >= 2) {
+        const [src, mname] = h.path.parts;
+        if (table[mname] && table[mname].source === src) delete table[mname];
+      }
+    }
+    for (const al of cls.aliases) {
+      const [src, mname] = al.path.parts;
+      const sub = cache[src] || resolve(src, visiting);
+      if (sub[mname]) table[al.alias] = sub[mname];
+    }
+    visiting.delete(clsName);
+    cache[clsName] = table;
+    return table;
+  };
+  const out = {};
+  for (const n of Object.keys(classes)) out[n] = resolve(n, new Set());
+  return out;
 }
 
 function genC(ast) {
-  const enums = {}, rets = {}, structFields = {}, arrayElems = new Set();
+  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set();
   const collectTypes = (t) => {
+    if (!t) return;
     if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); collectTypes(t.elem); }
   };
-  // 从字面量推断数组元素类型（函数体内的 [10,20,30] 无类型注解）
   const literalElemType = (items) => {
     for (const it of items) {
       if (it.type === "Literal") {
@@ -51,11 +91,7 @@ function genC(ast) {
   };
   const scanExpr = (e) => {
     if (!e || typeof e !== "object") return;
-    if (e.type === "ArrayLiteral") {
-      arrayElems.add(literalElemType(e.items));
-      e.items.forEach(scanExpr);
-      return;
-    }
+    if (e.type === "ArrayLiteral") { arrayElems.add(literalElemType(e.items)); e.items.forEach(scanExpr); return; }
     for (const v of Object.values(e)) {
       if (Array.isArray(v)) v.forEach(scanExpr);
       else if (v && typeof v === "object" && v.type) scanExpr(v);
@@ -65,7 +101,7 @@ function genC(ast) {
     if (d.type === "EnumDecl") enums[d.name] = d.variants;
     if (d.type === "FunDecl") {
       rets[d.name] = d.ret ? typeName(d.ret.rtype) : "void";
-      collectTypes(d.ret.rtype);
+      collectTypes(d.ret && d.ret.rtype);
       for (const p of d.params) collectTypes(p.ptype);
       d.body.stmts.forEach(scanExpr);
     }
@@ -76,20 +112,29 @@ function genC(ast) {
         collectTypes(f.fieldType);
       }
     }
+    if (d.type === "ClassDecl") {
+      const fields = [];
+      for (const f of d.fields) { fields.push({ name: f.name, type: typeName(f.fieldType), fieldType: f.fieldType }); collectTypes(f.fieldType); }
+      classes[d.name] = { fields, methods: d.methods, imports: d.imports, hides: d.hides, aliases: d.aliases };
+      for (const m of d.methods) {
+        collectTypes(m.ret && m.ret.rtype);
+        for (const p of m.params) collectTypes(p.ptype);
+        m.body.stmts.forEach(scanExpr);
+      }
+    }
   }
-  const ctx = { enums, rets, structs: structFields };
-  // 数组 typedef（动态块：连续数据区 + 长度）
+  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes) };
   const arrayDefs = [...arrayElems].map(e =>
     `typedef struct { unsigned long long len; ${cType(e)}* data; } ${shortName(e)}_Array;`
   ).join("\n");
-  const pre = [];
-  const structs = [], enumsDefs = [], funcs = [];
+
+  const structs = [], enumsDefs = [], classDefs = [], funcs = [];
   for (const d of ast.decls) {
     if (d.type === "StructDecl") structs.push(genStruct(d));
     else if (d.type === "EnumDecl") enumsDefs.push(genEnum(d, ctx));
-    else if (d.type === "FunDecl") funcs.push(genFun(d, ctx));
+    else if (d.type === "ClassDecl") classDefs.push(genClass(d, ctx));
+    else if (d.type === "FunDecl") funcs.push(genFun(d, ctx, null));
     else if (d.type === "InterfaceDecl") { /* 契约，不生成 */ }
-    else if (d.type === "ClassDecl") throw new Error("C 后端暂不支持 class（树）——请用 h run");
     else if (d.type === "GlobalDecl") throw new Error("C 后端暂不支持 global/并发——请用 h run");
     else if (d.type === "SpawnStmt" || d.type === "YieldStmt") throw new Error("C 后端暂不支持并发——请用 h run");
     else if (d.type === "ExprStmt") {
@@ -97,10 +142,23 @@ function genC(ast) {
       if (!isMainCall) throw new Error("C 后端暂不支持顶层语句——请用 h run");
     }
   }
+  // 打印函数（方案 b：与解释器 valueToStr 逐字一致）——struct/数组/class 全量生成
+  const printFns = [];
+  for (const n of Object.keys(structFields)) printFns.push(genPrintStruct(n, ctx));
+  for (const e of arrayElems) printFns.push(genPrintArray(e, ctx));
+  for (const n of Object.keys(classes)) printFns.push(genPrintClass(n, ctx));
+  const printProtos = printFns.map(f => f.split("{")[0].trim() + ";");
+  // 类型顺序：前向声明（struct/class tag）→ enum → 数组 → struct 定义 → class 定义 → 打印/方法/函数
+  const fwdDecls = [];
+  for (const n of Object.keys(structFields)) fwdDecls.push(`typedef struct ${n} ${n};`);
+  for (const n of Object.keys(classes)) fwdDecls.push(`typedef struct ${n} ${n};`);
+  const typeDefs = structs.concat(genClassDecls(ast, ctx));
   const body = [
     '#include <stdio.h>',
     '#include <stdbool.h>',
     '#include <stdint.h>',
+    '#include <stdlib.h>',
+    '#include <string.h>',
     '',
     '/* 最短往返浮点格式化（与解释器 JS 输出一致） */',
     'static void h_print_f64(double d) {',
@@ -115,79 +173,173 @@ function genC(ast) {
     '}',
     '',
   ];
-  return body.concat(arrayDefs ? [arrayDefs, ""] : [], structs, enumsDefs, funcs, ["int main(void) {", "  h_main();", "  return 0;", "}", ""]).join("\n");
+  return body.concat(fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
+    printProtos, [""], printFns, [""], classDefs, funcs,
+    ["int main(void) {", "  h_main();", "  return 0;", "}", ""]).join("\n");
 }
 
 function genStruct(d) {
   const fields = d.fields.map(f => `  ${cType(typeName(f.fieldType))} ${f.name};`).join("\n");
-  return `typedef struct {\n${fields}\n} ${d.name};`;
+  return `struct ${d.name} {\n${fields}\n};`;   // typedef 由 fwdDecls 提供（避免匿名 struct 重定义 typedef）
+}
+function genClassDecls(ast, ctx) {
+  return ast.decls.filter(d => d.type === "ClassDecl").map(d => {
+    const fields = d.fields.map(f => `  ${cType(typeName(f.fieldType))} ${f.name};`).join("\n");
+    return `struct ${d.name} {\n${fields}\n};`;
+  });
+}
+
+/* ---------- 打印函数（与求值器 valueToStr 逐字一致） ---------- */
+function genPrintStruct(name, ctx) {
+  let body = "", first = true;
+  for (const [fname, ftype] of Object.entries(ctx.structs[name])) {
+    if (!first) body += `    printf(", ");\n`;
+    first = false;
+    body += `    printf("${fname}: ");\n    ` + scalarPrint(ftype, `p->${fname}`, ctx) + "\n";
+  }
+  return `static void h_print_${name}(const ${name}* p) {\n  printf("${name}{");\n${body}  printf("}");\n}`;
+}
+function genPrintClass(name, ctx) {
+  let body = "", first = true;
+  for (const f of ctx.classes[name].fields) {
+    if (!first) body += `    printf(", ");\n`;
+    first = false;
+    body += `    printf("${f.name}: ");\n    ` + scalarPrint(f.type, `p->${f.name}`, ctx) + "\n";
+  }
+  return `static void h_print_${name}(const ${name}* p) {\n  printf("${name}{");\n${body}  printf("}");\n}`;
+}
+function genPrintArray(elem, ctx) {
+  const an = shortName(elem) + "_Array";
+  const el = scalarPrint(elem, "a->data[i]", ctx);
+  return `static void h_print_${an}(const ${an}* a) {\n  printf("[");\n  for (unsigned long long i = 0; i < a->len; i++) {\n    if (i) printf(", ");\n    ${el}\n  }\n  printf("]");\n}`;
 }
 function genEnum(d) {
   const names = d.variants.map(v => `  ${d.name}_${v}`).join(",\n");
   return `typedef enum {\n${names}\n} ${d.name};`;
 }
 
-function genFun(d, ctx) {
+/* ---------- class（树）：构造/释放 helper + 方法（typedef 见 genClassDecls） ---------- */
+function genClass(d, ctx) {
+  for (const f of d.fields) {
+    if (f.fieldType.mutable) throw new Error("C 后端暂不支持 class 的 ref 字段（双向引用）——请用 h run");
+  }
+  // 构造：h_new_Type(field1, field2, ...)；数组字段深拷贝（参数处复合字面量生命周期仅到表达式结束）
+  const newArgs = d.fields.map(f => `${cType(typeName(f.fieldType))} ${f.name}_v`).join(", ");
+  const newInit = d.fields.map(f => {
+    const ft = typeName(f.fieldType);
+    if (ft.startsWith("[") && ft.endsWith("]")) {
+      const et = cType(ft.slice(1, -1));
+      return `  p->${f.name} = ${f.name}_v;\n  p->${f.name}.data = (${et}*)malloc(sizeof(${et}) * ${f.name}_v.len);\n  memcpy(p->${f.name}.data, ${f.name}_v.data, sizeof(${et}) * ${f.name}_v.len);`;
+    }
+    return `  p->${f.name} = ${f.name}_v;`;
+  }).join("\n");
+  const ctor = `static ${d.name}* h_new_${d.name}(${newArgs || "void"}) {\n  ${d.name}* p = (${d.name}*)malloc(sizeof(${d.name}));\n${newInit}\n  return p;\n}`;
+  const dtorFrees = d.fields.map(f => {
+    const ft = typeName(f.fieldType);
+    return ft.startsWith("[") && ft.endsWith("]") ? `  free(p->${f.name}.data);` : "";
+  }).filter(Boolean).join("\n");
+  const dtor = `static void h_free_${d.name}(${d.name}* p) {\n${dtorFrees}${dtorFrees ? "\n" : ""}  free(p);\n}`;
+  const methods = d.methods.map(m => genFun(m, ctx, d.name)).join("\n");
+  return ctor + "\n" + dtor + (methods ? "\n" + methods : "");
+}
+
+/* ---------- 函数 / 方法 ---------- */
+function genFun(d, ctx, className) {
   const scope = new Scope(null, ctx);
+  if (className) scope.receiverType = className;
   const params = d.params.map(p => {
-    scope.declareType(p.name, typeName(p.ptype));
-    return `${cType(typeName(p.ptype))} ${p.name}`;
-  }).join(", ");
+    if (p.kind === "ref") throw new Error("C 后端暂不支持 ref 参数——请用 h run");
+    const t = typeName(p.ptype);
+    const ct = ctx.classes[t] ? cType(t) + "*" : cType(t);
+    // 树参数语义：val/ref = 视图（不拥有，不销毁）；move = 拥有（函数退出时销毁）
+    scope.declareType(p.name, t, p.kind === "move");
+    return `${ct} ${p.name}`;
+  });
+  const allParams = (className ? [`${className}* self`] : []).concat(params);
   const body = d.body.stmts.map(s => genStmt(s, scope)).join("\n");
-  const ret = d.ret ? cType(typeName(d.ret.rtype)) : "void";
-  const fname = d.name === "main" ? "h_main" : d.name;
-  return `${ret} ${fname}(${params}) {\n${body}\n}`;
+  // 函数最外层作用域：树变量销毁（move 后跳过——已从 trees 移除；视图参数从不进入）
+  const frees = [...scope.trees].map(n => `  h_free_${scope.typeOf(n)}(${n});`).join("\n");
+  const retT = d.ret ? typeName(d.ret.rtype) : "void";
+  const ret = d.ret ? (ctx.classes[retT] ? cType(retT) + "*" : cType(retT)) : "void";
+  let fname = className ? className + "_" + d.name : d.name;
+  if (!className && fname === "main") fname = "h_main";
+  return `${ret} ${fname}(${allParams.join(", ")}) {\n${body}${frees ? "\n" + frees : ""}\n}`;
 }
 
 class Scope {
-  constructor(parent, ctx) { this.parent = parent || null; this.ctx = ctx; this.vars = new Set(); this.types = new Map(); }
+  constructor(parent, ctx) {
+    this.parent = parent || null; this.ctx = ctx;
+    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null;
+  }
   declared(name) { let s = this; while (s) { if (s.vars.has(name)) return true; s = s.parent; } return false; }
-  declareType(name, t) { this.vars.add(name); this.types.set(name, t); }
+  declareType(name, t, owned = true) { this.vars.add(name); this.types.set(name, t); if (owned && this.classType(t)) this.trees.add(name); }
   typeOf(name) { let s = this; while (s) { if (s.types.has(name)) return s.types.get(name); s = s.parent; } return null; }
+  releaseTree(name) { let s = this; while (s) { if (s.trees.delete(name)) return; s = s.parent; } }
+  classType(t) { return t && this.ctx.classes[t] ? t : null; }
 }
 
 function genStmt(st, scope) {
   switch (st.type) {
     case "VarDecl": {
-      if (st.kind === "ref" || st.kind === "move") throw new Error("C 后端暂不支持 ref/move——请用 h run");
+      if (st.kind === "ref" || st.kind === "move") throw new Error("C 后端暂不支持 ref/move 参数——请用 h run");
       const init = genExpr(st.init, scope);
       if (scope.declared(st.name)) return `  ${st.name} = ${init};`;
-      const t = cType(inferType(st.init, scope) || "void");
-      scope.declareType(st.name, inferType(st.init, scope));
-      return `  ${t} ${st.name} = ${init};`;
+      const t = inferType(st.init, scope) || "void";
+      scope.declareType(st.name, t);
+      const ct = scope.classType(t) ? cType(t) + "*" : cType(t);
+      return `  ${ct} ${st.name} = ${init};`;
     }
-    case "ReturnStmt":
+    case "ReturnStmt": {
+      // 返回树（含 -> move T 的无 move 关键字逃逸）：所有权随返回值转移，函数退出不销毁
+      if (st.expr && st.expr.type === "Ident") {
+        const t = scope.typeOf(st.expr.name);
+        if (scope.classType(t)) scope.releaseTree(st.expr.name);
+      }
       return "  return " + (st.expr ? genExpr(st.expr, scope) : "") + ";";
+    }
     case "IfStmt": {
       const c = genExpr(st.cond, scope);
-      const t = st.then.stmts.map(s => genStmt(s, scope)).join("\n");
+      const t = genBlockInner(st.then, scope);
       if (st.els) {
-        const e = st.els.type === "Block" ? st.els.stmts.map(s => genStmt(s, scope)).join("\n") : genStmt(st.els, scope);
+        const e = st.els.type === "Block" ? genBlockInner(st.els, scope) : genStmt(st.els, scope);
         return `  if (${c}) {\n${t}\n  } else {\n${e}\n  }`;
       }
       return `  if (${c}) {\n${t}\n  }`;
     }
-    case "Block": {
-      const inner = new Scope(scope, scope.ctx);
-      return st.stmts.map(s => genStmt(s, inner)).join("\n");
-    }
+    case "Block": return genBlockInner(st, scope);
     case "ExprStmt":
       return "  " + genExpr(st.expr, scope) + ";";
     default:
       throw new Error("C 后端暂不支持语句 " + st.type);
   }
 }
+function genBlockInner(block, scope) {
+  const inner = new Scope(scope, scope.ctx);
+  inner.receiverType = scope.receiverType;   // 方法体内嵌套块仍可裸访问 self 字段
+  const body = block.stmts.map(s => genStmt(s, inner)).join("\n");
+  const frees = [...inner.trees].map(n => `  h_free_${inner.typeOf(n)}(${n});`).join("\n");
+  return body + (frees ? "\n" + frees : "");
+}
 
 function genExpr(e, scope) {
   switch (e.type) {
     case "Literal": return cLiteral(e);
-    case "Ident": return e.name;
+    case "Ident": {
+      // 方法体内裸字段名 → self->field（变量优先）
+      if (scope.receiverType && !scope.declared(e.name)) {
+        const f = scope.ctx.classes[scope.receiverType].fields.find(x => x.name === e.name);
+        if (f) return "self->" + e.name;
+      }
+      return e.name;
+    }
     case "MemberExpr": {
       // 枚举值 Type.Variant → 常量名
       if (e.obj.type === "Ident" && !scope.declared(e.obj.name)) return e.obj.name + "_" + e.prop;
-      // 数组 .len → .len 字段
       const ot = inferType(e.obj, scope);
+      // 数组 .len → .len 字段
       if (ot && ot.startsWith("[") && e.prop === "len") return genExpr(e.obj, scope) + ".len";
+      // class（树）字段 → 指针解引用
+      if (scope.classType(ot)) return genExpr(e.obj, scope) + "->" + e.prop;
       return genExpr(e.obj, scope) + "." + e.prop;
     }
     case "CallExpr": return genCall(e, scope);
@@ -197,26 +349,48 @@ function genExpr(e, scope) {
     }
     case "UnaryExpr": return `(${e.op}${genExpr(e.operand, scope)})`;
     case "AssignExpr": {
-      const target = e.left.type === "Ident" ? e.left.name : genExpr(e.left, scope);
+      const target = e.left.type === "Ident" ? genExpr(e.left, scope) : genExpr(e.left, scope);
       return `${target} ${e.op === "=" ? "=" : e.op} ${genExpr(e.right, scope)}`;
     }
-    case "ConstructExpr": {
-      const fields = e.fields.map(f => `.${f.name} = ${genExpr(f.expr, scope)}`).join(", ");
-      return `(${e.name}){ ${fields} }`;
-    }
+    case "ConstructExpr": return genConstruct(e, scope);
     case "MatchExpr": return genMatch(e, scope);
-    case "ErrorLit": throw new Error("C 后端暂不支持 error——请用 h run");
-    case "MoveExpr": throw new Error("C 后端暂不支持 move——请用 h run");
-    case "ArrayLiteral": {
-      const t = inferType(e, scope);   // "[f64]" 等
-      const items = e.items.map(x => genExpr(x, scope)).join(", ");
-      const et = cType(t.slice(1, -1));
-      return `(${cType(t)}){ .len = ${e.items.length}, .data = (${et}[]){ ${items} } }`;
+    case "MoveExpr": {
+      // move：所有权转移——源从销毁表移除（视图参数不在表内，无操作）
+      if (e.expr.type === "Ident") { scope.releaseTree(e.expr.name); return e.expr.name; }
+      return genExpr(e.expr, scope);
     }
+    case "MoveExpr": {
+      if (e.expr.type === "Ident") { scope.releaseTree(e.expr.name); return e.expr.name; }
+      return genExpr(e.expr, scope);
+    }
+    case "ErrorLit": throw new Error("C 后端暂不支持 error——请用 h run");
+    case "ArrayLiteral": return genArrayLiteral(e, inferType(e, scope), scope);
     case "IndexExpr":
       return genExpr(e.obj, scope) + ".data[" + genExpr(e.index, scope) + "]";
     default: throw new Error("C 后端暂不支持表达式 " + e.type);
   }
+}
+
+function genConstruct(e, scope) {
+  const cls = scope.ctx.classes[e.name];
+  if (cls) {
+    // 树构造 → h_new_Type(字段按声明序)
+    const args = cls.fields.map(f => {
+      const found = e.fields.find(x => x.name === f.name);
+      if (found) {
+        const ft = typeName(f.fieldType);
+        // 空数组字面量无元素类型信息 → 强制按字段声明类型生成
+        if (ft.startsWith("[") && ft.endsWith("]") && found.expr.type === "ArrayLiteral") {
+          return genArrayLiteral(found.expr, ft, scope);
+        }
+        return genExpr(found.expr, scope);
+      }
+      return "0";
+    });
+    return `h_new_${e.name}(${args.join(", ")})`;
+  }
+  const fields = e.fields.map(f => `.${f.name} = ${genExpr(f.expr, scope)}`).join(", ");
+  return `(${e.name}){ ${fields} }`;
 }
 
 function cLiteral(e) {
@@ -237,18 +411,30 @@ function genMatch(e, scope) {
     const constName = enumName ? enumName + "_" + arm.variant : arm.variant;
     return `      case ${constName}: _h_m = ${genExpr(arm.expr, scope)}; break;`;
   }).join("\n");
-  // GNU 语句表达式：switch 赋值临时变量，尾部取值为表达式结果（不能用 return——会返回外层函数）
   return `({ __typeof__(${target}) _h_t = (${target}); ${retT} _h_m = 0; switch (_h_t) {\n${cases}\n    default: break; } _h_m; })`;
 }
 
 function genCall(e, scope) {
   const callee = e.callee;
-  const args = e.args;
+  // print 特殊：参数走 genPrint（to_str 剥皮/树/struct 整值打印），勿预先 genExpr
+  if (callee.type === "Ident" && callee.name === "print") return genPrint(e.args, scope);
+  const args = e.args.map(a => genExpr(a, scope));
   if (callee.type === "Ident") {
-    if (callee.name === "print") return genPrint(args, scope);
     if (callee.name === "store" || callee.name === "load") throw new Error("C 后端暂不支持 store/load——请用 h run");
     const fn = scope.ctx.rets[callee.name];
-    return `${callee.name === "main" ? "h_main" : callee.name}(${args.map(a => genExpr(a, scope)).join(", ")})`;
+    return `${callee.name === "main" ? "h_main" : callee.name}(${args.join(", ")})`;
+  }
+  if (callee.type === "MemberExpr") {
+    // 方法调用：静态派发 type_method(self, ...)
+    const t = inferType(callee.obj, scope);
+    const table = scope.ctx.classMethods[t];
+    const entry = table && table[callee.prop];
+    if (entry) {
+      const mname = entry.source + "_" + entry.name;
+      return `${mname}(${genExpr(callee.obj, scope)}${args.length ? ", " + args.join(", ") : ""})`;
+    }
+    if (callee.prop === "to_str") throw new Error("C 后端暂不支持 to_str（print 参数内自动处理）——请用 h run");
+    throw new Error("C 后端暂不支持方法调用 " + callee.prop);
   }
   throw new Error("C 后端暂不支持该调用");
 }
@@ -257,21 +443,39 @@ function genPrint(args, scope) {
   const parts = [];
   for (const a of args) {
     if (parts.length) parts.push('printf(" ");');
-    const t = inferType(a, scope);
-    const code = genExpr(a, scope);
+    let t = inferType(a, scope);
+    // x.to_str()：按 x 本身的类型打印（求值器 to_str = valueToStr，字符串会加引号）——先剥皮再生成代码
+    let target = a, fromToStr = false;
+    if (a.type === "CallExpr" && a.callee.type === "MemberExpr" && a.callee.prop === "to_str") {
+      target = a.callee.obj;
+      t = inferType(target, scope);
+      fromToStr = true;
+    }
+    const code = genExpr(target, scope);
     if (t === "f64") parts.push(`h_print_f64(${code});`);
     else if (t === "u64") parts.push(`printf("%llu", ${code});`);
     else if (t === "bool") parts.push(`printf("%s", (${code}) ? "true" : "false");`);
+    else if (t === "Str") parts.push(fromToStr ? `printf("\\\"%s\\\"", ${code});` : `printf("%s", ${code});`);
+    else if (scope.classType(t)) parts.push(`h_print_${t}(${code});`);
+    else if (scope.ctx.structs[t]) parts.push(`h_print_${t}(&${code});`);
+    else if (t && t.startsWith("[") && t.endsWith("]")) parts.push(`h_print_${shortName(t.slice(1, -1))}_Array(&${code});`);
     else parts.push(`printf("%s", ${code});`);
   }
   parts.push('printf("\\n");');
   return parts.join("\n  ");
 }
 
+/* 数组字面量 → 复合字面量（可强制元素类型：空数组/字段类型已知时） */
+function genArrayLiteral(e, t, scope) {
+  const items = e.items.map(x => genExpr(x, scope)).join(", ");
+  const et = cType(t.slice(1, -1));
+  return `(${cType(t)}){ .len = ${e.items.length}, .data = (${et}[]){ ${items} } }`;
+}
+
 function inferEnumName(e, scope) {
   if (e.type === "Ident") {
     const t = scope.typeOf(e.name);
-    return t && t !== "?" && t !== "void" ? t : null;
+    return t && t !== "?" && t !== "void" && !scope.classType(t) ? t : null;
   }
   if (e.type === "MemberExpr" && e.obj.type === "Ident") return e.obj.name;
   return null;
@@ -284,13 +488,15 @@ function inferType(e, scope) {
       return "bool";
     case "Ident": return scope.typeOf(e.name) || "?";
     case "ConstructExpr": return e.name;
+    case "MoveExpr": return inferType(e.expr, scope);
     case "MemberExpr": {
-      // 枚举值 Type.Variant → 枚举名
       if (e.obj.type === "Ident" && !scope.declared(e.obj.name)) return e.obj.name;
-      // 数组 .len → 数组类型
       const ot = inferType(e.obj, scope);
       if (ot && ot.startsWith("[") && e.prop === "len") return "u64";
-      // struct 字段类型推断
+      if (scope.ctx.classes[ot]) {
+        const f = scope.ctx.classes[ot].fields.find(x => x.name === e.prop);
+        return f ? f.type : "?";
+      }
       if (scope.ctx.structs && scope.ctx.structs[ot] && scope.ctx.structs[ot][e.prop]) {
         return scope.ctx.structs[ot][e.prop];
       }
@@ -314,6 +520,16 @@ function inferType(e, scope) {
     case "UnaryExpr": return inferType(e.operand, scope);
     case "CallExpr": {
       if (e.callee.type === "Ident" && scope.ctx.rets[e.callee.name]) return scope.ctx.rets[e.callee.name];
+      if (e.callee.type === "MemberExpr") {
+        const t = inferType(e.callee.obj, scope);
+        const table = scope.ctx.classMethods[t];
+        const entry = table && table[e.callee.prop];
+        if (entry) {
+          const src = scope.ctx.classes[entry.source];
+          const m = src.methods.find(x => x.name === entry.name);
+          return m && m.ret ? typeName(m.ret.rtype) : "void";
+        }
+      }
       return "?";
     }
     default: return "?";

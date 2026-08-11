@@ -30,7 +30,7 @@
   - 同名冲突：自己定义优先（导入自动隐藏）；导入之间同名未处理 → R11 编译期拒绝。
   - 接口继承：A 导入 B → 自动继承 B 的接口标注（hide I2 可裁剪）。
   - 循环拒绝：R11 编译期检测。
-  - 示例：`examples/import.h`。
+  - 示例：`examples/import.hc`。
 - **方法机制**（修复）：方法调用绑定 receiver——方法体内裸字段名读写直接作用于 receiver（`fun amount() -> f64 { return balance }`）。
 - **同名冲突规则**：
   - A 自己定义的方法公开，导入的同名方法自动隐藏；
@@ -51,7 +51,7 @@
 - 枚举是块的一种（标签联合），支持穷尽性 match——语言核心（错误集是枚举特化）。
 - **已实现**（`src/`）：`match expr { Variant => expr, ... }` 表达式 + 枚举值 `Type.Variant`。
 - **穷尽性检查（R10）**：match 必须覆盖枚举全部变体——缺变体/未知变体/非枚举目标在编译期拒绝（`h run`/`h check`）。
-- 示例：`examples/match.h`。
+- 示例：`examples/match.hc`。
 
 ## 错误处理
 

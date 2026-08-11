@@ -9,16 +9,16 @@
 
 ## 命令
 
-- `h run foo.h`——解释器执行（脚本模式）。
-- `h build foo.h`——编译器产出原生二进制。
+- `h run foo.hc`——解释器执行（脚本模式）。
+- `h build foo.hc`——编译器产出原生二进制。
 - 多文件项目 = 命名空间树目录整体构建。
 
 ## 运行时雏形（已交付）
 
 - `src/`：lexer/parser/checker/evaluator 四模块 + `h.js` CLI。
 - 命令：`node src/h.js run|check|parse|build <file>`（无文件读 stdin；`--trace` 输出执行轨迹；`build --exec` 编译后直接运行）。
-- 示例：`examples/demo.h`（生命周期/字节化/并发演示）、`error.h`、`wrong.h`、`match.h`、`import.h`、`concurrency.h`、`calc.h`。
-- 冒烟测试：`tests/smoke.js`（28 项断言通过）。
+- 示例：`examples/demo.hc`（生命周期/字节化/并发演示）、`error.hc`、`wrong.hc`、`match.hc`、`import.hc`、`concurrency.hc`、`calc.hc`、`tree.hc`（class 双后端一致性）。
+- 冒烟测试：`tests/smoke.js`（34 项断言通过）。
 
 ## 编译后端（已交付：C 原生 + JS 回退）
 
@@ -26,9 +26,10 @@
 - **动态块 `[T]`**：连续数据区 + 长度（`T_Array`）——数组字面量 → 复合字面量、索引 → `.data[i]`、`.len` → `.len`。
 - `h build <file>`：探测编译器 `zig cc`（自带 clang）→ `gcc` → `cc` → `clang`，编译为原生二进制；无 C 编译器时回退 `jsgen`（JS 目标）。
 - **最短往返浮点格式化**（`h_print_f64`）：%.*g 循环至往返一致——与解释器 JS 输出逐位对齐。
-- **双后端一致性已验证（原生级）**：`calc.h`（enum/match/struct）与 `array.h`（动态块）编译后输出与 `h run` 逐行一致（smoke 断言，33 项全绿）。
+- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）编译后输出与 `h run` 逐行一致（smoke 断言，34 项全绿）。
 - 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）；枚举比较统一为 `类型.变体`。
-- 不支持的结构（class/并发/error/ref/move/顶层语句）编译时拒绝并提示用 `h run`。
+- 文件后缀：H 语言源码统一使用 `.hc`（区别于 C 头文件）。
+- 不支持的结构（class 的 ref 字段/并发/error/ref 参数/顶层语句）编译时拒绝并提示用 `h run`。
 - 环境注：Windows 下推荐 `zig cc`（Zig 自带 clang 21）；直接运行 exe 时中文输出需 UTF-8 代码页（`chcp 65001`）。
 
 ## C 目标映射（设计，待编译器环境）
@@ -41,9 +42,17 @@
 
 ## C 目标映射（已实现，见上）
 
-- struct → C struct（typedef）；enum + match → typedef enum + switch（GNU 语句表达式）
+- struct → C struct（typedef + 前向声明）；enum + match → typedef enum + switch（GNU 语句表达式）
 - u64/f64/bool/Str → unsigned long long/double/bool/const char*
-- 树/并发/error：需运行时支持，编译时拒绝（提示用 h run）
+- 数组 → `T_Array`（len + 指针），构造函数内深拷贝数据区，析构释放
+- **class（树）→ 堆指针 + helper**：
+  - `Account` → `struct Account` + `typedef`；值 = `Account*`（指针即引用语义，零拷贝）
+  - 构造 `Account{...}` → `h_new_Account(字段按声明序)`（malloc）；作用域退出 → `h_free_Account`（free）
+  - **生命周期 = 作用域**：局部树变量登记到销毁表，块/函数退出自动 free；`move x` 把源移出销毁表（所有权转移，不销毁）；`return x`（`-> move T`）同样逃逸
+  - **树参数 = 视图**（val 不拥有、不销毁）；`move` 参数才拥有所有权
+  - 方法 → 静态派发 `Type_method(self, ...)`；方法体内裸字段名 → `self->field`（含嵌套块）
+  - **打印一致性**：`print(树)` 生成 `h_print_Type`（递归输出 `Type{字段: 值, ...}`，数组 `[...]`、字符串带引号）——与解释器 valueToStr 逐字一致
+- 树/并发/error：ref 字段（双向引用）、并发调度、error 传播需运行时支持，编译时拒绝（提示用 h run）
 
 ## 解释器定位
 

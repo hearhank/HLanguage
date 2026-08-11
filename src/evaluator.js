@@ -602,7 +602,8 @@ class Evaluator {
     }
     const table = this.classMethods[obj.__type];
     const entry = table && table[mname];
-    if (entry) return yield* this.execBody(entry.func, [obj].concat(args), loc, obj, this.objWritable(this.lastObjExpr), null);
+    // receiver 经 sc.receiver 单独传递（execBody 的 params 不含 self）——勿把 obj 前置进参数列表
+    if (entry) return yield* this.execBody(entry.func, args, loc, obj, this.objWritable(this.lastObjExpr), null);
     this.rerr("没有方法 '" + mname + "'（类型 " + obj.__type + "）", loc);
   }
   *callFunction(name, argNodes, args, loc) {
