@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# H 语言 C 编译产物（zig cc / gcc 生成）
+*.exe
+*.c.bak
+build/
+out/
+
+# 临时文件
+*.tmp
+*_tmp.*
+*.log
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db

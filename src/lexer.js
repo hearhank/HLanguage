@@ -8,7 +8,7 @@ const KEYWORDS = new Set([
 ]);
 
 const OPERATORS = [
-  "=>", "->", "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", "&&", "||", "::",
+  "=>", "->", "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", "&&", "||", "::", "..",
   "=", "<", ">", "+", "-", "*", "/", "%", "!", "{", "}", "(", ")", "[", "]",
   ";", ",", ":", ".", "?",
 ];
@@ -30,7 +30,8 @@ function lex(src) {
     }
     if (/\d/.test(c)) {
       let s = "";
-      while (i < src.length && /[\d.]/.test(src[i])) s += src[i++];
+      while (i < src.length && /\d/.test(src[i])) s += src[i++];
+      if (src[i] === "." && /\d/.test(src[i + 1] || "")) { s += "."; i++; while (i < src.length && /\d/.test(src[i])) s += src[i++]; }   // 小数只允许一个点（避免 1..3 被吞）
       push("NUMBER", parseFloat(s), line, col); col += s.length; continue;
     }
     if (/[A-Za-z_]/.test(c)) {

@@ -52,6 +52,18 @@ class Checker {
       if (es !== "block" && es !== "unknown") this.err("R1", "动态块元素必须是块类型（连续内存），但 " + t.elem.name + " 是" + (es === "tree" ? "树" : "未知") + "类型", null);
       return "block";
     }
+    if (t.type === "SliceType") {
+      const es = this.shapeOf(t.elem);
+      if (es !== "block" && es !== "unknown") this.err("R1", "切片元素必须是块类型，但 " + (t.elem.name || "?") + " 是" + (es === "tree" ? "树" : "未知") + "类型", null);
+      return "slice";   // 借用视图：块数据的引用（生命周期受限，R12）
+    }
+    if (t.type === "TupleType") {
+      for (const it of t.items) {
+        const es = this.shapeOf(it.type);
+        if (es !== "block" && es !== "unknown") this.err("R1", "元组元素必须是块类型（连续内存），但 " + (it.name || it.type.name || "?") + " 是" + (es === "tree" ? "树" : "未知") + "类型", null);
+      }
+      return "block";
+    }
     if (t.type === "GenericType") return "block";
     const def = this.types[t.name];
     if (!def) {
@@ -63,7 +75,11 @@ class Checker {
   }
   nameOf(t) {
     return t.type === "NamedType" ? t.name
-      : t.type === "ArrayType" ? "[" + t.elem.name + "]"
+      : t.type === "ArrayType" ? "[" + (t.elem.name || "?") + "]"
+      : t.type === "SliceType" ? "[]" + (t.elem.name || "?")
+      : t.type === "TupleType" ? (t.named
+          ? "(" + t.items.map(i => i.name + ": " + (i.type.name || "?")).join(", ") + ")"
+          : "(" + t.items.map(i => i.type.name || "?").join(", ") + ")")
       : t.type === "GenericType" ? t.name + "<>"
       : "?";
   }
@@ -74,11 +90,13 @@ class Checker {
         for (const f of d.fields) {
           if (f.fieldType.mutable) this.err("R1", "块（struct）不能有 ref 字段：'" + f.name + "'", f.loc);
           const sh = this.shapeOf(f.fieldType);
+          if (sh === "slice") this.err("R12", "切片不得存入字段（借入不借出）：'" + f.name + "'", f.loc);
           if (sh === "tree") this.err("R1", "块只含块：字段 '" + f.name + "' 引用了树类型 " + (f.fieldType.name || "?") + "（树有生命周期，块是纯数据）", f.loc);
         }
       } else if (d.type === "ClassDecl") {
         for (const f of d.fields) {
           const sh = this.shapeOf(f.fieldType);
+          if (sh === "slice") this.err("R12", "切片不得存入字段（借入不借出）：'" + f.name + "'", f.loc);
           if (f.fieldType.mutable) {
             if (sh !== "tree") this.err("R2", "引用字段（ref）必须指向树类型，但 '" + f.name + "' 是 " + (this.nameOf(f.fieldType) || "未知") + "（" + (sh === "block" ? "块" : "未知") + "）", f.loc);
           } else {
@@ -173,6 +191,7 @@ class Checker {
   checkGlobals() {
     for (const d of this.ast.decls) {
       if (d.type !== "GlobalDecl") continue;
+      if (this.shapeOf(d.gtype) === "slice") this.err("R12", "切片不得存入全局（借入不借出）：'" + d.name + "'", d.loc);
       const gt = d.gtype;
       if (gt.type !== "GenericType" || !PATTERN_TYPES.includes(gt.name)) {
         this.err("R8", "global 必须声明访问模式（Exclusive<T>/SharedRead<T>/Channel<T> 等内建包装类型）", d.loc);
@@ -210,7 +229,17 @@ class Checker {
           break;
         case "Block": this.checkBlock(st, local, fun); break;
         case "ExprStmt": this.checkExpr(st.expr, local); break;
-        case "SpawnStmt": this.checkExpr(st.callee, local); break;
+        case "SpawnStmt": {
+          this.checkExpr(st.callee, scope);
+          // R12：切片不得作 spawn 参数（引用不跨执行体）
+          if (st.callee.type === "CallExpr") {
+            for (const a of st.callee.args) {
+              const ar = this.checkExpr(a, scope);
+              if (ar.shape === "slice") this.err("R12", "切片不得作 spawn 参数（引用不跨执行体）", a.loc);
+            }
+          }
+          break;
+        }
         case "YieldStmt": break;
       }
     }
@@ -224,7 +253,11 @@ class Checker {
       if (r.shape !== this.shapeOf(ret.rtype)) this.err("R4", "返回值形状不匹配（期望 " + this.nameOf(ret.rtype) + "）", st.loc);
       return;
     }
-    if (ret.kind === "move" || ret.kind === "ref") return;
+    if (ret.kind === "move" || ret.kind === "ref") {
+      if (this.shapeOf(ret.rtype) === "slice") this.err("R12", "切片不得作为返回值（借入不借出）", st.loc);
+      return;
+    }
+    if (this.shapeOf(ret.rtype) === "slice") this.err("R12", "切片不得作为返回值（借入不借出）", st.loc);
     if (r.shape === "unknown" || this.shapeOf(ret.rtype) === "unknown") return;
     if (r.shape !== this.shapeOf(ret.rtype)) this.err("R4", "返回值形状不匹配（期望 " + this.nameOf(ret.rtype) + "，实际 " + r.name + "）", st.loc);
   }
@@ -273,6 +306,20 @@ class Checker {
         }
         const obj = this.checkExpr(e.obj, scope);
         if (BUILTIN_METHODS.includes(e.prop)) return { shape: "unknown", name: "?", mutable: false };
+        if (obj.shape === "slice" && e.prop === "len") return { shape: "block", name: "u64", mutable: false };
+        // 元组访问：命名 .x / 位置 .0（元组名格式 "(T1, T2)" / "(x: T1, y: T2)"）
+        if (obj.name && obj.name.startsWith("(") && obj.name.endsWith(")")) {
+          const inner = obj.name.slice(1, -1);
+          const parts = inner === "" ? [] : inner.split(", ").map(p => p.includes(": ") ? { name: p.split(": ")[0], t: p.split(": ")[1] } : { name: null, t: p });
+          if (parts.length && parts[0].name !== null) {
+            const f = parts.find(p => p.name === e.prop);
+            if (!f) { this.err("R5", "元组没有字段 '" + e.prop + "'", e.loc); return { shape: "unknown", name: "?", mutable: false }; }
+            return { shape: "block", name: f.t, mutable: false };
+          }
+          const idx = Number(e.prop);
+          if (!Number.isInteger(idx) || idx < 0 || idx >= parts.length) { this.err("R5", "元组索引越界 '" + e.prop + "'（共 " + parts.length + " 个元素）", e.loc); return { shape: "unknown", name: "?", mutable: false }; }
+          return { shape: "block", name: parts[idx].t, mutable: false };
+        }
         const def = obj.shape === "unknown" ? null : this.types[obj.name];
         if (obj.shape === "unknown") return { shape: "unknown", name: "?", mutable: false };
         if (!def || !def.fields) {
@@ -333,7 +380,34 @@ class Checker {
         }
         return { shape: inner.shape, name: inner.name, mutable: true };
       }
+      case "TupleLit": {
+        const ts = e.items.map(it => { const r = this.checkExpr(it.expr, scope); return r.name || "?"; });
+        return { shape: "block", name: (e.named ? "(" + e.items.map((it, i) => it.name + ": " + ts[i]).join(", ") + ")" : "(" + ts.join(", ") + ")"), mutable: false };
+      }
+      case "RangeExpr": {
+        const obj = this.checkExpr(e.obj, scope);
+        if (e.start) this.checkExpr(e.start, scope);
+        if (e.end) this.checkExpr(e.end, scope);
+        const n = obj.name || "";
+        if (!(n.startsWith("[") && n.endsWith("]")) && !n.startsWith("[]")) this.err("R5", "取区间目标必须是动态块或切片，但 '" + (obj.name || "?") + "' 不是", e.loc);
+        const elem = n.startsWith("[]") ? n.slice(2) : n.slice(1, -1);
+        return { shape: "slice", name: "[]" + elem, mutable: false };
+      }
       case "AssignExpr": {
+        // 解构 (a, b) = expr：逐元素——新建变量或覆盖已有（可写检查 R4）
+        if (e.left.type === "TupleLit") {
+          for (const it of e.left.items) {
+            if (!it.expr || it.expr.type !== "Ident") { this.err("R4", "解构目标必须是变量名", e.loc); continue; }
+            const existing = scope.lookup(it.expr.name);
+            if (existing) {
+              if (!existing.mutable) this.err("R4", "解构目标不可写（只读变量）：'" + it.expr.name + "'", e.loc);
+            } else {
+              scope.define(it.expr.name, { shape: "block", name: "?", mutable: !!it.mut, moved: false });
+            }
+          }
+          this.checkExpr(e.right, scope);
+          return { shape: "unknown", name: "?", mutable: false };
+        }
         const left = this.checkExpr(e.left, scope);
         const right = this.checkExpr(e.right, scope);
         if (!left.mutable) this.err("R4", "赋值目标不可写（只读变量 / 只读指针 / 非 mut 字段）", e.loc);
@@ -377,7 +451,13 @@ class Checker {
         for (const it of e.items) this.checkExpr(it, scope);
         return { shape: "block", name: "[]", mutable: false };
       }
-      case "IndexExpr": { this.checkExpr(e.obj, scope); this.checkExpr(e.index, scope); return { shape: "unknown", name: "?", mutable: false }; }
+      case "IndexExpr": {
+        const obj = this.checkExpr(e.obj, scope);
+        this.checkExpr(e.index, scope);
+        const n = obj.name || "";
+        const elem = n.startsWith("[]") ? n.slice(2) : n.startsWith("[") ? n.slice(1, -1) : "?";
+        return { shape: "block", name: elem, mutable: obj.mutable };   // 元素可写性继承自目标（数组/切片需 mut）
+      }
       default: return { shape: "unknown", name: "?", mutable: false };
     }
   }

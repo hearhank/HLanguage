@@ -12,6 +12,12 @@ function valueToStr(v) {
   if (v.__shape === "error") return "error." + v.__name;
   if (v.__shape === "enum") return v.__type + "." + v.__variant;
   if (v.__shape === "channel") return "Channel(" + v.__chan.cap + ")";
+  if (v.__kind === "tuple") {
+    const named = v.__names.length && !/^\d+$/.test(v.__names[0]);
+    const parts = v.__names.map((n, i) => named ? n + ": " + valueToStr(v.__items[i]) : valueToStr(v.__items[i]));
+    return "(" + parts.join(", ") + ")";
+  }
+  if (v.__shape === "slice") return "[" + v.__arr.slice(v.__start, v.__start + v.__len).map(valueToStr).join(", ") + "]";
   const alive = v.__alive === undefined || v.__alive ? "" : " 💀";
   const inner = Object.entries(v.__fields || {}).map(([k, x]) => k + ": " + valueToStr(x)).join(", ");
   return v.__type + "{" + inner + "}" + alive;
@@ -416,6 +422,15 @@ class Evaluator {
           if (e.prop === "len") return obj.length;
           this.rerr("动态块没有属性 '" + e.prop + "'（仅 len）", e.loc);
         }
+        if (obj && obj.__shape === "slice") {
+          if (e.prop === "len") return obj.__len;
+          this.rerr("切片没有属性 '" + e.prop + "'（仅 len）", e.loc);
+        }
+        if (obj && obj.__kind === "tuple") {
+          const idx = obj.__names.indexOf(e.prop);
+          if (idx < 0) this.rerr("元组没有字段 '" + e.prop + "'", e.loc);
+          return obj.__items[idx];
+        }
         if (obj === null || obj === undefined || typeof obj !== "object" || obj.__shape === "void") this.rerr("无法访问字段 '" + e.prop + "'", e.loc);
         if (!(e.prop in obj.__fields)) this.rerr("类型 " + obj.__type + " 没有字段 '" + e.prop + "'", e.loc);
         return obj.__fields[e.prop];
@@ -424,7 +439,11 @@ class Evaluator {
       case "BinExpr": {
         const l = yield* this.evalExpr(e.left), r = yield* this.evalExpr(e.right);
         switch (e.op) {
-          case "+": return typeof l === "string" || typeof r === "string" ? String(l) + String(r) : l + r;
+          case "+": {
+            const a = typeof l === "object" ? valueToStr(l) : l;
+            const b = typeof r === "object" ? valueToStr(r) : r;
+            return typeof a === "string" || typeof b === "string" ? String(a) + String(b) : a + b;
+          }
           case "-": return l - r; case "*": return l * r; case "/": return l / r; case "%": return l % r;
           case "==": return enumEq(l, r); case "!=": return !enumEq(l, r);
           case "<": return l < r; case "<=": return l <= r; case ">": return l > r; case ">=": return l >= r;
@@ -452,6 +471,22 @@ class Evaluator {
         }
         this.rerr("match 未覆盖变体 " + target.__variant + "（穷尽性检查应在编译期拦截）", e.loc);
       }
+      case "TupleLit": {
+        const items = [];
+        for (const it of e.items) items.push(deepCopyBlock(yield* this.evalExpr(it.expr)));
+        const names = e.named ? e.items.map(i => i.name) : items.map((_, i) => String(i));
+        return { __shape: "block", __kind: "tuple", __names: names, __items: items };
+      }
+      case "RangeExpr": {
+        const obj = yield* this.evalExpr(e.obj);
+        const len = Array.isArray(obj) ? obj.length : obj && obj.__shape === "slice" ? obj.__len : null;
+        if (len === null) this.rerr("取区间目标必须是动态块或切片", e.loc);
+        const start = e.start ? Number(yield* this.evalExpr(e.start)) : 0;
+        const end = e.end ? Number(yield* this.evalExpr(e.end)) : len;
+        if (start < 0 || end > len || start > end) this.rerr("切片区间越界 " + start + ".." + end, e.loc);
+        if (Array.isArray(obj)) return { __shape: "slice", __arr: obj, __start: start, __len: end - start };
+        return { __shape: "slice", __arr: obj.__arr, __start: obj.__start + start, __len: end - start };
+      }
       case "ArrayLiteral": {
         const out = [];
         for (const it of e.items) out.push(deepCopyBlock(yield* this.evalExpr(it)));
@@ -460,6 +495,10 @@ class Evaluator {
       case "IndexExpr": {
         const obj = yield* this.evalExpr(e.obj);
         const idx = yield* this.evalExpr(e.index);
+        if (obj && obj.__shape === "slice") {
+          if (idx < 0 || idx >= obj.__len) this.rerr("索引越界", e.loc);
+          return obj.__arr[obj.__start + idx];
+        }
         if (!Array.isArray(obj)) this.rerr("索引目标不是数组", e.loc);
         return obj[idx];
       }
@@ -480,6 +519,26 @@ class Evaluator {
   }
 
   *execAssign(e) {
+    // 解构 (a, b) = expr：逐元素——声明新建或覆盖已有（R4 可写检查）
+    if (e.left.type === "TupleLit") {
+      const vals = yield* this.evalExpr(e.right);
+      if (!vals || vals.__kind !== "tuple") this.rerr("解构右侧必须是元组", e.loc);
+      if (vals.__items.length !== e.left.items.length) this.rerr("解构元素数不匹配（期望 " + e.left.items.length + "，实际 " + vals.__items.length + "）", e.loc);
+      for (let i = 0; i < e.left.items.length; i++) {
+        const it = e.left.items[i];
+        if (!it.expr || it.expr.type !== "Ident") this.rerr("解构目标必须是变量名", e.loc);
+        const v = this.lookupVar(it.expr.name);
+        if (v) {
+          if (!v.mutable) this.rerr("解构目标不可写（只读变量）：'" + it.expr.name + "'", e.loc);
+          v.value = vals.__items[i];
+          this.event("assign", { target: it.expr.name, op: "=", val: valueToStr(vals.__items[i]) });
+        } else {
+          this.current.vars[it.expr.name] = { kind: "val", value: vals.__items[i], mutable: !!it.mut, alive: true, owned: true };
+          this.event("create_var", { name: it.expr.name, mutable: !!it.mut, val: valueToStr(vals.__items[i]) });
+        }
+      }
+      return vals;
+    }
     const lv = this.resolveLValue(e.left, e.loc);
     if (!lv.mutable) this.rerr("赋值目标不可写（只读变量 / 只读指针 / 非 mut 字段）", e.loc);
     let val = yield* this.evalExpr(e.right);
@@ -543,11 +602,28 @@ class Evaluator {
         },
       };
     }
+    if (e.type === "IndexExpr") {
+      const obj = this.evalExprSync(e.obj);
+      const idx = Number(this.evalExprSync(e.index));
+      const writable = this.objWritable(e.obj);
+      if (obj && obj.__shape === "slice") {
+        if (idx < 0 || idx >= obj.__len) this.rerr("索引越界", loc);
+        return {
+          mutable: writable, label: "切片[" + idx + "]",
+          get: () => obj.__arr[obj.__start + idx], set: (x) => { obj.__arr[obj.__start + idx] = x; },
+        };
+      }
+      if (Array.isArray(obj)) {
+        return { mutable: writable, label: "[" + idx + "]", get: () => obj[idx], set: (x) => { obj[idx] = x; } };
+      }
+      this.rerr("无法写索引目标", loc);
+    }
     this.rerr("无法解析赋值目标", loc);
   }
   evalExprSync(e) {
-    // 赋值目标的左值求值（字段访问）——同步路径（不涉及挂起；Channel 不能作为赋值目标）
+    // 赋值目标的左值求值——同步路径（不挂起）。仅处理无挂起风险的表达式，其余返回 void
     if (!e) return { __shape: "void" };
+    if (e.type === "Literal") return e.value;
     if (e.type === "Ident") {
       const v = this.lookupVar(e.name);
       if (!v) {
@@ -560,8 +636,46 @@ class Evaluator {
     }
     if (e.type === "MemberExpr") {
       const obj = this.evalExprSync(e.obj);
+      if (Array.isArray(obj)) {
+        if (e.prop === "len") return obj.length;
+        this.rerr("动态块没有属性 '" + e.prop + "'（仅 len）", e.loc);
+      }
+      if (obj && obj.__shape === "slice") {
+        if (e.prop === "len") return obj.__len;
+        this.rerr("切片没有属性 '" + e.prop + "'（仅 len）", e.loc);
+      }
+      if (obj && obj.__kind === "tuple") {
+        const idx = obj.__names.indexOf(e.prop);
+        if (idx < 0) this.rerr("元组没有字段 '" + e.prop + "'", e.loc);
+        return obj.__items[idx];
+      }
       if (!obj || !obj.__fields) this.rerr("无法访问字段", e.loc);
       return obj.__fields[e.prop];
+    }
+    if (e.type === "IndexExpr") {
+      const obj = this.evalExprSync(e.obj);
+      const idx = Number(this.evalExprSync(e.index));
+      if (obj && obj.__shape === "slice") {
+        if (idx < 0 || idx >= obj.__len) this.rerr("索引越界", e.loc);
+        return obj.__arr[obj.__start + idx];
+      }
+      if (!Array.isArray(obj)) this.rerr("索引目标不是数组或切片", e.loc);
+      return obj[idx];
+    }
+    if (e.type === "BinExpr") {
+      const l = this.evalExprSync(e.left), r = this.evalExprSync(e.right);
+      switch (e.op) {
+        case "+": {
+          const a = typeof l === "object" ? valueToStr(l) : l;
+          const b = typeof r === "object" ? valueToStr(r) : r;
+          return typeof a === "string" || typeof b === "string" ? String(a) + String(b) : a + b;
+        }
+        case "-": return l - r; case "*": return l * r; case "/": return l / r; case "%": return l % r;
+        case "==": return enumEq(l, r); case "!=": return !enumEq(l, r);
+        case "<": return l < r; case "<=": return l <= r; case ">": return l > r; case ">=": return l >= r;
+        case "&&": return truthy(l) && truthy(r); case "||": return truthy(l) || truthy(r);
+        default: this.rerr("未知运算符 " + e.op, e.loc);
+      }
     }
     return { __shape: "void" };
   }
@@ -617,6 +731,10 @@ class Evaluator {
     if (mname === "to_str") return valueToStr(obj);
     if (mname === "to_bytes") return this.toBytes(obj);
     if (mname === "len" && Array.isArray(obj)) return obj.length;
+    if (mname === "len" && obj && obj.__shape === "slice") return obj.__len;
+    if (mname === "clone" && obj && obj.__shape === "slice") {
+      return obj.__arr.slice(obj.__start, obj.__start + obj.__len).map(x => deepCopyBlock(x));
+    }
     // Channel 操作：经宿主（本地队列或跨线程路由）
     if (obj && obj.__shape === "channel") {
       if (mname === "send") return yield* this.host.channelSend(obj.__chan, deepCopyBlock(args[0]));
@@ -670,9 +788,12 @@ class Evaluator {
           sc.vars[p.name] = { kind: "val", value: arg, mutable: true, alive: true, owned: true };
           this.event("move_param", { name: p.name });
         } else {
-          const isTree = arg && typeof arg === "object" && arg.__shape === "tree";
-          sc.vars[p.name] = { kind: "val", value: isTree ? arg : deepCopyBlock(arg), mutable: false, alive: true, owned: !isTree };
-          this.event("bind_val", { name: p.name, val: valueToStr(arg) });
+          // 切片参数：[]T 实参自动借用（[T] → 借用视图）；数组实参转切片
+          let a = arg;
+          if (p.ptype && p.ptype.type === "SliceType" && Array.isArray(arg)) a = { __shape: "slice", __arr: arg, __start: 0, __len: arg.length };
+          const isTree = a && typeof a === "object" && a.__shape === "tree";
+          sc.vars[p.name] = { kind: "val", value: isTree ? a : deepCopyBlock(a), mutable: false, alive: true, owned: !isTree };
+          this.event("bind_val", { name: p.name, val: valueToStr(a) });
         }
       });
       let result = null;
@@ -703,6 +824,16 @@ class Evaluator {
       if (x === null || x === undefined) return null;
       if (typeof x !== "object" || Array.isArray(x)) return x;
       if (x.__shape === "void" || x.__shape === "error" || x.__shape === "enum" || x.__shape === "channel") return x;
+      if (x.__kind === "tuple") {
+        // 元组字节格式（ADR 0007）：位置 __items / 命名 __fields（无 __type）
+        const named = x.__names.length && !/^\d+$/.test(x.__names[0]);
+        if (named) {
+          const f = {};
+          for (let i = 0; i < x.__names.length; i++) f[x.__names[i]] = clean(x.__items[i]);
+          return { __shape: "block", __fields: f };
+        }
+        return { __shape: "block", __items: x.__items.map(clean) };
+      }
       const out = { __shape: x.__shape, __type: x.__type, __fields: {} };
       for (const [k, fv] of Object.entries(x.__fields)) out.__fields[k] = clean(fv);
       return out;
@@ -726,6 +857,13 @@ class Evaluator {
     }
     const revive = (x) => {
       if (x && typeof x === "object" && x.__shape) {
+        if (x.__items && Array.isArray(x.__items)) {
+          return { __shape: "block", __kind: "tuple", __names: x.__items.map((_, i) => String(i)), __items: x.__items.map(revive) };
+        }
+        if (x.__fields && x.__type === undefined) {
+          const names = Object.keys(x.__fields);
+          return { __shape: "block", __kind: "tuple", __names: names, __items: names.map(k => revive(x.__fields[k])) };
+        }
         const fields = {};
         for (const [k, fv] of Object.entries(x.__fields)) fields[k] = revive(fv);
         return { __shape: x.__shape, __type: x.__type, __fields: fields, __alive: true };
@@ -755,7 +893,8 @@ function binOp(op, l, r) {
 function deepCopyBlock(v) {
   if (v === null || v === undefined || typeof v !== "object") return v;
   if (Array.isArray(v)) return v.map(deepCopyBlock);
-  if (v.__shape === "tree" || v.__shape === "channel" || v.__shape === "enum") return v;
+  if (v.__shape === "tree" || v.__shape === "channel" || v.__shape === "enum" || v.__shape === "slice") return v;   // slice 是借用视图：引用原数组（GC 安全），不复制
+  if (v.__kind === "tuple") return { __shape: "block", __kind: "tuple", __names: v.__names.slice(), __items: v.__items.map(deepCopyBlock) };
   if (v.__shape === "block") {
     const out = { __shape: "block", __type: v.__type, __fields: {} };
     for (const [k, x] of Object.entries(v.__fields)) out.__fields[k] = deepCopyBlock(x);

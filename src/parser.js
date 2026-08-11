@@ -152,7 +152,36 @@ class Parser {
     return { type: "GlobalDecl", name, gtype, init, loc: { line: tk.line, col: tk.col } };
   }
   parseType() {
-    if (this.check("OP", "[")) { this.next(); const elem = this.parseType(); this.expect("OP", "]", "']'"); return { type: "ArrayType", elem }; }
+    if (this.check("OP", "[")) {
+      this.next();
+      if (this.match("OP", "]")) { const elem = this.parseType(); return { type: "SliceType", elem }; }   // []T 切片（借用视图）
+      const elem = this.parseType();
+      this.expect("OP", "]", "']'");
+      return { type: "ArrayType", elem };
+    }
+    if (this.check("OP", "(")) {
+      // 元组类型：(T1, T2) / (x: T1, y: T2) / ()
+      this.next();
+      const items = [];
+      this.skipNL();
+      if (this.match("OP", ")")) return { type: "TupleType", named: false, items: [] };
+      let named = this.check("IDENT") && this.peek(1).value === ":";
+      while (true) {
+        this.skipNL();
+        if (named) {
+          const fname = this.expect("IDENT", undefined, "字段名").value;
+          this.expect("OP", ":", "':'");
+          items.push({ name: fname, type: this.parseType() });
+        } else {
+          items.push({ name: null, type: this.parseType() });
+        }
+        this.skipNL();
+        if (this.match("OP", ",")) { if (this.check("OP", ")")) break; continue; }
+        break;
+      }
+      this.expect("OP", ")");
+      return { type: "TupleType", named, items };
+    }
     let mutable = false;
     if (this.match("KEYWORD", "ref")) mutable = true;
     const name = this.expect("IDENT", undefined, "类型名").value;
@@ -188,7 +217,10 @@ class Parser {
     if (this.match("KEYWORD", "spawn")) { const callee = this.parseExpr(); this.optSemi(); return { type: "SpawnStmt", callee }; }
     if (this.check("KEYWORD", "if")) {
       this.next();
+      const saved = this.noConstruct;
+      this.noConstruct = true;             // 条件里的 IDENT{ 是块边界，不是构造字面量
       const cond = this.parseExpr();
+      this.noConstruct = saved;
       const then = this.parseBlock();
       let els = null;
       this.skipNL();
@@ -281,9 +313,37 @@ class Parser {
   parsePostfix() {
     let e = this.parsePrimary();
     while (true) {
-      if (this.match("OP", ".")) { const prop = this.expect("IDENT", undefined, "属性名").value; e = { type: "MemberExpr", obj: e, prop }; }
+      if (this.match("OP", ".")) {
+        let prop;
+        if (this.check("IDENT")) prop = this.next().value;
+        else if (this.check("NUMBER")) prop = String(this.next().value);   // 元组 .0/.1
+        else this.err("期望属性名", this.peek());
+        e = { type: "MemberExpr", obj: e, prop };
+      }
       else if (this.check("OP", "(")) { e = { type: "CallExpr", callee: e, args: this.parseArgs() }; }
-      else if (this.check("OP", "[")) { this.next(); const idx = this.parseExpr(); this.expect("OP", "]", "']'"); e = { type: "IndexExpr", obj: e, index: idx }; }
+      else if (this.check("OP", "[")) {
+        this.next();
+        if (this.check("OP", "]")) { this.next(); e = { type: "RangeExpr", obj: e, start: null, end: null }; }
+        else if (this.check("OP", "..")) {
+          this.next();
+          let end = null;
+          if (!this.check("OP", "]")) end = this.parseExpr();
+          this.expect("OP", "]", "']'");
+          e = { type: "RangeExpr", obj: e, start: null, end };
+        }
+        else {
+          const start = this.parseExpr();
+          if (this.match("OP", "..")) {
+            let end = null;
+            if (!this.check("OP", "]")) end = this.parseExpr();
+            this.expect("OP", "]", "']'");
+            e = { type: "RangeExpr", obj: e, start, end };
+          } else {
+            this.expect("OP", "]", "']'");
+            e = { type: "IndexExpr", obj: e, index: start };
+          }
+        }
+      }
       else break;
     }
     return e;
@@ -307,7 +367,34 @@ class Parser {
       this.expect("OP", ".", "'.'");
       return { type: "ErrorLit", name: this.expect("IDENT", undefined, "错误名").value, loc: { line: tk.line, col: tk.col } };
     }
-    if (this.check("OP", "(")) { this.next(); const e = this.parseExpr(); this.expect("OP", ")", "')'"); return e; }
+    if (this.check("OP", "(")) {
+      // 元组字面量：(v1, v2) / (x: v1, y: v2) / () / (v,)；单元素无逗号 = 分组 (v)
+      this.next();
+      this.skipNL();
+      const tl = { line: tk.line, col: tk.col };
+      if (this.match("OP", ")")) return { type: "TupleLit", named: false, items: [], loc: tl };
+      let named = this.check("IDENT") && this.peek(1).value === ":";
+      const items = [];
+      let hadComma = false;
+      while (true) {
+        this.skipNL();
+        let mut = false;
+        if (this.match("KEYWORD", "mut")) mut = true;
+        if (named) {
+          const fname = this.expect("IDENT", undefined, "字段名").value;
+          this.expect("OP", ":", "':'");
+          items.push({ name: fname, expr: this.parseExpr(), mut });
+        } else {
+          items.push({ name: null, expr: this.parseExpr(), mut });
+        }
+        this.skipNL();
+        if (this.match("OP", ",")) { hadComma = true; if (this.check("OP", ")")) break; continue; }
+        break;
+      }
+      this.expect("OP", ")");
+      if (items.length === 1 && !hadComma && !named && !items[0].mut) return items[0].expr;   // 分组
+      return { type: "TupleLit", named, items, loc: tl };
+    }
     if (this.check("OP", "[")) {
       this.next();
       const items = [];
