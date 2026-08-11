@@ -5,17 +5,56 @@
 
 const { parse } = require("./parser");
 
-/* Windows Fiber 协程 + M:N worker 线程运行时（H_THREADS=1 时与求值器单线程调度一致） */
+/* 并发运行时：Windows Fiber / POSIX ucontext 协程 + M:N worker 线程（H_THREADS=1 时与求值器单线程调度一致） */
 const CONCURRENCY_RUNTIME = `
-/* ---------- 并发运行时：Windows Fiber 协程 + M:N worker 线程 ---------- */
+/* ---------- 并发运行时：跨平台协程 + M:N worker 线程 ---------- */
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <pthread.h>
+#include <ucontext.h>
+#include <unistd.h>
+#endif
 #ifndef H_THREADS
 #define H_THREADS 1
 #endif
+#ifndef H_TASK_STACK
+#define H_TASK_STACK (64 * 1024)
+#endif
+/* 平台抽象：锁 / 条件变量 / 原子计数 */
+#ifdef _WIN32
+#define h_lock CRITICAL_SECTION
+#define h_cond CONDITION_VARIABLE
+#define h_lock_init(l) InitializeCriticalSection(l)
+#define h_lock_lock(l) EnterCriticalSection(l)
+#define h_lock_unlock(l) LeaveCriticalSection(l)
+#define h_cond_init(c) InitializeConditionVariable(c)
+#define h_cond_wait(c, l) SleepConditionVariableCS(c, l, INFINITE)
+#define h_cond_wake(c) WakeConditionVariable(c)
+#define h_cond_wakeall(c) WakeAllConditionVariable(c)
+#define h_atomic_inc(x) InterlockedIncrement(&(x))
+#define h_atomic_dec(x) InterlockedDecrement(&(x))
+#else
+#define h_lock pthread_mutex_t
+#define h_cond pthread_cond_t
+#define h_lock_init(l) pthread_mutex_init(l, NULL)
+#define h_lock_lock(l) pthread_mutex_lock(l)
+#define h_lock_unlock(l) pthread_mutex_unlock(l)
+#define h_cond_init(c) pthread_cond_init(c, NULL)
+#define h_cond_wait(c, l) pthread_cond_wait(c, l)
+#define h_cond_wake(c) pthread_cond_signal(c)
+#define h_cond_wakeall(c) pthread_cond_broadcast(c)
+#define h_atomic_inc(x) __atomic_add_fetch(&(x), 1, __ATOMIC_SEQ_CST)
+#define h_atomic_dec(x) __atomic_sub_fetch(&(x), 1, __ATOMIC_SEQ_CST)
+#endif
 typedef struct h_task h_task;
 struct h_task {
+#ifdef _WIN32
   void* fiber;
+#else
+  ucontext_t ctx;
+  void* stack;
+#endif
   h_task* next;
   int suspended;
   int done;
@@ -40,43 +79,88 @@ typedef struct h_spawn_req {
 typedef struct h_chan {
   int cap, count, head, tail;
   void** buf;
-  CRITICAL_SECTION lock;
+  h_lock lock;
   h_wait* waits;
 } h_chan;
 typedef struct h_worker {
-  void* sched_fiber;
-  HANDLE thread;
+  void* sched_ctx;
+  void* thread;
   h_task* ready_head;
   h_task* ready_tail;
   struct h_spawn_req* spawn_head;
   struct h_spawn_req* spawn_tail;
-  CRITICAL_SECTION lock;
-  CONDITION_VARIABLE cv;
+  h_lock lock;
+  h_cond cv;
   int shutdown;
 } h_worker;
 
-static CRITICAL_SECTION g_out_lock;
+static h_lock g_out_lock;
 static h_worker* g_workers = NULL;
 static int g_nworkers = H_THREADS;
-static volatile LONG g_active = 0;
+static volatile long g_active = 0;
 static int g_spawn_round = 0;
 #if H_THREADS == 1
 static h_chan** g_chans = NULL;
 static int g_chan_count = 0, g_chan_cap = 0;
 #endif
 
+/* 平台协程原语：当前任务 / 建删 / 切换（任务→调度器、调度器→任务）/ 主线程调度器初始化 */
+#ifdef _WIN32
+static void WINAPI h_task_enter(void* param);
 static h_task* h_cur_task(void) { return (h_task*)GetFiberData(); }
+static void h_ctx_create_task(h_task* t) { t->fiber = CreateFiber(0, h_task_enter, t); }
+static void h_ctx_delete_task(h_task* t) { DeleteFiber(t->fiber); }
+static void h_ctx_switch_to_sched(void) { SwitchToFiber(h_cur_task()->owner->sched_ctx); }
+static void h_ctx_switch_to_task(h_worker* w, h_task* t) { SwitchToFiber(t->fiber); }
+static void h_main_thread_ctx_init(h_worker* w) { w->sched_ctx = ConvertThreadToFiber(NULL); }
+#else
+static void h_task_enter(void);
+static __thread h_task* g_cur = NULL;
+static __thread h_worker* g_worker = NULL;
+static h_task* h_cur_task(void) { return g_cur; }
+static void h_ctx_create_task(h_task* t) {
+  t->stack = malloc(H_TASK_STACK);
+  getcontext(&t->ctx);
+  t->ctx.uc_stack.ss_sp = t->stack;
+  t->ctx.uc_stack.ss_size = H_TASK_STACK;
+  t->ctx.uc_link = NULL;
+  makecontext(&t->ctx, h_task_enter, 0);
+}
+static void h_ctx_delete_task(h_task* t) { free(t->stack); }
+static void h_ctx_switch_to_sched(void) { h_task* t = g_cur; swapcontext(&t->ctx, (ucontext_t*)g_worker->sched_ctx); }
+static void h_ctx_switch_to_task(h_worker* w, h_task* t) { g_cur = t; swapcontext((ucontext_t*)w->sched_ctx, &t->ctx); }
+static void h_main_thread_ctx_init(h_worker* w) { w->sched_ctx = malloc(sizeof(ucontext_t)); getcontext((ucontext_t*)w->sched_ctx); }
+#endif
+#ifdef _WIN32
+static void* h_thread_create(LPTHREAD_START_ROUTINE fn, void* arg) {
+  return CreateThread(NULL, 0, fn, arg, 0, NULL);
+}
+#else
+static void* h_thread_create(void* (*fn)(void*), void* arg) {
+  pthread_t* t = (pthread_t*)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, fn, arg);
+  return (void*)t;
+}
+#endif
+static void h_thread_join(void* t) {
+#ifdef _WIN32
+  WaitForSingleObject((HANDLE)t, INFINITE);
+#else
+  pthread_join(*(pthread_t*)t, NULL);
+  free(t);
+#endif
+}
 
-static void h_print_lock(void) { EnterCriticalSection(&g_out_lock); }
-static void h_print_unlock(void) { LeaveCriticalSection(&g_out_lock); }
-static void h_task_started(void) { InterlockedIncrement(&g_active); }
+static void h_print_lock(void) { h_lock_lock(&g_out_lock); }
+static void h_print_unlock(void) { h_lock_unlock(&g_out_lock); }
+static void h_task_started(void) { h_atomic_inc(g_active); }
 static void h_task_finished(void) {
-  if (InterlockedDecrement(&g_active) == 0) {
+  if (h_atomic_dec(g_active) == 0) {
     for (int i = 0; i < g_nworkers; i++) {
-      EnterCriticalSection(&g_workers[i].lock);
+      h_lock_lock(&g_workers[i].lock);
       g_workers[i].shutdown = 1;
-      LeaveCriticalSection(&g_workers[i].lock);
-      WakeAllConditionVariable(&g_workers[i].cv);
+      h_lock_unlock(&g_workers[i].lock);
+      h_cond_wakeall(&g_workers[i].cv);
     }
   }
 }
@@ -84,7 +168,7 @@ static h_chan* h_chan_new(int cap) {
   h_chan* c = (h_chan*)malloc(sizeof(h_chan));
   c->cap = cap < 1 ? 1 : cap; c->count = 0; c->head = 0; c->tail = 0;
   c->buf = (void**)malloc(sizeof(void*) * c->cap);
-  InitializeCriticalSection(&c->lock);
+  h_lock_init(&c->lock);
   c->waits = NULL;
 #if H_THREADS == 1
   if (g_chan_count == g_chan_cap) {
@@ -108,38 +192,43 @@ static void h_chan_wake(h_chan* c, int type) {
       free(w);
       wt->suspended = 0;
       h_worker* wker = wt->owner;
-      EnterCriticalSection(&wker->lock);
+      h_lock_lock(&wker->lock);
       wt->next = NULL;
       if (wker->ready_tail) wker->ready_tail->next = wt; else wker->ready_head = wt;
       wker->ready_tail = wt;
-      LeaveCriticalSection(&wker->lock);
-      WakeConditionVariable(&wker->cv);
+      h_lock_unlock(&wker->lock);
+      h_cond_wake(&wker->cv);
       return;
     }
     pp = &(*pp)->next;
   }
 }
+#ifdef _WIN32
 static void WINAPI h_task_enter(void* param) {
   h_task* t = (h_task*)param;
+#else
+static void h_task_enter(void) {
+  h_task* t = g_cur;
+#endif
   t->entry(t->arg);
   t->done = 1;
   h_task_finished();
-  SwitchToFiber(t->owner->sched_fiber);
+  h_ctx_switch_to_sched();
 }
-static void h_yield(void) { SwitchToFiber(h_cur_task()->owner->sched_fiber); }
+static void h_yield(void) { h_ctx_switch_to_sched(); }
 static int h_chan_has_wait(h_chan* c, int type) {
   for (h_wait* w = c->waits; w; w = w->next) if (w->type == type) return 1;
   return 0;
 }
 static int h_chan_send(h_chan* c, void* v) {
   h_task* t = h_cur_task();
-  EnterCriticalSection(&c->lock);
+  h_lock_lock(&c->lock);
   if (c->count < c->cap) {
     c->buf[c->tail] = v; c->tail = (c->tail + 1) % c->cap; c->count++;
 #if H_THREADS > 1
     h_chan_wake(c, 2);
 #endif
-    LeaveCriticalSection(&c->lock);
+    h_lock_unlock(&c->lock);
     return 1;
   }
   h_wait* w = (h_wait*)malloc(sizeof(h_wait));
@@ -148,19 +237,19 @@ static int h_chan_send(h_chan* c, void* v) {
   while (*pp) pp = &(*pp)->next;
   *pp = w;
   t->suspended = 1;
-  LeaveCriticalSection(&c->lock);
-  SwitchToFiber(t->owner->sched_fiber);
+  h_lock_unlock(&c->lock);
+  h_ctx_switch_to_sched();
   return 1;
 }
 static void* h_chan_recv(h_chan* c) {
   h_task* t = h_cur_task();
-  EnterCriticalSection(&c->lock);
+  h_lock_lock(&c->lock);
   if (c->count > 0) {
     void* v = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--;
 #if H_THREADS > 1
     h_chan_wake(c, 1);
 #endif
-    LeaveCriticalSection(&c->lock);
+    h_lock_unlock(&c->lock);
     return v;
   }
   h_wait* w = (h_wait*)malloc(sizeof(h_wait));
@@ -169,28 +258,28 @@ static void* h_chan_recv(h_chan* c) {
   while (*pp) pp = &(*pp)->next;
   *pp = w;
   t->suspended = 2;
-  LeaveCriticalSection(&c->lock);
-  SwitchToFiber(t->owner->sched_fiber);
+  h_lock_unlock(&c->lock);
+  h_ctx_switch_to_sched();
   return t->recv_val;
 }
-/* spawn：请求投递到 worker（round-robin）；fiber 须在创建线程运行，故由 worker 线程自建 */
+/* spawn：请求投递到 worker（round-robin）；协程须在创建线程运行，故由 worker 线程自建 */
 static void h_spawn(void (*entry)(void*), void* arg) {
   h_worker* w = &g_workers[g_spawn_round++ % g_nworkers];
   h_spawn_req* r = (h_spawn_req*)malloc(sizeof(h_spawn_req));
   r->entry = entry; r->arg = arg; r->next = NULL;
   h_task_started();
-  EnterCriticalSection(&w->lock);
+  h_lock_lock(&w->lock);
   if (w->spawn_tail) w->spawn_tail->next = r; else w->spawn_head = r;
   w->spawn_tail = r;
-  LeaveCriticalSection(&w->lock);
-  WakeConditionVariable(&w->cv);
+  h_lock_unlock(&w->lock);
+  h_cond_wake(&w->cv);
 }
-/* 调度循环：处理 spawn 请求（本线程建 fiber）→ 跑就绪 fiber；挂起者等唤醒、yield 者重入队 */
+/* 调度循环：处理 spawn 请求（本线程建协程）→ 跑就绪协程；挂起者等唤醒、yield 者重入队 */
 static void h_sched_loop(h_worker* w) {
 #if H_THREADS == 1
   /* 单线程：与求值器单线程调度逐字一致（FIFO + 空转延迟唤醒） */
   while (1) {
-    EnterCriticalSection(&w->lock);
+    h_lock_lock(&w->lock);
     h_spawn_req* r = w->spawn_head;
     w->spawn_head = w->spawn_tail = NULL;
     h_task* newt = NULL, *newtail = NULL;
@@ -199,7 +288,7 @@ static void h_sched_loop(h_worker* w) {
       h_task* t = (h_task*)malloc(sizeof(h_task));
       t->entry = r->entry; t->arg = r->arg; t->done = 0; t->suspended = 0; t->next = NULL;
       t->owner = w;
-      t->fiber = CreateFiber(0, h_task_enter, t);
+      h_ctx_create_task(t);
       if (newtail) newtail->next = t; else newt = t;
       newtail = t;
       free(r);
@@ -207,21 +296,21 @@ static void h_sched_loop(h_worker* w) {
     }
     if (w->ready_tail) w->ready_tail->next = newt; else w->ready_head = newt;
     if (newtail) w->ready_tail = newtail;
-    LeaveCriticalSection(&w->lock);
+    h_lock_unlock(&w->lock);
     while (1) {
-      EnterCriticalSection(&w->lock);
+      h_lock_lock(&w->lock);
       h_task* t = w->ready_head;
       if (t) { w->ready_head = t->next; if (!w->ready_head) w->ready_tail = NULL; }
-      LeaveCriticalSection(&w->lock);
+      h_lock_unlock(&w->lock);
       if (!t) break;
-      SwitchToFiber(t->fiber);
-      if (t->done) { DeleteFiber(t->fiber); free(t); continue; }
+      h_ctx_switch_to_task(w, t);
+      if (t->done) { h_ctx_delete_task(t); free(t); continue; }
       if (!t->suspended) {
-        EnterCriticalSection(&w->lock);
+        h_lock_lock(&w->lock);
         t->next = NULL;
         if (w->ready_tail) w->ready_tail->next = t; else w->ready_head = t;
         w->ready_tail = t;
-        LeaveCriticalSection(&w->lock);
+        h_lock_unlock(&w->lock);
       }
     }
     /* 空转：延迟唤醒（旧版语义：recv 等待者先、send 等待者后） */
@@ -236,8 +325,8 @@ static void h_sched_loop(h_worker* w) {
 #else
   /* 多线程：即时唤醒（send/recv 成功即唤醒跨线程等待者），空转 condvar 等待 */
   while (1) {
-    EnterCriticalSection(&w->lock);
-    while (!w->ready_head && !w->spawn_head && !w->shutdown) SleepConditionVariableCS(&w->cv, &w->lock, INFINITE);
+    h_lock_lock(&w->lock);
+    while (!w->ready_head && !w->spawn_head && !w->shutdown) h_cond_wait(&w->cv, &w->lock);
     h_spawn_req* r = w->spawn_head;
     w->spawn_head = w->spawn_tail = NULL;
     h_task* newt = NULL, *newtail = NULL;
@@ -246,7 +335,7 @@ static void h_sched_loop(h_worker* w) {
       h_task* t = (h_task*)malloc(sizeof(h_task));
       t->entry = r->entry; t->arg = r->arg; t->done = 0; t->suspended = 0; t->next = NULL;
       t->owner = w;
-      t->fiber = CreateFiber(0, h_task_enter, t);
+      h_ctx_create_task(t);
       if (newtail) newtail->next = t; else newt = t;
       newtail = t;
       free(r);
@@ -254,46 +343,57 @@ static void h_sched_loop(h_worker* w) {
     }
     if (w->ready_tail) w->ready_tail->next = newt; else w->ready_head = newt;
     if (newtail) w->ready_tail = newtail;
-    if (!w->ready_head) { LeaveCriticalSection(&w->lock); break; }
+    if (!w->ready_head) { h_lock_unlock(&w->lock); break; }
     h_task* t = w->ready_head;
     w->ready_head = t->next;
     if (!w->ready_head) w->ready_tail = NULL;
-    LeaveCriticalSection(&w->lock);
-    SwitchToFiber(t->fiber);
-    if (t->done) { DeleteFiber(t->fiber); free(t); continue; }
+    h_lock_unlock(&w->lock);
+    h_ctx_switch_to_task(w, t);
+    if (t->done) { h_ctx_delete_task(t); free(t); continue; }
     if (!t->suspended) {
-      EnterCriticalSection(&w->lock);
+      h_lock_lock(&w->lock);
       t->next = NULL;
       if (w->ready_tail) w->ready_tail->next = t; else w->ready_head = t;
       w->ready_tail = t;
-      LeaveCriticalSection(&w->lock);
+      h_lock_unlock(&w->lock);
     }
   }
 #endif
 }
+#ifdef _WIN32
 static DWORD WINAPI h_worker_main(void* param) {
   h_worker* w = (h_worker*)param;
-  w->sched_fiber = ConvertThreadToFiber(NULL);
+  w->sched_ctx = ConvertThreadToFiber(NULL);
   h_sched_loop(w);
   return 0;
 }
+#else
+static void* h_worker_main(void* param) {
+  h_worker* w = (h_worker*)param;
+  g_worker = w;
+  w->sched_ctx = malloc(sizeof(ucontext_t));
+  getcontext((ucontext_t*)w->sched_ctx);
+  h_sched_loop(w);
+  free(w->sched_ctx);
+  return NULL;
+}
+#endif
 static void h_runtime_init(void) {
-  InitializeCriticalSection(&g_out_lock);
+  h_lock_init(&g_out_lock);
   g_nworkers = H_THREADS < 1 ? 1 : H_THREADS;
   g_workers = (h_worker*)calloc(g_nworkers, sizeof(h_worker));
   for (int i = 0; i < g_nworkers; i++) {
-    InitializeCriticalSection(&g_workers[i].lock);
-    InitializeConditionVariable(&g_workers[i].cv);
+    h_lock_init(&g_workers[i].lock);
+    h_cond_init(&g_workers[i].cv);
     g_workers[i].thread = NULL;
   }
   for (int i = 1; i < g_nworkers; i++) {
-    g_workers[i].thread = CreateThread(NULL, 0, h_worker_main, &g_workers[i], 0, NULL);
+    g_workers[i].thread = h_thread_create(h_worker_main, &g_workers[i]);
   }
 }
 static void h_runtime_join(void) {
-  for (int i = 1; i < g_nworkers; i++) WaitForSingleObject(g_workers[i].thread, INFINITE);
+  for (int i = 1; i < g_nworkers; i++) h_thread_join(g_workers[i].thread);
 }
-#endif
 `;
 
 /* 字节化（to_bytes/from_bytes）：可逆自描述 JSON（与求值器 JSON.stringify 逐字节一致） */
@@ -723,7 +823,7 @@ function genC(ast, threads) {
   const hasMain = ctx.retKinds["main"] !== undefined;
   const mainErrT = hasMain && ctx.retKinds["main"] === "error" ? shortName(ctx.rets["main"] || "void") : null;
   const mainEntry = [
-    `static void WINAPI h_task_main_entry(void* arg) {`,
+    `static void h_task_main_entry(void* arg) {`,
     hasMain ? (mainErrT
       ? `  h_err_${mainErrT} _he = h_main(); if (!_he.ok) { fprintf(stderr, "\\u274c error.%s（未处理）\\n", _he.name); h_task_finished(); exit(1); }`
       : "  h_main();")
@@ -741,7 +841,7 @@ function genC(ast, threads) {
     ["int main(void) {",
       "  h_runtime_init();",
       "  h_global_init();",
-      "  g_workers[0].sched_fiber = ConvertThreadToFiber(NULL);",
+      "  h_main_thread_ctx_init(&g_workers[0]);",
       "  h_spawn(h_task_main_entry, NULL);",
       "  h_sched_loop(&g_workers[0]);",
       "  h_runtime_join();",

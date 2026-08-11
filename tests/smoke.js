@@ -227,6 +227,13 @@ t("M:N 多线程（C 后端）完成且关键行齐全",
   rMT.status === 0 && mtOut.includes("生产者启动") && mtOut.includes("生产者完成") && mtOut.includes("消费者启动") && mtOut.includes("消费者完成") && mtOut.includes("收到 1") && mtOut.includes("收到 3"),
   "status=" + rMT.status + "\n" + mtOut.slice(0, 400));
 
+// 17c. C 后端跨平台：zig cc 交叉编译 Linux（posix 并发运行时路径）
+process.chdir(require("os").tmpdir());
+const rX = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "concurrency.hc"], { encoding: "utf8" });
+const xc = require("child_process").spawnSync("zig", ["cc", "-target", "x86_64-linux-gnu", "-c", "concurrency.c", "-o", "cl.o"], { encoding: "utf8" });
+process.chdir(cwd);
+t("Linux 交叉编译通过（posix 并发运行时）", xc.status === 0, (xc.stderr || "").slice(0, 200));
+
 // 18. C 后端 yield：让出调度权（与 eval 单线程逐字一致）
 const yieldSrc = "fun w() {\n    print(\"开始\")\n    yield\n    print(\"继续\")\n}\nfun x() {\n    print(\"另一执行体\")\n}\nspawn w()\nspawn x()\n";
 r = h(["run"], yieldSrc);
