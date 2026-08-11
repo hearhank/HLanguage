@@ -19,6 +19,7 @@
 | 04 | 并发：执行体、访问模式、跨执行体规则 | [docs/spec/04-concurrency.md](docs/spec/04-concurrency.md) |
 | 05 | 行为层：函数契约、class、接口、错误、命名空间、类型推断 | [docs/spec/05-behavior.md](docs/spec/05-behavior.md) |
 | 06 | 工具链：双后端、IR、命令、FFI | [docs/spec/06-toolchain.md](docs/spec/06-toolchain.md) |
+| 07 | 与 Rust/Zig 功能对比：类型、生命周期、并发、字节化、能力矩阵 | [docs/spec/07-comparison.md](docs/spec/07-comparison.md) |
 
 ## 已定决策速览
 

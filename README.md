@@ -68,7 +68,7 @@ node tests/smoke.js                          # 34 项回归测试
 ## 文档索引
 
 - 设计总纲：[SPEC.md](SPEC.md) · 术语：[CONTEXT.md](CONTEXT.md)
-- 规格：`docs/spec/01-data.md` ~ `06-toolchain.md`
+- 规格：`docs/spec/01-data.md` ~ `07-comparison.md`
 - 决策：`docs/adr/0001-*.md` ~ `0006-*.md`
 
 ## 状态
