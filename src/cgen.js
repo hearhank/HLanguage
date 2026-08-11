@@ -132,6 +132,154 @@ const CONCURRENCY_RUNTIME = [
   '',
 ].join('\n');
 
+/* 字节化（to_bytes/from_bytes）：可逆自描述 JSON（与求值器 JSON.stringify 逐字节一致） */
+/* 字节化（to_bytes/from_bytes）：可逆自描述 JSON（与求值器 JSON.stringify 逐字节一致） */
+const JSON_RUNTIME = `
+/* ---------- 字节化运行时：字符串缓冲 + 最小 JSON 解析器（字符比较用十六进制，避免转义层叠） ---------- */
+typedef struct { char* data; size_t len, cap; } h_strbuf;
+static void h_sb_grow(h_strbuf* b, size_t need) {
+  if (b->len + need + 1 <= b->cap) return;
+  b->cap = b->cap ? b->cap * 2 : 64;
+  while (b->len + need + 1 > b->cap) b->cap *= 2;
+  b->data = (char*)realloc(b->data, b->cap);
+}
+static void h_sb_puts(h_strbuf* b, const char* s) {
+  size_t n = strlen(s);
+  h_sb_grow(b, n);
+  memcpy(b->data + b->len, s, n);
+  b->len += n;
+}
+static void h_sb_char(h_strbuf* b, char c) { h_sb_grow(b, 1); b->data[b->len++] = c; }
+static void h_sb_num(h_strbuf* b, double d) {
+  char buf[64];
+  int prec;
+  for (prec = 17; prec >= 1; prec--) {
+    snprintf(buf, sizeof buf, "%.*g", prec, d);
+    double back;
+    if (sscanf(buf, "%lf", &back) == 1 && back == d) break;
+  }
+  h_sb_puts(b, buf);
+}
+static void h_sb_json_str(h_strbuf* b, const char* s) {
+  h_sb_char(b, 0x22);
+  for (const char* p = s; p && *p; p++) {
+    unsigned char c = (unsigned char)*p;
+    switch (c) {
+      case 0x22: h_sb_puts(b, "\\x5c\\x22"); break;
+      case 0x5c: h_sb_puts(b, "\\x5c\\x5c"); break;
+      case 0x0a: h_sb_puts(b, "\\x5c\\x6e"); break;
+      case 0x09: h_sb_puts(b, "\\x5c\\x74"); break;
+      case 0x0d: h_sb_puts(b, "\\x5c\\x72"); break;
+      case 0x08: h_sb_puts(b, "\\x5c\\x62"); break;
+      case 0x0c: h_sb_puts(b, "\\x5c\\x66"); break;
+      default:
+        if (c < 0x20) { char u[8]; snprintf(u, sizeof u, "\\x5c\\x75%04x", c); h_sb_puts(b, u); }
+        else h_sb_char(b, (char)c);
+    }
+  }
+  h_sb_char(b, 0x22);
+}
+static char* h_sb_done(h_strbuf* b) { h_sb_grow(b, 1); b->data[b->len] = 0; return b->data; }
+
+typedef struct h_json h_json;
+typedef struct { char* key; h_json* val; } h_jpair;
+struct h_json {
+  int kind;
+  double num;
+  char* str;
+  h_jpair* obj; int obj_n, obj_cap;
+  h_json** arr; int arr_n, arr_cap;
+};
+static h_json* h_json_new(int kind) { h_json* j = (h_json*)calloc(1, sizeof(h_json)); j->kind = kind; return j; }
+static void h_json_skip(const char** p) { while (**p == 0x20 || **p == 0x09 || **p == 0x0a || **p == 0x0d) (*p)++; }
+static void h_json_parse_str_body(const char** p, char** out) {
+  h_strbuf b = {0};
+  while (**p && **p != 0x22) {
+    if (**p == 0x5c) {
+      (*p)++;
+      char c = **p;
+      if (c == 0x75) {
+        unsigned code = 0;
+        for (int i = 0; i < 4; i++) { (*p)++; char h = **p; code = code * 16 + (unsigned)((h >= 0x30 && h <= 0x39) ? h - 0x30 : (h >= 0x61 && h <= 0x66) ? h - 0x61 + 10 : h - 0x41 + 10); }
+        if (code < 0x80) h_sb_char(&b, (char)code);
+        else if (code < 0x800) { h_sb_char(&b, (char)(0xC0 | (code >> 6))); h_sb_char(&b, (char)(0x80 | (code & 0x3F))); }
+        else { h_sb_char(&b, (char)(0xE0 | (code >> 12))); h_sb_char(&b, (char)(0x80 | ((code >> 6) & 0x3F))); h_sb_char(&b, (char)(0x80 | (code & 0x3F))); }
+      } else {
+        h_sb_char(&b, c == 0x6e ? 0x0a : c == 0x74 ? 0x09 : c == 0x72 ? 0x0d : c == 0x62 ? 0x08 : c == 0x66 ? 0x0c : c);
+        (*p)++;
+      }
+    } else { h_sb_char(&b, **p); (*p)++; }
+  }
+  if (**p == 0x22) (*p)++;
+  *out = h_sb_done(&b);
+}
+static h_json* h_json_parse_value(const char** p);
+static h_json* h_json_parse_obj(const char** p) {
+  h_json* j = h_json_new(0);
+  (*p)++;
+  while (1) {
+    h_json_skip(p);
+    if (**p == 0x7d) { (*p)++; return j; }
+    if (**p != 0x22) return j;
+    (*p)++;
+    char* key = NULL;
+    h_json_parse_str_body(p, &key);
+    h_json_skip(p);
+    if (**p == 0x3a) (*p)++;
+    h_json_skip(p);
+    if (j->obj_n == j->obj_cap) { j->obj_cap = j->obj_cap ? j->obj_cap * 2 : 4; j->obj = (h_jpair*)realloc(j->obj, j->obj_cap * sizeof(h_jpair)); }
+    j->obj[j->obj_n].key = key;
+    j->obj[j->obj_n].val = h_json_parse_value(p);
+    j->obj_n++;
+    h_json_skip(p);
+    if (**p == 0x2c) { (*p)++; continue; }
+    if (**p == 0x7d) { (*p)++; return j; }
+    return j;
+  }
+}
+static h_json* h_json_parse_arr(const char** p) {
+  h_json* j = h_json_new(1);
+  (*p)++;
+  while (1) {
+    h_json_skip(p);
+    if (**p == 0x5d) { (*p)++; return j; }
+    if (j->arr_n == j->arr_cap) { j->arr_cap = j->arr_cap ? j->arr_cap * 2 : 4; j->arr = (h_json**)realloc(j->arr, j->arr_cap * sizeof(h_json*)); }
+    j->arr[j->arr_n++] = h_json_parse_value(p);
+    h_json_skip(p);
+    if (**p == 0x2c) { (*p)++; continue; }
+    if (**p == 0x5d) { (*p)++; return j; }
+    return j;
+  }
+}
+static h_json* h_json_parse_value(const char** p) {
+  h_json_skip(p);
+  char c = **p;
+  if (c == 0x7b) return h_json_parse_obj(p);
+  if (c == 0x5b) return h_json_parse_arr(p);
+  if (c == 0x22) { (*p)++; h_json* j = h_json_new(3); h_json_parse_str_body(p, &j->str); return j; }
+  if (c == 0x74) { *p += 4; return h_json_new(4); }
+  if (c == 0x66) { *p += 5; return h_json_new(5); }
+  if (c == 0x6e) { *p += 4; return h_json_new(6); }
+  { char* end = NULL; double d = strtod(*p, &end); h_json* j = h_json_new(2); j->num = d; *p = end; return j; }
+}
+static h_json* h_json_find(h_json* j, const char* key) {
+  if (!j || j->kind != 0) return NULL;
+  for (int i = 0; i < j->obj_n; i++) if (strcmp(j->obj[i].key, key) == 0) return j->obj[i].val;
+  return NULL;
+}
+static double h_jnum(h_json* j, const char* key) { h_json* v = h_json_find(j, key); return v && v->kind == 2 ? v->num : 0; }
+static const char* h_jstr(h_json* j, const char* key) { h_json* v = h_json_find(j, key); return v && v->kind == 3 ? v->str : NULL; }
+static void h_json_free(h_json* j) {
+  if (!j) return;
+  for (int i = 0; i < j->obj_n; i++) { free(j->obj[i].key); h_json_free(j->obj[i].val); }
+  free(j->obj);
+  for (int i = 0; i < j->arr_n; i++) h_json_free(j->arr[i]);
+  free(j->arr);
+  free(j->str);
+  free(j);
+}
+`;
+
 function typeName(t) {
   if (t.type === "NamedType") return t.name;
   if (t.type === "ArrayType") return "[" + typeName(t.elem) + "]";
@@ -314,6 +462,22 @@ function genC(ast) {
   for (const e of arrayElems) printFns.push(genPrintArray(e, ctx));
   for (const n of Object.keys(classes)) printFns.push(genPrintClass(n, ctx));
   const printProtos = printFns.map(f => f.split("{")[0].trim() + ";");
+  // 字节化：per-type 序列化/反序列化（h_tb_/h_jrev_/h_to_bytes_/h_from_bytes_）
+  const bytesFns = [];
+  for (const [n, fs] of Object.entries(structFields)) {
+    const farr = Object.entries(fs).map(([k, v]) => ({ name: k, type: v }));
+    bytesFns.push(genTB(n, "block", farr, ctx), genRevStruct(n, farr, ctx), genToBytesEntry(n, `const ${n}* p`), genFromBytes(n, n));
+  }
+  for (const e of arrayElems) {
+    const an = shortName(e) + "_Array";
+    bytesFns.push(genTBArray(e, ctx), genRevArray(e, ctx), genToBytesEntry(an, `const ${an}* p`), genFromBytes(an, an));
+  }
+  for (const [n, cls] of Object.entries(classes)) {
+    bytesFns.push(genTB(n, "tree", cls.fields, ctx), genRevClass(n, cls.fields, ctx), genToBytesEntry(n, `const ${n}* p`), genFromBytes(n, n + "*"));
+  }
+  for (const [n, vs] of Object.entries(enums)) {
+    bytesFns.push(genTBEnum(n, vs), genRevEnum(n, vs), genToBytesEntry(n, `${n} p`), genFromBytes(n, n));
+  }
   // 类型顺序：前向声明（struct/class tag）→ enum → 数组 → struct 定义 → class 定义 → 打印/方法/函数
   const fwdDecls = [];
   for (const n of Object.keys(structFields)) fwdDecls.push(`typedef struct ${n} ${n};`);
@@ -373,11 +537,13 @@ function genC(ast) {
     '}',
     '',
     CONCURRENCY_RUNTIME,
+    JSON_RUNTIME,
   ];
   const hasMain = ctx.retKinds["main"] !== undefined;
   const spawnGlue = [spawnCtxDefs, spawnTramps].filter(Boolean).join("\n");
   return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
-    errorDefs, [""], printProtos, [""], printFns, [""], classDefs, funcs,
+    errorDefs, [""], printProtos, [""], printFns, [""], classDefs,
+    bytesFns ? [bytesFns.join("\n"), ""] : [], funcs,
     spawnGlue ? [spawnGlue, ""] : [], globalInitFun ? [globalInitFun] : [],
     ["int main(void) {",
       "  h_global_init();",
@@ -433,6 +599,101 @@ function genPrintArray(elem, ctx) {
 function genEnum(d) {
   const names = d.variants.map(v => `  ${d.name}_${v}`).join(",\n");
   return `typedef enum {\n${names}\n} ${d.name};`;
+}
+
+/* ---------- 字节化（to_bytes/from_bytes）：per-type JSON 序列化/反序列化 ---------- */
+function tbValue(t, e, ctx) {
+  if (t === "f64" || t === "u64") return `h_sb_num(b, ${e});`;
+  if (t === "bool") return `h_sb_puts(b, (${e}) ? \"true\" : \"false\");`;
+  if (t === "Str") return `h_sb_json_str(b, ${e});`;
+  if (t.startsWith("[") && t.endsWith("]")) return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b);`;
+  if (ctx.classes[t]) return `if (${e}) h_tb_${t}(${e}, b); else h_sb_puts(b, \"null\");`;
+  if (ctx.structs[t]) return `h_tb_${t}(&${e}, b);`;
+  if (ctx.enums[t]) return `h_tb_${t}(${e}, b);`;
+  return `h_sb_puts(b, \"null\");`;
+}
+function genTB(name, shape, fields, ctx) {
+  const L = [];
+  L.push(`static void h_tb_${name}(const ${name}* p, h_strbuf* b) {`);
+  L.push(`  h_sb_puts(b, \"{\\\"__shape\\\":\\\"${shape}\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__fields\\\":{\");`);
+  fields.forEach((f, i) => {
+    if (i) L.push(`  h_sb_puts(b, \",\");`);
+    L.push(`  h_sb_puts(b, \"\\\"${f.name}\\\":\");`);
+    L.push(`  ${tbValue(f.type, `p->${f.name}`, ctx)}`);
+  });
+  L.push(`  h_sb_puts(b, \"}}\");`);
+  L.push(`}`);
+  return L.join("\n");
+}
+function genTBArray(elem, ctx) {
+  const an = shortName(elem) + "_Array";
+  const el = tbValue(elem, "a->data[i]", ctx);
+  return `static void h_tb_${an}(const ${an}* a, h_strbuf* b) {\n  h_sb_char(b, '[');\n  for (unsigned long long i = 0; i < a->len; i++) {\n    if (i) h_sb_char(b, ',');\n    ${el}\n  }\n  h_sb_char(b, ']');\n}`;
+}
+function genTBEnum(name, variants) {
+  const cases = variants.map(v => `    case ${name}_${v}: h_sb_puts(b, \"${v}\"); break;`).join("\n");
+  return `static void h_tb_${name}(${name} v, h_strbuf* b) {\n  h_sb_puts(b, \"{\\\"__shape\\\":\\\"enum\\\",\\\"__type\\\":\\\"${name}\\\",\\\"__variant\\\":\\\"\");\n  switch (v) {\n${cases}\n  }\n  h_sb_puts(b, \"\\\"}\");\n}`;
+}
+function genToBytesEntry(name, sig) {
+  return `static char* h_to_bytes_${name}(${sig}) { h_strbuf b = {0}; h_tb_${name}(p, &b); return h_sb_done(&b); }`;
+}
+function revValue(t, fname, ctx) {
+  if (t === "f64") return `h_jnum(F, \"${fname}\")`;
+  if (t === "u64") return `(unsigned long long)h_jnum(F, \"${fname}\")`;
+  if (t === "bool") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 4) ? true : false`; }
+  if (t === "Str") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 3 ? strdup(${v}->str) : \"\")`; }
+  if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(h_json_find(F, \"${fname}\"))`;
+  if (ctx.classes[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
+  if (ctx.structs[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
+  if (ctx.enums[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
+  return "0";
+}
+function revElem(t, e, ctx) {
+  if (t === "f64") return `${e}->kind == 2 ? ${e}->num : 0`;
+  if (t === "u64") return `(${e}->kind == 2 ? (unsigned long long)${e}->num : 0)`;
+  if (t === "bool") return `${e}->kind == 4 ? true : false`;
+  if (t === "Str") return `${e}->kind == 3 ? strdup(${e}->str) : \"\"`;
+  if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(${e})`;
+  if (ctx.classes[t] || ctx.structs[t] || ctx.enums[t]) return `h_jrev_${t}(${e})`;
+  return "0";
+}
+function genRevStruct(name, fields, ctx) {
+  const L = [];
+  L.push(`static ${name} h_jrev_${name}(h_json* j) {`);
+  L.push(`  ${name} r = {0};`);
+  L.push(`  if (!j || j->kind != 0) return r;`);
+  L.push(`  h_json* F = h_json_find(j, \"__fields\");`);
+  fields.forEach(f => L.push(`  r.${f.name} = ${revValue(f.type, f.name, ctx)};`));
+  L.push(`  return r;`);
+  L.push(`}`);
+  return L.join("\n");
+}
+function genRevClass(name, fields, ctx) {
+  const L = [];
+  L.push(`static ${name}* h_jrev_${name}(h_json* j) {`);
+  L.push(`  if (!j || j->kind == 6) return NULL;`);
+  L.push(`  h_json* F = h_json_find(j, \"__fields\");`);
+  L.push(`  return h_new_${name}(${fields.map(f => revValue(f.type, f.name, ctx)).join(", ")});`);
+  L.push(`}`);
+  return L.join("\n");
+}
+function genRevArray(elem, ctx) {
+  const an = shortName(elem) + "_Array";
+  const el = revElem(elem, "j->arr[i]", ctx);
+  return `static ${an} h_jrev_${an}(h_json* j) {\n  ${an} a = {0};\n  if (!j || j->kind != 1) return a;\n  a.len = j->arr_n;\n  a.data = a.len ? (${cType(elem)}*)malloc(sizeof(${cType(elem)}) * a.len) : NULL;\n  for (unsigned long long i = 0; i < a.len; i++) a.data[i] = ${el};\n  return a;\n}`;
+}
+function genRevEnum(name, variants) {
+  const L = [];
+  L.push(`static ${name} h_jrev_${name}(h_json* j) {`);
+  L.push(`  const char* v = \"\";`);
+  L.push(`  if (j && j->kind == 0) { h_json* vv = h_json_find(j, \"__variant\"); if (vv && vv->kind == 3) v = vv->str; }`);
+  variants.forEach(v => L.push(`  if (strcmp(v, \"${v}\") == 0) return ${name}_${v};`));
+  L.push(`  return ${name}_${variants[variants.length - 1]};`);
+  L.push(`}`);
+  return L.join("\n");
+}
+function genFromBytes(name, retT) {
+  return `static ${retT} h_from_bytes_${name}(const char* s) {\n  const char* p = s;\n  h_json* j = h_json_parse_value(&p);\n  ${retT} r = h_jrev_${name}(j);\n  h_json_free(j);\n  return r;\n}`;
 }
 
 /* ---------- class（树）：构造/释放/引用通知 + 方法（typedef 见 genClassDecls） ---------- */
@@ -725,6 +986,23 @@ function genCall(e, scope) {
       if (callee.prop === "recv") return `(unsigned long long)(uintptr_t)h_chan_recv(${genExpr(callee.obj, scope)})`;
       throw new Error("C 后端暂不支持 Channel 方法 " + callee.prop);
     }
+    // 静态调用 Type.from_bytes(bytes)
+    if (callee.prop === "from_bytes" && callee.obj.type === "Ident") {
+      const tn = callee.obj.name;
+      const arg = e.args[0] ? genExpr(e.args[0], scope) : "";
+      if (scope.ctx.classes[tn]) return `h_from_bytes_${tn}(${arg})`;
+      if (scope.ctx.structs[tn]) return `h_from_bytes_${tn}(${arg})`;
+      if (scope.ctx.enums[tn]) return `h_from_bytes_${tn}(${arg})`;
+    }
+    // 字节化：x.to_bytes()
+    if (callee.prop === "to_bytes") {
+      const obj = genExpr(callee.obj, scope);
+      if (scope.classType(ot)) return `h_to_bytes_${ot}(${obj})`;
+      if (scope.ctx.structs[ot]) return `h_to_bytes_${ot}(&${obj})`;
+      if (ot && ot.startsWith("[") && ot.endsWith("]")) return `h_to_bytes_${shortName(ot.slice(1, -1))}_Array(&${obj})`;
+      if (scope.ctx.enums[ot]) return `h_to_bytes_${ot}(${obj})`;
+      throw new Error("C 后端暂不支持该类型的 to_bytes——请用 h run");
+    }
     const t = inferType(callee.obj, scope);
     const table = scope.ctx.classMethods[t];
     const entry = table && table[callee.prop];
@@ -841,6 +1119,8 @@ function inferType(e, scope) {
           }
           return "void";
         }
+        if (e.callee.prop === "to_bytes") return "Str";
+        if (e.callee.prop === "from_bytes" && e.callee.obj.type === "Ident") return e.callee.obj.name;
         const table = scope.ctx.classMethods[t];
         const entry = table && table[e.callee.prop];
         if (entry) {

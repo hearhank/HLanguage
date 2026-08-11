@@ -251,6 +251,23 @@ if (require("fs").existsSync(exeSP)) {
 process.chdir(cwd);
 t("带参 spawn 双后端一致性", builtSP === runOutSP, "\n--- run ---\n" + runOutSP + "\n--- build ---\n" + builtSP);
 
+// 20. C 后端字节化 to_bytes/from_bytes（JSON 逐字节一致）
+const byPath = path.join(ROOT, "examples", "bytes.hc");
+r = h(["run", byPath]);
+const runOutBY = r.out;
+t("bytes.hc h run 运行", r.code === 0 && runOutBY.includes("恢复: Account{balance: 100"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "bytes.hc"), require("fs").readFileSync(byPath, "utf8"));
+const rBY = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "bytes.hc"], { encoding: "utf8" });
+const exeBY = path.join(require("os").tmpdir(), "bytes" + (process.platform === "win32" ? ".exe" : ""));
+let builtBY = "";
+if (require("fs").existsSync(exeBY)) {
+  const r3 = require("child_process").spawnSync(exeBY, [], { encoding: "utf8" });
+  builtBY = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("字节化双后端一致性（JSON 逐字节）", builtBY === runOutBY, "\n--- run ---\n" + runOutBY + "\n--- build ---\n" + builtBY);
+
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));
 
