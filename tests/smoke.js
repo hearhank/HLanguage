@@ -130,8 +130,8 @@ if (require("fs").existsSync(exeC)) {
 process.chdir(cwd);
 t("build 支持 class（树）：编译运行输出 1", builtC.includes("1"), "\n--- build 日志 ---\n" + (rC.stdout || "") + (rC.stderr || "") + "\n--- exe 输出 ---\n" + builtC);
 
-r = h(["build"], "fun f() {}\nspawn f()\n");
-t("build 拒绝并发 spawn（提示用 h run）", r.code === 1 && r.out.includes("暂不支持并发"), r.out.slice(0, 120));
+r = h(["build"], "global g: Exclusive<u64> = 0\n");
+t("build 拒绝非 Channel 的 global（提示用 h run）", r.code === 1 && r.out.includes("暂不支持非 Channel 的 global"), r.out.slice(0, 120));
 
 // 12. M:N 并行（worker_threads）
 r = h(["run", path.join(ROOT, "examples", "concurrency.hc"), "--threads", "2"]);
@@ -200,6 +200,39 @@ process.chdir(cwd);
 t("error 双后端一致：合法输出 + 未处理终止 + 退出码 1",
   rE.status === 1 && errOut.includes("先算一个合法的") && errOut.includes("❌ error.NegativeAmount（未处理）") && !errOut.includes("这行不会执行"),
   "status=" + rE.status + "\n" + errOut.slice(0, 300));
+
+// 17. C 后端并发：Fiber 协作式调度 + Channel 交替（与 eval 单线程逐字一致）
+const ccPath = path.join(ROOT, "examples", "concurrency.hc");
+r = h(["run", ccPath]);
+const runOutCC = r.out;
+t("concurrency.hc h run 运行", r.code === 0 && runOutCC.includes("消费者收到 3"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "concurrency.hc"), require("fs").readFileSync(ccPath, "utf8"));
+const rCC = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "concurrency.hc"], { encoding: "utf8" });
+const exeCC = path.join(require("os").tmpdir(), "concurrency" + (process.platform === "win32" ? ".exe" : ""));
+let builtCC = "";
+if (require("fs").existsSync(exeCC)) {
+  const r3 = require("child_process").spawnSync(exeCC, [], { encoding: "utf8" });
+  builtCC = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("并发双后端一致性（Channel 交替）", builtCC === runOutCC, "\n--- run ---\n" + runOutCC + "\n--- build ---\n" + builtCC);
+
+// 18. C 后端 yield：让出调度权（与 eval 单线程逐字一致）
+const yieldSrc = "fun w() {\n    print(\"开始\")\n    yield\n    print(\"继续\")\n}\nfun x() {\n    print(\"另一执行体\")\n}\nspawn w()\nspawn x()\n";
+r = h(["run"], yieldSrc);
+const runOutY = r.out;
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "yield.hc"), yieldSrc);
+const rY = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "yield.hc"], { encoding: "utf8" });
+const exeY = path.join(require("os").tmpdir(), "yield" + (process.platform === "win32" ? ".exe" : ""));
+let builtY = "";
+if (require("fs").existsSync(exeY)) {
+  const r3 = require("child_process").spawnSync(exeY, [], { encoding: "utf8" });
+  builtY = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("yield 双后端一致性（让出调度权）", builtY === runOutY, "\n--- run ---\n" + runOutY + "\n--- build ---\n" + builtY);
 
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));

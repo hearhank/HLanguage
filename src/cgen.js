@@ -5,6 +5,133 @@
 
 const { parse } = require("./parser");
 
+/* Windows Fiber 协作式协程运行时（M=1：与求值器单线程调度语义一致） */
+const CONCURRENCY_RUNTIME = [
+  '/* ---------- 并发运行时：Windows Fiber 协作式协程（M=1，对齐求值器单线程调度） ---------- */',
+  '#ifdef _WIN32',
+  '#include <windows.h>',
+  'typedef struct h_task h_task;',
+  'struct h_task {',
+  '  void* fiber;',
+  '  h_task* next;',
+  '  int suspended;',
+  '  int done;',
+  '  void* send_val;',
+  '  void* recv_val;',
+  '  void (*entry)(void*);',
+  '  void* arg;',
+  '};',
+  'typedef struct h_chan {',
+  '  int cap, count, head, tail;',
+  '  void** buf;',
+  '  h_task* wait_send;',
+  '  h_task* wait_recv;',
+  '} h_chan;',
+  '',
+  'static h_task* g_ready_head = NULL;',
+  'static h_task* g_ready_tail = NULL;',
+  'static void* g_sched_fiber = NULL;',
+  'static h_task* g_cur = NULL;',
+  'static h_chan** g_chans = NULL;',
+  'static int g_chan_count = 0, g_chan_cap = 0;',
+  '',
+  'static void h_chan_register(h_chan* c) {',
+  '  if (g_chan_count == g_chan_cap) {',
+  '    g_chan_cap = g_chan_cap ? g_chan_cap * 2 : 8;',
+  '    g_chans = (h_chan**)realloc(g_chans, g_chan_cap * sizeof(h_chan*));',
+  '  }',
+  '  g_chans[g_chan_count++] = c;',
+  '}',
+  'static h_chan* h_chan_new(int cap) {',
+  '  h_chan* c = (h_chan*)malloc(sizeof(h_chan));',
+  '  c->cap = cap < 1 ? 1 : cap; c->count = 0; c->head = 0; c->tail = 0;',
+  '  c->buf = (void**)malloc(sizeof(void*) * c->cap);',
+  '  c->wait_send = NULL; c->wait_recv = NULL;',
+  '  h_chan_register(c);',
+  '  return c;',
+  '}',
+  'static void h_ready_push(h_task* t) {',
+  '  t->next = NULL;',
+  '  if (g_ready_tail) g_ready_tail->next = t; else g_ready_head = t;',
+  '  g_ready_tail = t;',
+  '}',
+  'static h_task* h_ready_pop(void) {',
+  '  h_task* t = g_ready_head;',
+  '  if (t) { g_ready_head = t->next; if (!g_ready_head) g_ready_tail = NULL; }',
+  '  return t;',
+  '}',
+  'static void h_wait_push(h_task** head, h_task* t) {',
+  '  t->next = NULL;',
+  '  if (!*head) { *head = t; return; }',
+  '  h_task* p = *head;',
+  '  while (p->next) p = p->next;',
+  '  p->next = t;',
+  '}',
+  'static h_task* h_wait_pop(h_task** head) {',
+  '  h_task* t = *head;',
+  '  if (t) *head = t->next;',
+  '  return t;',
+  '}',
+  'static void WINAPI h_task_enter(void* param) {',
+  '  h_task* t = (h_task*)param;',
+  '  t->entry(t->arg);',
+  '  t->done = 1;',
+  '  SwitchToFiber(g_sched_fiber);',
+  '}',
+  'static void h_yield(void) { SwitchToFiber(g_sched_fiber); }',
+  'static int h_chan_send(h_chan* c, void* v) {',
+  '  if (c->count < c->cap) { c->buf[c->tail] = v; c->tail = (c->tail + 1) % c->cap; c->count++; return 1; }',
+  '  g_cur->suspended = 1; g_cur->send_val = v;',
+  '  h_wait_push(&c->wait_send, g_cur);',
+  '  SwitchToFiber(g_sched_fiber);',
+  '  return 1;',
+  '}',
+  'static void* h_chan_recv(h_chan* c) {',
+  '  if (c->count > 0) { void* v = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--; return v; }',
+  '  g_cur->suspended = 2;',
+  '  h_wait_push(&c->wait_recv, g_cur);',
+  '  SwitchToFiber(g_sched_fiber);',
+  '  return g_cur->recv_val;',
+  '}',
+  'static void h_spawn(void (*entry)(void*), void* arg) {',
+  '  h_task* t = (h_task*)malloc(sizeof(h_task));',
+  '  t->entry = entry; t->arg = arg; t->done = 0; t->suspended = 0; t->next = NULL;',
+  '  t->fiber = CreateFiber(0, h_task_enter, t);',
+  '  h_ready_push(t);',
+  '}',
+  'static void h_sched_run(void) {',
+  '  if (!g_sched_fiber) g_sched_fiber = ConvertThreadToFiber(NULL);',
+  '  while (1) {',
+  '    h_task* t;',
+  '    while ((t = h_ready_pop()) != NULL) {',
+  '      g_cur = t;',
+  '      SwitchToFiber(t->fiber);',
+  '      g_cur = NULL;',
+  '      if (t->done) { DeleteFiber(t->fiber); free(t); continue; }',
+  '      if (!t->suspended) h_ready_push(t);',
+  '    }',
+  '    for (int i = 0; i < g_chan_count; i++) {',
+  '      h_chan* c = g_chans[i];',
+  '      while (c->wait_recv && c->count > 0) {',
+  '        h_task* w = h_wait_pop(&c->wait_recv);',
+  '        w->recv_val = c->buf[c->head]; c->head = (c->head + 1) % c->cap; c->count--;',
+  '        w->suspended = 0;',
+  '        h_ready_push(w);',
+  '      }',
+  '      while (c->wait_send && c->count < c->cap) {',
+  '        h_task* w = h_wait_pop(&c->wait_send);',
+  '        c->buf[c->tail] = w->send_val; c->tail = (c->tail + 1) % c->cap; c->count++;',
+  '        w->suspended = 0;',
+  '        h_ready_push(w);',
+  '      }',
+  '    }',
+  '    if (!g_ready_head) break;',
+  '  }',
+  '}',
+  '#endif',
+  '',
+].join('\n');
+
 function typeName(t) {
   if (t.type === "NamedType") return t.name;
   if (t.type === "ArrayType") return "[" + typeName(t.elem) + "]";
@@ -19,6 +146,7 @@ function cType(tname) {
     case "bool": return "bool";
     case "Str": return "const char*";
     case "void": return "void";
+    case "Channel": return "h_chan*";
     default: {
       if (tname.startsWith("[") && tname.endsWith("]")) return shortName(tname.slice(1, -1)) + "_Array";
       return tname;   // struct/class 类型名（typedef 已定义）
@@ -74,7 +202,8 @@ function computeClassMethods(classes) {
 }
 
 function genC(ast) {
-  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), paramKinds = {}, retKinds = {};
+  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), paramKinds = {}, retKinds = {}, globals = {};
+  const spawns = [];
   const collectTypes = (t) => {
     if (!t) return;
     if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); collectTypes(t.elem); }
@@ -127,7 +256,7 @@ function genC(ast) {
       }
     }
   }
-  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds, retKinds };
+  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds, retKinds, globals };
   // error 返回类型结构体：struct h_err_T { ok, val, name }（未处理时调用点 fail-fast，与求值器一致）
   const errTypes = {};
   const collectErr = (ret) => {
@@ -156,8 +285,25 @@ function genC(ast) {
     else if (d.type === "ClassDecl") classDefs.push(genClass(d, ctx));
     else if (d.type === "FunDecl") funcs.push(genFun(d, ctx, null));
     else if (d.type === "InterfaceDecl") { /* 契约，不生成 */ }
-    else if (d.type === "GlobalDecl") throw new Error("C 后端暂不支持 global/并发——请用 h run");
-    else if (d.type === "SpawnStmt" || d.type === "YieldStmt") throw new Error("C 后端暂不支持并发——请用 h run");
+    else if (d.type === "GlobalDecl") {
+      // 全局 Channel（原型：仅 Channel<T>；值暂只支持 u64）
+      if (d.gtype.type === "GenericType" && d.gtype.name === "Channel") {
+        const elem = d.gtype.args && d.gtype.args[0] ? typeName(d.gtype.args[0]) : "u64";
+        let cap = 1;
+        if (d.init && d.init.type === "CallExpr" && d.init.callee.type === "Ident" && d.init.callee.name === "Channel" && d.init.args[0] && d.init.args[0].type === "Literal") {
+          cap = d.init.args[0].value;
+        }
+        globals[d.name] = { elem, cap };
+      } else {
+        throw new Error("C 后端暂不支持非 Channel 的 global/访问模式——请用 h run");
+      }
+    }
+    else if (d.type === "SpawnStmt") {
+      const callee = d.callee;
+      if (callee.type !== "CallExpr" || callee.callee.type !== "Ident") throw new Error("C 后端暂不支持复杂 spawn——请用 h run");
+      if (callee.args.length > 0) throw new Error("C 后端暂不支持带参 spawn——请用 h run");
+      spawns.push(callee.callee.name === "main" ? "h_main" : callee.callee.name);
+    }
     else if (d.type === "ExprStmt") {
       const isMainCall = d.expr.type === "CallExpr" && d.expr.callee.type === "Ident" && d.expr.callee.name === "main";
       if (!isMainCall) throw new Error("C 后端暂不支持顶层语句——请用 h run");
@@ -174,6 +320,12 @@ function genC(ast) {
   for (const n of Object.keys(structFields)) fwdDecls.push(`typedef struct ${n} ${n};`);
   for (const n of Object.keys(classes)) fwdDecls.push(`typedef struct ${n} ${n};`);
   const typeDefs = structs.concat(genClassDecls(ast, ctx));
+  // 全局 Channel 声明 + 初始化 + spawn 入口包装（void(void*)，供 Fiber 调用）
+  const globalDecls = Object.keys(globals).map(n => `static h_chan* ${n};`).join("\n");
+  const globalInitFun = ["static void h_global_init(void) {",
+    ...Object.keys(globals).map(n => `  ${n} = h_chan_new(${globals[n].cap});`), "}", ""].join("\n");
+  const spawnWrappers = spawns.map(f => `static void h_task_${f}(void* arg) { ${f}(); }`).join("\n");
+  const topSpawns = spawns.map(f => `  h_spawn(h_task_${f}, NULL);`).join("\n");
   const body = [
     '#include <stdio.h>',
     '#include <stdbool.h>',
@@ -201,13 +353,19 @@ function genC(ast) {
     '  printf("%s", buf);',
     '}',
     '',
+    CONCURRENCY_RUNTIME,
   ];
-  return body.concat(fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
+  const hasMain = ctx.retKinds["main"] !== undefined;
+  return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], typeDefs, [""],
     errorDefs, [""], printProtos, [""], printFns, [""], classDefs, funcs,
+    spawnWrappers ? [spawnWrappers, ""] : [], globalInitFun ? [globalInitFun] : [],
     ["int main(void) {",
-      ctx.retKinds["main"] === "error"
+      "  h_global_init();",
+      hasMain && ctx.retKinds["main"] === "error"
         ? `  h_err_${shortName(ctx.rets["main"] || "void")} _he = h_main(); if (!_he.ok) { fprintf(stderr, "\\u274c error.%s（未处理）\\n", _he.name); return 1; }`
-        : "  h_main();",
+        : hasMain ? "  h_main();" : "",
+      topSpawns,
+      "  h_sched_run();",
       "  return 0;", "}", ""]).join("\n");
 }
 
@@ -392,6 +550,7 @@ function genStmt(st, scope) {
       return `  if (${c}) {\n${t}\n  }`;
     }
     case "Block": return genBlockInner(st, scope);
+    case "YieldStmt": return "  h_yield();";
     case "ExprStmt":
       return "  " + genExpr(st.expr, scope) + ";";
     default:
@@ -530,8 +689,22 @@ function genCall(e, scope) {
   let fname = null;
   if (callee.type === "Ident") {
     if (callee.name === "store" || callee.name === "load") throw new Error("C 后端暂不支持 store/load——请用 h run");
+    if (callee.name === "Channel") {
+      // Channel(n) → 全局/局部 channel 构造
+      return `h_chan_new(${e.args[0] ? genExpr(e.args[0], scope) : "1"})`;
+    }
     fname = callee.name === "main" ? "h_main" : callee.name;
   } else if (callee.type === "MemberExpr") {
+    const ot = inferType(callee.obj, scope);
+    if (ot === "Channel") {
+      // 原型：Channel 值仅支持 u64（整数经指针槽传输）
+      if (callee.prop === "send") {
+        if (e.args.length !== 1 || inferType(e.args[0], scope) !== "u64") throw new Error("C 后端 Channel 暂只支持 send(u64)——请用 h run");
+        return `h_chan_send(${genExpr(callee.obj, scope)}, (void*)(uintptr_t)${genExpr(e.args[0], scope)})`;
+      }
+      if (callee.prop === "recv") return `(unsigned long long)(uintptr_t)h_chan_recv(${genExpr(callee.obj, scope)})`;
+      throw new Error("C 后端暂不支持 Channel 方法 " + callee.prop);
+    }
     const t = inferType(callee.obj, scope);
     const table = scope.ctx.classMethods[t];
     const entry = table && table[callee.prop];
@@ -599,7 +772,10 @@ function inferType(e, scope) {
       if (typeof e.value === "number") return Number.isInteger(e.value) ? "u64" : "f64";
       if (typeof e.value === "string") return "Str";
       return "bool";
-    case "Ident": return scope.typeOf(e.name) || "?";
+    case "Ident": {
+      if (scope.ctx.globals && scope.ctx.globals[e.name]) return "Channel";   // 全局 channel
+      return scope.typeOf(e.name) || "?";
+    }
     case "ConstructExpr": return e.name;
     case "MoveExpr": return inferType(e.expr, scope);
     case "MemberExpr": {
@@ -632,9 +808,19 @@ function inferType(e, scope) {
     }
     case "UnaryExpr": return inferType(e.operand, scope);
     case "CallExpr": {
-      if (e.callee.type === "Ident" && scope.ctx.rets[e.callee.name]) return scope.ctx.rets[e.callee.name];
+      if (e.callee.type === "Ident") {
+        if (e.callee.name === "Channel") return "Channel";
+        if (scope.ctx.rets[e.callee.name]) return scope.ctx.rets[e.callee.name];
+      }
       if (e.callee.type === "MemberExpr") {
         const t = inferType(e.callee.obj, scope);
+        if (t === "Channel") {
+          if (e.callee.prop === "recv") {
+            const g = e.callee.obj.type === "Ident" ? scope.ctx.globals[e.callee.obj.name] : null;
+            return g ? g.elem : "u64";
+          }
+          return "void";
+        }
         const table = scope.ctx.classMethods[t];
         const entry = table && table[e.callee.prop];
         if (entry) {
