@@ -24,23 +24,109 @@
 | 内存安全策略 | 运行时通知（防悬垂）+ 编译期读写分离 | 编译期借用检查 | 无内建保护，显式即安全 |
 | 隐藏控制流 | 无（同 Zig 哲学） | 有（`?`、panic、async 隐式状态机） | 无 |
 
-## 数据类型对照
+## 数据类型对照（完整清单 + 实现状态）
 
-| H | Rust | Zig | 说明 |
-|---|---|---|---|
-| `u64` / `f64` / `bool` | `u64` / `f64` / `bool` | `u64` / `f64` / `bool` | 标量一一对应 |
-| `Str`（内建动态块） | `&str` / `String` | `[]const u8` / `[]u8` | H 与 Zig 都是"数据区+长度"；Rust 分借用/拥有两种 |
-| `[T]`（动态块） | `Vec<T>` | `std.ArrayList(T)` / `[]T` 切片 | 连续数据区+长度；Zig 的切片是借用视图，H 是值 |
-| `struct`（块） | `struct` | `struct` | 值语义、连续内存，三者一致；H 用关键字区分形状 |
-| `enum` | `enum`（可带数据 payload） | `enum`（无 payload） | H/Zig 无 payload；Rust 的 payload 变体近似"枚举+结构" |
-| `class`（树） | `struct` + `Box`/`Rc` | `struct` + 手动堆分配 | **H 独特**：树 = 引用语义 + 双向引用 + 生命周期，是类型系统的一等形状 |
-| `ref T`（可写指针） | `&mut T` | `*T` / `*mut T` | H/Zig 显式；Rust 编译器保证别名规则 |
-| `move T` | `move`（隐式）+ 所有权转移 | 手动所有权 | H 的移动是**显式关键字**，Zig 无所有权概念 |
-| `error T` | `Result<T, E>` | `T \| error`（error union） | H 借鉴 Zig 形态 |
-| `Channel<T>` | `std::sync::mpsc` / tokio | 自建（Mutex+Cond） | H/Zig 形态相近；H 是内建 |
-| `Exclusive<T>` / `SharedRead<T>` | `Mutex<T>` / `RwLock<T>` | `std.Thread.Mutex` 等 | H 把访问模式做进类型（类型即模式） |
-| 泛型 `T<...>` | 泛型（trait 约束） | `comptime` 参数 | H 语法已定（GenericType），实现受限（原型仅 Channel） |
-| 函数（一等） | `fn` + 闭包 | `fn` + 闭包（有限） | H 函数可字节化（代码引用+捕获环境），Rust/Zig 无此能力 |
+图例：✅ 已实现（双后端一致，smoke 验证）｜🟡 部分（语法/检查器有，运行时受限）｜📐 设计定（ADR/SPEC，未实现）｜❌ 未实现或无意向
+
+### 标量
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `u8`/`u16`/`u32`/`u64`/`u128`/`usize` | `u1..u65535`（任意位宽整数） | `u64`（唯一整数） | ❌ | 其他位宽未实现（H 只定 u64） |
+| `i8`/`i16`/`i32`/`i64`/`i128`/`isize` | `i1..i65535` | — | ❌ | 无符号整数类型未实现 |
+| `f32`/`f64` | `f16`/`f32`/`f64`/`f80`/`f128` | `f64` | ❌ | 其他浮点位宽未实现（字面量含小数点即 f64） |
+| `bool` | `bool` | `bool` | ✅ | 一一对应 |
+| `char`（Unicode 标量） | 无（`u21` + 字符串） | — | ❌ | H 无单字符类型，用 `Str` |
+| `()` | `void` | `void`（返回/空元组） | ✅ | 空元组 `()` 等价 |
+
+### 复合
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| 元组 `(T1, T2)` | 匿名 struct `.{a, b}` | 元组 `(T1, T2)` / `(x: T1, y: T2)` | ✅ | 位置 + 命名严格分离；解构；字节化 |
+| 定长数组 `[T; N]` | 定长数组 `[N]T` | — | ❌ | H 只有动态块 `[T]`（连续数据区+长度） |
+| `Vec<T>` | `ArrayList(T)` | `[T]` 动态块 | ✅ | 连续数据区+长度；`len`/索引/切片 |
+| `&[T]` / `&mut [T]` 切片 | `[]T` / `[]const T` 切片 | `[]T` 切片 | ✅ | 借用视图 `[ptr, len]`；`mut` 写透；R12 借入不借出 |
+| `&str` / `String` | `[]const u8` / `[]u8` | `Str` | ✅ | 数据区+长度；`+` 拼接 |
+
+### 引用 / 指针
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `&T` | `*const T` | 树参数默认只读指针（`x: T`） | ✅ | 只读引用是默认语义 |
+| `&mut T` | `*T` | `ref T`（字段/参数） | ✅ | 可写引用；双向引用通知；不跨执行体 |
+| `*const T` / `*mut T`（裸指针） | `[*]T` 多指针 | — | ❌ | H 无裸指针（设计：高级指针替代，避免指针陷阱） |
+| `Option<&T>`（可选引用） | `?*T`（可选指针） | — | ❌ | 见下方可选类型 |
+
+### 函数
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `fn(T) -> R` 函数指针 | `fn` 类型 | 函数（仅直接调用） | 🟡 | 函数非一等值：不能赋变量/作参数（spawn 也只接受调用表达式） |
+| 闭包 `Fn`/`FnMut`/`FnOnce` | 闭包（有限） | — | ❌ | 未实现；捕获设计（`[x]`/`[move y]`/`[ref z]`）OPEN |
+| — | `anytype`（编译期多态） | — | ❌ | H 用类型推断 + 组合替代 |
+| — | — | 函数字节化（代码引用+捕获环境） | 📐 | 设计：函数可打包/存储/传输/恢复执行 |
+
+### 自定义类型
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `struct` | `struct`（匿名/命名/packed） | `struct`（块） | ✅ | 值语义、连续内存；块只含块 |
+| `enum`（可带 payload） | `enum`（无 payload） | `enum`（无 payload）+ 穷尽 `match` | ✅ | payload 变体 H/Zig 均无（H 用组合表达） |
+| `union` | `union` / tagged union | — | ❌ | 未实现（tagged union ≈ 枚举+字段，H 用 class 表达） |
+| `dyn Trait`（trait 对象） | 无 | `interface` | ✅ | 接口纯静态（编译期单态化），无运行期接口值 |
+| `struct + Box`/`Rc`/`Arc`（堆对象） | `struct` + 手动堆分配 | `class`（树） | ✅ | H 独特：树 = 一等内存形状，引用语义内建 |
+| `!`（never） | `noreturn` | — | ❌ | 未实现 |
+
+### 可选 / 错误
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `Option<T>` | `?T`（可选） | — | ❌ | 未实现（设计取舍：用元组/枚举表达） |
+| `Result<T, E>` | error union `E!T` | `error T` | ✅ | 值 = 枚举；未处理即终止（显式可观测） |
+| — | 错误集 `error{...}` / `anyerror` | — | ❌ | H 无全局错误集；错误是枚举（块，可字节化） |
+
+### 并发 / 共享
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `Mutex<T>` / `RwLock<T>` | `std.Thread.Mutex` 等 | `Exclusive<T>` / `SharedRead<T>` | 🟡 | 访问模式已进类型（checker R8）；运行时仅 Channel 实现（C 端非 Channel global 拒绝） |
+| `Arc<T>` / `Atomic*` | `std.atomic.Value` | — | 🟡 | 共享数据设计为模式类型（未实现） |
+| mpsc / tokio channel | 自建（锁+条件变量） | `Channel<T>` | ✅ | 内建容量 + 等待者队列；跨执行体路由 |
+
+### 泛型 / 元编程
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| 泛型 + trait 约束 | `comptime` 参数 | `T<...>`（GenericType） | 🟡 | 语法已定，仅内建模式包装（Channel 等）；用户自定义泛型未实现 |
+| 宏（声明式+过程式） | `comptime` | 无宏 | 📐 | 设计取舍：抽象靠函数 + class 组合 |
+| `const fn` | `comptime` 全量 | 编译期方法表/类型注册表 | ✅ | H 的编译期替代物（已实现） |
+
+### 标准库容器
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `HashMap`/`HashSet`/`BTreeMap`/`BTreeSet` | `HashMap`/`StringHashMap`/`AutoHashMap` 等 | — | ❌ | 未实现；字典按数据模型判定为树（buckets 非连续） |
+| `VecDeque`/`LinkedList`/`BinaryHeap` | `PriorityQueue`/`Stack`/`RingBuffer`/`Bitset` | — | ❌ | 未实现 |
+| `String`/`CString`/`OsString`/`PathBuf`/`Cow` | `std.mem` 等 | `Str` | ✅ | 仅 `Str`；其余未实现 |
+
+### 生命周期机制
+
+| Rust | Zig | H | 状态 | 说明 |
+|---|---|---|---|---|
+| `Box<T>`（堆拥有） | `allocator.alloc` | class 构造（堆）+ 作用域销毁 | ✅ | 分配内建但可见（allocator 显式设计） |
+| `Copy`/`Clone` trait | 赋值即拷贝 | 块 = memcpy；树 = 引用；`clone()` 显式 | ✅ | 语义按内存形状自动定 |
+| `Drop` | `defer` | 作用域退出自动销毁（树） | ✅ | 无显式 `defer` 关键字（自动即显式可观测） |
+| `Cell`/`RefCell` | — | ref 字段（双向引用通知） | ✅ | 运行时通知替代编译期借用规则 |
+
+### 实现状态汇总
+
+| 状态 | 类型 |
+|---|---|
+| ✅ **已实现**（双后端一致） | `u64`、`f64`、`bool`、`Str`、`void`、`struct`（块）、`enum`+`match`、元组、`[T]`、`[]T`、`class`（树）、`ref`（可写引用）、`move`、`error T`、`interface`（静态）、`Channel<T>`、`to_bytes`/`from_bytes`（全类型）、编译期方法表/类型注册表、`len`/`clone` |
+| 🟡 **部分**（语法/检查器有，运行时受限） | `Exclusive<T>`/`SharedRead<T>`（模式类型，运行时仅 Channel）、泛型 `T<...>`（仅内建模式包装）、函数（非一等值，仅直接调用）、`push`/`pop`/`alloc`/`free`（BUILTIN_METHODS 声明，未实现） |
+| 📐 **设计定**（ADR/SPEC，未实现） | 函数字节化（代码引用+捕获环境）、显式 allocator 传参、捕获标注 `[x]`/`[move y]`/`[ref z]`、`try`/`catch` 展开、`transmit` |
+| ❌ **未实现** | 其他整数位宽（`i8`-`i128`/`u8`-`u128`/任意位宽）、`f32`/`f16` 等浮点位宽、`char`、定长数组 `[T; N]`/`[N]T`、裸指针/多指针（`*T`/`[*]T`）、可选 `?T`/`Option`、`union`（含 tagged）、闭包、`dyn` 动态分派、`!`/`noreturn`、错误集/`anyerror`、HashMap/Set 等标准库容器、宏/`comptime`、SIMD 向量 |
 
 ## 生命周期与内存对照
 
