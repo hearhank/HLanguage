@@ -5,6 +5,7 @@ const KEYWORDS = new Set([
   "struct", "class", "enum", "interface", "fun", "mut", "ref", "move", "error",
   "return", "if", "else", "global", "spawn", "import", "hide", "alias", "use",
   "pub", "yield", "match", "try", "catch", "true", "false",
+  "for", "while", "break", "continue", "in",
 ]);
 
 const OPERATORS = [
@@ -16,7 +17,7 @@ const OPERATORS = [
 function lex(src) {
   const toks = [];
   let i = 0, line = 1, col = 1;
-  const push = (kind, value, ln, cl) => toks.push({ kind, value, line: ln, col: cl });
+  const push = (kind, value, ln, cl, float) => toks.push({ kind, value, line: ln, col: cl, float });
 
   while (i < src.length) {
     const c = src[i];
@@ -32,7 +33,8 @@ function lex(src) {
       let s = "";
       while (i < src.length && /\d/.test(src[i])) s += src[i++];
       if (src[i] === "." && /\d/.test(src[i + 1] || "")) { s += "."; i++; while (i < src.length && /\d/.test(src[i])) s += src[i++]; }   // 小数只允许一个点（避免 1..3 被吞）
-      push("NUMBER", parseFloat(s), line, col); col += s.length; continue;
+      push("NUMBER", parseFloat(s), line, col, s.includes("."));   // 第 5 参：是否浮点（整数除法的类型区分）
+      col += s.length; continue;
     }
     if (/[A-Za-z_]/.test(c)) {
       let s = "";

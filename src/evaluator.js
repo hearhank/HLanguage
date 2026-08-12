@@ -294,6 +294,10 @@ class Evaluator {
         }
         return null;
       }
+      case "ForStmt": return yield* this.execFor(st);
+      case "WhileStmt": return yield* this.execWhile(st);
+      case "BreakStmt": return { flow: "break" };
+      case "ContinueStmt": return { flow: "continue" };
       case "Block": return yield* this.execBlock(st, new Scope(this.current, "块"));
       case "ExprStmt": {
         const r = yield* this.evalExpr(st.expr);
@@ -305,13 +309,34 @@ class Evaluator {
       default: return null;
     }
   }
+  *execFor(st) {
+    const start = Number(yield* this.evalExpr(st.range.obj));
+    const end = st.range.end ? Number(yield* this.evalExpr(st.range.end)) : Number.MAX_SAFE_INTEGER;
+    for (let i = start; i < end; i++) {
+      const sc = new Scope(this.current, "for");
+      sc.vars[st.varName] = { kind: "val", value: i, mutable: false, alive: true, owned: true };
+      const r = yield* this.execBlock(st.body, sc);
+      if (r && r.flow === "break") break;
+      if (r && r.flow === "return") return r;
+      // continue / 正常结束 → 下一次迭代
+    }
+    return null;
+  }
+  *execWhile(st) {
+    while (truthy(yield* this.evalExpr(st.cond))) {
+      const r = yield* this.execBlock(st.body, new Scope(this.current, "while"));
+      if (r && r.flow === "break") break;
+      if (r && r.flow === "return") return r;
+    }
+    return null;
+  }
   *execBlock(block, scope) {
     this.enterScope(scope);
     let ret = null;
     for (const st of block.stmts) {
       if (this.halted) break;
       const r = yield* this.execStmt(st);
-      if (r && r.flow === "return") { ret = r; break; }
+      if (r && r.flow) { ret = r; break; }   // return / break / continue 都停止本块（作用域照常退出）
     }
     this.exitScope(scope, ret && ret.value);
     return ret;
@@ -444,7 +469,10 @@ class Evaluator {
             const b = typeof r === "object" ? valueToStr(r) : r;
             return typeof a === "string" || typeof b === "string" ? String(a) + String(b) : a + b;
           }
-          case "-": return l - r; case "*": return l * r; case "/": return l / r; case "%": return l % r;
+          case "-": return l - r; case "*": return l * r;
+          // u64 整除（向零截断，对齐 C/Rust）；f64 或未知类型回退浮点
+          case "/": return e._t === "u64" ? Math.trunc(l / r) : l / r;
+          case "%": return e._t === "u64" ? Math.trunc(l % r) : l % r;
           case "==": return enumEq(l, r); case "!=": return !enumEq(l, r);
           case "<": return l < r; case "<=": return l <= r; case ">": return l > r; case ">=": return l >= r;
           case "&&": return truthy(l) && truthy(r); case "||": return truthy(l) || truthy(r);
@@ -670,7 +698,10 @@ class Evaluator {
           const b = typeof r === "object" ? valueToStr(r) : r;
           return typeof a === "string" || typeof b === "string" ? String(a) + String(b) : a + b;
         }
-        case "-": return l - r; case "*": return l * r; case "/": return l / r; case "%": return l % r;
+        case "-": return l - r; case "*": return l * r;
+        // u64 整除（向零截断，对齐 C/Rust）；f64 或未知类型回退浮点
+        case "/": return e._t === "u64" ? Math.trunc(l / r) : l / r;
+        case "%": return e._t === "u64" ? Math.trunc(l % r) : l % r;
         case "==": return enumEq(l, r); case "!=": return !enumEq(l, r);
         case "<": return l < r; case "<=": return l <= r; case ">": return l > r; case ">=": return l >= r;
         case "&&": return truthy(l) && truthy(r); case "||": return truthy(l) || truthy(r);
@@ -914,8 +945,8 @@ function defaultValue(t) {
   return null;
 }
 
-function run(src) {
-  const ast = parse(src);
+function run(src, ast) {
+  ast = ast || parse(src);
   const ev = new Evaluator(ast);
   ev.register();
   try { ev.run(); }

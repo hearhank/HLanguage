@@ -306,5 +306,34 @@ t("C 生成类型注册表（h_type_registry）", genC2.includes("h_type_registr
 r = h(["check"], "class A {}\nfun f(x: ref A) {}\nfun main() {\n    a = A{}\n    f(a)\n}\n");
 t("ref 实参非 mut → R3 拒绝", r.code === 1 && r.out.includes("R3"), r.out.slice(0, 120));
 
+// 21. 整数除法 + 循环（for/while/break/continue）：双后端一致性
+const lpPath = path.join(ROOT, "examples", "loop.hc");
+r = h(["run", lpPath]);
+const runOutLP = r.out;
+t("loop.hc h run 运行", r.code === 0 && runOutLP.includes("整除: 2 取余: 1") && runOutLP.includes("奇数求和: 25"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "loop.hc"), require("fs").readFileSync(lpPath, "utf8"));
+const rLP = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "loop.hc"], { encoding: "utf8" });
+const exeLP = path.join(require("os").tmpdir(), "loop" + (process.platform === "win32" ? ".exe" : ""));
+let builtLP = "";
+if (require("fs").existsSync(exeLP)) {
+  const r3 = require("child_process").spawnSync(exeLP, [], { encoding: "utf8" });
+  builtLP = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("循环/除法双后端一致性（C 原生）", builtLP === runOutLP, "\n--- run ---\n" + runOutLP + "\n--- build ---\n" + builtLP);
+
+// 21b. 循环/除法静态拒绝用例
+r = h(["run"], "fun main() {\n    break\n}\n");
+t("break 在循环外 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    continue\n}\n");
+t("continue 在循环外 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    mut a = [1, 2]\n    for x in a {}\n}\n");
+t("for 非数字区间 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    for i in 0.5..3 {}\n}\n");
+t("for f64 区间 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    print(nonexistent)\n}\n");
+t("调用参数未定义变量 → R7（参数检查修复）", r.code === 1 && r.out.includes("R7"), r.out.slice(0, 120));
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

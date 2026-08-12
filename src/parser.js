@@ -206,6 +206,28 @@ class Parser {
   }
   optSemi() { this.match("OP", ";"); this.skipNL(); }
   parseStmt() {
+    if (this.match("KEYWORD", "for")) {
+      const tk = this.t[this.p - 1];
+      const id = this.expect("IDENT", undefined, "循环变量");
+      this.expect("KEYWORD", "in", "'in'");
+      const saved = this.noConstruct;
+      this.noConstruct = true;             // 区间里的 { 是循环体，不是构造字面量
+      const range = this.parseExpr();
+      this.noConstruct = saved;
+      const body = this.parseBlock();
+      return { type: "ForStmt", varName: id.value, range, body, loc: { line: tk.line, col: tk.col } };
+    }
+    if (this.match("KEYWORD", "while")) {
+      const tk = this.t[this.p - 1];
+      const saved = this.noConstruct;
+      this.noConstruct = true;             // 条件里的 IDENT{ 是块边界，不是构造字面量
+      const cond = this.parseExpr();
+      this.noConstruct = saved;
+      const body = this.parseBlock();
+      return { type: "WhileStmt", cond, body, loc: { line: tk.line, col: tk.col } };
+    }
+    if (this.match("KEYWORD", "break")) { const tk = this.t[this.p - 1]; this.optSemi(); return { type: "BreakStmt", loc: { line: tk.line, col: tk.col } }; }
+    if (this.match("KEYWORD", "continue")) { const tk = this.t[this.p - 1]; this.optSemi(); return { type: "ContinueStmt", loc: { line: tk.line, col: tk.col } }; }
     if (this.match("KEYWORD", "return")) {
       const tk = this.t[this.p - 1];
       let expr = null;
@@ -344,6 +366,12 @@ class Parser {
           }
         }
       }
+      else if (this.check("OP", "..")) {
+        // 裸数字区间 0..n（for 循环用；切片区间仍走上面的 "[" 分支）
+        this.next();
+        const end = this.parseExpr();
+        e = { type: "RangeExpr", obj: e, start: null, end };
+      }
       else break;
     }
     return e;
@@ -359,7 +387,7 @@ class Parser {
   parsePrimary() {
     const tk = this.peek();
     if (tk.kind === "KEYWORD" && tk.value === "match") { this.next(); return this.parseMatch(tk); }
-    if (tk.kind === "NUMBER") { this.next(); return { type: "Literal", kind: "number", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
+    if (tk.kind === "NUMBER") { this.next(); return { type: "Literal", kind: tk.float ? "float" : "number", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "STRING") { this.next(); return { type: "Literal", kind: "string", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "KEYWORD" && (tk.value === "true" || tk.value === "false")) { this.next(); return { type: "Literal", kind: "bool", value: tk.value === "true", loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "KEYWORD" && tk.value === "error") {

@@ -22,6 +22,7 @@ class Checker {
     this.funcs = {};
     this.errors = [];
     this.globals = new Set();
+    this.loopDepth = 0;
   }
   err(rule, msg, loc) { this.errors.push({ rule, msg, line: loc ? loc.line : 0, col: loc ? loc.col : 0 }); }
 
@@ -227,6 +228,33 @@ class Checker {
           this.checkBlock(st.then, local, fun);
           if (st.els) this.checkBlock(st.els, local, fun);
           break;
+        case "ForStmt": {
+          // for i in 0..n：区间必须是数字 RangeExpr（切片区间不适用）
+          if (st.range.type !== "RangeExpr") { this.err("R5", "for 的 in 必须是数字区间（0..n）", st.loc); break; }
+          const ro = this.checkExpr(st.range.obj, local);
+          if (ro.name === "f64") { this.err("R5", "for 区间要求整数（u64），不支持 f64", st.range.loc); break; }
+          if (ro.name !== "u64") this.err("R5", "for 区间必须是数值（u64），但 '" + (ro.name || "?") + "' 不是", st.range.loc);
+          if (st.range.start) this.checkExpr(st.range.start, local);
+          if (st.range.end) this.checkExpr(st.range.end, local);
+          const loop = new Scope(local);
+          loop.define(st.varName, { shape: "block", name: "u64", mutable: false, moved: false });
+          this.loopDepth++;
+          this.checkBlock(st.body, loop, fun);
+          this.loopDepth--;
+          break;
+        }
+        case "WhileStmt":
+          this.checkExpr(st.cond, local);
+          this.loopDepth++;
+          this.checkBlock(st.body, local, fun);
+          this.loopDepth--;
+          break;
+        case "BreakStmt":
+          if (!this.loopDepth) this.err("R5", "break 只能在循环内使用", st.loc);
+          break;
+        case "ContinueStmt":
+          if (!this.loopDepth) this.err("R5", "continue 只能在循环内使用", st.loc);
+          break;
         case "Block": this.checkBlock(st, local, fun); break;
         case "ExprStmt": this.checkExpr(st.expr, local); break;
         case "SpawnStmt": {
@@ -283,7 +311,7 @@ class Checker {
     if (!e) return { shape: "unknown", name: "?", mutable: false };
     switch (e.type) {
       case "Literal":
-        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : "u64", mutable: false };
+        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : e.kind === "float" ? "f64" : "u64", mutable: false };
       case "Ident": {
         const v = scope.lookup(e.name);
         if (!v) {
@@ -331,6 +359,8 @@ class Checker {
         return { shape: this.shapeOf(f.fieldType), name: this.nameOf(f.fieldType), mutable: obj.mutable && f.isMut };
       }
       case "CallExpr": {
+        // 参数必须检查（类型标注/未定义变量/可写性）——既有缺口：此前 print 等内建参数从不检查
+        for (const a of e.args) this.checkExpr(a, scope);
         const callee = e.callee;
         if (callee.type === "Ident") {
           const fn = this.funcs[callee.name];
@@ -367,9 +397,13 @@ class Checker {
         return { shape: "unknown", name: "?", mutable: false };
       }
       case "BinExpr": {
-        this.checkExpr(e.left, scope);
-        this.checkExpr(e.right, scope);
-        return { shape: "block", name: "u64", mutable: false };
+        const l = this.checkExpr(e.left, scope);
+        const r = this.checkExpr(e.right, scope);
+        // 数值类型推断并标注（求值器据此决定 u64 整除 vs f64 浮点除法）
+        const lt = l.name === "u64" || l.name === "f64" ? l.name : null;
+        const rt = r.name === "u64" || r.name === "f64" ? r.name : null;
+        e._t = lt === "f64" || rt === "f64" ? "f64" : lt === "u64" || rt === "u64" ? "u64" : null;
+        return { shape: "block", name: e._t || "u64", mutable: false };
       }
       case "UnaryExpr": { const r = this.checkExpr(e.operand, scope); return { shape: r.shape, name: r.name, mutable: false }; }
       case "MoveExpr": {

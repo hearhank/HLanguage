@@ -4,7 +4,7 @@
 
 const { Worker } = require("worker_threads");
 const path = require("path");
-const { parse } = require("./parser");
+const { check } = require("./checker");
 const { Evaluator, Scheduler } = require("./evaluator");
 
 function encodeForWorker(v) {
@@ -88,7 +88,7 @@ class ParallelRunner {
       w.postMessage({ type: "init", source: this.source });
       this.workers.push(w);
     }
-    const ast = parse(this.source);
+    const ast = check(this.source).ast;   // 复用静态检查的 AST（含除法等类型标注）
     const mainEv = new Evaluator(ast, new MainHost(this));
     this.mainEv = mainEv;
     this.mainHost = mainEv.host;

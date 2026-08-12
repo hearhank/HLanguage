@@ -1123,6 +1123,27 @@ function genStmt(st, scope) {
       }
       return `  if (${c}) {\n${t}\n  }`;
     }
+    case "ForStmt": {
+      if (st.range.type !== "RangeExpr" || !st.range.end) throw new Error("for 的 in 必须是数字区间（0..n）");
+      const start = genExpr(st.range.obj, scope);
+      const end = genExpr(st.range.end, scope);
+      const inner = new Scope(scope, scope.ctx);
+      inner.receiverType = scope.receiverType;
+      inner.declareType(st.varName, "u64", false);
+      const body = st.body.stmts.map(s => genStmt(s, inner)).join("\n");
+      const frees = [...inner.trees].map(n => `  h_free_${inner.typeOf(n)}(${n});`).join("\n");
+      return `  for (unsigned long long ${st.varName} = (${start}); ${st.varName} < (${end}); ${st.varName}++) {\n${body}${frees ? "\n" + frees : ""}\n  }`;
+    }
+    case "WhileStmt": {
+      const c = genExpr(st.cond, scope);
+      const inner = new Scope(scope, scope.ctx);
+      inner.receiverType = scope.receiverType;
+      const body = st.body.stmts.map(s => genStmt(s, inner)).join("\n");
+      const frees = [...inner.trees].map(n => `  h_free_${inner.typeOf(n)}(${n});`).join("\n");
+      return `  while (${c}) {\n${body}${frees ? "\n" + frees : ""}\n  }`;
+    }
+    case "BreakStmt": return "  break;";
+    case "ContinueStmt": return "  continue;";
     case "Block": return genBlockInner(st, scope);
     case "YieldStmt": return "  h_yield();";
     case "ExprStmt":
@@ -1239,6 +1260,7 @@ function cLiteral(e) {
   if (e.kind === "string") return '"' + e.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
   if (e.kind === "bool") return e.value ? "true" : "false";
   if (typeof e.value === "number") {
+    if (e.kind === "float") return Number.isInteger(e.value) ? e.value + ".0" : e.value + "";   // 3.0 → 3.0（double），不是 3ULL
     if (Number.isInteger(e.value)) return e.value < 0 ? `(${e.value})` : e.value + "ULL";   // 负数不能用 ULL（无符号取负变巨大数）
     return e.value + "";
   }
@@ -1360,7 +1382,7 @@ function inferEnumName(e, scope) {
 function inferType(e, scope) {
   switch (e.type) {
     case "Literal":
-      if (typeof e.value === "number") return Number.isInteger(e.value) ? "u64" : "f64";
+      if (typeof e.value === "number") return e.kind === "float" ? "f64" : "u64";
       if (typeof e.value === "string") return "Str";
       return "bool";
     case "Ident": {

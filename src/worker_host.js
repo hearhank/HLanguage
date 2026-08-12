@@ -3,7 +3,7 @@
 // Channel 操作经主线程单点路由（无竞争）；数据经结构化克隆（跨线程深拷贝）
 
 const { parentPort } = require("worker_threads");
-const { parse } = require("./parser");
+const { check } = require("./checker");
 const { Evaluator, Scheduler } = require("./evaluator");
 
 class WorkerHost {
@@ -82,7 +82,7 @@ function runLocalQueue() {
 
 parentPort.on("message", (msg) => {
   if (msg.type === "init") {
-    const ast = parse(msg.source);
+    const ast = check(msg.source).ast;   // 复用静态检查的 AST（含除法等类型标注）
     ev = new Evaluator(ast, null);
     ev.host = new WorkerHost(ev);
     ev.sched = new Scheduler(ev);

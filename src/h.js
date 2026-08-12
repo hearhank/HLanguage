@@ -74,8 +74,8 @@ function doRun(src, trace) {
     console.error("❌ " + r.errors.length + " 个静态错误，拒绝执行");
     return 1;
   }
-  // 求值
-  const ev = run(src);
+  // 求值（复用静态检查的 AST——含除法等类型标注）
+  const ev = run(src, r.ast);
   // 输出（print/store/load）
   for (const line of ev.output) console.log(line);
   // 轨迹
