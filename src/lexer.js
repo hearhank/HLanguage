@@ -5,7 +5,7 @@ const KEYWORDS = new Set([
   "struct", "class", "enum", "interface", "fun", "mut", "ref", "move", "error",
   "return", "if", "else", "global", "spawn", "import", "hide", "alias", "use",
   "pub", "yield", "match", "try", "catch", "true", "false",
-  "for", "while", "break", "continue", "in",
+  "for", "while", "break", "continue", "in", "null",
 ]);
 
 const OPERATORS = [

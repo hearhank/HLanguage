@@ -42,7 +42,7 @@
 
 | ☑ | Rust | Zig | H | 状态 | 说明 |
 |---|---|---|---|---|---|
-| ◐ | `fn(T) -> R` | `fn` 类型 | 函数（仅直接调用） | 部分 | 非一等值：不能赋变量/作参数 |
+| ☑ | `fn(T) -> R` | `fn` 类型 | `fun(T1, T2) -> R`（函数引用） | 已实现 | 无捕获引用可赋值/传参/调用；闭包未实现 |
 | ☐ | 闭包 `Fn`/`FnMut`/`FnOnce` | 闭包（有限） | — | 未实现 | 捕获设计 `[x]`/`[move y]`/`[ref z]` OPEN |
 | ☐ | — | `anytype` | — | 未实现 | 用类型推断 + 组合替代 |
 | △ | — | — | 函数字节化 | 设计定 | 代码引用+捕获环境，可打包/存储/传输 |
@@ -62,7 +62,7 @@
 
 | ☑ | Rust | Zig | H | 状态 | 说明 |
 |---|---|---|---|---|---|
-| ☐ | `Option<T>` | `?T` 可选 | — | 未实现 | 设计取舍：元组/枚举表达 |
+| ☑ | `Option<T>` | `?T` 可选 | `?T` + `null` + `x.?` | 已实现 | 自动提升；仅块 T；字节化 |
 | ☑ | `Result<T, E>` | error union `E!T` | `error T` | 已实现 | 值 = 枚举；未处理即终止 |
 | ☐ | — | 错误集 `error{...}`/`anyerror` | — | 未实现 | 错误是枚举（块），无全局错误集 |
 
@@ -107,12 +107,13 @@
 - [x] 元组 + 切片双后端——`examples/tuple_slice.hc`
 - [x] 嵌套元组字节化（struct 字段/数组元素）——`examples/tuple_slice.hc`
 - [x] 切片 clone 复合元素（递归深拷贝）——`examples/tuple_slice.hc`
+- [x] 可选类型 `?T`（`null`/自动提升/`x.?` 解包/字节化）——`examples/optional_fun.hc`
+- [x] 函数作为参数（`fun(T) -> R` 类型、函数名即值、函数值调用）——`examples/optional_fun.hc`
 - [ ] 数组 `push` / `pop`（BUILTIN_METHODS 已声明，运行时未实现）
 - [ ] `alloc` / `free`（显式分配，BUILTIN_METHODS 已声明）
 
 ### 能力补全
-- [ ] 可选类型 `?T`（对应 Rust `Option` / Zig `?T`）——错误处理与空值表达依赖
-- [ ] 函数一等化 / 闭包（捕获标注 `[x]`/`[move y]`/`[ref z]`）——函数字节化落地的前置
+- [ ] 闭包（捕获标注 `[x]`/`[move y]`/`[ref z]`）——函数引用（无捕获）已实现，捕获环境是下一步
 - [ ] 用户自定义泛型 `T<...>`（当前仅内建模式包装）
 - [ ] `Exclusive<T>` / `SharedRead<T>` 运行时实现（C 端目前仅 Channel）
 - [ ] `try` / `catch` 错误展开（当前未处理即终止）

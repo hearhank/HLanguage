@@ -152,6 +152,18 @@ class Parser {
     return { type: "GlobalDecl", name, gtype, init, loc: { line: tk.line, col: tk.col } };
   }
   parseType() {
+    if (this.match("OP", "?")) return { type: "OptionalType", inner: this.parseType() };   // ?T 可选类型（Zig 式，问号在前）
+    if (this.match("KEYWORD", "fun")) {
+      // 函数类型 fun(T1, T2) -> R（参数为类型列表，无参数名）
+      this.expect("OP", "(", "'('");
+      const params = [];
+      this.skipNL();
+      if (!this.check("OP", ")")) { do { this.skipNL(); params.push(this.parseType()); this.skipNL(); } while (this.match("OP", ",")); }
+      this.expect("OP", ")", "')'");
+      let ret = null;
+      if (this.match("OP", "->")) ret = this.parseType();
+      return { type: "FunType", params, ret };
+    }
     if (this.check("OP", "[")) {
       this.next();
       if (this.match("OP", "]")) { const elem = this.parseType(); return { type: "SliceType", elem }; }   // []T 切片（借用视图）
@@ -336,6 +348,8 @@ class Parser {
     let e = this.parsePrimary();
     while (true) {
       if (this.match("OP", ".")) {
+        // 解包 x.?：点后紧跟问号（词法上是两个 token：'.' '?'）
+        if (this.match("OP", "?")) { e = { type: "UnwrapExpr", expr: e }; continue; }
         let prop;
         if (this.check("IDENT")) prop = this.next().value;
         else if (this.check("NUMBER")) prop = String(this.next().value);   // 元组 .0/.1
@@ -375,6 +389,10 @@ class Parser {
         const end = this.parseExpr();
         e = { type: "RangeExpr", obj: e, start: null, end };
       }
+      else if (this.match("OP", "?")) {
+        // 解包 x.?：可选值取内部值（null 时运行时错误）
+        e = { type: "UnwrapExpr", expr: e };
+      }
       else break;
     }
     return e;
@@ -393,6 +411,7 @@ class Parser {
     if (tk.kind === "NUMBER") { this.next(); return { type: "Literal", kind: tk.float ? "float" : "number", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "STRING") { this.next(); return { type: "Literal", kind: "string", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "KEYWORD" && (tk.value === "true" || tk.value === "false")) { this.next(); return { type: "Literal", kind: "bool", value: tk.value === "true", loc: { line: tk.line, col: tk.col } }; }
+    if (tk.kind === "KEYWORD" && tk.value === "null") { this.next(); return { type: "Literal", kind: "null", value: null, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "KEYWORD" && tk.value === "error") {
       this.next();
       this.expect("OP", ".", "'.'");

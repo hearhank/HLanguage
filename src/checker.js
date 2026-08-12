@@ -65,6 +65,12 @@ class Checker {
       }
       return "block";
     }
+    if (t.type === "OptionalType") {
+      const es = this.shapeOf(t.inner);
+      if (es !== "block" && es !== "unknown") this.err("R1", "可选值必须是块类型（连续内存），但 " + (t.inner.name || "?") + " 是" + (es === "tree" ? "树" : "未知") + "类型", null);
+      return "block";
+    }
+    if (t.type === "FunType") return "block";   // 函数引用（无捕获）= 纯代码引用，块值
     if (t.type === "GenericType") return "block";
     const def = this.types[t.name];
     if (!def) {
@@ -81,6 +87,8 @@ class Checker {
       : t.type === "TupleType" ? (t.named
           ? "(" + t.items.map(i => i.name + ": " + (i.type.name || "?")).join(", ") + ")"
           : "(" + t.items.map(i => i.type.name || "?").join(", ") + ")")
+      : t.type === "OptionalType" ? "?" + this.nameOf(t.inner)
+      : t.type === "FunType" ? "fun(" + t.params.map(p => this.nameOf(p)).join(", ") + ") -> " + (t.ret ? this.nameOf(t.ret) : "void")
       : t.type === "GenericType" ? t.name + "<>"
       : "?";
   }
@@ -290,6 +298,10 @@ class Checker {
     if (r.shape !== this.shapeOf(ret.rtype)) this.err("R4", "返回值形状不匹配（期望 " + this.nameOf(ret.rtype) + "，实际 " + r.name + "）", st.loc);
   }
 
+  funTypeOf(fn) {
+    return "fun(" + fn.params.map(p => this.nameOf(p.ptype)).join(", ") + ") -> " + (fn.ret && fn.ret.rtype ? this.nameOf(fn.ret.rtype) : "void");
+  }
+
   checkVarDecl(v, scope) {
     if (!v.init) return;
     // 覆盖声明（同名变量已存在）= 赋值语义 → R4 只读检查
@@ -304,18 +316,19 @@ class Checker {
     if (v.kind === "ref") {
       if (!init.mutable) this.err("R3", "只能对可写变量/数据声明可写指针（ref）—— '" + (v.init.type === "Ident" ? v.init.name : "该表达式") + "' 不可写", v.loc);
     }
-    scope.define(v.name, { shape: init.shape, name: init.name, mutable: v.kind === "mut" || v.kind === "ref", moved: false });
+    scope.define(v.name, { shape: init.shape, name: v.annotation ? this.nameOf(v.annotation) : init.name, mutable: v.kind === "mut" || v.kind === "ref", moved: false });
   }
 
   checkExpr(e, scope) {
     if (!e) return { shape: "unknown", name: "?", mutable: false };
     switch (e.type) {
       case "Literal":
-        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : e.kind === "float" ? "f64" : "u64", mutable: false };
+        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : e.kind === "float" ? "f64" : e.kind === "null" ? "?" : "u64", mutable: false };
       case "Ident": {
         const v = scope.lookup(e.name);
         if (!v) {
           if (this.globals.has(e.name) || this.types[e.name]) return { shape: "unknown", name: e.name, mutable: true };  // global/类型名放行
+          if (this.funcs[e.name]) return { shape: "block", name: this.funTypeOf(this.funcs[e.name]), mutable: false };   // 函数名 → 函数引用值
           this.err("R7", "未定义的变量 '" + e.name + "'", e.loc); return { shape: "unknown", name: e.name, mutable: false };
         }
         if (v.moved) this.err("R9", "变量 '" + e.name + "' 已被 move，不能再使用", e.loc);
@@ -399,11 +412,23 @@ class Checker {
       case "BinExpr": {
         const l = this.checkExpr(e.left, scope);
         const r = this.checkExpr(e.right, scope);
+        // 可选值不能直接参与运算（需先解包 x.?）；与 null 的比较是允许的（裸 "?" 是未知类型，不误伤）
+        const lt = l.name && l.name.startsWith("?") && l.name !== "?";
+        const rt = r.name && r.name.startsWith("?") && r.name !== "?";
+        if ((lt || rt) && !["==", "!=", "&&", "||"].includes(e.op)) this.err("R5", "可选值不能直接参与运算，需先解包（x.?）", e.loc);
         // 数值类型推断并标注（求值器据此决定 u64 整除 vs f64 浮点除法）
-        const lt = l.name === "u64" || l.name === "f64" ? l.name : null;
-        const rt = r.name === "u64" || r.name === "f64" ? r.name : null;
-        e._t = lt === "f64" || rt === "f64" ? "f64" : lt === "u64" || rt === "u64" ? "u64" : null;
+        const ltn = l.name === "u64" || l.name === "f64" ? l.name : null;
+        const rtn = r.name === "u64" || r.name === "f64" ? r.name : null;
+        e._t = ltn === "f64" || rtn === "f64" ? "f64" : ltn === "u64" || rtn === "u64" ? "u64" : null;
         return { shape: "block", name: e._t || "u64", mutable: false };
+      }
+      case "UnwrapExpr": {
+        const inner = this.checkExpr(e.expr, scope);
+        const n = inner.name || "";
+        if (n.startsWith("?")) return { shape: "block", name: n.slice(1), mutable: inner.mutable };
+        if (n === "?" || n === "unknown") return { shape: "block", name: "?", mutable: false };
+        this.err("R5", "解包目标必须是可选类型（?T），但 '" + (n || "?") + "' 不是", e.loc);
+        return { shape: "block", name: "?", mutable: false };
       }
       case "UnaryExpr": { const r = this.checkExpr(e.operand, scope); return { shape: r.shape, name: r.name, mutable: false }; }
       case "MoveExpr": {

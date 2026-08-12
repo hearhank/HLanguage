@@ -352,5 +352,30 @@ if (require("fs").existsSync(exeTS)) {
 process.chdir(cwd);
 t("元组/切片双后端一致性（C 原生）", builtTS === runOutTS, "\n--- run ---\n" + runOutTS + "\n--- build ---\n" + builtTS);
 
+// 23. 可选类型 ?T + 函数作为参数：双后端一致性
+const ofPath = path.join(ROOT, "examples", "optional_fun.hc");
+r = h(["run", ofPath]);
+const runOutOF = r.out;
+t("optional_fun.hc h run 运行", r.code === 0 && runOutOF.includes("可选: 5") && runOutOF.includes("置空: null") && runOutOF.includes("解包: 3") && runOutOF.includes("函数值: 14"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "optional_fun.hc"), require("fs").readFileSync(ofPath, "utf8"));
+const rOF = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "optional_fun.hc"], { encoding: "utf8" });
+const exeOF = path.join(require("os").tmpdir(), "optional_fun" + (process.platform === "win32" ? ".exe" : ""));
+let builtOF = "";
+if (require("fs").existsSync(exeOF)) {
+  const r3 = require("child_process").spawnSync(exeOF, [], { encoding: "utf8" });
+  builtOF = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("可选/函数参数双后端一致性（C 原生）", builtOF === runOutOF, "\n--- run ---\n" + runOutOF + "\n--- build ---\n" + builtOF);
+
+// 23b. 可选类型静态拒绝用例
+r = h(["run"], "fun main() {\n    mut x: ?u64 = 3\n    print((x + 1).to_str())\n}\n");
+t("可选值直接运算 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    mut x: u64 = 3\n    print(x.?.to_str())\n}\n");
+t("非可选值解包 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    mut x: ?u64 = null\n    print(x.?.to_str())\n}\n");
+t("解包 null 运行时错误", r.code === 1 && r.out.includes("解包 null"), r.out.slice(0, 120));
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

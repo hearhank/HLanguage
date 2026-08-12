@@ -18,6 +18,8 @@ function valueToStr(v) {
     return "(" + parts.join(", ") + ")";
   }
   if (v.__shape === "slice") return "[" + v.__arr.slice(v.__start, v.__start + v.__len).map(valueToStr).join(", ") + "]";
+  if (v.__shape === "optional") return v.__has ? valueToStr(v.__value) : "null";
+  if (v.__shape === "func") return "fun." + v.__fn.name;
   const alive = v.__alive === undefined || v.__alive ? "" : " 💀";
   const inner = Object.entries(v.__fields || {}).map(([k, x]) => k + ": " + valueToStr(x)).join(", ");
   return v.__type + "{" + inner + "}" + alive;
@@ -405,15 +407,17 @@ class Evaluator {
     const existing = this.current.lookup(v.name);
     if (v.kind === "val" && existing && existing.alive) {
       if (!existing.mutable) this.rerr("赋值目标不可写（只读变量）：'" + v.name + "'", v.loc);
-      const val = v.init ? deepCopyBlock(yield* this.evalExpr(v.init)) : null;
+      let val = v.init ? deepCopyBlock(yield* this.evalExpr(v.init)) : null;
+      if (existing.opt) val = wrapOptVal(val);
       if (this.isError(val)) { this.haltWithError(val, v.loc); return null; }
       existing.value = val;
       this.event("assign", { target: v.name, op: "=", val: valueToStr(val) });
       return null;
     }
-    const val = v.init ? deepCopyBlock(yield* this.evalExpr(v.init)) : null;
+    let val = v.init ? deepCopyBlock(yield* this.evalExpr(v.init)) : null;
+    if (v.annotation && v.annotation.type === "OptionalType") val = wrapOptVal(val);
     if (this.isError(val)) { this.haltWithError(val, v.loc); return null; }
-    this.current.vars[v.name] = { kind: "val", value: val, mutable: v.kind === "mut", alive: true, owned: true };
+    this.current.vars[v.name] = { kind: "val", value: val, mutable: v.kind === "mut", alive: true, owned: true, opt: !!(v.annotation && v.annotation.type === "OptionalType") };
     this.event("create_var", { name: v.name, mutable: v.kind === "mut", val: valueToStr(val) });
     return null;
   }
@@ -428,6 +432,7 @@ class Evaluator {
         if (!v) {
           const rf = this.current.findReceiver(e.name);
           if (rf) return rf.receiver.__fields[e.name];
+          if (this.funcs[e.name]) return { __shape: "func", __fn: this.funcs[e.name] };   // 函数名 → 函数引用值
           this.rerr("未定义的变量 '" + e.name + "'", e.loc);
         }
         if (!v.alive) this.rerr("变量 '" + e.name + "' 已失效（被 move 或所在作用域已退出）", e.loc);
@@ -514,6 +519,15 @@ class Evaluator {
         if (start < 0 || end > len || start > end) this.rerr("切片区间越界 " + start + ".." + end, e.loc);
         if (Array.isArray(obj)) return { __shape: "slice", __arr: obj, __start: start, __len: end - start };
         return { __shape: "slice", __arr: obj.__arr, __start: obj.__start + start, __len: end - start };
+      }
+      case "UnwrapExpr": {
+        const v = yield* this.evalExpr(e.expr);
+        if (v && typeof v === "object" && v.__shape === "optional") {
+          if (!v.__has) this.rerr("解包 null（可选值无值）", e.loc);
+          return v.__value;
+        }
+        if (v === null || v === undefined) this.rerr("解包 null（可选值无值）", e.loc);
+        return v;
       }
       case "ArrayLiteral": {
         const out = [];
@@ -605,7 +619,7 @@ class Evaluator {
           get: () => t.value, set: (x) => { t.value = x; },
         };
       }
-      return { mutable: v.mutable, label: e.name, get: () => v.value, set: (x) => { v.value = x; } };
+      return { mutable: v.mutable, label: e.name, get: () => v.value, set: (x) => { v.value = v.opt ? wrapOptVal(x) : x; } };
     }
     if (e.type === "MemberExpr") {
       const obj = this.evalExprSync(e.obj);
@@ -729,8 +743,10 @@ class Evaluator {
     for (const [k, fd] of Object.entries(def.fields)) fields[k] = deepCopyBlock(defaultValue(fd.fieldType));
     for (const f of e.fields) {
       if (!(f.name in fields)) this.rerr("类型 " + e.name + " 没有字段 '" + f.name + "'", e.loc);
-      fields[f.name] = deepCopyBlock(yield* this.evalExpr(f.expr));
       const fd = def.fields[f.name];
+      let fv = deepCopyBlock(yield* this.evalExpr(f.expr));
+      if (fd && fd.fieldType.type === "OptionalType") fv = wrapOptVal(fv);   // 可选字段：裸值提升
+      fields[f.name] = fv;
       const val = fields[f.name];
       if (fd && fd.fieldType.mutable && val && val.__shape === "tree" && val.__refs) refRegs.push([f.name, val]);
     }
@@ -756,6 +772,11 @@ class Evaluator {
       return yield* this.callMethod(obj, mname, args, e.loc);
     }
     if (callee.type !== "Ident") this.rerr("无法调用该表达式", e.loc);
+    // 函数值变量调用（f 是 fun 类型变量）：解包函数引用并执行
+    const fv = this.lookupVar(callee.name);
+    if (fv && fv.alive && fv.value && fv.value.__shape === "func") {
+      return yield* this.execBody(fv.value.__fn, args, e.loc, null, false);
+    }
     return yield* this.callFunction(callee.name, e.args, args, e.loc);
   }
   *callMethod(obj, mname, args, loc) {
@@ -823,7 +844,9 @@ class Evaluator {
           let a = arg;
           if (p.ptype && p.ptype.type === "SliceType" && Array.isArray(arg)) a = { __shape: "slice", __arr: arg, __start: 0, __len: arg.length };
           const isTree = a && typeof a === "object" && a.__shape === "tree";
-          sc.vars[p.name] = { kind: "val", value: isTree ? a : deepCopyBlock(a), mutable: false, alive: true, owned: !isTree };
+          const isOpt = !!(p.ptype && p.ptype.type === "OptionalType");
+          if (isOpt) a = wrapOptVal(a);
+          sc.vars[p.name] = { kind: "val", value: isTree ? a : deepCopyBlock(a), mutable: false, alive: true, owned: !isTree, opt: isOpt };
           this.event("bind_val", { name: p.name, val: valueToStr(a) });
         }
       });
@@ -836,6 +859,8 @@ class Evaluator {
       if (result && result.__shape === "tree" && fn.ret && fn.ret.kind !== "move" && fn.ret.kind !== "ref") {
         this.rerr("树数据必须通过 move 返回（当前返回会被函数作用域销毁）", loc);
       }
+      // 可选返回：裸值/null 自动包装（?T 提升）
+      if (fn.ret && fn.ret.rtype && fn.ret.rtype.type === "OptionalType") result = wrapOptVal(result);
       if (result && result.__shape === "error") {
         this.event("error_propagate", { name: result.__name });
       }
@@ -856,6 +881,7 @@ class Evaluator {
       if (typeof x !== "object") return x;
       if (Array.isArray(x)) return x.map(clean);   // 数组元素递归（元组/块元素统一格式，对齐 C 后端）
       if (x.__shape === "void" || x.__shape === "error" || x.__shape === "enum" || x.__shape === "channel") return x;
+      if (x.__shape === "optional") return { __shape: "optional", __has: x.__has, __value: x.__has ? clean(x.__value) : null };
       if (x.__kind === "tuple") {
         // 元组字节格式（ADR 0007）：位置 __items / 命名 __fields（无 __type）
         const named = x.__names.length && !/^\d+$/.test(x.__names[0]);
@@ -889,6 +915,9 @@ class Evaluator {
     }
     const revive = (x) => {
       if (x && typeof x === "object" && x.__shape) {
+        if (x.__shape === "optional") {
+          return { __shape: "optional", __has: !!x.__has, __value: x.__has ? revive(x.__value) : null };
+        }
         if (x.__items && Array.isArray(x.__items)) {
           return { __shape: "block", __kind: "tuple", __names: x.__items.map((_, i) => String(i)), __items: x.__items.map(revive) };
         }
@@ -908,12 +937,29 @@ class Evaluator {
   }
 }
 
-function truthy(v) { return v !== false && v !== null && v !== undefined && v !== 0 && v !== ""; }
+function truthy(v) {
+  if (v && typeof v === "object" && v.__shape === "optional") return v.__has;
+  return v !== false && v !== null && v !== undefined && v !== 0 && v !== "";
+}
 function enumEq(l, r) {
   // 枚举值按 类型.变体 比较（与编译后端字符串常量一致）
   if (l && typeof l === "object" && l.__shape === "enum") return l.__type + "." + l.__variant === (r && typeof r === "object" ? r.__type + "." + r.__variant : String(r));
   if (r && typeof r === "object" && r.__shape === "enum") return r.__type + "." + r.__variant === (l && typeof l === "object" ? l.__type + "." + l.__variant : String(l));
+  // 可选值比较：无值侧视为 null（x == null / x == 5 均可）
+  const lo = l && typeof l === "object" && l.__shape === "optional";
+  const ro = r && typeof r === "object" && r.__shape === "optional";
+  if (lo || ro) {
+    const lv = lo ? (l.__has ? l.__value : null) : l;
+    const rv = ro ? (r.__has ? r.__value : null) : r;
+    return lv === rv;
+  }
   return l === r;
+}
+/* 可选包装：裸值 → optional 对象（T 自动提升 ?T）；已包装/空值 → 自身/null 包装 */
+function wrapOptVal(v) {
+  if (v && typeof v === "object" && v.__shape === "optional") return v;
+  if (v === null || v === undefined) return { __shape: "optional", __has: false, __value: null };
+  return { __shape: "optional", __has: true, __value: v };
 }
 function binOp(op, l, r) {
   switch (op) {
@@ -925,7 +971,9 @@ function binOp(op, l, r) {
 function deepCopyBlock(v) {
   if (v === null || v === undefined || typeof v !== "object") return v;
   if (Array.isArray(v)) return v.map(deepCopyBlock);
-  if (v.__shape === "tree" || v.__shape === "channel" || v.__shape === "enum" || v.__shape === "slice") return v;   // slice 是借用视图：引用原数组（GC 安全），不复制
+  if (v.__shape === "tree" || v.__shape === "channel" || v.__shape === "enum" || v.__shape === "slice" || v.__shape === "func") return v;   // slice 借用视图 / func 不可变引用，不复制
+  if (v.__shape === "optional") return { __shape: "optional", __has: v.__has, __value: v.__has ? deepCopyBlock(v.__value) : null };
+  if (v.__kind === "tuple") return { __shape: "block", __kind: "tuple", __names: v.__names.slice(), __items: v.__items.map(deepCopyBlock) };
   if (v.__kind === "tuple") return { __shape: "block", __kind: "tuple", __names: v.__names.slice(), __items: v.__items.map(deepCopyBlock) };
   if (v.__shape === "block") {
     const out = { __shape: "block", __type: v.__type, __fields: {} };
