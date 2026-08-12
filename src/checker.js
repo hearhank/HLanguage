@@ -92,7 +92,7 @@ class Checker {
   }
   nameOf(t) {
     return t.type === "NamedType" ? t.name
-      : t.type === "ArrayType" ? "[" + (t.elem.name || "?") + "]"
+      : t.type === "ArrayType" ? (t.len !== null && t.len !== undefined ? "[" + (t.elem.name || "?") + "; " + t.len + "]" : "[" + (t.elem.name || "?") + "]")
       : t.type === "SliceType" ? "[]" + (t.elem.name || "?")
       : t.type === "TupleType" ? (t.named
           ? "(" + t.items.map(i => i.name + ": " + (i.type.name || "?")).join(", ") + ")"
@@ -323,6 +323,10 @@ class Checker {
     }
     const init = this.checkExpr(v.init, scope);
     if (v.annotation) this.shapeOf(v.annotation);
+    // 定长数组标注：字面量长度必须精确匹配
+    if (v.annotation && v.annotation.type === "ArrayType" && v.annotation.len !== null && v.annotation.len !== undefined && v.init && v.init.type === "ArrayLiteral") {
+      if (v.init.items.length !== v.annotation.len) this.err("R5", "定长数组长度不匹配：期望 " + v.annotation.len + "，实际 " + v.init.items.length, v.loc);
+    }
     if (v.kind === "ref") {
       if (!init.mutable) this.err("R3", "只能对可写变量/数据声明可写指针（ref）—— '" + (v.init.type === "Ident" ? v.init.name : "该表达式") + "' 不可写", v.loc);
     }
@@ -454,13 +458,37 @@ class Checker {
         const ts = e.items.map(it => { const r = this.checkExpr(it.expr, scope); return r.name || "?"; });
         return { shape: "block", name: (e.named ? "(" + e.items.map((it, i) => it.name + ": " + ts[i]).join(", ") + ")" : "(" + ts.join(", ") + ")"), mutable: false };
       }
+      case "ClosureLit": {
+        const fscope = new Scope(scope);
+        for (const p of e.params) {
+          const sh = this.shapeOf(p.ptype);
+          fscope.define(p.name, { shape: sh, name: this.nameOf(p.ptype), mutable: p.kind === "ref" || p.kind === "move", moved: false });
+        }
+        // 捕获验证：未定义 R7 / ref 活引用本轮拒绝 R5 / 树必须 move 捕获 / move 后原变量失效
+        for (const c of e.captures) {
+          const cv = scope.lookup(c.name);
+          if (!cv) { this.err("R7", "捕获变量 '" + c.name + "' 未定义", e.loc); continue; }
+          if (e.params.some(p => p.name === c.name)) { this.err("R5", "捕获 '" + c.name + "' 与参数同名", e.loc); continue; }
+          if (c.kind === "ref") { this.err("R5", "活引用捕获 [ref " + c.name + "] 暂不支持", e.loc); continue; }
+          if (c.kind === "val" && cv.name && cv.name.startsWith("fun(")) { this.err("R5", "暂不支持捕获闭包变量（环境生命周期）", e.loc); continue; }
+          if (c.kind === "val" && cv.shape === "tree") { this.err("R5", "树只能 move 捕获（[move " + c.name + "]）", e.loc); continue; }
+          if (cv.moved) { this.err("R9", "捕获变量 '" + c.name + "' 已被 move", e.loc); continue; }
+          if (c.kind === "move") cv.moved = true;
+          fscope.define(c.name, { shape: cv.shape, name: cv.name, mutable: true, moved: false });   // 环境私有：闭包内捕获可写
+        }
+        this.checkBlock(e.body, fscope, null);
+        const retName = e.ret && e.ret.rtype ? this.nameOf(e.ret.rtype) : "void";
+        return { shape: "block", name: "fun(" + e.params.map(p => this.nameOf(p.ptype)).join(", ") + ") -> " + retName, mutable: false };
+      }
       case "RangeExpr": {
         const obj = this.checkExpr(e.obj, scope);
         if (e.start) this.checkExpr(e.start, scope);
         if (e.end) this.checkExpr(e.end, scope);
         const n = obj.name || "";
         if (!(n.startsWith("[") && n.endsWith("]")) && !n.startsWith("[]")) this.err("R5", "取区间目标必须是动态块或切片，但 '" + (obj.name || "?") + "' 不是", e.loc);
-        const elem = n.startsWith("[]") ? n.slice(2) : n.slice(1, -1);
+        const sem = n.lastIndexOf(";");
+        const fixed = n.startsWith("[") && n.endsWith("]") && sem > 0;
+        const elem = n.startsWith("[]") ? n.slice(2) : fixed ? n.slice(1, sem).trim() : n.slice(1, -1);
         return { shape: "slice", name: "[]" + elem, mutable: false };
       }
       case "AssignExpr": {
@@ -491,7 +519,14 @@ class Checker {
         if (!def) { this.err("R5", "未定义的类型 '" + e.name + "'", e.loc); return { shape: "unknown", name: e.name, mutable: true }; }
         for (const f of e.fields) {
           if (!def.fields[f.name]) this.err("R5", "类型 " + e.name + " 没有字段 '" + f.name + "'", e.loc);
-          else this.checkExpr(f.expr, scope);
+          else {
+            this.checkExpr(f.expr, scope);
+            // 定长数组字段：字面量长度必须精确匹配
+            const fd = def.fields[f.name];
+            if (fd && fd.fieldType.type === "ArrayType" && fd.fieldType.len !== null && fd.fieldType.len !== undefined && f.expr.type === "ArrayLiteral" && f.expr.items.length !== fd.fieldType.len) {
+              this.err("R5", "定长数组字段 '" + f.name + "' 长度不匹配：期望 " + fd.fieldType.len + "，实际 " + f.expr.items.length, f.loc);
+            }
+          }
         }
         return { shape: def.shape, name: e.name, mutable: true };
       }
@@ -525,7 +560,9 @@ class Checker {
         const obj = this.checkExpr(e.obj, scope);
         this.checkExpr(e.index, scope);
         const n = obj.name || "";
-        const elem = n.startsWith("[]") ? n.slice(2) : n.startsWith("[") ? n.slice(1, -1) : "?";
+        const sem = n.lastIndexOf(";");
+        const fixed = n.startsWith("[") && n.endsWith("]") && sem > 0;
+        const elem = n.startsWith("[]") ? n.slice(2) : fixed ? n.slice(1, sem).trim() : n.startsWith("[") ? n.slice(1, -1) : "?";
         return { shape: "block", name: elem, mutable: obj.mutable };   // 元素可写性继承自目标（数组/切片需 mut）
       }
       default: return { shape: "unknown", name: "?", mutable: false };

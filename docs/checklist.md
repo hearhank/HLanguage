@@ -111,11 +111,15 @@
 - [x] 可选类型 `?T`（`null`/自动提升/`x.?` 解包/字节化）——`examples/optional_fun.hc`
 - [x] 函数作为参数（`fun(T) -> R` 类型、函数名即值、函数值调用）——`examples/optional_fun.hc`
 - [x] 全标量类型（`u8`-`u128`/`i8`-`i128`/`usize`/`isize`/`f32`，字面量后缀 + 提升 + 整除扩展 + f32 单精度）——`examples/scalars.hc`
-- [ ] 数组 `push` / `pop`（BUILTIN_METHODS 已声明，运行时未实现）
+- [x] 定长数组 `[T; N]`（标注即定长、C struct 值语义、可切片、嵌套、字节化）——`examples/fixed_arr.hc`
+- [x] 闭包（值捕获 `[x]`/move 捕获 `[move y]`，fun 类型统一为闭包结构体，函数名即值）——`examples/closure.hc`
+- [ ] 迭代器（Rust iter 风格：树对象 + 函数引用/闭包链 `map`/`filter`/`fold`/`collect` + `for x in arr`）——设计已定（SPEC 05）
 - [ ] `alloc` / `free`（显式分配，BUILTIN_METHODS 已声明）
 
 ### 能力补全
-- [ ] 闭包（捕获标注 `[x]`/`[move y]`/`[ref z]`）——函数引用（无捕获）已实现，捕获环境是下一步
+- [ ] 闭包 `[ref z]` 活引用捕获（生命周期跨执行体语义）
+- [ ] 闭包变量捕获（环境生命周期管理）
+- [ ] 用户自定义泛型 `T<...>`（当前仅内建模式包装）
 - [ ] 用户自定义泛型 `T<...>`（当前仅内建模式包装）
 - [ ] `Exclusive<T>` / `SharedRead<T>` 运行时实现（C 端目前仅 Channel）
 - [ ] `try` / `catch` 错误展开（当前未处理即终止）

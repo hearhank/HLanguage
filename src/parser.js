@@ -168,8 +168,15 @@ class Parser {
       this.next();
       if (this.match("OP", "]")) { const elem = this.parseType(); return { type: "SliceType", elem }; }   // []T 切片（借用视图）
       const elem = this.parseType();
+      let len = null;
+      if (this.match("OP", ";")) {
+        // 定长数组 [T; N]：N 为编译期常量
+        const n = this.expect("NUMBER", undefined, "定长数组长度");
+        len = n.value;
+        if (!Number.isInteger(len) || len < 0) this.err("定长数组长度必须是正整数", n);
+      }
       this.expect("OP", "]", "']'");
-      return { type: "ArrayType", elem };
+      return { type: "ArrayType", elem, len };
     }
     if (this.check("OP", "(")) {
       // 元组类型：(T1, T2) / (x: T1, y: T2) / ()
@@ -405,8 +412,33 @@ class Parser {
     this.expect("OP", ")");
     return args;
   }
+  /* 闭包字面量：fun(params) [captures] -> ret { body }；捕获 [x] 值复制 / [move y] 所有权 / [ref z] 活引用 */
+  parseClosure(tk) {
+    const params = this.parseParams();
+    let captures = [];
+    if (this.match("OP", "[")) {
+      this.skipNL();
+      if (!this.check("OP", "]")) {
+        do {
+          this.skipNL();
+          let kind = "val";
+          if (this.match("KEYWORD", "move")) kind = "move";
+          else if (this.match("KEYWORD", "ref")) kind = "ref";
+          const name = this.expect("IDENT", undefined, "捕获变量").value;
+          captures.push({ kind, name });
+          this.skipNL();
+        } while (this.match("OP", ","));
+      }
+      this.expect("OP", "]", "']'");
+    }
+    let ret = null;
+    if (this.peek().value === "->") ret = this.parseRet();
+    const body = this.parseBlock();
+    return { type: "ClosureLit", params, captures, ret, body, loc: { line: tk.line, col: tk.col } };
+  }
   parsePrimary() {
     const tk = this.peek();
+    if (tk.kind === "KEYWORD" && tk.value === "fun") { this.next(); return this.parseClosure(tk); }
     if (tk.kind === "KEYWORD" && tk.value === "match") { this.next(); return this.parseMatch(tk); }
     if (tk.kind === "NUMBER") { this.next(); const ltype = tk.suffix || (tk.float ? "f64" : "u64"); return { type: "Literal", kind: tk.float ? "float" : "number", value: tk.value, ltype, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "STRING") { this.next(); return { type: "Literal", kind: "string", value: tk.value, loc: { line: tk.line, col: tk.col } }; }

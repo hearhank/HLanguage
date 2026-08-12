@@ -555,9 +555,21 @@ static void h_json_free(h_json* j) {
 }
 `;
 
+/* 定长数组类型名解析："[u64; 3]" → { elem: "u64", len: 3 }；非定长返回 null */
+function fixedLenInfo(tname) {
+  if (!tname || !tname.startsWith("[") || !tname.endsWith("]")) return null;
+  const sem = tname.lastIndexOf(";");
+  if (sem < 0) return null;
+  const len = Number(tname.slice(sem + 1, -1).trim());
+  if (!Number.isInteger(len)) return null;
+  return { elem: tname.slice(1, sem).trim(), len };
+}
+
 function typeName(t) {
   if (t.type === "NamedType") return t.name;
-  if (t.type === "ArrayType") return "[" + typeName(t.elem) + "]";
+  if (t.type === "ArrayType") return t.len !== null && t.len !== undefined
+    ? "[" + typeName(t.elem) + "; " + t.len + "]"
+    : "[" + typeName(t.elem) + "]";
   if (t.type === "SliceType") return "[]" + typeName(t.elem);
   if (t.type === "OptionalType") return "?" + typeName(t.inner);
   if (t.type === "FunType") return "fun(" + t.params.map(p => typeName(p)).join(", ") + ") -> " + (t.ret ? typeName(t.ret) : "void");
@@ -605,22 +617,19 @@ function funCType(tname) {
   const cps = params.map(p => cType(p)).join(", ");
   return `${cType(ret)} (*)(${cps || "void"})`;
 }
+function funCName(tname) {
+  let h = 0;
+  for (const ch of tname) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  return "fun_" + (h >>> 0).toString(36);
+}
 function funReturnType(tname) {
   const arrow = tname.indexOf(" -> ");
   return arrow >= 0 ? tname.slice(arrow + 4) : "?";
 }
-/* C 声明类型（函数指针需要参数名嵌入 (*name)）："fun(u64) -> u64" → "u64 (*name)(u64)" */
+/* C 声明类型：class 指针、fun 闭包结构体、函数指针按名嵌入 */
 function cDeclType(t, name, ctx) {
   if (ctx && ctx.classes && ctx.classes[t]) return cType(t) + "* " + name;
-  if (t.startsWith("fun(")) {
-    const arrow = t.indexOf(" -> ");
-    const open = t.indexOf("(");
-    const close = t.indexOf(")");
-    const params = splitList(t.slice(open + 1, close));
-    const ret = t.slice(arrow + 4);
-    const cps = params.map(p => cType(p)).join(", ");
-    return `${cType(ret)} (*${name})(${cps || "void"})`;
-  }
+  if (t.startsWith("fun(")) return funCName(t) + " " + name;   // 闭包结构体（胖指针：fn + env）
   return `${cType(t)} ${name}`;
 }
 
@@ -646,8 +655,9 @@ function cType(tname) {
     case "Channel": return "h_chan*";
     case "?": return "bool";   // 裸 null（无类型上下文）：占位
     default: {
-      if (tname.startsWith("fun(")) return funCType(tname);
+      if (tname.startsWith("fun(")) return funCName(tname);   // 闭包结构体（fn + env + free_env）
       if (tname.startsWith("?") && tname.length > 1) return shortName(tname.slice(1)) + "_Opt";
+      if (fixedLenInfo(tname)) return shortName(tname);   // 定长数组 → struct（data[N] 内联，值语义）
       if (tname.startsWith("[") && tname.endsWith("]")) return shortName(tname.slice(1, -1)) + "_Array";
       if (tname.startsWith("[]")) return shortName(tname.slice(2)) + "_Slice";
       if (tname.startsWith("(") && tname.endsWith(")")) return tupleCName(tname);
@@ -656,7 +666,10 @@ function cType(tname) {
   }
 }
 function shortName(t) {
-  // 复合类型 → 合法 C 标识符：可选 _Opt、元组 hash、数组/切片递归
+  // 复合类型 → 合法 C 标识符：fun 闭包、定长 u64_Arr3、可选 _Opt、元组 hash、数组/切片递归
+  if (t.startsWith("fun(")) return funCName(t);
+  const f = fixedLenInfo(t);
+  if (f) return shortName(f.elem) + "_Arr" + f.len;
   if (t.startsWith("?") && t.length > 1) return shortName(t.slice(1)) + "_Opt";
   if (t.startsWith("(") && t.endsWith(")")) return tupleCName(t);
   if (t.startsWith("[") && t.endsWith("]")) return shortName(t.slice(1, -1)) + "_Array";
@@ -668,7 +681,7 @@ function shortName(t) {
 function scalarPrint(t, e, ctx) {
   if (t === "f64") return `h_print_f64(${e});`;
   if (t === "f32") return `h_print_f64((double)(${e}));`;
-  if (t === "u64") return `printf("%llu", ${e});`;
+  if (t === "u64") return `printf("%llu", (unsigned long long)(${e}));`;
   if (t === "i64") return `printf("%lld", ${e});`;
   if (t === "u8" || t === "u16" || t === "u32") return `printf("%u", (unsigned)(${e}));`;
   if (t === "i8" || t === "i16" || t === "i32") return `printf("%d", (int)(${e}));`;
@@ -678,7 +691,11 @@ function scalarPrint(t, e, ctx) {
   if (t === "i128") return `h_print_i128(${e});`;
   if (t === "bool") return `printf("%s", (${e}) ? "true" : "false");`;
   if (t === "Str") return 'printf("\\\"%s\\\"", ' + e + ');';
-  if (t.startsWith("[") && t.endsWith("]")) return `h_print_${shortName(t.slice(1, -1))}_Array(&${e});`;
+  if (t.startsWith("[")) {
+    const f = fixedLenInfo(t);
+    if (f) return `h_print_${shortName(t)}(&${e});`;   // 定长：data[N] 内联，长度编译期常量
+    return `h_print_${shortName(t.slice(1, -1))}_Array(&${e});`;
+  }
   if (t.startsWith("[]")) return `h_print_${shortName(t.slice(2))}_Slice(&${e});`;
   if (t.startsWith("(") && t.endsWith(")")) return `h_print_${tupleCName(t)}(&${e});`;
   if (t.startsWith("?") && t.length > 1) return `h_print_${shortName(t.slice(1))}_Opt(&${e});`;
@@ -722,14 +739,27 @@ function computeClassMethods(classes) {
 }
 
 function genC(ast, threads) {
-  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), sliceElems = new Set(), optionalElems = new Set(), tupleDefs = {}, paramKinds = {}, paramTypes = {}, retKinds = {}, globals = {};
+  const enums = {}, rets = {}, structFields = {}, classes = {}, arrayElems = new Set(), sliceElems = new Set(), optionalElems = new Set(), tupleDefs = {}, fixedArrDefs = {}, funDefs = {}, paramKinds = {}, paramTypes = {}, retKinds = {}, globals = {}, funAst = {};
   const spawns = [];
   const collectTypes = (t) => {
     if (!t) return;
-    if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); sliceElems.add(typeName(t.elem)); collectTypes(t.elem); }
+    if (t.type === "ArrayType") {
+      if (t.len !== null && t.len !== undefined) {
+        const tn = typeName(t);
+        if (!(tn in fixedArrDefs)) fixedArrDefs[tn] = { elem: typeName(t.elem), len: t.len };
+        const en = typeName(t.elem);
+        if (!en.startsWith("[")) {   // 基础元素：切片/数组定义；复合元素（嵌套数组/定长）由自身定义覆盖
+          arrayElems.add(en);
+          sliceElems.add(en);
+        }
+        collectTypes(t.elem);
+      } else {
+        arrayElems.add(typeName(t.elem)); sliceElems.add(typeName(t.elem)); collectTypes(t.elem);
+      }
+    }
     if (t.type === "SliceType") { sliceElems.add(typeName(t.elem)); collectTypes(t.elem); }
     if (t.type === "OptionalType") { optionalElems.add(typeName(t.inner)); collectTypes(t.inner); }
-    if (t.type === "FunType") { t.params.forEach(collectTypes); if (t.ret) collectTypes(t.ret); }
+    if (t.type === "FunType") { funDefs[typeName(t)] = { params: t.params.map(typeName), ret: t.ret ? typeName(t.ret) : "void" }; t.params.forEach(collectTypes); if (t.ret) collectTypes(t.ret); }
     if (t.type === "TupleType") {
       const tn = typeName(t);
       if (!(tn in tupleDefs)) tupleDefs[tn] = { cn: tupleCName(tn), tname: tn };
@@ -781,13 +811,22 @@ function genC(ast, threads) {
   for (const d of ast.decls) {
     if (d.type === "EnumDecl") enums[d.name] = d.variants;
     if (d.type === "FunDecl") {
+      funAst[d.name] = d;
       rets[d.name] = d.ret ? typeName(d.ret.rtype) : "void";
       paramKinds[d.name] = d.params.map(p => p.kind);
       paramTypes[d.name] = d.params.map(p => typeName(p.ptype));
       retKinds[d.name] = d.ret ? d.ret.kind : "val";
       collectTypes(d.ret && d.ret.rtype);
       for (const p of d.params) collectTypes(p.ptype);
-      d.body.stmts.forEach(scanExpr);
+      const scanStmt = (s) => {
+        if (!s || typeof s !== "object") return;
+        if (s.type === "VarDecl" && s.annotation) collectTypes(s.annotation);   // 标注类型（定长等）也要收集
+        if (s.type === "Block") s.stmts.forEach(scanStmt);
+        if (s.type === "IfStmt") { scanStmt(s.then); if (s.els) scanStmt(s.els); }
+        if (s.type === "ForStmt") scanStmt(s.body);
+        if (s.type === "WhileStmt") scanStmt(s.body);
+      };
+      d.body.stmts.forEach(s => { scanStmt(s); scanExpr(s); });
     }
     if (d.type === "StructDecl") {
       structFields[d.name] = {};
@@ -806,24 +845,35 @@ function genC(ast, threads) {
         retKinds[d.name + "_" + m.name] = m.ret ? m.ret.kind : "val";
         collectTypes(m.ret && m.ret.rtype);
         for (const p of m.params) collectTypes(p.ptype);
-        m.body.stmts.forEach(scanExpr);
+        const scanStmtM = (s) => {
+          if (!s || typeof s !== "object") return;
+          if (s.type === "VarDecl" && s.annotation) collectTypes(s.annotation);
+          if (s.type === "Block") s.stmts.forEach(scanStmtM);
+          if (s.type === "IfStmt") { scanStmtM(s.then); if (s.els) scanStmtM(s.els); }
+          if (s.type === "ForStmt") scanStmtM(s.body);
+          if (s.type === "WhileStmt") scanStmtM(s.body);
+        };
+        m.body.stmts.forEach(s => { scanStmtM(s); scanExpr(s); });
       }
     }
   }
-  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds, paramTypes, retKinds, globals, tuples: tupleDefs };
+  const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds, paramTypes, retKinds, globals, tuples: tupleDefs, funDefs, funAst, funRefs: new Set(), closures: [] };
   // 切片 clone 的深拷贝依赖：从切片元素类型递归收集（数组/元组/struct 嵌套）
   const cloneNeeded = new Set();
   const collectClone = (t) => {
     if (cloneNeeded.has(t)) return;
     cloneNeeded.add(t);
-    if (t.startsWith("[") && t.endsWith("]")) collectClone(t.slice(1, -1));
+    const f = fixedLenInfo(t);
+    if (f) collectClone(f.elem);
+    else if (t.startsWith("[") && t.endsWith("]")) collectClone(t.slice(1, -1));
     else if (t.startsWith("(") && t.endsWith(")")) { const named = tupleIsNamed(t); tupleElemTypes(t).forEach(x => collectClone(named ? x.split(": ")[1] : x)); }
     else if (structFields[t]) Object.values(structFields[t]).forEach(collectClone);
   };
   sliceElems.forEach(collectClone);
   const cloneFns = [];
   for (const t of cloneNeeded) {
-    if (t.startsWith("[") && t.endsWith("]")) cloneFns.push(genArrClone(t.slice(1, -1), ctx));
+    if (fixedLenInfo(t)) cloneFns.push(genFixedArrClone(t, ctx));
+    else if (t.startsWith("[") && t.endsWith("]")) cloneFns.push(genArrClone(t.slice(1, -1), ctx));
     else if (t.startsWith("(") && t.endsWith(")")) cloneFns.push(genTupClone(t, ctx));
     else if (structFields[t]) cloneFns.push(genStructClone(t, ctx));
   }
@@ -848,12 +898,19 @@ function genC(ast, threads) {
   const arrayDefs = [...arrayElems].map(e =>
     `typedef struct { unsigned long long len; ${cType(e)}* data; } ${shortName(e)}_Array;`
   ).join("\n");
+  const fixedArrDefStrs = Object.entries(fixedArrDefs).map(([tn, { elem, len }]) =>
+    `typedef struct { ${cType(elem)} data[${len}]; } ${shortName(tn)};`
+  ).join("\n");
   const sliceDefs = [...sliceElems].map(e =>
     `typedef struct { unsigned long long len; ${cType(e)}* data; } ${shortName(e)}_Slice;`
   ).join("\n");
   const optDefs = [...optionalElems].map(e =>
     `typedef struct { bool has; ${cType(e)} val; } ${shortName(e)}_Opt;`
   ).join("\n");
+  const funDefStrs = Object.entries(funDefs).map(([tn, { params, ret }]) => {
+    const cps = params.map(p => cType(p)).join(", ");
+    return `typedef struct { ${cType(ret)} (*fn)(const void* env, ${cps || "void"}); const void* env; void (*free_env)(const void*); } ${funCName(tn)};`;
+  }).join("\n");
   const tupleStructDefs = Object.values(tupleDefs).map(({ cn, tname }) => {
     const elems = tupleElemTypes(tname);
     const named = tupleIsNamed(tname);
@@ -894,9 +951,30 @@ function genC(ast, threads) {
     }
   }
   // 打印函数（方案 b：与解释器 valueToStr 逐字一致）——struct/数组/class 全量生成
+  const funFreeDefs = Object.keys(funDefs).map(tn =>
+    `static void h_free_${funCName(tn)}(${funCName(tn)}* f) { if (f->free_env) f->free_env(f->env); else if (f->env) free((void*)f->env); }`
+  ).join("\n");
+  const envDefs = ctx.closures.map(c => genEnvDefs(c, ctx)).join("\n");
+  const closureFns = ctx.closures.map(c => genClosureFn(c, ctx)).join("\n");
+  const cbDefs = [...ctx.funRefs].map(name => genCb(name, ctx)).filter(Boolean).join("\n");
+  // 前向声明（闭包函数/包装/class 析构被环境或早期代码引用）
+  const classFreeProtos = Object.keys(classes).map(n => `static void h_free_${n}(${n}*);`);
+  const closureProtos = ctx.closures.map(c => {
+    const ps = c.e.params.map(p => cType(typeName(p.ptype))).join(", ");
+    const retT = c.e.ret && c.e.ret.rtype ? typeName(c.e.ret.rtype) : "void";
+    return `static ${cType(retT)} h_closure_${c.idx}(const void* env, ${ps || "void"});`;
+  });
+  const cbProtos = [...ctx.funRefs].map(name => {
+    const fn = ctx.funAst[name];
+    if (!fn) return "";
+    const ps = fn.params.map(p => cType(typeName(p.ptype))).join(", ");
+    const ret = ctx.rets[name] || "void";
+    return `static ${cType(ret)} h_cb_${name}(const void* env, ${ps || "void"});`;
+  }).filter(Boolean);
   const printFns = [];
   for (const n of Object.keys(structFields)) printFns.push(genPrintStruct(n, ctx));
   for (const e of arrayElems) printFns.push(genPrintArray(e, ctx));
+  for (const tn of Object.keys(fixedArrDefs)) printFns.push(genPrintFixedArr(tn, ctx));
   for (const e of sliceElems) printFns.push(genPrintSlice(e, ctx));
   for (const e of sliceElems) printFns.push(genSliceClone(e, ctx));
   for (const e of optionalElems) printFns.push(genPrintOpt(e, ctx));
@@ -912,6 +990,9 @@ function genC(ast, threads) {
   for (const e of arrayElems) {
     const an = shortName(e) + "_Array";
     bytesFns.push(genTBArray(e, ctx), genRevArray(e, ctx), genToBytesEntry(an, `const ${an}* p`), genFromBytes(an, an));
+  }
+  for (const tn of Object.keys(fixedArrDefs)) {
+    bytesFns.push(genTBFixedArr(tn, ctx), genRevFixedArr(tn, ctx), genTBFixedArrEntry(tn, ctx));
   }
   for (const { cn, tname } of Object.values(tupleDefs)) {
     bytesFns.push(genTBTuple(cn, tname, ctx), genRevTuple(cn, tname, ctx), genToBytesEntry(cn, `const ${cn}* p`));
@@ -1032,10 +1113,11 @@ function genC(ast, threads) {
     `}`,
   ].join("\n");
   const spawnGlue = [spawnCtxDefs, spawnTramps].filter(Boolean).join("\n");
-  return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], sliceDefs ? [sliceDefs, ""] : [], optDefs ? [optDefs, ""] : [], tupleStructDefs ? [tupleStructDefs, ""] : [], typeDefs, [""],
-    errorDefs, [""], printProtos.concat(bytesProtos, cloneProtos), [""], printFns.concat(cloneFns), [""], classDefs,
+  return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], fixedArrDefStrs ? [fixedArrDefStrs, ""] : [], sliceDefs ? [sliceDefs, ""] : [], optDefs ? [optDefs, ""] : [], funDefStrs ? [funDefStrs, ""] : [], tupleStructDefs ? [tupleStructDefs, ""] : [], typeDefs, [""],
+    errorDefs, [""], printProtos.concat(bytesProtos, cloneProtos, classFreeProtos, closureProtos, cbProtos), [""], printFns.concat(cloneFns, funFreeDefs ? [funFreeDefs, ""] : [], envDefs ? [envDefs, ""] : []), [""], classDefs,
     registry ? [registry] : [],
     bytesFns ? [bytesFns.join("\n"), ""] : [], funcs,
+    closureFns ? [closureFns, ""] : [], cbDefs ? [cbDefs, ""] : [],
     spawnGlue ? [spawnGlue, ""] : [], mainEntry ? [mainEntry, ""] : [], globalInitFun ? [globalInitFun] : [],
     ["int main(void) {",
       "  h_runtime_init();",
@@ -1088,6 +1170,12 @@ function genPrintArray(elem, ctx) {
   const el = scalarPrint(elem, "a->data[i]", ctx);
   return `static void h_print_${an}(const ${an}* a) {\n  printf("[");\n  for (unsigned long long i = 0; i < a->len; i++) {\n    if (i) printf(", ");\n    ${el}\n  }\n  printf("]");\n}`;
 }
+function genPrintFixedArr(tname, ctx) {
+  const f = fixedLenInfo(tname);
+  const cn = shortName(tname);
+  const el = scalarPrint(f.elem, "p->data[i]", ctx);
+  return `static void h_print_${cn}(const ${cn}* p) {\n  printf("[");\n  for (unsigned long long i = 0; i < ${f.len}; i++) {\n    if (i) printf(", ");\n    ${el}\n  }\n  printf("]");\n}`;
+}
 function genPrintSlice(elem, ctx) {
   const sn = shortName(elem) + "_Slice";
   const el = scalarPrint(elem, "s->data[i]", ctx);
@@ -1128,10 +1216,17 @@ function genSliceClone(elem, ctx) {
 function deepCopyElem(t, e, ctx) {
   if (t === "u64" || t === "f64" || t === "bool") return e;
   if (t === "Str") return `(${e} ? strdup(${e}) : NULL)`;
+  if (fixedLenInfo(t)) return `h_farr_clone_${shortName(t)}(&(${e}))`;   // 定长：逐元素深拷贝（Str 等）
   if (t.startsWith("[") && t.endsWith("]")) return `h_arr_clone_${shortName(t.slice(1, -1))}(&(${e}))`;
   if (t.startsWith("(") && t.endsWith(")")) return `h_tup_clone_${tupleCName(t)}(&(${e}))`;
   if (ctx.structs[t]) return `h_struct_clone_${t}(&(${e}))`;
   return e;
+}
+function genFixedArrClone(tname, ctx) {
+  const f = fixedLenInfo(tname);
+  const cn = shortName(tname);
+  const copy = deepCopyElem(f.elem, "a->data[i]", ctx);
+  return `static ${cn} h_farr_clone_${cn}(const ${cn}* a) {\n  ${cn} r = *a;\n  for (unsigned long long i = 0; i < ${f.len}; i++) r.data[i] = ${copy};\n  return r;\n}`;
 }
 function genArrClone(elem, ctx) {
   const an = shortName(elem) + "_Array";
@@ -1162,7 +1257,11 @@ function tbValue(t, e, ctx) {
   if (t === "f64" || t === "f32" || t === "u64" || t === "u8" || t === "u16" || t === "u32" || t === "u128" || t === "usize" || t === "i64" || t === "i8" || t === "i16" || t === "i32" || t === "i128" || t === "isize") return `h_sb_num(b, (double)(${e}));`;   // JSON 数字（double 精度损失与 JS number 一致）
   if (t === "bool") return `h_sb_puts(b, (${e}) ? \"true\" : \"false\");`;
   if (t === "Str") return `h_sb_json_str(b, ${e});`;
-  if (t.startsWith("[") && t.endsWith("]")) return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b, 0);`;
+  if (t.startsWith("[")) {
+    const f = fixedLenInfo(t);
+    if (f) return `h_tb_${shortName(t)}(&${e}, b, 0);`;   // 定长
+    return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b, 0);`;
+  }
   if (t.startsWith("(") && t.endsWith(")")) return `h_tb_${tupleCName(t)}(&${e}, b, 0);`;
   if (t.startsWith("?") && t.length > 1) return `h_tb_${shortName(t.slice(1))}_Opt(&${e}, b, 0);`;
   if (ctx.classes[t]) return `if (${e}) h_tb_${t}(${e}, b, 0); else h_sb_puts(b, \"null\");`;
@@ -1182,6 +1281,22 @@ function genTB(name, shape, fields, ctx) {
   L.push(`  h_sb_puts(b, \"}}\");`);
   L.push(`}`);
   return L.join("\n");
+}
+function genTBFixedArr(tname, ctx) {
+  const f = fixedLenInfo(tname);
+  const cn = shortName(tname);
+  const el = tbValue(f.elem, "p->data[i]", ctx);
+  return `static void h_tb_${cn}(const ${cn}* p, h_strbuf* b, int top) {\n  h_sb_char(b, '[');\n  for (unsigned long long i = 0; i < ${f.len}; i++) {\n    if (i) h_sb_char(b, ',');\n    ${el}\n  }\n  h_sb_char(b, ']');\n}`;
+}
+function genRevFixedArr(tname, ctx) {
+  const f = fixedLenInfo(tname);
+  const cn = shortName(tname);
+  const el = revElem(f.elem, "j->arr[i]", ctx);
+  return `static ${cn} h_jrev_${cn}(h_json* j) {\n  ${cn} a = {0};\n  if (!j || j->kind != 1) return a;\n  for (unsigned long long i = 0; i < ${f.len} && i < j->arr_n; i++) a.data[i] = ${el};\n  return a;\n}`;
+}
+function genTBFixedArrEntry(tname, ctx) {
+  const cn = shortName(tname);
+  return genToBytesEntry(cn, `const ${cn}* p`);
 }
 function genTBArray(elem, ctx) {
   const an = shortName(elem) + "_Array";
@@ -1237,7 +1352,11 @@ function revValue(t, fname, ctx) {
   if (t === "isize") return `(intptr_t)h_jnum(F, \"${fname}\")`;
   if (t === "bool") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 4) ? true : false`; }
   if (t === "Str") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 3 ? strdup(${v}->str) : \"\")`; }
-  if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(h_json_find(F, \"${fname}\"))`;
+  if (t.startsWith("[")) {
+    const f = fixedLenInfo(t);
+    if (f) return `h_jrev_${shortName(t)}(h_json_find(F, \"${fname}\"))`;
+    return `h_jrev_${shortName(t.slice(1, -1))}_Array(h_json_find(F, \"${fname}\"))`;
+  }
   if (t.startsWith("(") && t.endsWith(")")) return `h_jrev_${tupleCName(t)}(h_json_find(F, \"${fname}\"))`;
   if (t.startsWith("?") && t.length > 1) return `h_jrev_${shortName(t.slice(1))}_Opt(h_json_find(F, \"${fname}\"))`;
   if (ctx.classes[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
@@ -1262,7 +1381,11 @@ function revElem(t, e, ctx) {
   if (t === "isize") return `(${e}->kind == 2 ? (intptr_t)${e}->num : 0)`;
   if (t === "bool") return `${e}->kind == 4 ? true : false`;
   if (t === "Str") return `${e}->kind == 3 ? strdup(${e}->str) : \"\"`;
-  if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(${e})`;
+  if (t.startsWith("[")) {
+    const f = fixedLenInfo(t);
+    if (f) return `h_jrev_${shortName(t)}(${e})`;
+    return `h_jrev_${shortName(t.slice(1, -1))}_Array(${e})`;
+  }
   if (t.startsWith("(") && t.endsWith(")")) return `h_jrev_${tupleCName(t)}(${e})`;
   if (t.startsWith("?") && t.length > 1) return `h_jrev_${shortName(t.slice(1))}_Opt(${e})`;
   if (ctx.classes[t] || ctx.structs[t] || ctx.enums[t]) return `h_jrev_${t}(${e})`;
@@ -1404,8 +1527,11 @@ function genFun(d, ctx, className) {
   });
   const allParams = (className ? [`${className}* self`] : []).concat(params);
   const body = d.body.stmts.map(s => genStmt(s, scope)).join("\n");
-  // 函数最外层作用域：树变量销毁（move 后跳过——已从 trees 移除；视图参数从不进入）
-  const frees = [...scope.trees].map(n => `  h_free_${scope.typeOf(n)}(${n});`).join("\n");
+  // 函数最外层作用域：树/闭包变量销毁（move 后跳过——已从 trees 移除；视图参数从不进入）
+  const frees = [...scope.trees].map(n => {
+    const t = scope.typeOf(n);
+    return `  h_free_${shortName(t)}(${t && t.startsWith("fun(") ? "&" : ""}${n});`;
+  }).join("\n");
   const retT = d.ret ? typeName(d.ret.rtype) : "void";
   const ret = d.ret
     ? (d.ret.kind === "error"
@@ -1417,13 +1543,58 @@ function genFun(d, ctx, className) {
   return `${ret} ${fname}(${allParams.join(", ")}) {\n${body}${frees ? "\n" + frees : ""}\n}`;
 }
 
+/* ---------- 闭包 ---------- */
+/* 闭包环境：捕获字段（值捕获块 = 值字段；move 捕获树 = 指针字段，所有权入环境） */
+function genEnvDefs(c, ctx) {
+  const { caps, idx } = c;
+  const envName = "h_env_" + idx;
+  const fields = caps.map(cap => `  ${cap.kind === "move" && ctx.classes[cap.type] ? cType(cap.type) + "*" : cType(cap.type)} ${cap.name};`).join("\n");
+  const args = caps.map(cap => `${cap.kind === "move" && ctx.classes[cap.type] ? cType(cap.type) + "*" : cType(cap.type)} ${cap.name}_v`).join(", ");
+  const inits = caps.map(cap => `  e->${cap.name} = ${cap.name}_v;`).join("\n");
+  const frees = caps.filter(cap => cap.kind === "move" && ctx.classes[cap.type])
+    .map(cap => `  if (e->${cap.name}) h_free_${cap.type}(e->${cap.name});`).join("\n");
+  return `typedef struct {\n${fields}\n} ${envName};\n`
+    + `static ${envName}* ${envName}_new(${args || "void"}) { ${envName}* e = (${envName}*)malloc(sizeof(${envName}));\n${inits}\n  return e; }\n`
+    + `static void ${envName}_free(const void* p) { const ${envName}* e = (const ${envName}*)p;\n${frees}${frees ? "\n" : ""}  free((void*)e); }`;
+}
+/* 闭包函数：h_closure_N(const void* env, params...)——捕获经 e-> 读取 */
+function genClosureFn(c, ctx) {
+  const { e, idx, caps } = c;
+  const cname = "h_closure_" + idx;
+  const envName = "h_env_" + idx;
+  const cscope = new Scope(null, ctx);
+  cscope.retType = e.ret ? { kind: "val", T: typeName(e.ret.rtype) } : { kind: "val", T: "void" };
+  cscope.closureEnv = "e";
+  cscope.closureVars = new Set(e.captures.map(x => x.name));
+  for (const cap of caps) cscope.declareType(cap.name, cap.type, false);   // 捕获类型（闭包体内类型推断用）
+  const params = e.params.map(p => {
+    const t = typeName(p.ptype);
+    cscope.declareType(p.name, t, false);
+    return `${cType(t)} ${p.name}`;
+  }).join(", ");
+  const body = e.body.stmts.map(s => genStmt(s, cscope)).join("\n");
+  const retT = e.ret && e.ret.rtype ? typeName(e.ret.rtype) : "void";
+  return `static ${cType(retT)} ${cname}(const void* env, ${params || "void"}) {\n  const ${envName}* e = (const ${envName}*)env;\n${body}\n}`;
+}
+/* 函数名引用包装：h_cb_name(const void* env, params...) → name(args)（env 恒 NULL） */
+function genCb(name, ctx) {
+  const fn = ctx.funAst[name];
+  if (!fn) return "";
+  const ps = fn.params.map(p => `${cType(typeName(p.ptype))} ${p.name}`).join(", ");
+  const pn = fn.params.map(p => p.name).join(", ");
+  const ret = ctx.rets[name] || "void";
+  const call = name === "main" ? "h_main" : name;
+  return `static ${cType(ret)} h_cb_${name}(const void* env, ${ps || "void"}) { (void)env; return ${call}(${pn}); }`;
+}
+
 class Scope {
   constructor(parent, ctx) {
     this.parent = parent || null; this.ctx = ctx;
-    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null; this.refParams = new Set(); this.retType = null;
+    this.vars = new Set(); this.types = new Map(); this.trees = new Set(); this.receiverType = null; this.refParams = new Set(); this.retType = null; this.closureEnv = null; this.closureVars = null;
   }
   declared(name) { let s = this; while (s) { if (s.vars.has(name)) return true; s = s.parent; } return false; }
-  declareType(name, t, owned = true) { this.vars.add(name); this.types.set(name, t); if (owned && this.classType(t)) this.trees.add(name); }
+  declareType(name, t, owned = true) { this.vars.add(name); this.types.set(name, t); if (owned && (this.classType(t) || t.startsWith("fun("))) this.trees.add(name); }
+  markClosure(name) { this.trees.add(name); }   // 闭包变量：环境随作用域退出释放
   typeOf(name) { let s = this; while (s) { if (s.types.has(name)) return s.types.get(name); s = s.parent; } return null; }
   releaseTree(name) { let s = this; while (s) { if (s.trees.delete(name)) return; s = s.parent; } }
   classType(t) { return t && this.ctx.classes[t] ? t : null; }
@@ -1434,16 +1605,31 @@ function genStmt(st, scope) {
     case "VarDecl": {
       if (st.kind === "ref" || st.kind === "move") throw new Error("C 后端暂不支持 ref/move 参数——请用 h run");
       let init = genExpr(st.init, scope);
+      // 函数名引用 → 函数引用值（胖指针 env NULL）；闭包字面量 → 登记销毁（环境随作用域释放）
+      if (st.init.type === "Ident" && isFunName(st.init.name, scope)) init = genFunRef(st.init.name, scope);
+      if (st.init.type === "ClosureLit") scope.trees.add(st.name);
+      // 定长标注 [T; N]：字面量按定长 struct 生成（data[N] 内联）
+      if (st.annotation && st.annotation.type === "ArrayType" && st.annotation.len !== null && st.annotation.len !== undefined && st.init && st.init.type === "ArrayLiteral") {
+        init = genArrayLiteral(st.init, typeName(st.annotation), scope);
+      }
       // 可选标注 ?T：裸值/null 自动包装（T → ?T 提升）
       if (st.annotation && st.annotation.type === "OptionalType") {
         const ann = typeName(st.annotation);
         init = st.init.type === "Literal" && st.init.kind === "null" ? genNullOpt(ann) : genWrapOpt(ann, init);
       }
+      // 函数名引用 → 闭包值（env NULL）；闭包字面量 → 登记销毁（环境随作用域释放）
+      const initT = st.init ? inferType(st.init, scope) : null;
+      if (initT && initT.startsWith("fun(") && st.init.type === "Ident" && !scope.typeOf(st.init.name)) {
+        scope.ctx.funRefs.add(st.init.name);
+        init = `(${funCName(initT)}){ .fn = h_cb_${st.init.name}, .env = NULL, .free_env = NULL }`;
+      }
+      if (st.init && st.init.type === "ClosureLit") scope.markClosure(st.name);
       if (scope.declared(st.name)) {
         // 覆盖声明 = 赋值；ref 参数写透调用者变量；可选目标自动包装
         const tgt = scope.refParams.has(st.name) ? "(*" + st.name + ")" : st.name;
         let init2 = init;
         const vt = scope.typeOf(st.name);
+        if (vt && vt.startsWith("fun(") && st.init.type === "Ident" && isFunName(st.init.name, scope)) init2 = genFunRef(st.init.name, scope);
         if (vt && vt.startsWith("?") && vt !== "?") {
           init2 = st.init.type === "Literal" && st.init.kind === "null" ? genNullOpt(vt) : genWrapOpt(vt, init);
         }
@@ -1473,6 +1659,15 @@ function genStmt(st, scope) {
         const rhs = st.expr.type === "Literal" && st.expr.kind === "null" ? genNullOpt(rt.T) : genWrapOpt(rt.T, genExpr(st.expr, scope));
         return "  return " + rhs + ";";
       }
+      // fun 返回：函数名 → 包装为函数引用值
+      if (st.expr && st.expr.type === "Ident" && isFunName(st.expr.name, scope) && rt && rt.T && rt.T.startsWith("fun(")) {
+        return "  return " + genFunRef(st.expr.name, scope) + ";";
+      }
+      // 返回函数名：包装为闭包引用（env NULL）
+      if (st.expr && rt && rt.T && rt.T.startsWith("fun(") && st.expr.type === "Ident" && !scope.typeOf(st.expr.name)) {
+        scope.ctx.funRefs.add(st.expr.name);
+        return `  return (${funCName(rt.T)}){ .fn = h_cb_${st.expr.name}, .env = NULL, .free_env = NULL };`;
+      }
       // 返回树（含 -> move T 的无 move 关键字逃逸）：所有权随返回值转移，函数退出不销毁
       if (st.expr && st.expr.type === "Ident") {
         const t = scope.typeOf(st.expr.name);
@@ -1495,17 +1690,27 @@ function genStmt(st, scope) {
       const end = genExpr(st.range.end, scope);
       const inner = new Scope(scope, scope.ctx);
       inner.receiverType = scope.receiverType;
+      inner.closureEnv = scope.closureEnv;
+      inner.closureVars = scope.closureVars;
       inner.declareType(st.varName, "u64", false);
       const body = st.body.stmts.map(s => genStmt(s, inner)).join("\n");
-      const frees = [...inner.trees].map(n => `  h_free_${inner.typeOf(n)}(${n});`).join("\n");
+      const frees = [...inner.trees].map(n => {
+        const t = inner.typeOf(n);
+        return `  h_free_${shortName(t)}(${t && t.startsWith("fun(") ? "&" : ""}${n});`;
+      }).join("\n");
       return `  for (unsigned long long ${st.varName} = (${start}); ${st.varName} < (${end}); ${st.varName}++) {\n${body}${frees ? "\n" + frees : ""}\n  }`;
     }
     case "WhileStmt": {
       const c = genExpr(st.cond, scope);
       const inner = new Scope(scope, scope.ctx);
       inner.receiverType = scope.receiverType;
+      inner.closureEnv = scope.closureEnv;
+      inner.closureVars = scope.closureVars;
       const body = st.body.stmts.map(s => genStmt(s, inner)).join("\n");
-      const frees = [...inner.trees].map(n => `  h_free_${inner.typeOf(n)}(${n});`).join("\n");
+      const frees = [...inner.trees].map(n => {
+        const t = inner.typeOf(n);
+        return `  h_free_${shortName(t)}(${t && t.startsWith("fun(") ? "&" : ""}${n});`;
+      }).join("\n");
       return `  while (${c}) {\n${body}${frees ? "\n" + frees : ""}\n  }`;
     }
     case "BreakStmt": return "  break;";
@@ -1524,8 +1729,13 @@ function genStmt(st, scope) {
 function genBlockInner(block, scope) {
   const inner = new Scope(scope, scope.ctx);
   inner.receiverType = scope.receiverType;   // 方法体内嵌套块仍可裸访问 self 字段
+  inner.closureEnv = scope.closureEnv;
+  inner.closureVars = scope.closureVars;     // 闭包体内嵌套块仍可读捕获
   const body = block.stmts.map(s => genStmt(s, inner)).join("\n");
-  const frees = [...inner.trees].map(n => `  h_free_${inner.typeOf(n)}(${n});`).join("\n");
+  const frees = [...inner.trees].map(n => {
+    const t = inner.typeOf(n);
+    return `  h_free_${shortName(t)}(${t && t.startsWith("fun(") ? "&" : ""}${n});`;
+  }).join("\n");
   return body + (frees ? "\n" + frees : "");
 }
 
@@ -1533,6 +1743,8 @@ function genExpr(e, scope) {
   switch (e.type) {
     case "Literal": return cLiteral(e);
     case "Ident": {
+      // 闭包体内捕获变量 → e->name（环境读取）
+      if (scope.closureVars && scope.closureVars.has(e.name)) return "e->" + e.name;
       // ref 参数：解引用写透（调用者变量）
       if (scope.refParams.has(e.name)) return "(*" + e.name + ")";
       // 方法体内裸字段名 → self->field（变量优先）
@@ -1546,8 +1758,12 @@ function genExpr(e, scope) {
       // 枚举值 Type.Variant → 常量名
       if (e.obj.type === "Ident" && !scope.declared(e.obj.name)) return e.obj.name + "_" + e.prop;
       const ot = inferType(e.obj, scope);
-      // 数组/切片 .len → .len 字段
-      if (ot && (ot.startsWith("[") || ot.startsWith("[]")) && e.prop === "len") return genExpr(e.obj, scope) + ".len";
+      // 数组/切片 .len：动态 = .len 字段；定长 = 编译期常量
+      if (ot && (ot.startsWith("[") || ot.startsWith("[]")) && e.prop === "len") {
+        const f = fixedLenInfo(ot);
+        if (f) return f.len + "";
+        return genExpr(e.obj, scope) + ".len";
+      }
       // 元组访问：命名 .x / 位置 .0（C 字段名 _0 不能数字开头）
       if (ot && ot.startsWith("(") && ot.endsWith(")")) {
         const named = tupleIsNamed(ot);
@@ -1611,12 +1827,18 @@ function genExpr(e, scope) {
           return `h_set_${ot}_${e.left.prop}(${genExpr(e.left.obj, scope)}, ${genExpr(e.right, scope)});`;
         }
       }
-      // 可选目标：裸值/null 自动包装（T → ?T 提升）
+      // 可选目标：裸值/null 自动包装（T → ?T 提升）；fun 目标：函数名 → 函数引用值
       const ltype = e.left.type === "Ident" ? scope.typeOf(e.left.name) : null;
       const rhs = genExpr(e.right, scope);
       let val = rhs;
+      if (ltype && ltype.startsWith("fun(") && e.right.type === "Ident" && isFunName(e.right.name, scope)) val = genFunRef(e.right.name, scope);
       if (ltype && ltype.startsWith("?") && ltype !== "?") {
         val = e.right.type === "Literal" && e.right.kind === "null" ? genNullOpt(ltype) : genWrapOpt(ltype, rhs);
+      }
+      // fun 目标：函数名实参包装为闭包引用
+      if (ltype && ltype.startsWith("fun(") && e.right.type === "Ident" && !scope.typeOf(e.right.name)) {
+        scope.ctx.funRefs.add(e.right.name);
+        val = `(${funCName(ltype)}){ .fn = h_cb_${e.right.name}, .env = NULL, .free_env = NULL }`;
       }
       const target = e.left.type === "Ident" ? genExpr(e.left, scope) : genExpr(e.left, scope);
       return `${target} ${e.op === "=" ? "=" : e.op} ${val}`;
@@ -1634,7 +1856,9 @@ function genExpr(e, scope) {
     }
     case "ErrorLit": throw new Error("C 后端暂不支持 error——请用 h run");
     case "ArrayLiteral": return genArrayLiteral(e, inferType(e, scope), scope);
+    case "ClosureLit": return genClosure(e, scope);
     case "TupleLit": return genTupleLiteral(e, scope);
+    case "ClosureLit": return genClosure(e, scope);
     case "RangeExpr": return genRange(e, scope);
     case "UnwrapExpr": {
       const code = genExpr(e.expr, scope);
@@ -1650,6 +1874,9 @@ function genExpr(e, scope) {
   }
 }
 
+/* 闭包字面量：注册闭包（环境/函数），返回 (fun_xxx){ .fn = h_closure_N, .env = env_new(...), .free_env = env_free }
+   生成路径见 genClosureFn/genEnvDefs（闭包函数与环境在类型/函数区统一产出） */
+
 function genConstruct(e, scope) {
   const cls = scope.ctx.classes[e.name];
   if (cls) {
@@ -1658,8 +1885,8 @@ function genConstruct(e, scope) {
       const found = e.fields.find(x => x.name === f.name);
       if (found) {
         const ft = typeName(f.fieldType);
-        // 空数组字面量无元素类型信息 → 强制按字段声明类型生成
-        if (ft.startsWith("[") && ft.endsWith("]") && found.expr.type === "ArrayLiteral") {
+        // 空数组字面量无元素类型信息 → 强制按字段声明类型生成；定长字段同理
+        if (ft.startsWith("[") && found.expr.type === "ArrayLiteral") {
           return genArrayLiteral(found.expr, ft, scope);
         }
         let c = genExpr(found.expr, scope);
@@ -1672,7 +1899,9 @@ function genConstruct(e, scope) {
   }
   const fields = e.fields.map(f => {
     const ft = scope.ctx.structs && scope.ctx.structs[e.name] ? scope.ctx.structs[e.name][f.name] : null;
-    let c = genExpr(f.expr, scope);
+    let c;
+    if (ft && ft.startsWith("[") && f.expr.type === "ArrayLiteral") c = genArrayLiteral(f.expr, ft, scope);   // 数组/定长字段：按声明类型生成
+    else c = genExpr(f.expr, scope);
     if (ft && ft.startsWith("?") && ft !== "?") c = f.expr.type === "Literal" && f.expr.kind === "null" ? genNullOpt(ft) : genWrapOpt(ft, c);
     return `.${f.name} = ${c}`;
   }).join(", ");
@@ -1705,6 +1934,36 @@ function genMatch(e, scope) {
   return `({ __typeof__(${target}) _h_t = (${target}); ${retT} _h_m = 0; switch (_h_t) {\n${cases}\n    default: break; } _h_m; })`;
 }
 
+/* 闭包字面量：注册闭包（函数 + 环境），生成胖指针构造表达式 */
+function genClosure(e, scope) {
+  const t = "fun(" + e.params.map(p => typeName(p.ptype)).join(", ") + ") -> " + (e.ret && e.ret.rtype ? typeName(e.ret.rtype) : "void");
+  const cn = funCName(t);
+  const idx = scope.ctx.closures.length;
+  const caps = e.captures.map(c => ({ kind: c.kind, name: c.name, type: inferType({ type: "Ident", name: c.name }, scope) || "u64" }));
+  scope.ctx.closures.push({ e, t, cn, idx, caps });
+  const cname = "h_closure_" + idx;
+  const envName = "h_env_" + idx;
+  const initArgs = caps.map(cap => {
+    if (cap.kind === "move") scope.releaseTree(cap.name);   // move 捕获：所有权入环境，源移出销毁表
+    return genExpr({ type: "Ident", name: cap.name }, scope);
+  }).join(", ");
+  if (!e.captures.length) return `(${cn}){ .fn = ${cname}, .env = NULL, .free_env = NULL }`;
+  return `(${cn}){ .fn = ${cname}, .env = ${envName}_new(${initArgs}), .free_env = ${envName}_free }`;
+}
+/* 函数名 → 函数引用值（胖指针，env NULL）：包装转发函数 h_cb_xxx */
+function genFunRef(name, scope) {
+  const t = (scope.ctx.rets && scope.ctx.rets[name] !== undefined)
+    ? "fun(" + ((scope.ctx.paramTypes && scope.ctx.paramTypes[name]) || []).join(", ") + ") -> " + scope.ctx.rets[name]
+    : null;
+  if (!t) return name;
+  scope.ctx.funRefs.add(name);
+  return `(${funCName(t)}){ .fn = h_cb_${name}, .env = NULL, .free_env = NULL }`;
+}
+/* 是否函数名（未声明变量、非内建、是具名函数） */
+function isFunName(name, scope) {
+  return !scope.declared(name) && scope.ctx.rets && scope.ctx.rets[name] !== undefined;
+}
+
 function genCall(e, scope) {
   const callee = e.callee;
   // print 特殊：参数走 genPrint（to_str 剥皮/树/struct 整值打印），勿预先 genExpr
@@ -1715,6 +1974,13 @@ function genCall(e, scope) {
     if (callee.name === "Channel") {
       // Channel(n) → 全局/局部 channel 构造
       return `h_chan_new(${e.args[0] ? genExpr(e.args[0], scope) : "1"})`;
+    }
+    // 闭包/函数引用变量调用：胖指针 (f.fn)(f.env, args)
+    const vt = scope.typeOf(callee.name);
+    if (vt && vt.startsWith("fun(")) {
+      const f = genExpr(callee, scope);
+      const args = e.args.map(a => genExpr(a, scope)).join(", ");
+      return `${f}.fn(${f}.env${args ? ", " + args : ""})`;
     }
     fname = callee.name === "main" ? "h_main" : callee.name;
   } else if (callee.type === "MemberExpr") {
@@ -1741,7 +2007,11 @@ function genCall(e, scope) {
       const obj = genExpr(callee.obj, scope);
       if (scope.classType(ot)) return `h_to_bytes_${ot}(${obj})`;
       if (scope.ctx.structs[ot]) return `h_to_bytes_${ot}(&${obj})`;
-      if (ot && ot.startsWith("[") && ot.endsWith("]")) return `h_to_bytes_${shortName(ot.slice(1, -1))}_Array(&${obj})`;
+      if (ot && ot.startsWith("[") && ot.endsWith("]")) {
+        const f = fixedLenInfo(ot);
+        if (f) return `h_to_bytes_${shortName(ot)}(&${obj})`;
+        return `h_to_bytes_${shortName(ot.slice(1, -1))}_Array(&${obj})`;
+      }
       if (scope.ctx.enums[ot]) return `h_to_bytes_${ot}(${obj})`;
       if (ot && ot.startsWith("(") && ot.endsWith(")")) return `h_to_bytes_${tupleCName(ot)}(&${obj})`;
       if (ot && ot.startsWith("?") && ot !== "?") return `h_to_bytes_${shortName(ot.slice(1))}_Opt(&${obj})`;
@@ -1768,12 +2038,16 @@ function genCall(e, scope) {
       if (a.type !== "Ident") throw new Error("ref 实参必须是可写变量（checker R3）——请用 h run");
       return "&" + genExpr(a, scope);
     }
+    // fun 形参：函数名实参 → 包装为函数引用值（env NULL）
+    const pt = ptypes && ptypes[i];
+    if (pt && pt.startsWith("fun(") && a.type === "Ident" && isFunName(a.name, scope)) return genFunRef(a.name, scope);
     const code = genExpr(a, scope);
     // [T] 实参 → []T 切片形参：自动借用（视图指向原数据区，不复制）
     const at = inferType(a, scope);
-    const pt = ptypes && ptypes[i];
     if (pt && pt.startsWith("[]") && at && at.startsWith("[") && at.endsWith("]")) {
-      return `(${shortName(pt.slice(2))}_Slice){ .data = ${code}.data, .len = ${code}.len }`;
+      const f = fixedLenInfo(at);
+      const len = f ? f.len : `${code}.len`;
+      return `(${shortName(pt.slice(2))}_Slice){ .data = ${code}.data, .len = ${len} }`;
     }
     // ?T 形参：裸值/null 自动包装（T → ?T 提升）
     if (pt && pt.startsWith("?") && pt !== "?") {
@@ -1800,7 +2074,7 @@ function genPrint(args, scope) {
     const code = genExpr(target, scope);
     if (t === "f64") parts.push(`h_print_f64(${code});`);
     else if (t === "f32") parts.push(`h_print_f64((double)(${code}));`);
-    else if (t === "u64") parts.push(`printf("%llu", ${code});`);
+    else if (t === "u64") parts.push(`printf("%llu", (unsigned long long)(${code}));`);
     else if (t === "i64") parts.push(`printf("%lld", ${code});`);
     else if (t === "u8" || t === "u16" || t === "u32") parts.push(`printf("%u", (unsigned)(${code}));`);
     else if (t === "i8" || t === "i16" || t === "i32") parts.push(`printf("%d", (int)(${code}));`);
@@ -1812,7 +2086,11 @@ function genPrint(args, scope) {
     else if (t === "Str") parts.push(fromToStr ? `printf("\\\"%s\\\"", ${code});` : `printf("%s", ${code});`);
     else if (scope.classType(t)) parts.push(`if (${code}) { h_print_${t}(${code}); } else { printf("null"); }`);
     else if (scope.ctx.structs[t]) parts.push(`h_print_${t}(&${code});`);
-    else if (t && t.startsWith("[") && t.endsWith("]")) parts.push(`h_print_${shortName(t.slice(1, -1))}_Array(&${code});`);
+    else if (t && t.startsWith("[") && t.endsWith("]")) {
+      const f = fixedLenInfo(t);
+      if (f) parts.push(`h_print_${shortName(t)}(&${code});`);
+      else parts.push(`h_print_${shortName(t.slice(1, -1))}_Array(&${code});`);
+    }
     else if (t && t.startsWith("[]")) parts.push(`h_print_${shortName(t.slice(2))}_Slice(&${code});`);
     else if (t && t.startsWith("(") && t.endsWith(")")) parts.push(`h_print_${tupleCName(t)}(&${code});`);
     else if (t && t.startsWith("?") && t !== "?") parts.push(`h_print_${shortName(t.slice(1))}_Opt(&${code});`);
@@ -1824,6 +2102,15 @@ function genPrint(args, scope) {
 
 /* 数组字面量 → 复合字面量（可强制元素类型：空数组/字段类型已知时） */
 function genArrayLiteral(e, t, scope) {
+  const f = fixedLenInfo(t);
+  if (f) {
+    const items = e.items.map(x => {
+      // 嵌套数组元素：按元素类型生成（定长/动态），避免内层被推断为动态
+      if (x.type === "ArrayLiteral" && f.elem.startsWith("[")) return genArrayLiteral(x, f.elem, scope);
+      return genExpr(x, scope);
+    }).join(", ");
+    return `(${shortName(t)}){ .data = { ${items} } }`;
+  }
   const items = e.items.map(x => genExpr(x, scope)).join(", ");
   const et = cType(t.slice(1, -1));
   return `(${cType(t)}){ .len = ${e.items.length}, .data = (${et}[]){ ${items} } }`;
@@ -1840,11 +2127,12 @@ function genTupleLiteral(e, scope) {
 /* 切片 range 表达式：s[a..b] → (T_Slice){ .data = &s.data[a], .len = b - a }（视图，不复制） */
 function genRange(e, scope) {
   const ot = inferType(e.obj, scope);
-  const elem = ot.startsWith("[]") ? ot.slice(2) : ot.slice(1, -1);
+  const f = fixedLenInfo(ot);
+  const elem = f ? f.elem : (ot.startsWith("[]") ? ot.slice(2) : ot.slice(1, -1));
   const sn = shortName(elem) + "_Slice";
   const obj = genExpr(e.obj, scope);
   const start = e.start ? genExpr(e.start, scope) : "0";
-  const end = e.end ? genExpr(e.end, scope) : obj + ".len";
+  const end = e.end ? genExpr(e.end, scope) : (f ? f.len : obj + ".len");
   const data = e.start ? `&${obj}.data[${start}]` : `${obj}.data`;
   return `(${sn}){ .data = ${data}, .len = (${end}) - (${start}) }`;
 }
@@ -1933,6 +2221,8 @@ function inferType(e, scope) {
     case "IndexExpr": {
       const ot = inferType(e.obj, scope);
       if (!ot) return "?";
+      const f = fixedLenInfo(ot);
+      if (f) return f.elem;
       if (ot.startsWith("[]")) return ot.slice(2);
       return ot.startsWith("[") ? ot.slice(1, -1) : "?";
     }
@@ -1940,10 +2230,16 @@ function inferType(e, scope) {
       const ts = e.items.map(it => inferType(it.expr, scope) || "?");
       return e.named ? "(" + e.items.map((it, i) => it.name + ": " + ts[i]).join(", ") + ")" : "(" + ts.join(", ") + ")";
     }
+    case "ClosureLit": {
+      const ts = e.params.map(p => typeName(p.ptype)).join(", ");
+      const ret = e.ret && e.ret.rtype ? typeName(e.ret.rtype) : "void";
+      return "fun(" + ts + ") -> " + ret;
+    }
     case "RangeExpr": {
       const ot = inferType(e.obj, scope);
       if (!ot) return "?";
-      return ot.startsWith("[]") ? ot : "[]" + ot.slice(1, -1);
+      if (ot.startsWith("[]")) return ot;
+      return "[]" + (fixedLenInfo(ot) ? fixedLenInfo(ot).elem : ot.slice(1, -1));
     }
     case "UnwrapExpr": {
       const it = inferType(e.expr, scope);

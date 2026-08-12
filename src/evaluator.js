@@ -19,7 +19,7 @@ function valueToStr(v) {
   }
   if (v.__shape === "slice") return "[" + v.__arr.slice(v.__start, v.__start + v.__len).map(valueToStr).join(", ") + "]";
   if (v.__shape === "optional") return v.__has ? valueToStr(v.__value) : "null";
-  if (v.__shape === "func") return "fun." + v.__fn.name;
+  if (v.__shape === "func") return "fun." + (v.__fn.name || "闭包");
   const alive = v.__alive === undefined || v.__alive ? "" : " 💀";
   const inner = Object.entries(v.__fields || {}).map(([k, x]) => k + ": " + valueToStr(x)).join(", ");
   return v.__type + "{" + inner + "}" + alive;
@@ -514,6 +514,23 @@ class Evaluator {
         const names = e.named ? e.items.map(i => i.name) : items.map((_, i) => String(i));
         return { __shape: "block", __kind: "tuple", __names: names, __items: items };
       }
+      case "ClosureLit": {
+        // 闭包求值：捕获环境（[x] 值复制 / [move y] 所有权转移）
+        const captures = {};
+        for (const c of e.captures) {
+          const v = this.lookupVar(c.name);
+          if (!v || !v.alive) this.rerr("捕获变量 '" + c.name + "' 不可用", e.loc);
+          if (c.kind === "move") {
+            v.alive = false;
+            this.invalidateRefsTo(v);
+            this.event("move", { name: c.name, val: valueToStr(v.value) });
+            captures[c.name] = v.value;
+          } else {
+            captures[c.name] = deepCopyBlock(v.value);
+          }
+        }
+        return { __shape: "func", __fn: e, __captures: captures };
+      }
       case "RangeExpr": {
         const obj = yield* this.evalExpr(e.obj);
         const len = Array.isArray(obj) ? obj.length : obj && obj.__shape === "slice" ? obj.__len : null;
@@ -775,10 +792,10 @@ class Evaluator {
       return yield* this.callMethod(obj, mname, args, e.loc);
     }
     if (callee.type !== "Ident") this.rerr("无法调用该表达式", e.loc);
-    // 函数值变量调用（f 是 fun 类型变量）：解包函数引用并执行
+    // 函数值变量调用（f 是 fun 类型变量）：解包函数引用并执行（含捕获环境）
     const fv = this.lookupVar(callee.name);
     if (fv && fv.alive && fv.value && fv.value.__shape === "func") {
-      return yield* this.execBody(fv.value.__fn, args, e.loc, null, false);
+      return yield* this.execBody(fv.value.__fn, args, e.loc, null, false, null, fv.value.__captures);
     }
     return yield* this.callFunction(callee.name, e.args, args, e.loc);
   }
@@ -818,12 +835,18 @@ class Evaluator {
     const varRefs = argNodes.map(n => n.type === "Ident" ? n.name : null);
     return yield* this.execBody(fn, args, loc, null, false, varRefs);
   }
-  *execBody(fn, argVals, loc, receiver, receiverWritable, varRefs) {
+  *execBody(fn, argVals, loc, receiver, receiverWritable, varRefs, captures) {
     this.event("call", { name: fn.name });
     const sc = new Scope(this.current, "函数 " + fn.name);
     if (receiver) { sc.receiver = receiver; sc.receiverWritable = !!receiverWritable; }
     this.enterScope(sc);
     try {
+      if (captures) {
+        // 闭包捕获绑定：环境值进入函数作用域（优先于外层同名，checker 已拒参数同名）；环境私有可写
+        for (const [n, v] of Object.entries(captures)) {
+          sc.vars[n] = { kind: "val", value: v, mutable: true, alive: true, owned: false };
+        }
+      }
       fn.params.forEach((p, i) => {
         const arg = argVals[i];
         if (p.kind === "ref") {

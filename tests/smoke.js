@@ -394,5 +394,53 @@ if (require("fs").existsSync(exeSC)) {
 process.chdir(cwd);
 t("全标量双后端一致性（C 原生）", builtSC === runOutSC, "\n--- run ---\n" + runOutSC + "\n--- build ---\n" + builtSC);
 
+// 25. 定长数组 [T; N]：双后端一致性
+const faPath = path.join(ROOT, "examples", "fixed_arr.hc");
+r = h(["run", faPath]);
+const runOutFA = r.out;
+t("fixed_arr.hc h run 运行", r.code === 0 && runOutFA.includes("定长: [10, 20, 30] len: 3") && runOutFA.includes("借用: 60"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "fixed_arr.hc"), require("fs").readFileSync(faPath, "utf8"));
+const rFA = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "fixed_arr.hc"], { encoding: "utf8" });
+const exeFA = path.join(require("os").tmpdir(), "fixed_arr" + (process.platform === "win32" ? ".exe" : ""));
+let builtFA = "";
+if (require("fs").existsSync(exeFA)) {
+  const r3 = require("child_process").spawnSync(exeFA, [], { encoding: "utf8" });
+  builtFA = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("定长数组双后端一致性（C 原生）", builtFA === runOutFA, "\n--- run ---\n" + runOutFA + "\n--- build ---\n" + builtFA);
+
+// 25b. 定长数组静态拒绝用例（长度不匹配）
+r = h(["run"], "fun main() {\n    a: [u64; 3] = [1, 2]\n    print(a)\n}\n");
+t("定长长度不匹配 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "struct S { xs: [u8; 2] }\nfun main() {\n    s = S{ xs: [1, 2, 3] }\n}\n");
+t("定长字段长度不匹配 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+
+// 26. 闭包（值捕获/move 捕获/函数引用混用）：双后端一致性
+const clPath = path.join(ROOT, "examples", "closure.hc");
+r = h(["run", clPath]);
+const runOutCL = r.out;
+t("closure.hc h run 运行", r.code === 0 && runOutCL.includes("捕获: 15") && runOutCL.includes("move捕获: 101 103") && runOutCL.includes("工厂: 8 15"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "closure.hc"), require("fs").readFileSync(clPath, "utf8"));
+const rCL = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "closure.hc"], { encoding: "utf8" });
+const exeCL = path.join(require("os").tmpdir(), "closure" + (process.platform === "win32" ? ".exe" : ""));
+let builtCL = "";
+if (require("fs").existsSync(exeCL)) {
+  const r3 = require("child_process").spawnSync(exeCL, [], { encoding: "utf8" });
+  builtCL = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("闭包双后端一致性（C 原生）", builtCL === runOutCL, "\n--- run ---\n" + runOutCL + "\n--- build ---\n" + builtCL);
+
+// 26b. 闭包静态拒绝用例
+r = h(["run"], "fun main() {\n    mut x: u64 = 5\n    f = fun() [ref x] -> u64 { return x }\n}\n");
+t("活引用捕获 [ref x] → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "class A {}\nfun main() {\n    mut a = A{}\n    f = fun() [a] -> u64 { return 1 }\n}\n");
+t("树值捕获（须 move）→ R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.slice(0, 120));
+r = h(["run"], "fun main() {\n    f = fun() [nonexistent] -> u64 { return 1 }\n}\n");
+t("捕获未定义变量 → R7 拒绝", r.code === 1 && r.out.includes("R7"), r.out.slice(0, 120));
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);
