@@ -596,7 +596,13 @@ function cType(tname) {
     }
   }
 }
-function shortName(tname) { return tname; }
+function shortName(t) {
+  // 复合类型 → 合法 C 标识符：元组 hash、数组/切片递归（tup_xxx_Array / tup_xxx_Slice）
+  if (t.startsWith("(") && t.endsWith(")")) return tupleCName(t);
+  if (t.startsWith("[") && t.endsWith("]")) return shortName(t.slice(1, -1)) + "_Array";
+  if (t.startsWith("[]")) return shortName(t.slice(2)) + "_Slice";
+  return t;
+}
 
 /* 标量/复合值的打印语句（双后端一致：对齐求值器 valueToStr） */
 function scalarPrint(t, e, ctx) {
@@ -606,6 +612,7 @@ function scalarPrint(t, e, ctx) {
   if (t === "Str") return 'printf("\\\"%s\\\"", ' + e + ');';
   if (t.startsWith("[") && t.endsWith("]")) return `h_print_${shortName(t.slice(1, -1))}_Array(&${e});`;
   if (t.startsWith("[]")) return `h_print_${shortName(t.slice(2))}_Slice(&${e});`;
+  if (t.startsWith("(") && t.endsWith(")")) return `h_print_${tupleCName(t)}(&${e});`;
   if (ctx.classes[t]) return `if (${e}) { h_print_${t}(${e}); } else { printf("null"); }`;   // ref 字段可能为 NULL（目标已销毁被通知置空）
   if (ctx.structs[t]) return `h_print_${t}(&${e});`;
   return `printf("?");`;   // 枚举等：占位（示例避开）
@@ -650,7 +657,7 @@ function genC(ast, threads) {
   const spawns = [];
   const collectTypes = (t) => {
     if (!t) return;
-    if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); collectTypes(t.elem); }
+    if (t.type === "ArrayType") { arrayElems.add(typeName(t.elem)); sliceElems.add(typeName(t.elem)); collectTypes(t.elem); }
     if (t.type === "SliceType") { sliceElems.add(typeName(t.elem)); collectTypes(t.elem); }
     if (t.type === "TupleType") {
       const tn = typeName(t);
@@ -665,6 +672,7 @@ function genC(ast, threads) {
         if (typeof it.value === "string") return "Str";
       }
       if (it.type === "ArrayLiteral") return "[" + literalElemType(it.items) + "]";
+      if (it.type === "TupleLit") return tupleLitType(it);
     }
     return "u64";
   };
@@ -687,7 +695,7 @@ function genC(ast, threads) {
   };
   const scanExpr = (e) => {
     if (!e || typeof e !== "object") return;
-    if (e.type === "ArrayLiteral") { arrayElems.add(literalElemType(e.items)); e.items.forEach(scanExpr); return; }
+    if (e.type === "ArrayLiteral") { const et = literalElemType(e.items); arrayElems.add(et); sliceElems.add(et); e.items.forEach(scanExpr); return; }
     if (e.type === "TupleLit") {
       const t = tupleLitType(e);
       if (t && !(t in tupleDefs)) tupleDefs[t] = { cn: tupleCName(t), tname: t };
@@ -732,6 +740,23 @@ function genC(ast, threads) {
     }
   }
   const ctx = { enums, rets, structs: structFields, classes, classMethods: computeClassMethods(classes), paramKinds, paramTypes, retKinds, globals, tuples: tupleDefs };
+  // 切片 clone 的深拷贝依赖：从切片元素类型递归收集（数组/元组/struct 嵌套）
+  const cloneNeeded = new Set();
+  const collectClone = (t) => {
+    if (cloneNeeded.has(t)) return;
+    cloneNeeded.add(t);
+    if (t.startsWith("[") && t.endsWith("]")) collectClone(t.slice(1, -1));
+    else if (t.startsWith("(") && t.endsWith(")")) { const named = tupleIsNamed(t); tupleElemTypes(t).forEach(x => collectClone(named ? x.split(": ")[1] : x)); }
+    else if (structFields[t]) Object.values(structFields[t]).forEach(collectClone);
+  };
+  sliceElems.forEach(collectClone);
+  const cloneFns = [];
+  for (const t of cloneNeeded) {
+    if (t.startsWith("[") && t.endsWith("]")) cloneFns.push(genArrClone(t.slice(1, -1), ctx));
+    else if (t.startsWith("(") && t.endsWith(")")) cloneFns.push(genTupClone(t, ctx));
+    else if (structFields[t]) cloneFns.push(genStructClone(t, ctx));
+  }
+  const cloneProtos = cloneFns.map(f => f.split("{")[0].trim() + ";");
   // error 返回类型结构体：struct h_err_T { ok, val, name }（未处理时调用点 fail-fast，与求值器一致）
   const errTypes = {};
   const collectErr = (ret) => {
@@ -814,7 +839,7 @@ function genC(ast, threads) {
     bytesFns.push(genTBArray(e, ctx), genRevArray(e, ctx), genToBytesEntry(an, `const ${an}* p`), genFromBytes(an, an));
   }
   for (const { cn, tname } of Object.values(tupleDefs)) {
-    bytesFns.push(genTBTuple(cn, tname, ctx), genToBytesEntry(cn, `const ${cn}* p`));
+    bytesFns.push(genTBTuple(cn, tname, ctx), genRevTuple(cn, tname, ctx), genToBytesEntry(cn, `const ${cn}* p`));
   }
   for (const [n, cls] of Object.entries(classes)) {
     bytesFns.push(genTB(n, "tree", cls.fields, ctx), genRevClass(n, cls.fields, ctx), genToBytesEntry(n, `const ${n}* p`), genFromBytes(n, n + "*"));
@@ -822,6 +847,8 @@ function genC(ast, threads) {
   for (const [n, vs] of Object.entries(enums)) {
     bytesFns.push(genTBEnum(n, vs), genRevEnum(n, vs), genToBytesEntry(n, `${n} p`), genFromBytes(n, n));
   }
+  // 字节化函数互相调用（struct↔数组↔元组嵌套）需前向声明
+  const bytesProtos = bytesFns.map(f => f.split("{")[0].trim() + ";");
   // 类型注册表（类型标签注册机制）：类型名 → 元数据，运行时可见（互操作/诊断入口）
   const regEntries = [];
   for (const n of Object.keys(structFields)) regEntries.push(`  { \"${n}\", sizeof(${n}) }`);
@@ -915,7 +942,7 @@ function genC(ast, threads) {
   ].join("\n");
   const spawnGlue = [spawnCtxDefs, spawnTramps].filter(Boolean).join("\n");
   return body.concat(globalDecls ? [globalDecls, ""] : [], fwdDecls, [""], enumsDefs, arrayDefs ? [arrayDefs, ""] : [], sliceDefs ? [sliceDefs, ""] : [], tupleStructDefs ? [tupleStructDefs, ""] : [], typeDefs, [""],
-    errorDefs, [""], printProtos, [""], printFns, [""], classDefs,
+    errorDefs, [""], printProtos.concat(bytesProtos, cloneProtos), [""], printFns.concat(cloneFns), [""], classDefs,
     registry ? [registry] : [],
     bytesFns ? [bytesFns.join("\n"), ""] : [], funcs,
     spawnGlue ? [spawnGlue, ""] : [], mainEntry ? [mainEntry, ""] : [], globalInitFun ? [globalInitFun] : [],
@@ -990,10 +1017,36 @@ function genSliceClone(elem, ctx) {
   const sn = shortName(elem) + "_Slice";
   const an = shortName(elem) + "_Array";
   const et = cType(elem);
-  const copy = elem === "Str"
-    ? `r.data[i] = s->data[i] ? strdup(s->data[i]) : NULL;`
-    : `r.data[i] = s->data[i];`;
-  return `static ${an} h_slice_clone_${shortName(elem)}(const ${sn}* s) {\n  ${an} r = { .len = s->len, .data = s->len ? (${et}*)malloc(sizeof(${et}) * s->len) : NULL };\n  for (unsigned long long i = 0; i < s->len; i++) ${copy}\n  return r;\n}`;
+  const copy = deepCopyElem(elem, "s->data[i]", ctx);
+  return `static ${an} h_slice_clone_${shortName(elem)}(const ${sn}* s) {\n  ${an} r = { .len = s->len, .data = s->len ? (${et}*)malloc(sizeof(${et}) * s->len) : NULL };\n  for (unsigned long long i = 0; i < s->len; i++) r.data[i] = ${copy};\n  return r;\n}`;
+}
+/* 块深拷贝表达式（切片 clone 的递归元素拷贝；u64/f64/bool 直拷，Str strdup，复合递归） */
+function deepCopyElem(t, e, ctx) {
+  if (t === "u64" || t === "f64" || t === "bool") return e;
+  if (t === "Str") return `(${e} ? strdup(${e}) : NULL)`;
+  if (t.startsWith("[") && t.endsWith("]")) return `h_arr_clone_${shortName(t.slice(1, -1))}(&(${e}))`;
+  if (t.startsWith("(") && t.endsWith(")")) return `h_tup_clone_${tupleCName(t)}(&(${e}))`;
+  if (ctx.structs[t]) return `h_struct_clone_${t}(&(${e}))`;
+  return e;
+}
+function genArrClone(elem, ctx) {
+  const an = shortName(elem) + "_Array";
+  const copy = deepCopyElem(elem, "a->data[i]", ctx);
+  return `static ${an} h_arr_clone_${shortName(elem)}(const ${an}* a) {\n  ${an} r = { .len = a->len, .data = a->len ? (${cType(elem)}*)malloc(sizeof(${cType(elem)}) * a->len) : NULL };\n  for (unsigned long long i = 0; i < a->len; i++) r.data[i] = ${copy};\n  return r;\n}`;
+}
+function genTupClone(tname, ctx) {
+  const cn = tupleCName(tname);
+  const named = tupleIsNamed(tname);
+  const elems = tupleElemTypes(tname);
+  const names = named ? elems.map(x => x.split(": ")[0]) : elems.map((_, i) => "_" + i);
+  const types = named ? elems.map(x => x.split(": ")[1]) : elems;
+  const body = types.map((t, i) => `  r.${names[i]} = ${deepCopyElem(t, `p->${names[i]}`, ctx)};`).join("\n");
+  return `static ${cn} h_tup_clone_${cn}(const ${cn}* p) {\n  ${cn} r = {0};\n${body}\n  return r;\n}`;
+}
+function genStructClone(name, ctx) {
+  const fs = ctx.structs[name];
+  const body = Object.entries(fs).map(([fname, ftype]) => `  r.${fname} = ${deepCopyElem(ftype, `p->${fname}`, ctx)};`).join("\n");
+  return `static ${name} h_struct_clone_${name}(const ${name}* p) {\n  ${name} r = {0};\n${body}\n  return r;\n}`;
 }
 function genEnum(d) {
   const names = d.variants.map(v => `  ${d.name}_${v}`).join(",\n");
@@ -1006,6 +1059,7 @@ function tbValue(t, e, ctx) {
   if (t === "bool") return `h_sb_puts(b, (${e}) ? \"true\" : \"false\");`;
   if (t === "Str") return `h_sb_json_str(b, ${e});`;
   if (t.startsWith("[") && t.endsWith("]")) return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b, 0);`;
+  if (t.startsWith("(") && t.endsWith(")")) return `h_tb_${tupleCName(t)}(&${e}, b, 0);`;
   if (ctx.classes[t]) return `if (${e}) h_tb_${t}(${e}, b, 0); else h_sb_puts(b, \"null\");`;
   if (ctx.structs[t]) return `h_tb_${t}(&${e}, b, 0);`;
   if (ctx.enums[t]) return `h_tb_${t}(${e}, b, 0);`;
@@ -1067,6 +1121,7 @@ function revValue(t, fname, ctx) {
   if (t === "bool") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 4) ? true : false`; }
   if (t === "Str") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 3 ? strdup(${v}->str) : \"\")`; }
   if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(h_json_find(F, \"${fname}\"))`;
+  if (t.startsWith("(") && t.endsWith(")")) return `h_jrev_${tupleCName(t)}(h_json_find(F, \"${fname}\"))`;
   if (ctx.classes[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
   if (ctx.structs[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
   if (ctx.enums[t]) return `h_jrev_${t}(h_json_find(F, \"${fname}\"))`;
@@ -1078,6 +1133,7 @@ function revElem(t, e, ctx) {
   if (t === "bool") return `${e}->kind == 4 ? true : false`;
   if (t === "Str") return `${e}->kind == 3 ? strdup(${e}->str) : \"\"`;
   if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(${e})`;
+  if (t.startsWith("(") && t.endsWith(")")) return `h_jrev_${tupleCName(t)}(${e})`;
   if (ctx.classes[t] || ctx.structs[t] || ctx.enums[t]) return `h_jrev_${t}(${e})`;
   return "0";
 }
@@ -1105,6 +1161,26 @@ function genRevArray(elem, ctx) {
   const an = shortName(elem) + "_Array";
   const el = revElem(elem, "j->arr[i]", ctx);
   return `static ${an} h_jrev_${an}(h_json* j) {\n  ${an} a = {0};\n  if (!j || j->kind != 1) return a;\n  a.len = j->arr_n;\n  a.data = a.len ? (${cType(elem)}*)malloc(sizeof(${cType(elem)}) * a.len) : NULL;\n  for (unsigned long long i = 0; i < a.len; i++) a.data[i] = ${el};\n  return a;\n}`;
+}
+function genRevTuple(cn, tname, ctx) {
+  const named = tupleIsNamed(tname);
+  const elems = tupleElemTypes(tname);
+  const names = named ? elems.map(x => x.split(": ")[0]) : elems.map((_, i) => "_" + i);
+  const types = named ? elems.map(x => x.split(": ")[1]) : elems;
+  const L = [];
+  L.push(`static ${cn} h_jrev_${cn}(h_json* j) {`);
+  L.push(`  ${cn} r = {0};`);
+  L.push(`  if (!j || j->kind != 0) return r;`);
+  if (named) {
+    L.push(`  h_json* F = h_json_find(j, \"__fields\");`);
+    types.forEach((t, i) => L.push(`  { h_json* v = h_json_find(F, \"${names[i]}\"); if (v) r.${names[i]} = ${revElem(t, "v", ctx)}; }`));
+  } else {
+    L.push(`  h_json* F = h_json_find(j, \"__items\");`);
+    types.forEach((t, i) => L.push(`  { h_json* v = F && F->kind == 1 && F->arr_n > ${i} ? F->arr[${i}] : NULL; if (v) r.${names[i]} = ${revElem(t, "v", ctx)}; }`));
+  }
+  L.push(`  return r;`);
+  L.push(`}`);
+  return L.join("\n");
 }
 function genRevEnum(name, variants) {
   const L = [];
@@ -1461,10 +1537,9 @@ function genCall(e, scope) {
       if (ot && ot.startsWith("(") && ot.endsWith(")")) return `h_to_bytes_${tupleCName(ot)}(&${obj})`;
       throw new Error("C 后端暂不支持该类型的 to_bytes——请用 h run");
     }
-    // 切片 clone：深拷贝元素（标量/Str），返回独立数组
+    // 切片 clone：深拷贝元素（递归块拷贝），返回独立数组
     if (ot && ot.startsWith("[]") && callee.prop === "clone") {
       const elem = ot.slice(2);
-      if (!["u64", "f64", "bool", "Str"].includes(elem)) throw new Error("C 后端切片 clone 暂只支持标量元素——请用 h run");
       const obj = genExpr(callee.obj, scope);
       return `h_slice_clone_${shortName(elem)}(&${obj})`;
     }

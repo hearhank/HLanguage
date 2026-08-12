@@ -853,7 +853,8 @@ class Evaluator {
   toBytes(v) {
     const clean = (x) => {
       if (x === null || x === undefined) return null;
-      if (typeof x !== "object" || Array.isArray(x)) return x;
+      if (typeof x !== "object") return x;
+      if (Array.isArray(x)) return x.map(clean);   // 数组元素递归（元组/块元素统一格式，对齐 C 后端）
       if (x.__shape === "void" || x.__shape === "error" || x.__shape === "enum" || x.__shape === "channel") return x;
       if (x.__kind === "tuple") {
         // 元组字节格式（ADR 0007）：位置 __items / 命名 __fields（无 __type）

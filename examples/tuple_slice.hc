@@ -16,6 +16,11 @@ fun sum(xs: []u64) -> u64 {
     return xs[0] + sum(xs[1..])
 }
 
+struct Bag {
+    pair: (u64, u64)
+    name: Str
+}
+
 fun main() -> void {
     // 多返回 + 位置元组 + 解构
     (q, r) = divmod(7, 3)
@@ -67,4 +72,26 @@ fun main() -> void {
     // 元组字节化
     by = t.to_bytes()
     print("元组字节:", by)
+
+    // struct 含元组字段：字节化往返（恢复元组字段）
+    bag = Bag{ pair: (1, 2), name: "袋" }
+    print("struct:", bag)
+    bb = bag.to_bytes()
+    print("struct字节:", bb)
+    bag2 = Bag.from_bytes(bb)
+    print("恢复:", bag2.pair.0.to_str(), bag2.pair.1.to_str(), bag2.name)
+
+    // 数组元素是元组：字节化 + 打印
+    pts = [(1, 2), (3, 4)]
+    print("元组数组:", pts, "len:", pts.len.to_str())
+    pb = pts.to_bytes()
+    print("数组字节:", pb)
+
+    // 切片 clone 复合元素（元组元素，深拷贝独立）
+    mut tarr = [(10, 20), (30, 40)]
+    ts = tarr[0..2]
+    mut tc = ts.clone()
+    tc[0] = (99, 88)
+    print("元组clone:", tc)
+    print("clone独立:", tarr, tc)
 }
