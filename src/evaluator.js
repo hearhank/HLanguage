@@ -426,7 +426,7 @@ class Evaluator {
   *evalExpr(e) {
     if (!e) return { __shape: "void" };
     switch (e.type) {
-      case "Literal": return e.value;
+      case "Literal": return e.ltype === "f32" ? Math.fround(e.value) : e.value;
       case "Ident": {
         const v = this.lookupVar(e.name);
         if (!v) {
@@ -468,22 +468,26 @@ class Evaluator {
       case "CallExpr": return yield* this.execCall(e);
       case "BinExpr": {
         const l = yield* this.evalExpr(e.left), r = yield* this.evalExpr(e.right);
+        let res;
         switch (e.op) {
           case "+": {
             const a = typeof l === "object" ? valueToStr(l) : l;
             const b = typeof r === "object" ? valueToStr(r) : r;
-            return typeof a === "string" || typeof b === "string" ? String(a) + String(b) : a + b;
+            if (typeof a === "string" || typeof b === "string") return String(a) + String(b);
+            res = a + b;
+            break;
           }
-          case "-": return l - r; case "*": return l * r;
-          // u64 整除（向零截断，对齐 C/Rust）；f64 或未知类型回退浮点
-          case "/": return e._t === "u64" ? Math.trunc(l / r) : l / r;
-          case "%": return e._t === "u64" ? Math.trunc(l % r) : l % r;
+          case "-": res = l - r; break;
+          case "*": res = l * r; break;
+          // 整数整除（向零截断，对齐 C/Rust）；浮点或未知类型回退浮点
+          case "/": res = isIntNum(e._t) ? Math.trunc(l / r) : l / r; break;
+          case "%": res = isIntNum(e._t) ? Math.trunc(l % r) : l % r; break;
           case "==": return enumEq(l, r); case "!=": return !enumEq(l, r);
           case "<": return l < r; case "<=": return l <= r; case ">": return l > r; case ">=": return l >= r;
           case "&&": return truthy(l) && truthy(r); case "||": return truthy(l) || truthy(r);
           default: this.rerr("未知运算符 " + e.op, e.loc);
         }
-        break;
+        return e._t === "f32" ? Math.fround(res) : res;   // f32 单精度逐运算截断
       }
       case "UnaryExpr": {
         const x = yield* this.evalExpr(e.operand);
@@ -706,21 +710,20 @@ class Evaluator {
     }
     if (e.type === "BinExpr") {
       const l = this.evalExprSync(e.left), r = this.evalExprSync(e.right);
+      let res;
       switch (e.op) {
-        case "+": {
-          const a = typeof l === "object" ? valueToStr(l) : l;
-          const b = typeof r === "object" ? valueToStr(r) : r;
-          return typeof a === "string" || typeof b === "string" ? String(a) + String(b) : a + b;
-        }
-        case "-": return l - r; case "*": return l * r;
-        // u64 整除（向零截断，对齐 C/Rust）；f64 或未知类型回退浮点
-        case "/": return e._t === "u64" ? Math.trunc(l / r) : l / r;
-        case "%": return e._t === "u64" ? Math.trunc(l % r) : l % r;
+        case "+": res = (typeof l === "object" ? valueToStr(l) : l) + (typeof r === "object" ? valueToStr(r) : r); break;
+        case "-": res = l - r; break;
+        case "*": res = l * r; break;
+        // 整数整除（向零截断，对齐 C/Rust）；浮点或未知类型回退浮点
+        case "/": res = isIntNum(e._t) ? Math.trunc(l / r) : l / r; break;
+        case "%": res = isIntNum(e._t) ? Math.trunc(l % r) : l % r; break;
         case "==": return enumEq(l, r); case "!=": return !enumEq(l, r);
         case "<": return l < r; case "<=": return l <= r; case ">": return l > r; case ">=": return l >= r;
         case "&&": return truthy(l) && truthy(r); case "||": return truthy(l) || truthy(r);
         default: this.rerr("未知运算符 " + e.op, e.loc);
       }
+      return e._t === "f32" ? Math.fround(res) : res;
     }
     return { __shape: "void" };
   }
@@ -961,6 +964,10 @@ function wrapOptVal(v) {
   if (v === null || v === undefined) return { __shape: "optional", __has: false, __value: null };
   return { __shape: "optional", __has: true, __value: v };
 }
+/* 整数类型集合（除法整除判断）与 f32 单精度截断 */
+const INT_NUM = new Set(["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize"]);
+function isIntNum(t) { return t && INT_NUM.has(t); }
+function f32of(v) { return Math.fround(v); }
 function binOp(op, l, r) {
   switch (op) {
     case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r;

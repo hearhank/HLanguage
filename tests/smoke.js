@@ -377,5 +377,22 @@ t("非可选值解包 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.ou
 r = h(["run"], "fun main() {\n    mut x: ?u64 = null\n    print(x.?.to_str())\n}\n");
 t("解包 null 运行时错误", r.code === 1 && r.out.includes("解包 null"), r.out.slice(0, 120));
 
+// 24. 全标量类型（u8-u128/i8-i128/usize/isize/f32）：双后端一致性
+const scPath = path.join(ROOT, "examples", "scalars.hc");
+r = h(["run", scPath]);
+const runOutSC = r.out;
+t("scalars.hc h run 运行", r.code === 0 && runOutSC.includes("u128: 123") && runOutSC.includes("i128: -123") && runOutSC.includes("单精度: 0.30000001192092896"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "scalars.hc"), require("fs").readFileSync(scPath, "utf8"));
+const rSC = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "scalars.hc"], { encoding: "utf8" });
+const exeSC = path.join(require("os").tmpdir(), "scalars" + (process.platform === "win32" ? ".exe" : ""));
+let builtSC = "";
+if (require("fs").existsSync(exeSC)) {
+  const r3 = require("child_process").spawnSync(exeSC, [], { encoding: "utf8" });
+  builtSC = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("全标量双后端一致性（C 原生）", builtSC === runOutSC, "\n--- run ---\n" + runOutSC + "\n--- build ---\n" + builtSC);
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

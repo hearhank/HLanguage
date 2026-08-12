@@ -408,7 +408,7 @@ class Parser {
   parsePrimary() {
     const tk = this.peek();
     if (tk.kind === "KEYWORD" && tk.value === "match") { this.next(); return this.parseMatch(tk); }
-    if (tk.kind === "NUMBER") { this.next(); return { type: "Literal", kind: tk.float ? "float" : "number", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
+    if (tk.kind === "NUMBER") { this.next(); const ltype = tk.suffix || (tk.float ? "f64" : "u64"); return { type: "Literal", kind: tk.float ? "float" : "number", value: tk.value, ltype, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "STRING") { this.next(); return { type: "Literal", kind: "string", value: tk.value, loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "KEYWORD" && (tk.value === "true" || tk.value === "false")) { this.next(); return { type: "Literal", kind: "bool", value: tk.value === "true", loc: { line: tk.line, col: tk.col } }; }
     if (tk.kind === "KEYWORD" && tk.value === "null") { this.next(); return { type: "Literal", kind: "null", value: null, loc: { line: tk.line, col: tk.col } }; }

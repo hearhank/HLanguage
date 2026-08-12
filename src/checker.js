@@ -4,10 +4,20 @@
 
 const { parse } = require("./parser");
 
-const BUILTIN_BLOCK = ["u64", "f64", "Str", "bool", "void"];
+const BUILTIN_BLOCK = ["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "Str", "bool", "void"];
 const PATTERN_TYPES = ["Exclusive", "SharedRead", "Channel"];
 const BUILTIN_METHODS = ["to_bytes", "from_bytes", "to_str", "to_string", "len", "push", "pop", "send", "recv", "alloc", "free", "clone"];
 const BUILTIN_FUNCS = ["store", "load", "transmit"];
+/* 数值类型：整数除法与提升判断 */
+const NUM_TYPES = new Set(["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64"]);
+const numRank = (n) => ({ "u8": 1, "i8": 2, "u16": 3, "i16": 4, "u32": 5, "i32": 6, "u64": 7, "i64": 8, "u128": 9, "i128": 10, "usize": 7, "isize": 8, "f32": 20, "f64": 21 }[n] || 0);
+const promoteNum = (a, b) => {
+  if (a === "f64" || b === "f64") return "f64";
+  if (a === "f32" || b === "f32") return "f32";
+  const ra = numRank(a), rb = numRank(b);
+  if (!ra && !rb) return null;
+  return ra >= rb ? a : b;
+};
 
 class Scope {
   constructor(parent) { this.parent = parent; this.vars = {}; }
@@ -323,7 +333,7 @@ class Checker {
     if (!e) return { shape: "unknown", name: "?", mutable: false };
     switch (e.type) {
       case "Literal":
-        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : e.kind === "float" ? "f64" : e.kind === "null" ? "?" : "u64", mutable: false };
+        return { shape: "block", name: e.kind === "string" ? "Str" : e.kind === "bool" ? "bool" : e.kind === "null" ? "?" : e.ltype || (e.kind === "float" ? "f64" : "u64"), mutable: false };
       case "Ident": {
         const v = scope.lookup(e.name);
         if (!v) {
@@ -416,11 +426,12 @@ class Checker {
         const lt = l.name && l.name.startsWith("?") && l.name !== "?";
         const rt = r.name && r.name.startsWith("?") && r.name !== "?";
         if ((lt || rt) && !["==", "!=", "&&", "||"].includes(e.op)) this.err("R5", "可选值不能直接参与运算，需先解包（x.?）", e.loc);
-        // 数值类型推断并标注（求值器据此决定 u64 整除 vs f64 浮点除法）
-        const ltn = l.name === "u64" || l.name === "f64" ? l.name : null;
-        const rtn = r.name === "u64" || r.name === "f64" ? r.name : null;
-        e._t = ltn === "f64" || rtn === "f64" ? "f64" : ltn === "u64" || rtn === "u64" ? "u64" : null;
-        return { shape: "block", name: e._t || "u64", mutable: false };
+        // 数值类型推断并标注（求值器据此决定整数整除 vs 浮点除法；f32 单精度截断）
+        const ltn = NUM_TYPES.has(l.name) ? l.name : null;
+        const rtn = NUM_TYPES.has(r.name) ? r.name : null;
+        e._t = promoteNum(ltn, rtn);
+        const isStr = l.name === "Str" || r.name === "Str";
+        return { shape: "block", name: e._t || (isStr ? "Str" : "u64"), mutable: false };
       }
       case "UnwrapExpr": {
         const inner = this.checkExpr(e.expr, scope);

@@ -14,10 +14,13 @@ const OPERATORS = [
   ";", ",", ":", ".", "?",
 ];
 
+/* 数字字面量后缀：5u8 / -3i32 / 1.5f32（无后缀默认 u64/f64） */
+const NUM_SUFFIXES = new Set(["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64"]);
+
 function lex(src) {
   const toks = [];
   let i = 0, line = 1, col = 1;
-  const push = (kind, value, ln, cl, float) => toks.push({ kind, value, line: ln, col: cl, float });
+  const push = (kind, value, ln, cl, float, suffix) => toks.push({ kind, value, line: ln, col: cl, float, suffix });
 
   while (i < src.length) {
     const c = src[i];
@@ -37,8 +40,16 @@ function lex(src) {
         const afterMemberDot = toks.length && toks[toks.length - 1].kind === "OP" && toks[toks.length - 1].value === ".";
         if (!afterMemberDot) { s += "."; i++; while (i < src.length && /\d/.test(src[i])) s += src[i++]; }
       }
-      push("NUMBER", parseFloat(s), line, col, s.includes("."));   // 第 5 参：是否浮点（整数除法的类型区分）
-      col += s.length; continue;
+      // 类型后缀：5u8 / 1.5f32（紧跟数字，无空格）
+      let suffix = "";
+      if (/[A-Za-z_]/.test(src[i] || "")) {
+        let ss = "";
+        while (i < src.length && /[A-Za-z0-9_]/.test(src[i])) ss += src[i++];
+        if (NUM_SUFFIXES.has(ss)) suffix = ss;
+        else throw { lex: true, msg: "非法数字后缀 '" + ss + "'", line, col };
+      }
+      push("NUMBER", parseFloat(s), line, col, s.includes("."), suffix);   // 第 5 参：浮点标志；第 6 参：类型后缀
+      col += s.length + suffix.length; continue;
     }
     if (/[A-Za-z_]/.test(c)) {
       let s = "";

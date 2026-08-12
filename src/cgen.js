@@ -5,6 +5,17 @@
 
 const { parse } = require("./parser");
 
+/* 数值类型：除法/提升判断（与 checker 一致） */
+const NUM_TYPES = new Set(["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64"]);
+const numRank = (n) => ({ "u8": 1, "i8": 2, "u16": 3, "i16": 4, "u32": 5, "i32": 6, "u64": 7, "i64": 8, "u128": 9, "i128": 10, "usize": 7, "isize": 8, "f32": 20, "f64": 21 }[n] || 0);
+const promoteNum = (a, b) => {
+  if (a === "f64" || b === "f64") return "f64";
+  if (a === "f32" || b === "f32") return "f32";
+  const ra = numRank(a), rb = numRank(b);
+  if (!ra && !rb) return null;
+  return ra >= rb ? a : b;
+};
+
 /* 并发运行时：Windows Fiber / POSIX ucontext 协程 + M:N worker 线程（H_THREADS=1 时与求值器单线程调度一致） */
 const CONCURRENCY_RUNTIME = `
 /* ---------- 并发运行时：跨平台协程 + M:N worker 线程 ---------- */
@@ -615,7 +626,19 @@ function cDeclType(t, name, ctx) {
 
 function cType(tname) {
   switch (tname) {
+    case "u8": return "uint8_t";
+    case "u16": return "uint16_t";
+    case "u32": return "uint32_t";
     case "u64": return "unsigned long long";
+    case "u128": return "unsigned __int128";
+    case "usize": return "uintptr_t";
+    case "i8": return "int8_t";
+    case "i16": return "int16_t";
+    case "i32": return "int32_t";
+    case "i64": return "long long";
+    case "i128": return "__int128";
+    case "isize": return "intptr_t";
+    case "f32": return "float";
     case "f64": return "double";
     case "bool": return "bool";
     case "Str": return "const char*";
@@ -644,7 +667,15 @@ function shortName(t) {
 /* 标量/复合值的打印语句（双后端一致：对齐求值器 valueToStr） */
 function scalarPrint(t, e, ctx) {
   if (t === "f64") return `h_print_f64(${e});`;
+  if (t === "f32") return `h_print_f64((double)(${e}));`;
   if (t === "u64") return `printf("%llu", ${e});`;
+  if (t === "i64") return `printf("%lld", ${e});`;
+  if (t === "u8" || t === "u16" || t === "u32") return `printf("%u", (unsigned)(${e}));`;
+  if (t === "i8" || t === "i16" || t === "i32") return `printf("%d", (int)(${e}));`;
+  if (t === "usize") return `printf("%llu", (unsigned long long)(${e}));`;
+  if (t === "isize") return `printf("%lld", (long long)(${e}));`;
+  if (t === "u128") return `h_print_u128(${e});`;
+  if (t === "i128") return `h_print_i128(${e});`;
   if (t === "bool") return `printf("%s", (${e}) ? "true" : "false");`;
   if (t === "Str") return 'printf("\\\"%s\\\"", ' + e + ');';
   if (t.startsWith("[") && t.endsWith("]")) return `h_print_${shortName(t.slice(1, -1))}_Array(&${e});`;
@@ -708,7 +739,7 @@ function genC(ast, threads) {
   const literalElemType = (items) => {
     for (const it of items) {
       if (it.type === "Literal") {
-        if (typeof it.value === "number") return it.kind === "float" ? "f64" : "u64";
+        if (typeof it.value === "number") return it.ltype || (it.kind === "float" ? "f64" : "u64");
         if (typeof it.value === "string") return "Str";
       }
       if (it.type === "ArrayLiteral") return "[" + literalElemType(it.items) + "]";
@@ -720,7 +751,7 @@ function genC(ast, threads) {
   const litTypeOf = (x) => {
     if (!x) return null;
     if (x.type === "Literal") {
-      if (typeof x.value === "number") return x.kind === "float" ? "f64" : "u64";
+      if (typeof x.value === "number") return x.ltype || (x.kind === "float" ? "f64" : "u64");
       if (typeof x.value === "string") return "Str";
       if (typeof x.value === "boolean") return "bool";
     }
@@ -973,6 +1004,18 @@ function genC(ast, threads) {
     '  printf("%s", buf);',
     '}',
     '',
+    'static void h_print_u128(unsigned __int128 v) {',
+    '  if (v == 0) { printf("0"); return; }',
+    '  char buf[64]; int n = 0;',
+    '  while (v) { buf[n++] = (char)(\'0\' + (int)(v % 10)); v /= 10; }',
+    '  while (n) putchar(buf[--n]);',
+    '}',
+    'static void h_print_i128(__int128 v) {',
+    '  if (v == 0) { printf("0"); return; }',
+    '  if (v < 0) { printf("-"); v = -v; }',
+    '  h_print_u128((unsigned __int128)v);',
+    '}',
+    '',
     CONCURRENCY_RUNTIME,
     JSON_RUNTIME,
   ];
@@ -1116,7 +1159,7 @@ function genEnum(d) {
 
 /* ---------- 字节化（to_bytes/from_bytes）：per-type JSON 序列化/反序列化 ---------- */
 function tbValue(t, e, ctx) {
-  if (t === "f64" || t === "u64") return `h_sb_num(b, ${e});`;
+  if (t === "f64" || t === "f32" || t === "u64" || t === "u8" || t === "u16" || t === "u32" || t === "u128" || t === "usize" || t === "i64" || t === "i8" || t === "i16" || t === "i32" || t === "i128" || t === "isize") return `h_sb_num(b, (double)(${e}));`;   // JSON 数字（double 精度损失与 JS number 一致）
   if (t === "bool") return `h_sb_puts(b, (${e}) ? \"true\" : \"false\");`;
   if (t === "Str") return `h_sb_json_str(b, ${e});`;
   if (t.startsWith("[") && t.endsWith("]")) return `h_tb_${shortName(t.slice(1, -1))}_Array(&${e}, b, 0);`;
@@ -1179,7 +1222,19 @@ function genToBytesEntry(name, sig) {
 }
 function revValue(t, fname, ctx) {
   if (t === "f64") return `h_jnum(F, \"${fname}\")`;
+  if (t === "f32") return `(float)h_jnum(F, \"${fname}\")`;
   if (t === "u64") return `(unsigned long long)h_jnum(F, \"${fname}\")`;
+  if (t === "i64") return `(long long)h_jnum(F, \"${fname}\")`;
+  if (t === "u8") return `(uint8_t)h_jnum(F, \"${fname}\")`;
+  if (t === "u16") return `(uint16_t)h_jnum(F, \"${fname}\")`;
+  if (t === "u32") return `(uint32_t)h_jnum(F, \"${fname}\")`;
+  if (t === "u128") return `(unsigned __int128)h_jnum(F, \"${fname}\")`;
+  if (t === "usize") return `(uintptr_t)h_jnum(F, \"${fname}\")`;
+  if (t === "i8") return `(int8_t)h_jnum(F, \"${fname}\")`;
+  if (t === "i16") return `(int16_t)h_jnum(F, \"${fname}\")`;
+  if (t === "i32") return `(int32_t)h_jnum(F, \"${fname}\")`;
+  if (t === "i128") return `(__int128)h_jnum(F, \"${fname}\")`;
+  if (t === "isize") return `(intptr_t)h_jnum(F, \"${fname}\")`;
   if (t === "bool") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 4) ? true : false`; }
   if (t === "Str") { const v = `h_json_find(F, \"${fname}\")`; return `(${v} && ${v}->kind == 3 ? strdup(${v}->str) : \"\")`; }
   if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(h_json_find(F, \"${fname}\"))`;
@@ -1192,7 +1247,19 @@ function revValue(t, fname, ctx) {
 }
 function revElem(t, e, ctx) {
   if (t === "f64") return `${e}->kind == 2 ? ${e}->num : 0`;
+  if (t === "f32") return `${e}->kind == 2 ? (float)${e}->num : 0`;
   if (t === "u64") return `(${e}->kind == 2 ? (unsigned long long)${e}->num : 0)`;
+  if (t === "i64") return `(${e}->kind == 2 ? (long long)${e}->num : 0)`;
+  if (t === "u8") return `(${e}->kind == 2 ? (uint8_t)${e}->num : 0)`;
+  if (t === "u16") return `(${e}->kind == 2 ? (uint16_t)${e}->num : 0)`;
+  if (t === "u32") return `(${e}->kind == 2 ? (uint32_t)${e}->num : 0)`;
+  if (t === "u128") return `(${e}->kind == 2 ? (unsigned __int128)${e}->num : 0)`;
+  if (t === "usize") return `(${e}->kind == 2 ? (uintptr_t)${e}->num : 0)`;
+  if (t === "i8") return `(${e}->kind == 2 ? (int8_t)${e}->num : 0)`;
+  if (t === "i16") return `(${e}->kind == 2 ? (int16_t)${e}->num : 0)`;
+  if (t === "i32") return `(${e}->kind == 2 ? (int32_t)${e}->num : 0)`;
+  if (t === "i128") return `(${e}->kind == 2 ? (__int128)${e}->num : 0)`;
+  if (t === "isize") return `(${e}->kind == 2 ? (intptr_t)${e}->num : 0)`;
   if (t === "bool") return `${e}->kind == 4 ? true : false`;
   if (t === "Str") return `${e}->kind == 3 ? strdup(${e}->str) : \"\"`;
   if (t.startsWith("[") && t.endsWith("]")) return `h_jrev_${shortName(t.slice(1, -1))}_Array(${e})`;
@@ -1527,8 +1594,12 @@ function genExpr(e, scope) {
       return `(${l} ${e.op} ${r})`;
     }
     case "UnaryExpr": {
-      // 负整数字面量：不能用 ULL（无符号取负变巨大数），直接 (-n) 转 double
-      if (e.op === "-" && e.operand.type === "Literal" && Number.isInteger(e.operand.value)) return `(-${e.operand.value})`;
+      // 负整数字面量：默认 u64 不能 ULL 取负，直接 (-n) 转 int；带类型后缀按类型化字面量取负
+      if (e.op === "-" && e.operand.type === "Literal" && Number.isInteger(e.operand.value)) {
+        const lt = e.operand.ltype;
+        if (lt && lt !== "u64") return `(-${cLiteral(e.operand)})`;
+        return `(-${e.operand.value})`;
+      }
       return `(${e.op}${genExpr(e.operand, scope)})`;
     }
     case "AssignExpr": {
@@ -1613,7 +1684,10 @@ function cLiteral(e) {
   if (e.kind === "bool") return e.value ? "true" : "false";
   if (e.kind === "null") return "0";   // 裸 null：可选上下文由包装处替换为 { .has = false }
   if (typeof e.value === "number") {
-    if (e.kind === "float") return Number.isInteger(e.value) ? e.value + ".0" : e.value + "";   // 3.0 → 3.0（double），不是 3ULL
+    const suf = e.ltype;
+    if (suf === "f32") return Number.isInteger(e.value) ? e.value + ".0f" : e.value + "f";
+    if (suf && suf !== "u64" && suf !== "f64") return `((${cType(suf)})(${e.value}))`;   // 5u8 → ((uint8_t)(5))
+    if (e.kind === "float") return Number.isInteger(e.value) ? e.value + ".0" : e.value + "";
     if (Number.isInteger(e.value)) return e.value < 0 ? `(${e.value})` : e.value + "ULL";   // 负数不能用 ULL（无符号取负变巨大数）
     return e.value + "";
   }
@@ -1725,7 +1799,15 @@ function genPrint(args, scope) {
     }
     const code = genExpr(target, scope);
     if (t === "f64") parts.push(`h_print_f64(${code});`);
+    else if (t === "f32") parts.push(`h_print_f64((double)(${code}));`);
     else if (t === "u64") parts.push(`printf("%llu", ${code});`);
+    else if (t === "i64") parts.push(`printf("%lld", ${code});`);
+    else if (t === "u8" || t === "u16" || t === "u32") parts.push(`printf("%u", (unsigned)(${code}));`);
+    else if (t === "i8" || t === "i16" || t === "i32") parts.push(`printf("%d", (int)(${code}));`);
+    else if (t === "usize") parts.push(`printf("%llu", (unsigned long long)(${code}));`);
+    else if (t === "isize") parts.push(`printf("%lld", (long long)(${code}));`);
+    else if (t === "u128") parts.push(`h_print_u128(${code});`);
+    else if (t === "i128") parts.push(`h_print_i128(${code});`);
     else if (t === "bool") parts.push(`printf("%s", (${code}) ? "true" : "false");`);
     else if (t === "Str") parts.push(fromToStr ? `printf("\\\"%s\\\"", ${code});` : `printf("%s", ${code});`);
     else if (scope.classType(t)) parts.push(`if (${code}) { h_print_${t}(${code}); } else { printf("null"); }`);
@@ -1802,7 +1884,7 @@ function inferEnumName(e, scope) {
 function inferType(e, scope) {
   switch (e.type) {
     case "Literal":
-      if (typeof e.value === "number") return e.kind === "float" ? "f64" : "u64";
+      if (typeof e.value === "number") return e.ltype || (e.kind === "float" ? "f64" : "u64");
       if (typeof e.value === "string") return "Str";
       if (e.kind === "null") return "?";
       return "bool";
@@ -1870,6 +1952,8 @@ function inferType(e, scope) {
     case "MatchExpr": return e.arms.length ? inferType(e.arms[0].expr, scope) : "?";
     case "BinExpr": {
       const l = inferType(e.left, scope), r = inferType(e.right, scope);
+      const p = promoteNum(NUM_TYPES.has(l) ? l : null, NUM_TYPES.has(r) ? r : null);
+      if (p) return p;
       if (l === "f64" || r === "f64") return "f64";
       if (l !== "?") return l;
       return r;
