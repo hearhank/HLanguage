@@ -18,7 +18,7 @@
 - `src/`：lexer/parser/checker/evaluator 四模块 + `h.js` CLI。
 - 命令：`node src/h.js run|check|parse|build <file>`（无文件读 stdin；`--trace` 输出执行轨迹；`build --exec` 编译后直接运行）。
 - 示例：`examples/demo.hc`（生命周期/字节化/并发演示）、`error.hc`、`wrong.hc`、`match.hc`、`import.hc`、`concurrency.hc`、`calc.hc`、`tree.hc`（class 双后端一致性）。
-- 冒烟测试：`tests/smoke.js`（34 项断言通过）。
+- 冒烟测试：`tests/smoke.js`（63 项断言通过）。
 
 ## 编译后端（已交付：C 原生 + JS 回退）
 
@@ -26,7 +26,7 @@
 - **动态块 `[T]`**：连续数据区 + 长度（`T_Array`）——数组字面量 → 复合字面量、索引 → `.data[i]`、`.len` → `.len`。
 - `h build <file>`：探测编译器 `zig cc`（自带 clang）→ `gcc` → `cc` → `clang`，编译为原生二进制；无 C 编译器时回退 `jsgen`（JS 目标）。
 - **最短往返浮点格式化**（`h_print_f64`）：%.*g 循环至往返一致——与解释器 JS 输出逐位对齐。
-- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）、`ref.hc`（ref 字段双向引用通知）、`ref_param.hc`（ref/move 参数）、`error.hc`（error 未处理即终止）、`concurrency.hc`（并发 + Channel 交替，单线程逐字一致 / `--threads 2` M:N 关键行齐全）、`spawn_args.hc`（带参 spawn）、`bytes.hc`（字节化往返）编译后输出与 `h run` 逐行一致（smoke 断言，51 项全绿）。
+- **双后端一致性已验证（原生级）**：`calc.hc`（enum/match/struct）、`array.hc`（动态块）、`tree.hc`（class 树 + move + 方法）、`ref.hc`（ref 字段双向引用通知）、`ref_param.hc`（ref/move 参数）、`error.hc`（error 未处理即终止）、`concurrency.hc`（并发 + Channel 交替，单线程逐字一致 / `--threads 2` M:N 关键行齐全）、`spawn_args.hc`（带参 spawn）、`bytes.hc`（字节化往返）、`loop.hc`（整数除法 + 循环）、`tuple_slice.hc`（元组 + 切片）编译后输出与 `h run` 逐行一致（smoke 断言，63 项全绿）。
 - 入口语义：main 若定义且未被显式调用 → 自动调用（两后端一致）；枚举比较统一为 `类型.变体`。
 - 文件后缀：H 语言源码统一使用 `.hc`（区别于 C 头文件）。
 - 限制（编译时拒绝并提示用 `h run`）：非 Channel 的 global/访问模式、非 Windows 平台并发运行时。
@@ -61,7 +61,10 @@
   - 带参 spawn 经打包结构体 `h_sp_ctx_f` 传参；全局 `Channel<T>` 在 `h_global_init` 构造（原型仅 u64 值）
   - **字节化（to_bytes/from_bytes）**：可逆自描述 JSON（与求值器 `JSON.stringify` 逐字节一致）——per-type 生成 `h_tb_T`（序列化，最短往返数字、`\x` 转义字符串）+ `h_jrev_T`（反序列化，递归重建）+ `h_to_bytes_T`/`h_from_bytes_T` 入口；**顶层带格式版本字段 `"__ver":1`**（未知版本报错、缺失视为 v1 兼容旧数据）；**类型标签注册机制**——生成 `h_type_registry`（类型名→元数据，运行时可见）+ `from_bytes` 校验 `__type` 匹配目标类型（两端一致）；`x.to_bytes()` → 字符串，`Type.from_bytes(s)` → 恢复实例（ref 字段经 setter 重新注册）；块=连续数据直接映射、树=序列化压平
 - 限制：非 Channel 的 global（Exclusive/SharedRead）编译时拒绝（提示用 h run）。Windows 平台运行验证（Fiber）；POSIX 平台经 zig cc 交叉编译验证（x86_64/aarch64 Linux），运行验证待真实环境。
-- 元组/切片（ADR 0007/0008）：设计已定，两后端实现待排期（parser/checker/evaluator/cgen 同步落地）。
+- 元组/切片（ADR 0007/0008）：**两后端已实现**（parser/checker/evaluator/cgen 同步落地）——
+  - **元组**：C 端匿名结构体（类型名内容 hash → `tup_xxx`，命名元组按字段名、位置元组字段 `_0/_1`）；字面量 → 复合字面量；`.x`/`.0` 访问（C 字段名映射）；解构 `(a, b) = f()` → 临时承接 + 逐元素赋值（新变量声明/已有覆盖）；`to_bytes` 支持（位置 `__items` / 命名 `__fields`，无 `__type`，与求值器逐字节一致；`from_bytes` 无入口——元组无类型名，两后端一致）；
+  - **切片**：`T_Slice{ len, data }`（视图，不拥有）；`[]T` 参数；`[T]` 实参自动借用（`.data/.len` 透传）；`s[a..b]`/`s[..]` → 偏移 + 长度（越界由调用方保证，checker 范围与求值器一致）；索引/写透 `.data[i]`（天然写透原数据区）；`s.len`；`s.clone()` → 独立数组（标量/Str 元素深拷贝，复合元素编译时拒绝）；R12 借入不借出由 checker 静态拦截，C 端无悬垂风险；
+  - 限制：struct/数组内嵌元组的字节化恢复、切片 clone 复合元素——暂未覆盖（编译时拒绝/提示用 h run）。
 
 ## 解释器定位
 

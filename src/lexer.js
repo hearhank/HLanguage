@@ -32,7 +32,11 @@ function lex(src) {
     if (/\d/.test(c)) {
       let s = "";
       while (i < src.length && /\d/.test(src[i])) s += src[i++];
-      if (src[i] === "." && /\d/.test(src[i + 1] || "")) { s += "."; i++; while (i < src.length && /\d/.test(src[i])) s += src[i++]; }   // 小数只允许一个点（避免 1..3 被吞）
+      if (src[i] === "." && /\d/.test(src[i + 1] || "")) {
+        // 小数只允许一个点（避免 1..3 被吞）；紧跟成员访问 '.' 时按整数拆（元组 .0.1）
+        const afterMemberDot = toks.length && toks[toks.length - 1].kind === "OP" && toks[toks.length - 1].value === ".";
+        if (!afterMemberDot) { s += "."; i++; while (i < src.length && /\d/.test(src[i])) s += src[i++]; }
+      }
       push("NUMBER", parseFloat(s), line, col, s.includes("."));   // 第 5 参：是否浮点（整数除法的类型区分）
       col += s.length; continue;
     }

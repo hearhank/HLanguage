@@ -335,5 +335,22 @@ t("for f64 区间 → R5 拒绝", r.code === 1 && r.out.includes("R5"), r.out.sl
 r = h(["run"], "fun main() {\n    print(nonexistent)\n}\n");
 t("调用参数未定义变量 → R7（参数检查修复）", r.code === 1 && r.out.includes("R7"), r.out.slice(0, 120));
 
+// 22. C 后端元组 + 切片：双后端一致性
+const tsPath = path.join(ROOT, "examples", "tuple_slice.hc");
+r = h(["run", tsPath]);
+const runOutTS = r.out;
+t("tuple_slice.hc h run 运行", r.code === 0 && runOutTS.includes("多返回: 2 1") && runOutTS.includes("写透: [1, 9, 3, 4, 5]") && runOutTS.includes("求和: 22"), "");
+process.chdir(require("os").tmpdir());
+require("fs").writeFileSync(path.join(require("os").tmpdir(), "tuple_slice.hc"), require("fs").readFileSync(tsPath, "utf8"));
+const rTS = require("child_process").spawnSync(process.execPath, [path.join(ROOT, "src", "h.js"), "build", "tuple_slice.hc"], { encoding: "utf8" });
+const exeTS = path.join(require("os").tmpdir(), "tuple_slice" + (process.platform === "win32" ? ".exe" : ""));
+let builtTS = "";
+if (require("fs").existsSync(exeTS)) {
+  const r3 = require("child_process").spawnSync(exeTS, [], { encoding: "utf8" });
+  builtTS = (r3.stdout || "").replace(/\r/g, "");
+}
+process.chdir(cwd);
+t("元组/切片双后端一致性（C 原生）", builtTS === runOutTS, "\n--- run ---\n" + runOutTS + "\n--- build ---\n" + builtTS);
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过 (" + pass + ")" : "❌ 失败 " + fail + " 项"));
 process.exit(fail === 0 ? 0 : 1);

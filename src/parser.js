@@ -4,7 +4,7 @@
 const { lex } = require("./lexer");
 
 class Parser {
-  constructor(toks) { this.t = toks; this.p = 0; }
+  constructor(toks) { this.t = toks; this.p = 0; this.noConstruct = false; this.noRange = false; }
   peek(off) { return this.t[Math.min(this.p + (off || 0), this.t.length - 1)]; }
   next() { return this.t[this.p++]; }
   skipNL() { while (this.peek().kind === "NEWLINE") this.p++; }
@@ -345,6 +345,8 @@ class Parser {
       else if (this.check("OP", "(")) { e = { type: "CallExpr", callee: e, args: this.parseArgs() }; }
       else if (this.check("OP", "[")) {
         this.next();
+        const saved = this.noRange;
+        this.noRange = true;             // 索引内 1..3 是区间分界，裸区间不在此处解析
         if (this.check("OP", "]")) { this.next(); e = { type: "RangeExpr", obj: e, start: null, end: null }; }
         else if (this.check("OP", "..")) {
           this.next();
@@ -365,8 +367,9 @@ class Parser {
             e = { type: "IndexExpr", obj: e, index: start };
           }
         }
+        this.noRange = saved;
       }
-      else if (this.check("OP", "..")) {
+      else if (this.check("OP", "..") && !this.noRange) {
         // 裸数字区间 0..n（for 循环用；切片区间仍走上面的 "[" 分支）
         this.next();
         const end = this.parseExpr();
