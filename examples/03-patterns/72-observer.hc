@@ -1,0 +1,36 @@
+// 72-observer.hc — 发布/订阅（观察者模式，67 延伸）
+//
+//   - 主题 + 订阅者列表（闭包回调）
+//   - 事件即数据：事件名 + 负载（&[u8]）
+
+class Subject {
+    mut subscribers: Vec(Fn1(&[u8], &[u8]) void),   // (事件, 负载)
+
+    fn subscribe(self: *mut Self, handler: Fn1(&[u8], &[u8]) void) void {
+        self.subscribers.append(handler);
+    }
+
+    fn publish(self: *Self, event: &[u8], payload: &[u8]) void {
+        for (self.subscribers) |h| {
+            h(event, payload);
+        }
+    }
+}
+
+fn main(io: Io) !void {
+    var subject: o Subject = Subject.new(alloc);
+
+    subject.subscribe(|event, payload| io.print("[{}] {}\n", event, payload));
+
+    subject.publish("user.login", "alice");
+    subject.publish("user.logout", "alice");
+}
+
+test "发布订阅" {
+    var subject: o Subject = Subject.new(alloc);
+    var mut received = 0;
+    subject.subscribe(|event, payload| { received += 1; });   // 可写捕获
+    subject.publish("user.login", "alice");
+    subject.publish("user.logout", "alice");
+    try expect_eq(received, 2);
+}
