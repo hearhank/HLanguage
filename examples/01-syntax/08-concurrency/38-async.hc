@@ -6,7 +6,7 @@
 //   - 线程默认执行；事件循环（Evented）为可选运行时
 //   - 并发 await 方向：Go 式协程 + 通道（评审 B2）
 
-async fn fetch_url(url: &[u8], alloc: Allocator) !String {
+async fn fetch_url(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     var conn = try io.net.connect(url);
     defer conn.close();
     var body = try io.net.read_all(&conn, alloc);
@@ -19,7 +19,7 @@ async fn parse_json(data: &[u8]) !JsonValue {
 
 fn main(io: Io) !void {
     // 顺序 await：await 在任何函数可用（阻塞等待线程结果）
-    var body = try await fetch_url("https://example.com", alloc);
+    var body = try await fetch_url(&io, "https://example.com", alloc);
     var value = try await parse_json(body);
     io.print("{}\n", value);
 

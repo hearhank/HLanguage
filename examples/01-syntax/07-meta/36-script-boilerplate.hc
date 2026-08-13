@@ -1,7 +1,7 @@
-// 36-script-boilerplate.hc — 脚本生成样板（A4 机制定前的形态）
+// 36-script-boilerplate.hc — 脚本生成样板（Q23 定案后形态）
 //
 //   - script 块就地替换（Q17）；脚本 = H 核心子集（B1）
-//   - 输入机制（A4：DSL 或 AST 查询）待定——此处示形态
+//   - 输入机制（Q23）：隐式 types 元数据对象；产物 = 代码字符串
 //   - 用途：数据定义 → 序列化/校验样板（Q37/Q38 定制通道）
 
 struct User {
@@ -11,8 +11,8 @@ struct User {
 }
 
 script {
-    // 读取上方 User 定义（A4 机制待定）
-    // 生成（本位置）：
+    var fields = types.fields("User");
+    // 遍历 fields 拼接生成（示意）：
     //   fn user_to_json(u: *User) String { ... }       // 定制：字段映射
     //   fn user_validate(u: *User) !void { ... }       // 校验：age >= 0
     //   fn user_to_bytes(u: *User) o Vec(u8) { ... }   // 递归序列化（含 String 字段）

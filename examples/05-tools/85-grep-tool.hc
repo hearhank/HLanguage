@@ -3,7 +3,7 @@
 //   - 57 目录遍历 + 行读取 + find（47）
 //   - 输出 文件名:行 格式
 
-fn search_file(io: Io, path: &[u8], needle: &[u8]) !i32 {
+fn search_file(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     var data = try io.fs.read_file(path, alloc);
     var text = String.from(data, alloc);
     var lines = text.split('\n');
@@ -27,7 +27,7 @@ fn main(io: Io) !void {
     var total = 0;
     for (entries) |entry| {
         if (!entry.is_dir and entry.name.ends_with(".hc")) {
-            total += try search_file(io, entry.name, needle);
+            total += try search_file(&io, entry.name, needle);
         }
     }
     io.print("{} matches\n", total);

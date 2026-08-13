@@ -5,10 +5,17 @@
 //   - *mut 不可拷贝，只能 move 传递（评审 A5）
 //   - Debug：悬垂访问抛错带位置；Release：裸读（用户负责）
 //   - 只读指针：Debug 默认注册、Release 默认裸读
+// Q18 定案（2026-08-13）：悬垂唯一产生路径 = 引用逃逸到比目标更长寿的容器/全局
+//   （返回值引用被编译期禁止）；容器元素「取指针」不抛错，「解引用访问」才触发检测
+
+fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {
+    var temp: i32 = 7;
+    buf.append(&temp);      // 登记 &temp；fill 返回后 temp 销毁 → 容器内引用被标记悬垂
+}
 
 fn main(io: Io) !void {
     // 唯一写者：同一变量同一时间最多一个 &mut（运行时登记）
-    var mut x: o i32 = 42;
+    var mut x: i32 = 42;
     var w: *mut i32 = &mut x;
     w.* = 100;
     io.print("x = {}\n", x);
@@ -18,11 +25,9 @@ fn main(io: Io) !void {
     var p: *i32 = &x;
     io.print("read via p: {}\n", p.*);
 
-    // 悬垂（Debug 演示）：块内引用指向块外将被销毁的变量
-    {
-        var temp: o i32 = 7;
-        var d: *i32 = &temp;   // 登记到 temp
-        io.print("temp = {}\n", d.*);
-    }   // temp 销毁 → d 被标记悬垂
+    // 悬垂（Debug 演示）：引用逃逸进容器 → 目标销毁 → 解引用抛错
+    var mut buf = Vec(*i32).init(alloc);
+    fill(&mut buf, alloc);
+    var d = buf[0];          // 取出悬垂引用（取指针本身不抛错）
     // io.print("{}\n", d.*);  // Debug：悬垂访问抛错（携带位置）；Release：UB（用户负责）
 }

@@ -9,7 +9,7 @@ struct Config {
 }
 
 fn lookup_port(name: &[u8]) ?i32 {
-    // 查找失败返回 null（optional 显式）
+    return null;   // 草图：查找失败返回 null（optional 显式）
 }
 
 fn main(io: Io) !void {

@@ -1,4 +1,4 @@
-// 52-string-deep.hc — String 方法集（值语义，Q16/Q28）
+// 52-string-deep.hc — String 方法集（= u8[] 别名，Q3；concat 等返回新 String）
 //
 //   - 拼接 concat（Q28 无运算符）；比较 == 内容（Q16）
 //   - split / join / find / substring / replace

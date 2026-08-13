@@ -8,12 +8,12 @@
 
 fn main(io: Io) !void {
     // if 是表达式：作表达式时 else 强制
-    var mut x: o i32 = 7;
+    var mut x: i32 = 7;
     var label: &[u8] = if (x > 5) "big" else "small";
     io.print("{}\n", label);
 
     // while + 续步表达式
-    var mut i: o i32 = 0;
+    var mut i: i32 = 0;
     while (i < 5) : (i += 1) {
         io.print("i = {}\n", i);
     }

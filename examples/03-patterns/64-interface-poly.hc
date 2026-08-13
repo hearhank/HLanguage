@@ -1,6 +1,6 @@
-// 64-interface-poly.hc — 接口使用形态（Q33 定案 2026-08-13）
+// 64-interface-poly.hc — 接口使用形态（Q22/Q22b 定案 2026-08-13）
 //
-//   - 静态路径（主）：fn describe(shape: anytype)——comptime 检查实现 Shape，单态化无虚表
+//   - 静态路径（主）：fn describe(shape: *T) where T: Shape——单态化无虚表
 //   - 异构集合：显式装箱到接口对象（虚表作为装箱一部分，非隐藏）
 //   - 双路径与「方法调用双语」同精神
 
@@ -19,8 +19,8 @@ struct Circle: Shape {
     fn area(self: *Self) f32 { return pi * self.r * self.r; }
 }
 
-// 静态路径：comptime 约束（anytype + Shape 形状检查；bound 语法待细化）
-fn describe(shape: anytype) f32 {
+// 静态路径（主）：接口约束参数（Q22b：where 子句 + 虚拟类型，单态化无虚表）
+fn describe(shape: *T) f32 where T: Shape {
     return shape.area();
 }
 
@@ -38,8 +38,8 @@ fn main(io: Io) !void {
     var circ = Circle{ r = 2.0 };
 
     // 静态路径（单态化，无虚表）
-    io.print("rect = {}\n", describe(rect));
-    io.print("circle = {}\n", describe(circ));
+    io.print("rect = {}\n", describe(&rect));
+    io.print("circle = {}\n", describe(&circ));
 
     // 异构集合：显式装箱
     var shapes: o Vec(*Shape) = Vec(*Shape).init(alloc);

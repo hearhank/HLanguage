@@ -1,12 +1,12 @@
-// 75-transaction.hc — 事务模式（defer/errdefer 组合，24 延伸）
+// 75-transaction.hc — 事务模式（defer/errdefer 组合，22 延伸）
 //
 //   - 成功提交 / 失败回滚（errdefer 仅错误路径）
 //   - 多步写入的一致性（原子替换语义）
 
-fn transfer(io: Io, from: &[u8], to: &[u8], amount: i64) !void {
+fn transfer(io: *T, from: &[u8], to: &[u8], amount: i64) !void where T: Io {
     var log = try io.fs.open("journal.log");
     defer log.close();
-    errdefer io.fs.append("journal.log", "ROLLBACK\n") catch {};
+    errdefer io.fs.append("journal.log", "ROLLBACK\n") catch |_| {};
 
     // 步骤 1：扣款（不足则回滚）
     var a = try io.fs.read_int(from);
@@ -24,6 +24,6 @@ fn transfer(io: Io, from: &[u8], to: &[u8], amount: i64) !void {
 }
 
 fn main(io: Io) !void {
-    try transfer(io, "alice.bal", "bob.bal", 10);
+    try transfer(&io, "alice.bal", "bob.bal", 10);
     io.print("done\n");
 }

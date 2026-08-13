@@ -8,7 +8,7 @@
 
 const FileError = error{ NotFound, PermissionDenied, Io };
 
-fn read_config(io: Io, path: &[u8]) FileError!&[u8] {
+fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     var f = io.fs.open(path) catch |err| switch (err) {
         error.NotFound => return error.NotFound,
         error.PermissionDenied => return error.PermissionDenied,
@@ -19,7 +19,7 @@ fn read_config(io: Io, path: &[u8]) FileError!&[u8] {
 }
 
 fn main(io: Io) !void {
-    var data = read_config(io, "config.txt") catch |err| {
+    var data = read_config(&io, "config.txt") catch |err| {
         io.print("config error: {}\n", err);
         return;
     };

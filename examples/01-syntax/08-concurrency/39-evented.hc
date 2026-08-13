@@ -5,7 +5,7 @@
 //   - 同一套 await 代码在 Threaded（默认）/ Evented 下运行
 //   - await = 阻塞等待（Threaded） vs 协作挂起（Evented），语义一致（双模式承诺）
 
-async fn fetch(io: Io, url: &[u8], alloc: Allocator) !String {
+async fn fetch(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     var body = try io.net.get(url);
     return String.from(body, alloc);
 }
@@ -15,8 +15,8 @@ fn main(io: Io) !void {
     var ev_io = Io.evented(alloc);
 
     // 同一套 async 代码在两种运行时下都可运行
-    var f1 = fetch(ev_io, "https://a.example.com", alloc);
-    var f2 = fetch(ev_io, "https://b.example.com", alloc);
+    var f1 = fetch(&ev_io, "https://a.example.com", alloc);
+    var f2 = fetch(&ev_io, "https://b.example.com", alloc);
     var r1 = try await f1;
     var r2 = try await f2;
     io.print("{} {}\n", r1.len, r2.len);

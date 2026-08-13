@@ -1,4 +1,4 @@
-// 61-json-walk.hc — JSON 值遍历（enum 递归，74 延伸）
+// 61-json-walk.hc — JSON 值遍历（enum 递归，54 延伸）
 //
 //   - JsonValue：enum 负载递归（数组/对象元素也是 JsonValue）
 //   - switch 穷举 + 递归遍历（Q27 switch 表达式）

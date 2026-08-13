@@ -2,7 +2,7 @@
 //
 //   - 综合：切片 + 递归 + enum + error union + arena 回收
 //   - 微型表达式：数字 / 括号嵌套（语法可扩展 + -）
-//   - AST 节点从 arena 分配（统一回收，Q37）——避开复杂所有权链接
+//   - AST 节点从 arena 分配（统一回收，49 延伸）——避开复杂所有权链接
 
 const ParseError = error{ UnexpectedToken, UnexpectedEnd };
 
@@ -17,13 +17,13 @@ class Node {                     // AST 节点
     // left/right 扩展后启用（arena 持有）
 }
 
-fn parse(io: Io, data: &[u8], pos: *usize, arena: *Arena) ParseError!*Node {
+fn parse(io: *T, data: &[u8], pos: *usize, arena: *Arena) ParseError!*Node where T: Io {
     skip_space(data, pos);
     var c = peek(data, pos) orelse return error.UnexpectedEnd;
 
     if (c == '(') {
         advance(data, pos);
-        var inner = try parse(io, data, pos, arena);      // 递归
+        var inner = try parse(&io, data, pos, arena);      // 递归
         expect(data, pos, ')') catch return error.UnexpectedToken;
         return inner;
     }
@@ -46,6 +46,6 @@ fn main(io: Io) !void {
     var arena = Arena.init(alloc);
     var pos = 0;
 
-    var node = try parse(io, "(5)", &pos, &arena);
+    var node = try parse(&io, "(5)", &pos, &arena);
     io.print("result = {}\n", eval(node));
 }

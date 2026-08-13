@@ -5,7 +5,7 @@
 //   - 安全性由运行时登记统一承担（双向注册、Debug 悬垂检测）
 
 fn main(io: Io) !void {
-    var mut x: o i32 = 42;
+    var mut x: i32 = 42;
     var p: *i32 = &x;           // 只读指针（& 对只读/可写变量均合法，读权限可降级）
     var w: *mut i32 = &mut x;   // 可写指针（&mut 仅对 var mut 变量合法）
 

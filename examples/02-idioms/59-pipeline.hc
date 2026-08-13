@@ -3,7 +3,7 @@
 //   - 函数链：数据流经管道（每步一个函数）
 //   - 综合：io.fs / 迭代器链 / parse
 
-fn read_numbers(io: Io, path: &[u8]) !Vec(i32) {
+fn read_numbers(io: *T, path: &[u8]) !Vec(i32) where T: Io {
     var data = try io.fs.read_file(path, alloc);
     var nums = Vec(i32).init(alloc);
     var parts = String.from(data, alloc).split(',');
@@ -21,7 +21,7 @@ fn transform(nums: &Vec(i32)) Vec(i32) {
 
 fn main(io: Io) !void {
     // 管道：读 → 变换 → 汇总
-    var nums = try read_numbers(io, "data.txt");
+    var nums = try read_numbers(&io, "data.txt");
     var evens = transform(&nums);
 
     var sum = 0;

@@ -8,7 +8,7 @@ interface Drawable {
 }
 
 interface Saveable {
-    fn save(self: *Self, io: Io) !void;
+    fn save(self: *Self, io: *T) !void where T: Io;
 }
 
 class Paragraph {
@@ -30,7 +30,7 @@ class Document: Drawable, Saveable {
         }
     }
 
-    fn save(self: *Self, io: Io) !void {
+    fn save(self: *Self, io: *T) !void where T: Io {
         // 保存逻辑（序列化 + 落盘）
     }
 }

@@ -2,7 +2,7 @@
 //
 //   - 标量/纯值 struct：赋值即复制（值语义）
 //   - 数组/集合/复杂类型：引用类型——复制需显式 copy（B3）
-//   - String：值语义例外（Q16，赋值即深拷贝）
+//   - String = u8[] 别名（Q3）：赋值别名共享（Q3c），深拷贝需显式 copy
 
 struct Point {
     mut x: f32,
@@ -29,9 +29,9 @@ fn main(io: Io) !void {
     v2.append(2);
     io.print("v1 len = {}, v2 len = {}\n", v1.len, v2.len);
 
-    // String：值语义（Q16）
+    // String = u8[] 别名（Q3/Q3c）：赋值别名共享；concat 返回新 String
     var s1 = String.from("hi", alloc);
-    var s2 = s1;                     // 赋值即深拷贝
-    var s3 = s2.concat("!");
-    io.print("{} {}\n", s1, s3);     // s1 不变
+    var s2 = s1;                     // 别名共享（s1 保持唯一拥有）
+    var s3 = s2.concat("!");         // concat 返回新 String
+    io.print("{} {}\n", s1, s3);     // s1 未变
 }

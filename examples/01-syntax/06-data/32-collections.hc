@@ -4,9 +4,9 @@
 //   - Vec(i32) 是 comptime 类型应用；构造 = 普通函数（12.20）
 //   - 字符串字面量保持 &[u8] 静态切片；String.from(&[u8]) 显式转换（分配是显式动作）
 //
-// Q16 定案（2026-08-13）：所有权默认 + String 值语义
+// Q16 定案（2026-08-13）：所有权默认 + String = u8[] 别名（Q3 修订）
 //   - 复杂类型（分配器创建）除 Arena 外默认拥有——作用域退出自动销毁（无需显式 o/deinit）
-//   - String 默认值复制（传参深拷贝语义）
+//   - String = u8[] 别名（Q3）：引用类型、赋值别名共享（Q3c）、复制需显式 copy
 
 fn main(io: Io) !void {
     // Vec：构造 + 追加（非 arena 分配器 → 默认拥有，作用域退出自动销毁）
@@ -27,8 +27,8 @@ fn main(io: Io) !void {
     m.put("apple", 5);
     io.print("apple = {}\n", m.get("apple").?);
 
-    // String：从静态切片显式转换（分配 + 复制）；值复制语义
+    // String = u8[] 别名（Q3）：从静态切片显式转换；赋值 = 别名共享（Q3c）
     var name = String.from("hello", alloc);
-    var name2 = name;   // 值复制（深拷贝语义）
+    var name2 = name;   // 别名共享（深拷贝需显式 copy）
     io.print("{}\n", name2);
 }

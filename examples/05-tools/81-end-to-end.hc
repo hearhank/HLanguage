@@ -15,15 +15,16 @@ enum OrderStatus {
     cancelled,
 }
 
-// 脚本生成：序列化/反序列化/校验样板（就地替换本块，A4 机制待细化）
+// 脚本生成：序列化/反序列化/校验样板（Q23：types 元数据输入，就地替换本块）
 script {
-    // 生成（本位置）：
+    var fields = types.fields("Order");
+    // 遍历 fields 拼接生成（示意）：
     //   fn order_to_bytes(o: *Order) o Vec(u8) { ... }
     //   fn order_from_bytes(data: &[u8]) !Order { ... }
     //   fn order_validate(o: *Order) !void { ... }
 }
 
-fn handle_order(io: Io, conn: *TcpConn) !void {
+fn handle_order(io: *T, conn: *TcpConn) !void where T: Io {
     // 传输：接收长度前缀帧
     var data = try io.net.read_frame(&conn, alloc);
 
@@ -53,6 +54,6 @@ fn main(io: Io) !void {
 
     while (true) {                 // 无 loop 关键字（12.7）
         var conn = try io.net.accept(&server);
-        try handle_order(io, &conn);
+        try handle_order(&io, &conn);
     }
 }

@@ -1,7 +1,7 @@
 // 46-recursion.hc — 递归与树算法
 //
 //   - 递归函数（fib）
-//   - tree 复杂类型（12.20/16-class）+ 递归遍历
+//   - tree 复杂类型（12.20/31-class）+ 递归遍历
 
 fn fib(n: i32) i32 {
     if (n < 2) {

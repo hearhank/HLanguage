@@ -12,7 +12,7 @@ enum Value {
 }
 
 fn parse_int(s: &[u8]) ?i32 {
-    // 解析失败返回 null（optional 显式解包）
+    return null;   // 草图：解析失败返回 null（optional 显式解包）
 }
 
 fn main(io: Io) !void {

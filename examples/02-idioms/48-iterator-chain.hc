@@ -17,7 +17,7 @@ fn main(io: Io) !void {
     }
     io.print("total = {}\n", total);
 
-    // 字符串变换（String 值语义，Q16）
+    // 字符串变换（String = u8[] 别名，Q3）
     var names = ["alice", "bob", "carol"];
     var upper = names.iter().map(|n| n.to_upper());
     for (upper) |n| {

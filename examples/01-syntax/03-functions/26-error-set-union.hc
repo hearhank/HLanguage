@@ -7,13 +7,13 @@ const FileError = error{ NotFound, PermissionDenied };
 const ParseError = error{ InvalidFormat };
 const CombinedError = FileError || ParseError;   // 错误集联合
 
-fn load_config(io: Io, path: &[u8]) CombinedError!Config {
+fn load_config(io: *T, path: &[u8]) CombinedError!Config where T: Io {
     var data = io.fs.read_file(path) catch return error.NotFound;
     return Config.from_json(data) catch return error.InvalidFormat;
 }
 
 fn main(io: Io) !void {
-    var cfg = load_config(io, "app.json") catch |err| {
+    var cfg = load_config(&io, "app.json") catch |err| {
         io.print("failed: {}\n", err);
         return;
     };
