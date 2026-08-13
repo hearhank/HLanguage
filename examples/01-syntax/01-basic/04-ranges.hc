@@ -23,3 +23,20 @@ fn main(io: Io) !void {
         io.print("arr[{}] = {}\n", idx, arr[idx]);
     }
 }
+
+test "for 区间和" {
+    var sum = 0;
+    for (0..10) |i| {
+        sum += i;
+    }
+    try expect_eq(sum, 45);
+}
+
+test "下标迭代" {
+    var arr = [10, 20, 30];
+    var total = 0;
+    for (0..arr.len) |idx| {
+        total += arr[idx];
+    }
+    try expect_eq(total, 60);
+}

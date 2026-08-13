@@ -19,3 +19,17 @@ fn main(io: Io) !void {
     var b = String.from("abc", alloc);
     io.print("equal = {}\n", a == b);
 }
+
+test "字符串拼接" {
+    var name = String.from("alice", alloc);
+    var greeting = String.from("hello, ", alloc).concat(name);
+    try expect_eq_slices(greeting.to_bytes(), "hello, alice");
+    var g2 = String.concat(greeting, String.from("!", alloc));
+    try expect_eq_slices(g2.to_bytes(), "hello, alice!");
+}
+
+test "== 内容比较" {
+    var a = String.from("abc", alloc);
+    var b = String.from("abc", alloc);
+    try expect_eq(a == b, true);
+}

@@ -26,3 +26,12 @@ fn main(io: Io) !void {
     io.print("find 7: {}\n", binary_search(&sorted, 7) orelse -1);
     io.print("find 6: {}\n", binary_search(&sorted, 6) orelse -1);
 }
+
+test "二分查找命中与未命中" {
+    var sorted = [1, 3, 5, 7, 9, 11];
+    try expect_eq(binary_search(&sorted, 7).?, 3);
+    try expect_eq(binary_search(&sorted, 1).?, 0);
+    try expect_eq(binary_search(&sorted, 11).?, 5);
+    try expect_eq(binary_search(&sorted, 6) orelse 0, 0);
+    try expect_eq(binary_search(&sorted, 12) orelse 0, 0);
+}

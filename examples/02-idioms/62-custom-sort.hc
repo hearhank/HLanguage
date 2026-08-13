@@ -24,3 +24,13 @@ fn main(io: Io) !void {
         io.print("{}: {}\n", p.name, p.age);
     }
 }
+
+test "自定义比较器排序" {
+    var people = Vec(Person).init(alloc);
+    people.append(Person{ name = String.from("alice", alloc), age = 30 });
+    people.append(Person{ name = String.from("bob", alloc), age = 25 });
+    people.append(Person{ name = String.from("carol", alloc), age = 35 });
+    sort(&mut people, |a, b| a.age - b.age);   // 按年龄升序
+    try expect_eq(people[0].age, 25);   // bob
+    try expect_eq(people[2].age, 35);   // carol
+}

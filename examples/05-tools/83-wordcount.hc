@@ -21,4 +21,10 @@ fn main(io: Io) !void {
     for (counts) |kv| {
         io.print("{}: {}\n", kv.key, kv.value);
     }
+
+    test "词频统计（演示）" {
+        // S4 演示型（Q-T6）：读取 input.txt（外部文件依赖），不在测试中执行；
+        // 统计逻辑等价断言见 32-collections / 53-map-deep
+        try expect(true);
+    }
 }

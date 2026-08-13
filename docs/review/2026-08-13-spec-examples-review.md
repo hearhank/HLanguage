@@ -125,6 +125,15 @@
 - **Q27 一致性小修**：06 特性数 25→26；6 处示例编号引用修正；17/18 空函数体补 `return null`；04 新增「示例 API 清单」基线表。
 - **Q28 M3.0 脚本 VM 子集**：单线程解释器 = 词法/解析 + 求值 + 作用域所有权 + defer + 错误处理 + 集合/String + `types` 元数据；**延迟项**：引用双向登记、唯一写者、多线程/async（脚本内引用不检测）；脚本执行不受 M4 阻塞，M3/M4 可并行。
 
+### 测试功能（Q-T1~Q-T6，2026-08-13 追加）
+
+- **Q-T1 断言 API 五件套**（归 std.debug、测试块内隐式可用）：`expect(cond)` / `expect_eq(a, b)`（失败输出期望 vs 实际）/ `expect_neq` / `expect_error(e, expr)` / `expect_eq_slices`（长度 + 首个差异位置）；`expect_eq` 支持 `==` 可比较类型（含 String 内容比较）；均 `anyerror!void`。
+- **Q-T2 输出与统计**：逐测试 `[PASS]/[FAIL]/[SKIP] 文件::测试`；FAIL 附错误类型 + 位置（Debug 附期望 vs 实际）；汇总 `N passed, M failed, K skipped (耗时)`；失败数 > 0 → 非零退出码；失败不中止（按文件分组，全跑完汇总）。
+- **Q-T3 隔离/执行/跳过**：test 块独立作用域（退出自动销毁）；1.0 默认串行（并发留 1.x）；`return error.SkipTest;` → SKIP。
+- **Q-T4 测试环境**：test 块内隐式 `test_io`（独立 `Io.threaded()` 实例，每测试创建/销毁）+ `alloc`；IO 测试默认真实执行。
+- **Q-T5 双模式测试**：`hc test` 默认脚本模式；`--mode=compile` 编译模式跑同一套（M5 一致性套件交叉验证）；两模式语法/断言/统计完全一致。
+- **Q-T6 示例测试形态**：S1 纯逻辑断言 / S2 main smoke（`try main(test_io);`）/ S3 局部逻辑（IO/网络示例测纯逻辑，不真跑网络）/ S4 演示标注（依赖外部环境，注释「断言留 1.x」）；输出不捕获（1.0）；85 示例 + math.hc 全部具备至少 1 个 test 块。
+
 ## 四、遗留开放问题（未覆盖）
 
 以下条目本轮未触及，保留在 `05-open-questions-and-risks.md`：

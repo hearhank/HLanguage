@@ -57,3 +57,9 @@ fn main(io: Io) !void {
         try handle_order(&io, &conn);
     }
 }
+
+test "端到端（演示）" {
+    // S4 演示型（Q-T6）：81 为 TCP 服务（listen 8080），且序列化样板由脚本生成（未展开）；
+    // 端到端验收在 M7 以真实网络运行（04-stdlib-scope 端到端基准）
+    try expect(true);
+}

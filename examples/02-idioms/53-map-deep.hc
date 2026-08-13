@@ -21,3 +21,17 @@ fn main(io: Io) !void {
     m.remove("apple");
     io.print("size = {}\n", m.len);
 }
+
+test "Map 遍历与删除" {
+    var m = Map(&[u8], i32).init(alloc);
+    m.put("apple", 5);
+    m.put("banana", 7);
+    var total = 0;
+    for (m) |kv| {
+        total += kv.value;
+    }
+    try expect_eq(total, 12);
+    m.remove("apple");
+    try expect_eq(m.len, 1);
+    try expect(!m.contains("apple"));
+}

@@ -21,3 +21,18 @@ fn main(io: Io) !void {
     // 唯一写者：同一变量同一时间最多一个 &mut（运行时登记）
     // var w2: *mut i32 = &mut x;  // 运行时错误！x 已有写者 w（携带位置）
 }
+
+test "指针读写与降级" {
+    var mut x: i32 = 42;
+    var p: *i32 = &x;
+    var w: *mut i32 = &mut x;
+    w.* = 100;
+    try expect_eq(p.*, 100);   // 读权限可降级：& 与 &mut 共存
+    try expect_eq(x, 100);
+}
+
+test "自动解引用索引" {
+    var arr = [1, 2, 3];
+    var sp: *[3]i32 = &arr;
+    try expect_eq(sp[1], 2);
+}

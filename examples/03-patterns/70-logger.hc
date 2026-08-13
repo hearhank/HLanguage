@@ -37,3 +37,12 @@ fn main(io: Io) !void {
     logger.log(&io, Level.info, "started");
     logger.log(&io, Level.error, "boom");
 }
+
+test "日志级别" {
+    var logger: o Logger = Logger.new(alloc);
+    logger.min_level = Level.info;
+    try expect_eq(level_rank(Level.error), 3);
+    try expect_eq(level_rank(Level.debug), 0);
+    // log 输出到 stdout（不捕获，Q-T6）；级别过滤由 level_rank 断言覆盖
+    try expect(level_rank(Level.info) >= level_rank(logger.min_level));
+}

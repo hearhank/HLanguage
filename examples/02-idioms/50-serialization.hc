@@ -34,3 +34,20 @@ fn main(io: Io) !void {
     var order2 = try Order.from_json(json);
     io.print("id = {}\n", order2.id);
 }
+
+test "struct ↔ bytes" {
+    var p = Point{ x = 1.0, y = 2.0 };
+    var bytes: &[u8] = p.to_bytes();
+    try expect_eq(bytes.len, 8);   // 两个 f32（POD 直映射）
+    var p2 = try Point.from_bytes(bytes);
+    try expect_eq(p2.x, 1.0);
+    try expect_eq(p2.y, 2.0);
+}
+
+test "class ↔ JSON" {
+    var mut order: o Order = Order.new(alloc);
+    order.id = 42;
+    var json = order.to_json();
+    var order2 = try Order.from_json(json);
+    try expect_eq(order2.id, 42);
+}

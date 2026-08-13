@@ -53,3 +53,16 @@ fn main(io: Io) !void {
     var doc = JsonValue{object = pairs};
     io.print("strings = {}\n", count_strings(&doc));   // 2
 }
+
+test "JSON 遍历计数" {
+    var arr = Vec(JsonValue).init(alloc);
+    arr.append(JsonValue{number = 1.0});
+    arr.append(JsonValue{string = String.from("y", alloc)});
+
+    var pairs = Vec(JsonPair).init(alloc);
+    pairs.append(JsonPair{ key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)} });
+    pairs.append(JsonPair{ key = String.from("list", alloc), value = JsonValue{array = arr} });
+
+    var doc = JsonValue{object = pairs};
+    try expect_eq(count_strings(&doc), 2);   // "x" + "y"
+}

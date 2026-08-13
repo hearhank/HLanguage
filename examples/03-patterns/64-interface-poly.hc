@@ -47,3 +47,20 @@ fn main(io: Io) !void {
     shapes.append(box(circ, alloc));
     io.print("total = {}\n", total_area(&shapes));
 }
+
+test "静态路径单态化" {
+    var rect = Rect{ w = 3.0, h = 4.0 };
+    var circ = Circle{ r = 2.0 };
+    try expect(describe(&rect) > 11.99 and describe(&rect) < 12.01);
+    try expect(describe(&circ) > 12.56 and describe(&circ) < 12.57);
+}
+
+test "异构集合装箱" {
+    var rect = Rect{ w = 3.0, h = 4.0 };
+    var circ = Circle{ r = 2.0 };
+    var shapes: o Vec(*Shape) = Vec(*Shape).init(alloc);
+    shapes.append(box(rect, alloc));
+    shapes.append(box(circ, alloc));
+    var total = total_area(&shapes);
+    try expect(total > 24.55 and total < 24.57);   // 12 + 4π ≈ 24.566
+}

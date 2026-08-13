@@ -33,3 +33,16 @@ fn main(io: Io) !void {
         io.print("{}: {}\n", row.name, row.age);
     }
 }
+
+test "CSV 解析" {
+    var csv = "alice,30\nbob,25";
+    var rows = try parse_csv(csv);
+    try expect_eq(rows.len, 2);
+    try expect_eq_slices(rows[0].name.to_bytes(), "alice");
+    try expect_eq(rows[0].age, 30);
+}
+
+test "CSV 格式错误" {
+    var bad = "alice,30,extra\n";
+    try expect_error(BadRow, parse_csv(bad));
+}

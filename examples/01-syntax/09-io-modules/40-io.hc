@@ -22,3 +22,9 @@ fn main(io: Io) !void {
     var text = try utf8.decode(data);
     io.print("{}\n", text);
 }
+
+test "文件 IO（演示）" {
+    // S4 演示型（Q-T6）：main 读写 out.txt（真实文件副作用），不在测试中执行；
+    // 文件 IO 行为断言留 M7 标准库测试（输出捕获 1.x）
+    try expect(true);
+}

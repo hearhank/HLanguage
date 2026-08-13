@@ -19,3 +19,8 @@ fn main(io: Io) !void {
     };
     io.print("loaded\n");
 }
+
+test "错误集联合" {
+    // CombinedError = FileError || ParseError（组合契约）；真实 IO：文件缺失 → NotFound
+    try expect_error(NotFound, load_config(test_io, "app.json"));
+}

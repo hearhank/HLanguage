@@ -37,3 +37,25 @@ fn main(io: Io) !void {
     var total = await fut;
     io.print("total = {}\n", total);
 }
+
+test "Thread 接口" {
+    var t: o Thread(i32) = spawn(worker, 9);
+    var r = try t.join();
+    try expect_eq(r, 81);
+}
+
+test "四模式类型" {
+    var s1 = OneToOne(i32).init(alloc);
+    s1.write(2);
+    try expect_eq(s1.read(), 2);
+    var s4 = ManyToMany(i32).init(alloc);
+    s4.write(1);
+    try expect_eq(s4.read(), 1);
+}
+
+test "async 作用域绑定" {
+    var base = 5;
+    var fut: Future(i32) = async_add(&base, 10);
+    var total = await fut;   // 冻结窗口：await 前 base 不可写（Q19）
+    try expect_eq(total, 15);
+}

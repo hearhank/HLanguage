@@ -33,3 +33,12 @@ fn main(io: Io) !void {
     bus.emit("key");
     io.print("handled {} events\n", count);
 }
+
+test "事件回调" {
+    var bus: o EventBus = EventBus.new(alloc);
+    var mut count = 0;
+    bus.on(mut |event| { count += 1; });   // 可写捕获（Q26：双向登记）
+    bus.emit("click");
+    bus.emit("key");
+    try expect_eq(count, 2);
+}

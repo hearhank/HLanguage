@@ -14,3 +14,11 @@ fn main(io: Io) !void {
     var total = Orders.total(&lines);
     io.print("total = {}\n", total);
 }
+
+test "多文件项目" {
+    var lines = Vec(Orders.Line).init(alloc);
+    lines.append(Orders.Line{ item = String.from("apple", alloc), price = 3.0 });
+    lines.append(Orders.Line{ item = String.from("banana", alloc), price = 2.0 });
+    var total = Orders.total(&lines);
+    try expect(total > 5.49 and total < 5.51);
+}

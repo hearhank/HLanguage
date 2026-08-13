@@ -47,3 +47,25 @@ fn main(io: Io) !void {
     };
     io.print("{}\n", label);
 }
+
+test "orelse 默认值" {
+    var n = parse_int("42") orelse 0;   // 草图实现返回 null → 默认值
+    try expect_eq(n, 0);
+}
+
+test "optional 捕获" {
+    var maybe = parse_int("abc");
+    var n = if (maybe) |v| v else 0;
+    try expect_eq(n, 0);
+}
+
+test "switch 表达式穷举" {
+    var dir = Direction.east;
+    var dx = switch (dir) {
+        Direction.north => 0,
+        Direction.east => 1,
+        Direction.south => 0,
+        Direction.west => -1,
+    };
+    try expect_eq(dx, 1);
+}

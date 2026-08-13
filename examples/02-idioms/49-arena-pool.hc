@@ -17,3 +17,12 @@ fn main(io: Io) !void {
     var arena = Arena.init(alloc);   // 默认拥有，退出自动统一回收
     try handle_request(&io, &arena);
 }
+
+test "arena 统一回收" {
+    var arena = Arena.init(alloc);
+    var buf = arena.alloc(1024);
+    try expect_eq(buf.len, 1024);
+    var text = String.from_slice(&buf, arena);
+    try expect_eq(text.len, 1024);
+    // 函数结束：arena 统一回收（buf/text 不各自销毁）
+}

@@ -86,6 +86,8 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - `json.parse(data)` / `Order.from_json(data)`（class 序列化分层）
 - `utf8.decode(data)`；`math.nan(f64)` / `math.inf(f32)` / `math.inf_neg(f64)`（类型参数 comptime 式）
 - 待定归属：`fmt_int(i32) String`、`parse_int(&[u8]) ?i32`、`min(a, b)`、`sqrt(x)`、`read_u64_le(&[u8]) u64`（57 使用）
+- `debug` 断言（Q-T1 定案，测试块内隐式可用）：`expect(cond)` / `expect_eq(a, b)` / `expect_neq(a, b)` / `expect_error(e, expr)` / `expect_eq_slices(a, b)`——均 `anyerror!void`
+- `test_io`（Q-T4 定案：test 块内隐式注入的 `Io.threaded()` 实例，每次测试独立创建/销毁）
 
 ### 并发（12.21/12.24/Q14/Q20）
 

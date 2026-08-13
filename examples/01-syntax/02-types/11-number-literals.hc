@@ -15,3 +15,16 @@ fn main(io: Io) !void {
     io.print("{x} {} {} {} {}\n", hex, bin, oct, big, sci);
     io.print("{b}\n", speed);
 }
+
+test "进制字面量" {
+    var hex: u32 = 0xFF;
+    var bin: u8 = 0b1010;
+    var oct: i32 = 0o17;
+    var big = 1_000_000;
+    var sci = 1.5e9;
+    try expect_eq(hex, 255);
+    try expect_eq(bin, 10);
+    try expect_eq(oct, 15);
+    try expect_eq(big, 1000000);
+    try expect(sci > 1.49e9 and sci < 1.51e9);
+}

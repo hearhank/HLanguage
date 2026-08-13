@@ -31,3 +31,11 @@ fn main(io: Io) !void {
     var d = buf[0];          // 取出悬垂引用（取指针本身不抛错）
     // io.print("{}\n", d.*);  // Debug：悬垂访问抛错（携带位置）；Release：UB（用户负责）
 }
+
+test "悬垂标记但不访问" {
+    // Debug：fill 返回后 temp 已销毁 → buf[0] 的引用被标记悬垂；
+    // 解引用访问（d.*）会抛错带位置——本测试不触发访问（触发演示见主程序注释）
+    var mut buf = Vec(*i32).init(alloc);
+    fill(&mut buf, alloc);
+    try expect_eq(buf.len, 1);   // 引用被登记并标记，但取出/持有不抛错
+}

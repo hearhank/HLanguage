@@ -35,3 +35,32 @@ fn main(io: Io) !void {
     var s3 = s2.concat("!");         // concat 返回新 String
     io.print("{} {}\n", s1, s3);     // s1 未变
 }
+
+test "标量与纯值 struct 复制" {
+    var a: i32 = 5;
+    var b = a;
+    b = 10;
+    try expect_eq(a, 5);   // 原值不变
+
+    var p1 = Point{ x = 1.0, y = 2.0 };
+    var mut p2 = p1;
+    p2.x = 99.0;
+    try expect_eq(p1.x, 1.0);   // 复制互不影响
+}
+
+test "集合显式 copy" {
+    var v1 = Vec(i32).init(alloc);
+    v1.append(1);
+    var v2 = copy(&v1);   // 显式深拷贝（B3）
+    v2.append(2);
+    try expect_eq(v1.len, 1);
+    try expect_eq(v2.len, 2);
+}
+
+test "String 别名共享" {
+    var s1 = String.from("hi", alloc);
+    var s2 = s1;   // 别名共享（Q3c）：不复制
+    var s3 = s2.concat("!");   // concat 返回新 String
+    try expect_eq_slices(s1.to_bytes(), "hi");   // 原变量未变
+    try expect_eq_slices(s3.to_bytes(), "hi!");
+}

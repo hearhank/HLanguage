@@ -25,3 +25,9 @@ fn main(io: Io) !void {
     }
     io.print("total bytes = {}\n", total);
 }
+
+test "异步批处理（演示）" {
+    // S4 演示型（Q-T6）：fetch 依赖真实网络，不在测试中执行；
+    // Future 并行发起/汇总断言留 M5 运行时测试
+    try expect(true);
+}

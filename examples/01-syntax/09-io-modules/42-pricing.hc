@@ -8,3 +8,8 @@ namespace Pricing {
         return price * (1.0 + rate);
     }
 }
+
+test "Pricing.with_tax" {
+    var total = Pricing.with_tax(100.0, 0.1);
+    try expect(total > 109.99 and total < 110.01);
+}

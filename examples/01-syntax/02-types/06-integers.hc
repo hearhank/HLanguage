@@ -23,3 +23,14 @@ fn main(io: Io) !void {
     var sum = a + d;
     io.print("{} {} {} {} {} {}\n", a, b, c, d, e, sum);
 }
+
+test "字面量定型与后缀" {
+    var a: i32 = 42;
+    var d = 42i32;
+    var sum = a + d;
+    try expect_eq(sum, 84);
+    var e = 255u8;
+    try expect_eq(e, 255);
+    var f = -1isize;
+    try expect_eq(f, -1);
+}

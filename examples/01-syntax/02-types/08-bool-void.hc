@@ -17,3 +17,11 @@ fn main(io: Io) !void {
     io.print("{} {} {}\n", is_valid(10, 5), ready, neg);
     io.print("safe = {}\n", is_valid(0, 5));   // 短路保护：不会除零
 }
+
+test "短路求值" {
+    try expect(is_valid(10, 5));
+    try expect(!is_valid(0, 5));     // 短路：x == 0 时不求值 (100 / x)
+    try expect(is_valid(0, -1) == false);
+    try expect((1 > 0) or (2 > 5));  // or：左边为 true 则右边不求值
+    try expect(!(1 > 0) == false);
+}

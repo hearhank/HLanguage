@@ -30,3 +30,17 @@ fn main(io: Io) !void {
     }
     io.print("even*10 sum = {}\n", sum);
 }
+
+test "数据管道变换" {
+    var nums = Vec(i32).init(alloc);
+    nums.append(1);
+    nums.append(2);
+    nums.append(3);
+    nums.append(4);
+    var evens = transform(&nums);
+    var sum = 0;
+    for (evens) |n| {
+        sum += n;
+    }
+    try expect_eq(sum, 60);   // (2 + 4) × 10
+}

@@ -30,3 +30,19 @@ fn main(io: Io) !void {
     // 锯齿：编译期报错（内层长度不一致；锯齿数据用 Vec(&[i32])）
     // var bad = [[1, 2], [3, 4, 5]];  // 错误（Q42）
 }
+
+test "多维数组" {
+    var grid = [[1, 2], [3, 4]];
+    try expect_eq(grid[1][0], 3);
+    try expect_eq(grid.len, 2);
+}
+
+test "sum_row" {
+    var flat = [1, 2, 3];
+    try expect_eq(sum_row(&flat), 6);
+}
+
+test "显式类型" {
+    var matrix: [2][2]i32 = [[5, 6], [7, 8]];
+    try expect_eq(matrix[0][1], 6);
+}

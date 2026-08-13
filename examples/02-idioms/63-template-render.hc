@@ -14,3 +14,10 @@ fn main(io: Io) !void {
     var out = render(tmpl, "alice", 30);
     io.print("{}\n", out);
 }
+
+test "模板渲染" {
+    var tmpl = "Hello, {{name}}! You are {{age}} years old.";
+    var out = render(tmpl, "alice", 30);
+    try expect(out.find("alice") != null);      // 值已替换进去
+    try expect(out.find("{{name}}") == null);   // 占位符已替换
+}

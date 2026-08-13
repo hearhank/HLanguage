@@ -26,3 +26,10 @@ fn main(io: Io) !void {
 
     io.print("limit = {}\n", q.limit_n);
 }
+
+test "builder 链式调用" {
+    var mut q: o Query = Query.new(alloc);
+    q.where("age > 18").limit(10);   // 链：*mut 资格延续（Q25）
+    try expect_eq_slices(q.where_clause.to_bytes(), "age > 18");
+    try expect_eq(q.limit_n, 10);
+}

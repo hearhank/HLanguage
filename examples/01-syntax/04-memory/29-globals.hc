@@ -10,3 +10,8 @@ global MAX_RETRIES: i32 = 3;
 fn main(io: Io) !void {
     io.print("{} retries = {}\n", APP_NAME, MAX_RETRIES);
 }
+
+test "global 常量" {
+    try expect_eq_slices(APP_NAME, "h");
+    try expect_eq(MAX_RETRIES, 3);
+}

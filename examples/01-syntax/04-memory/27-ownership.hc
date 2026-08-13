@@ -36,3 +36,19 @@ fn main(io: Io) !void {
     var buf = arena.alloc(64);
     // take(io, move buf);  // 错误！无 o 变量禁止 move（move 须对整个 arena）
 }
+
+test "move 进函数" {
+    var s1 = String.from("hello", alloc);
+    take(&test_io, move s1);   // 转移后 s1 不可再用
+}
+
+test "move 返回" {
+    var s2 = make();
+    try expect_eq(s2.len, 4);   // "made"
+}
+
+test "借用不转移所有权" {
+    var s2 = String.from("borrow", alloc);
+    borrow(&test_io, &s2);
+    try expect_eq(s2.len, 6);   // 借用后仍可用
+}

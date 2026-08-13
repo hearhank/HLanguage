@@ -28,3 +28,11 @@ fn main(io: Io) !void {
     var failed = HttpState{failed = "timeout"};
     io.print("{}\n", describe(failed));
 }
+
+test "状态机描述" {
+    var state = HttpState{connecting = 3};
+    try expect_eq_slices(describe(state), "connecting");
+    var failed = HttpState{failed = "timeout"};
+    try expect_eq_slices(describe(failed), "failed");
+    try expect_eq_slices(describe(HttpState.done), "done");
+}

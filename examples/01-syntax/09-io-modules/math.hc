@@ -14,3 +14,8 @@ namespace Math {
         return x + 1;   // 包内私有（无 pub）
     }
 }
+
+test "Math.square" {
+    try expect_eq(Math.square(5), 25);
+    try expect_eq(Math.square(-3), 9);
+}

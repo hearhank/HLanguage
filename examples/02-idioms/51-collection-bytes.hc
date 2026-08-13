@@ -23,3 +23,19 @@ fn main(io: Io) !void {
     var s_bytes = s.to_bytes();
     io.print("s bytes = {}\n", s_bytes.len);
 }
+
+test "集合二进制序列化" {
+    var v = Vec(i32).init(alloc);
+    v.append(1);
+    v.append(2);
+    v.append(3);
+    var bytes = v.to_bytes();
+    try expect_eq(bytes.len, 8 + 12);   // u64 前缀 + 3 × i32
+    var v2 = try Vec(i32).from_bytes(bytes);
+    try expect_eq(v2.len, 3);
+}
+
+test "String 字节" {
+    var s = String.from("hello", alloc);
+    try expect_eq(s.to_bytes().len, 5);
+}

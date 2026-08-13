@@ -25,3 +25,12 @@ fn main(io: Io) !void {
     subject.publish("user.login", "alice");
     subject.publish("user.logout", "alice");
 }
+
+test "发布订阅" {
+    var subject: o Subject = Subject.new(alloc);
+    var mut received = 0;
+    subject.subscribe(|event, payload| { received += 1; });   // 可写捕获
+    subject.publish("user.login", "alice");
+    subject.publish("user.logout", "alice");
+    try expect_eq(received, 2);
+}

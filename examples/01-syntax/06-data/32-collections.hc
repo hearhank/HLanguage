@@ -32,3 +32,30 @@ fn main(io: Io) !void {
     var name2 = name;   // 别名共享（深拷贝需显式 copy）
     io.print("{}\n", name2);
 }
+
+test "Vec 追加与迭代" {
+    var v = Vec(i32).init(alloc);
+    v.append(1);
+    v.append(2);
+    v.append(3);
+    var sum = 0;
+    for (v) |item| {
+        sum += item;
+    }
+    try expect_eq(sum, 6);
+}
+
+test "Map 键值操作" {
+    var m = Map(&[u8], i32).init(alloc);
+    m.put("apple", 5);
+    try expect_eq(m.get("apple").?, 5);
+    try expect(m.contains("apple"));
+    try expect(!m.contains("pear"));
+}
+
+test "String 别名共享" {
+    var name = String.from("hello", alloc);
+    var name2 = name;   // 别名共享（Q3c）：不复制
+    try expect_eq_slices(name2.to_bytes(), "hello");
+    try expect_eq_slices(name.to_bytes(), "hello");   // 原变量仍可用
+}

@@ -31,4 +31,15 @@ fn main(io: Io) !void {
     for (0..5) |_| {
         io.print("allowed = {}\n", bucket.allow(io));
     }
+
+    test "令牌桶" {
+        var bucket: o TokenBucket = TokenBucket.new(3, test_io.time.now());
+        var allowed = 0;
+        for (0..5) |_| {
+            if (bucket.allow(test_io)) {
+                allowed += 1;
+            }
+        }
+        try expect(allowed >= 3);   // 至少初始 3 令牌；时间流逝可能补充更多
+    }
 }

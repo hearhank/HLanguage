@@ -22,3 +22,9 @@ fn main(io: Io) !void {
     var body = try await fetch_with_retry(&io, "https://example.com", alloc, 3);
     io.print("got {} bytes\n", body.len);
 }
+
+test "重试模式（演示）" {
+    // S4 演示型（Q-T6）：fetch_with_retry 依赖真实网络（io.net.get），不在测试中执行；
+    // 重试/指数退避逻辑断言留 M5 运行时测试
+    try expect(true);
+}

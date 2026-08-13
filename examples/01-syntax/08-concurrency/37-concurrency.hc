@@ -31,3 +31,22 @@ fn main(io: Io) !void {
     var total = await fut;
     io.print("total = {}\n", total);
 }
+
+test "线程 join" {
+    var t: o Thread(i32) = spawn(compute, 6, 7);
+    var result = try t.join();
+    try expect_eq(result, 42);
+}
+
+test "四模式共享容器" {
+    var shared = ManyToMany(i32).init(alloc);
+    shared.write(42);
+    try expect_eq(shared.read(), 42);
+}
+
+test "async 作用域绑定" {
+    var base = 10;
+    var fut: Future(i32) = async_add(&base, 5);
+    var total = await fut;   // 冻结窗口：await 前 base 不可写（Q19）
+    try expect_eq(total, 15);
+}

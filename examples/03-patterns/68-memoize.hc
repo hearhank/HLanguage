@@ -28,3 +28,13 @@ fn main(io: Io) !void {
     var r3 = memo.get_or_compute(7, slow_square);   // 未命中
     io.print("{} {} {}\n", r1, r2, r3);
 }
+
+test "记忆化缓存" {
+    var memo: o Memo = Memo.new(alloc);
+    var r1 = memo.get_or_compute(5, slow_square);
+    var r2 = memo.get_or_compute(5, slow_square);   // 命中缓存
+    var r3 = memo.get_or_compute(7, slow_square);   // 未命中
+    try expect_eq(r1, 25);
+    try expect_eq(r2, 25);
+    try expect_eq(r3, 49);
+}

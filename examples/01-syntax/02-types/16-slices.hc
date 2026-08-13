@@ -39,3 +39,25 @@ fn main(io: Io) !void {
     var msg: &[u8] = "hello";
     io.print("{}\n", msg);
 }
+
+test "只读切片视图" {
+    var arr = [1, 2, 3, 4, 5];
+    var s: &[i32] = &arr[1..3];
+    try expect_eq(s.len, 2);
+    try expect_eq(sum_slice(s), 5);
+}
+
+test "可写切片" {
+    var arr = [1, 2, 3, 4, 5];
+    var s2: &mut [i32] = &mut arr[0..2];
+    zero_out(s2);
+    try expect_eq(arr[0], 0);
+    try expect_eq(arr[1], 0);
+    try expect_eq(arr[2], 3);   // 切片外不受影响
+}
+
+test "字符串字面量切片" {
+    var msg: &[u8] = "hello";
+    try expect_eq(msg.len, 5);
+    try expect_eq_slices(msg, "hello");
+}

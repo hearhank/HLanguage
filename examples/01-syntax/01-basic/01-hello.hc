@@ -13,3 +13,7 @@ fn main(io: Io) !void {
     io.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
 }
+
+test "hello 入口可运行" {
+    try main(test_io);   // S2：smoke test（入口 !void 错误自动捕获）
+}

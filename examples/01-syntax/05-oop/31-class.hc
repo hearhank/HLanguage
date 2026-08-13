@@ -45,3 +45,17 @@ fn main(io: Io) !void {
     root.children.append(Node.new(3, alloc));
     io.print("total = {}\n", root.total());
 }
+
+test "class 方法与状态" {
+    var c: o Counter = Counter.new();
+    c.inc();
+    c.inc();
+    try expect_eq(c.get(), 2);
+}
+
+test "tree 递归组合" {
+    var root: o Node = Node.new(1, alloc);
+    root.children.append(Node.new(2, alloc));
+    root.children.append(Node.new(3, alloc));
+    try expect_eq(root.total(), 6);
+}

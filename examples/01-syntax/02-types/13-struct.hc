@@ -46,3 +46,26 @@ fn main(io: Io) !void {
     hp.x = 100.0;
     io.print("{}\n", hp.x);
 }
+
+test "dist 计算与双语调用" {
+    var p: Point = Point{x = 1.0, y = 2.0};
+    var q: Point = Point{x = 4.0, y = 6.0};
+    var d1 = p.dist(q);
+    var d2 = Point.dist(p, q);
+    try expect(d1 > 4.99 and d1 < 5.01);   // √(3²+4²) = 5
+    try expect_eq(d1 == d2, true);         // 双语等价
+}
+
+test "纯值 struct 复制" {
+    var p: Point = Point{x = 1.0, y = 2.0};
+    var p2: Point = p;
+    p2.x = 99.0;
+    try expect_eq(p.x, 1.0);               // 复制互不影响
+}
+
+test "装箱" {
+    var p: Point = Point{x = 1.0, y = 2.0};
+    var hp: o *mut Point = box(p, alloc);
+    hp.x = 100.0;
+    try expect_eq(hp.x, 100.0);
+}

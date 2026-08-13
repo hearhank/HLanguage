@@ -36,3 +36,15 @@ fn main(io: Io) !void {
     root.children.append(move child);
     io.print("depth = {}\n", root.depth());
 }
+
+test "递归 fib" {
+    try expect_eq(fib(10), 55);
+}
+
+test "tree 深度" {
+    var root: o Node = Node.new(1, alloc);
+    var child: o Node = Node.new(2, alloc);
+    child.children.append(Node.new(3, alloc));
+    root.children.append(move child);
+    try expect_eq(root.depth(), 3);
+}

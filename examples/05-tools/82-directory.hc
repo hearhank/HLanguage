@@ -15,3 +15,9 @@ fn main(io: Io) !void {
     }
     io.print("{} entries\n", count);
 }
+
+test "目录遍历（演示）" {
+    // S4 演示型（Q-T6）：list_dir 依赖实际目录内容（CWD），断言不稳定；
+    // 目录遍历断言留 M7 标准库测试
+    try expect(true);
+}

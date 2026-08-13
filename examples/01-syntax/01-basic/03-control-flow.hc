@@ -38,3 +38,26 @@ fn main(io: Io) !void {
     var data: &[u8] = try io.fs.read_all(f, io.alloc);
     io.print("read {} bytes\n", data.len);
 }
+
+test "if 表达式" {
+    var x: i32 = 7;
+    var label: &[u8] = if (x > 5) "big" else "small";
+    try expect_eq_slices(label, "big");
+}
+
+test "while 续步" {
+    var mut i: i32 = 0;
+    var sum = 0;
+    while (i < 5) : (i += 1) {
+        sum += i;
+    }
+    try expect_eq(sum, 10);
+}
+
+test "for 可写捕获" {
+    var mut arr2 = [10, 20, 30];
+    for (arr2) |mut item| {
+        item *= 2;
+    }
+    try expect_eq(arr2[0] + arr2[1] + arr2[2], 120);
+}

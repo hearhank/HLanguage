@@ -35,3 +35,23 @@ fn main(io: Io) !void {
     }
     io.print("total = {}\n", total);   // 0²+1²+…+19² = 2470
 }
+
+test "任务分发与汇合" {
+    var tasks = ManyToOne(i32).init(alloc);
+    var out = OneToMany(i32).init(alloc);
+    for (0..20) |i| {
+        tasks.write(i);
+    }
+    tasks.close();
+    var t1 = spawn(worker, &tasks, &out);
+    var t2 = spawn(worker, &tasks, &out);
+    var t3 = spawn(worker, &tasks, &out);
+    try t1.join();
+    try t2.join();
+    try t3.join();
+    var total = 0;
+    while (out.try_read()) |v| {
+        total += v;
+    }
+    try expect_eq(total, 2470);   // 0²+1²+…+19²
+}

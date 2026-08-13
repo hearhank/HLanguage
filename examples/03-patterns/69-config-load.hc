@@ -31,3 +31,10 @@ fn main(io: Io) !void {
     var cfg = try load_config(&io, "config.json");
     io.print("{}:{}\n", cfg.host, cfg.port);
 }
+
+test "配置加载默认值" {
+    // 真实 IO（Q-T4）：config 文件缺失 → catch 返回默认配置
+    var cfg = try load_config(&test_io, "config_missing_42.json");
+    try expect_eq(cfg.port, 8080);
+    try expect_eq_slices(cfg.host.to_bytes(), "localhost");
+}

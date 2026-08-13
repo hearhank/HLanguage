@@ -19,3 +19,10 @@ fn main(io: Io) !void {
     var f: Fn1(i32) i32 = square;
     io.print("{}\n", f(4));               // 16
 }
+
+test "函数作值" {
+    try expect_eq(apply(square, 5), 25);
+    try expect_eq(apply(cube, 3), 27);
+    var f: Fn1(i32) i32 = square;
+    try expect_eq(f(4), 16);
+}

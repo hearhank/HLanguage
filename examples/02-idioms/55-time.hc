@@ -14,3 +14,10 @@ fn main(io: Io) !void {
     io.time.sleep(50);
     io.print("slept 50ms\n");
 }
+
+test "时间计时" {
+    var start = test_io.time.now();
+    test_io.time.sleep(10);
+    var elapsed = test_io.time.now() - start;
+    try expect(elapsed >= 10);
+}

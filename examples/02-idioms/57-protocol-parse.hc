@@ -31,3 +31,12 @@ fn main(io: Io) !void {
     var decoded = try decode(&frame);
     io.print("id = {}\n", decoded.id);
 }
+
+test "编码解码往返" {
+    var msg = Message{ id = 7, kind = 1 };
+    var frame = encode(&msg);
+    try expect_eq(frame.len, 16);   // 8（u64 前缀）+ 8（POD 字节）
+    var decoded = try decode(&frame);
+    try expect_eq(decoded.id, 7);
+    try expect_eq(decoded.kind, 1);
+}

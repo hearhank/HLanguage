@@ -105,7 +105,7 @@
 ### 12.1 基础语法（部分定义）
 C 风格（花括号、分号）；标识符 `snake_case`，类型 `PascalCase`。
 
-**测试块（2026-08-13 Q8 定案）**：`test "名称" { ... }` 顶层测试块，`hc test` 运行；测试失败 = error；`expect` 归 std.debug 且测试块内隐式可用（见 06 §2）。
+**测试块（2026-08-13 Q8 定案）**：`test "名称" { ... }` 顶层测试块，`hc test` 运行；测试失败 = error；**断言 API（Q-T1 定案）**：`expect` / `expect_eq` / `expect_neq` / `expect_error` / `expect_eq_slices`——归 std.debug、测试块内隐式可用；**输出统计（Q-T2 定案）**：`[PASS]/[FAIL]/[SKIP] 文件::测试` 逐项 + `N passed, M failed, K skipped` 汇总；失败非零退出码；失败不中止；**隔离/串行/跳过（Q-T3 定案）**：test 块独立作用域（退出自动销毁）；1.0 默认串行；`return error.SkipTest;` 标记跳过；**环境（Q-T4 定案）**：test 块内隐式 `test_io`（独立 `Io.threaded()` 实例）+ `alloc`；其它运行时显式创建；**双模式（Q-T5 定案）**：`hc test` 默认脚本模式，`--mode=compile` 交叉验证；**示例测试形态（Q-T6 定案）**：S1 纯逻辑断言 / S2 main smoke / S3 局部逻辑 / S4 演示标注；输出不捕获（见 06 §2）。
 
 **变量声明与指针**（项目所有者定义，2026-08-13；Rust 标杆修订同日）：
 - `var mut x: o T = t;` — `var` 声明关键字；默认只读，`mut` 修饰可写（Rust 式，2026-08-13 Q7 定名，占位符解除）；`:T` 类型标注（可推断时省略）；`o` 前缀 = **所有权注册在当前作用域**（作用域退出时销毁；**仅适用于分配器分配的对象**——复杂类型/装箱指针，标量/纯值 struct 上写 `o` 编译错误，2026-08-13 Q15 裁定）

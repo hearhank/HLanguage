@@ -26,3 +26,22 @@ fn main(io: Io) !void {
     var parity = 0b1010 ^ 0b0101;           // 全 1
     io.print("{b}\n", parity);
 }
+
+test "标志位组合" {
+    var flags = FLAG_READ | FLAG_WRITE;
+    try expect((flags & FLAG_READ) != 0);
+    try expect((flags & FLAG_EXEC) == 0);
+}
+
+test "置位清除与移位" {
+    var flags = FLAG_READ;
+    flags |= FLAG_EXEC;
+    flags &= ~FLAG_WRITE;
+    try expect((flags & FLAG_EXEC) != 0);
+    try expect((flags & FLAG_WRITE) == 0);
+
+    var x: u8 = 1;
+    try expect_eq(x << 4, 16);
+    var parity = 0b1010 ^ 0b0101;
+    try expect_eq(parity, 15);
+}

@@ -29,3 +29,9 @@ fn main(io: Io) !void {
     var p2 = try Person.from_json(json);
     io.print("{}\n", p2.addr.city);
 }
+
+test "嵌套 class JSON（演示）" {
+    // S4 演示型（Q-T6）：Person.to_json 为内建默认语义（示例以空体标注），
+    // 递归嵌套序列化实现在标准库内建；断言留 M7 标准库测试
+    try expect(true);
+}

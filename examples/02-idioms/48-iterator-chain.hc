@@ -24,3 +24,14 @@ fn main(io: Io) !void {
         io.print("{}\n", n);
     }
 }
+
+test "filter/map 链" {
+    var scores = [92, 45, 78, 61, 88, 30];
+    var passed = scores.iter().filter(|s| s >= 60).map(|s| s + 10);
+    try expect_eq(passed.len, 4);   // 92,78,61,88 通过
+    var total = 0;
+    for (passed) |s| {
+        total += s;
+    }
+    try expect_eq(total, 359);   // 102+88+71+98
+}

@@ -29,3 +29,21 @@ fn main(io: Io) !void {
         none => io.print("none\n"),
     }
 }
+
+test "枚举实例化" {
+    var v: Value = Value{int = 42};
+    var label = switch (v) {
+        int => |i| i,
+        float => |f| 0,
+        none => 0,
+    };
+    try expect_eq(label, 42);
+}
+
+test "无负载常量" {
+    var n: Value = Value.none;
+    try expect(switch (n) {
+        none => true,
+        else => false,
+    });
+}

@@ -29,3 +29,12 @@ fn main(io: Io) !void {
     var v1 = try await fut1;
     var v2 = try await fut2;
 }
+
+test "async 并发 await" {
+    // S3（Q-T6）：不跑网络（fetch_url 依赖外部）；测纯解析路径
+    var fut1: Future(!JsonValue) = parse_json("{\"a\":1}");
+    var fut2: Future(!JsonValue) = parse_json("[1,2]");
+    var v1 = try await fut1;
+    var v2 = try await fut2;
+    // 成功解析（契约层面验证；内容断言依赖 json.parse 实现）
+}

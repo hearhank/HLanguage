@@ -41,3 +41,11 @@ fn main(io: Io) !void {
     doc.body.append(Paragraph.new(alloc));
     io.print("paragraphs = {}\n", doc.body.len);
 }
+
+test "class 组合" {
+    var doc: o Document = Document.new(alloc);
+    doc.title = String.from("组合示例", alloc);
+    doc.body.append(Paragraph.new(alloc));
+    try expect_eq(doc.body.len, 1);
+    try expect_eq_slices(doc.title.to_bytes(), "组合示例");
+}

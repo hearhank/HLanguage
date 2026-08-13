@@ -29,3 +29,11 @@ fn main(io: Io) !void {
         io.print("no port\n");
     }
 }
+
+test "字段 optional 默认值" {
+    var cfg = Config{ host = null, port = 8080 };
+    var port = cfg.port orelse 8080;
+    try expect_eq(port, 8080);
+    var host = cfg.host orelse String.from("localhost", alloc);
+    try expect_eq_slices(host.to_bytes(), "localhost");
+}

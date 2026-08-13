@@ -18,3 +18,8 @@ fn main(io: Io) !void {
     };
     io.print("loaded\n");
 }
+
+test "错误返回追踪" {
+    // 真实 IO（Q-T4）：app.json 不存在 → NotFound（Debug 下错误带返回追踪）
+    try expect_error(NotFound, load_config(test_io, "app.json"));
+}

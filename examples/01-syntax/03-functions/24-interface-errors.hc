@@ -37,3 +37,18 @@ fn main(io: Io) !void {
     };
     io.print("parsed2: {}\n", v2);
 }
+
+test "接口错误契约" {
+    var json_p = JsonParser{};
+    var v = json_p.parse("{\"a\":1}") catch |err| {
+        try expect(false);   // 合法 JSON 不应失败
+        return;
+    };
+    // 成功路径：v 已解析（契约成立）
+
+    var csv_p = CsvParser{};
+    var v2 = csv_p.parse("a,b,c") catch |err| {
+        try expect(false);   // 合法 CSV 不应失败
+        return;
+    };
+}

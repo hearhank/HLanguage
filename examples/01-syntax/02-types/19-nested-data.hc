@@ -44,3 +44,25 @@ fn main(io: Io) !void {
     };
     io.print("{}\n", desc);
 }
+
+test "嵌套结构与 switch" {
+    var e = Entity{
+        kind = Kind.enemy,
+        pos = Position{ x = 1.0, y = 2.0 },
+        tags = Vec(&[u8]).init(alloc),
+        history = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    };
+    e.tags.append("boss");
+
+    try expect_eq(e.kind == Kind.enemy, true);
+    try expect_eq(e.pos.x, 1.0);
+    try expect_eq(e.tags.len, 1);
+    try expect_eq(e.history.len, 8);
+
+    var desc = switch (e.kind) {
+        Kind.player => "player",
+        Kind.enemy => "enemy",
+        Kind.item => "item",
+    };
+    try expect_eq_slices(desc, "enemy");
+}

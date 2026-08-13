@@ -26,3 +26,20 @@ fn main(io: Io) !void {
     var replaced = text.replace("world", "h");
     io.print("{}\n", replaced);
 }
+
+test "split/join" {
+    var csv = String.from("a,b,c,d", alloc);
+    var parts = csv.split(',');
+    try expect_eq(parts.len, 4);
+    var joined = String.join(&parts, " | ");
+    try expect_eq_slices(joined.to_bytes(), "a | b | c | d");
+}
+
+test "find/substring/replace" {
+    var text = String.from("hello world", alloc);
+    try expect_eq(text.find("world").?, 6);
+    var sub = text.substring(0, 5);
+    try expect_eq_slices(sub.to_bytes(), "hello");
+    var replaced = text.replace("world", "h");
+    try expect_eq_slices(replaced.to_bytes(), "hello h");
+}

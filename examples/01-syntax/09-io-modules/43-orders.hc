@@ -16,3 +16,11 @@ namespace Orders {
         return sum;
     }
 }
+
+test "Orders.total" {
+    var lines = Vec(Orders.Line).init(alloc);
+    lines.append(Orders.Line{ item = String.from("apple", alloc), price = 3.0 });
+    lines.append(Orders.Line{ item = String.from("banana", alloc), price = 2.0 });
+    var total = Orders.total(&lines);
+    try expect(total > 5.49 and total < 5.51);   // (3+2) * 1.1 = 5.5
+}

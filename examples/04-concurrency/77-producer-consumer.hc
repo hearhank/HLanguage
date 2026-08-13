@@ -31,3 +31,12 @@ fn main(io: Io) !void {
     var sum = try c_thread.join();
     io.print("sum = {}\n", sum);   // 0²+1²+…+9² = 285
 }
+
+test "生产者消费者" {
+    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
+    var p_thread: o Thread(void) = spawn(producer, &ch, 10);
+    var c_thread: o Thread(i32) = spawn(consumer, &ch, 10);
+    try p_thread.join();
+    var sum = try c_thread.join();
+    try expect_eq(sum, 285);   // 0²+1²+…+9²
+}
