@@ -1,0 +1,27 @@
+// 80-batch-async.hc — 异步批处理（Future 并行 + 汇总）
+//
+//   - 并行发起：Future 列表（Q19 await 任何函数可用）
+//   - 全部等待并汇总（Go 协程方向，B2）
+
+async fn fetch(io: Io, url: &[u8], alloc: Allocator) !String {
+    var body = try io.net.get(url);
+    return String.from(body, alloc);
+}
+
+fn main(io: Io) !void {
+    var urls = ["https://a.example.com", "https://b.example.com", "https://c.example.com"];
+
+    // 批量发起（并行）
+    var futures = Vec(Future(!String)).init(alloc);
+    for (urls) |u| {
+        futures.append(fetch(io, u, alloc));
+    }
+
+    // 全部等待并汇总
+    var total = 0;
+    for (futures) |f| {
+        var body = try await f;
+        total += body.len;
+    }
+    io.print("total bytes = {}\n", total);
+}

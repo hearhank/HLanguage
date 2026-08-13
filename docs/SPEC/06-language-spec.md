@@ -223,10 +223,10 @@ var f: Future(T) = af(...); var v = await f;  // await 任何函数可用（Q19�
 
 四大支柱（详见 `04-stdlib-scope.md`）：定义（类型+序列化）/ 修改（集合+变换）/ 传输（网络+FFI）/ 保存（文件+存储）。基础层：`mem`（Allocator）、`io`（I/O+并发，含 async/await 支持）、`time`、`debug`。
 
-- **序列化分层**（2026-08-13 定案）：struct ↔ bytes 内建（`to_bytes`/`from_bytes`，零拷贝视图）；class ↔ JSON 内建（`to_json`/`from_json`）+ 脚本生成可定制；集合 → 二进制内建（长度前缀 u64 LE + 元素字节，Q38）
+- **序列化分层**（2026-08-13 定案）：struct ↔ bytes 内建（`to_bytes`/`from_bytes`，零拷贝视图）；class ↔ JSON 内建（`to_json`/`from_json`）+ 脚本生成可定制；集合 → 二进制内建（长度前缀 u64 LE + 元素字节，Q38）。**POD 边界**（2026-08-13 确认）：仅纯值（POD）struct 可 `to_bytes` 直映射；含切片/指针字段的 struct 走递归序列化（脚本定制，Q37 精神）
 - **文件 IO 双语**（Q20）：`f.read_all(alloc)` ≡ `io.fs.read_all(&f, alloc)`；`defer f.close()`；字节为中心 + UTF-8 函数
 - **集合构造**（Q15）：`Vec(i32).init(alloc)`——comptime 类型应用 + 构造函数；`String.from(&[u8], alloc)` 显式转换
-- **端到端验收基准**（Q25）：TCP 服务——接收 → 反序列化 → 校验/变换 → 序列化回写 → 落盘（见 `examples/19-end-to-end.hc`）
+- **端到端验收基准**（Q25）：TCP 服务——接收 → 反序列化 → 校验/变换 → 序列化回写 → 落盘（见 `examples/05-tools/81-end-to-end.hc`）
 
 ## 12. 待定
 
