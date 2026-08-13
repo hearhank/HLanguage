@@ -1,0 +1,19 @@
+// build.zon — 项目依赖声明（12.25，Q26 定案 2026-08-13）
+//
+// 清单即数据（H 数据字面量）：
+//   - const build = Build{ ... }（const 常量，Q12）
+//   - 构建逻辑与数据分离（Zig build.zig 同精神，但纯数据声明）
+//   - 脚本生成器可直接读取（A4 输入通道之一）
+
+const build = Build{
+    name = "orders",
+    version = "0.1.0",
+    kind = Kind.exe,                    // exe / lib / script（枚举常量，Q9 式）
+    files = [                           // 包内文件（数组字面量，Q4 式）
+        "main.hc",
+        "math.hc",
+    ],
+    deps = [
+        Pkg{ name = "json", version = "0.2.0", fingerprint = 0xa1b2 },
+    ],
+};

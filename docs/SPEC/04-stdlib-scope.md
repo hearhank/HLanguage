@@ -16,7 +16,7 @@
 | 模块 | 内容 |
 |---|---|
 | `types` | 运行时类型元数据、反射式信息（comptime 生成） |
-| `serialize` / `deserialize` | comptime 驱动的（反）序列化：二进制原生格式 + JSON 等可选格式 |
+| `serialize` / `deserialize` | **分层序列化**（2026-08-13 定案）：struct ↔ bytes 内建（to_bytes/from_bytes）；class ↔ JSON 内建（to_json/from_json）+ 脚本生成可定制；集合 → 二进制 |
 | `validate` | 数据约束校验（定义数据时声明的约束的运行时检查） |
 
 ## 支柱二：修改数据
