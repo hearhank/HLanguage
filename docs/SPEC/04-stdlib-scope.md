@@ -16,7 +16,7 @@
 | 模块 | 内容 |
 |---|---|
 | `types` | 运行时类型元数据、反射式信息（comptime 生成） |
-| `serialize` / `deserialize` | **分层序列化**（2026-08-13 定案）：struct ↔ bytes 内建（to_bytes/from_bytes）；class ↔ JSON 内建（to_json/from_json）+ 脚本生成可定制；集合 → 二进制 |
+| `serialize` / `deserialize` | **分层序列化**（2026-08-13 定案；2026-08-14 修订）：Continuous 类型 ↔ bytes 内建（to_bytes/from_bytes）；class（默认）↔ JSON 内建（to_json/from_json）+ 脚本生成可定制；集合（含 Table）→ 二进制 |
 | `validate` | 数据约束校验（定义数据时声明的约束的运行时检查） |
 
 ## 支柱二：修改数据
@@ -34,7 +34,7 @@
 |---|---|
 | `net` | TCP/UDP、HTTP 客户端/服务端 |
 | `ipc` | 进程间通信、管道、共享内存 |
-| `ffi` | C ABI 互操作（`hc cc` 配套）、外部符号绑定 |
+| `ffi` | C ABI 互操作（`hc cc` 配套）、外部符号绑定；`extern fn` + `@cImport`（Q-S4 定案，C 指针外置不参与登记） |
 | `channel` | 线程间数据传递（配合 `io` 接口） |
 
 ## 支柱四：保存数据
@@ -56,24 +56,28 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 ### io（接口约束参数 `io: *T where T: Io`；入口编译器注入句柄，Q22c）
 
 - `io.print(comptime 格式串, ...)` — 格式化输出（Q2 comptime 校验；Zig 式说明符）
+- **程序环境（2026-08-14 定案）**：`io.args() &[&[u8]]`（命令行参数，0 号 = 程序名）/ `io.env(name) ?&[u8]`（环境变量）/ `io.stdin`、`io.stdout`、`io.stderr`（字节流：read_all/write_all）/ `io.exit(t: ExitType, code: u8) !void`（`enum ExitType { Exit, Error }` 默认枚举：Exit 正常静默、Error 错误退出打印标记；main error → Error/1、正常 → Exit/0）
 - `io.fs.open(path) !File` / `io.fs.open_dir(path) !Dir` / `defer f.close()`
 - `io.fs.read_file(path, alloc) !&[u8]`（路径直读） / `io.fs.read_all(&f, alloc) !&[u8]`（句柄读）
 - `io.fs.write_all(&f, data) !void` ≡ `f.write_all(data)`（双语，Q20）
 - `io.fs.append(path, data) !void` ≡ `f.append(data)`；`io.fs.rename(a, b) !void`；`io.fs.remove(path) !void`
 - `io.fs.read_int(path) !i64` / `io.fs.write_int(path, v) !void`
+- **随机访问（2026-08-14 定案）**：`f.seek(offset: usize) !void`（绝对定位游标）/ `f.pos() usize`（当前偏移）/ `f.read_at(buf, offset) !usize` / `f.write_at(data, offset) !void`（定位读写，不改游标）
 - `io.fs.list_dir(&dir, alloc) !Vec(DirEntry)`（DirEntry：name / is_dir）
 - `io.net.connect(url) !Conn` / `io.net.get(url) !&[u8]` / `io.net.read_all(&conn, alloc)`
 - `io.net.listen(port) !Server` / `io.net.accept(&server) !Conn`
 - `io.net.read_frame(&conn, alloc) !&[u8]` / `io.net.write_frame(&conn, data) !void`（长度前缀帧）
+- **UDP（2026-08-14 定案，进 1.0）**：`io.net.udp.bind(port) !UdpSocket` / `send_to(&sock, addr, data) !void` / `recv_from(&sock, alloc) !(Addr, &[u8])`（元组多值返回）/ `close()`
 - `io.time.now() i64` / `io.time.sleep(ms) void`
 
 ### 集合与字符串（Q15 构造；String = u8[] 别名 Q3）
 
 - `Vec(T).init(alloc)` — append / len / extend / to_bytes / from_bytes
 - `Map(K, V).init(alloc)` — put / get ?V / contains / remove / len
-- `String.from(&[u8], alloc)` — concat / split / join / find ?usize / substring / replace / to_upper / to_bytes / == 内容比较
+- `String.from(&[u8], alloc)` — concat / split / join / find ?usize / substring / replace / to_upper / to_bytes / **as_slice（内容视图，无前缀，R-2）** / == 内容比较
 - `String.from_slice(&buf, arena)`（arena 分配形态）
 - 内建：`copy(&v)` / `box(v, alloc)`（Q12）
+- `@` 内建（Q-S1/Q-S3 定案）：`@sizeOf` / `@alignOf` / `@offsetOf` / `@typeOf` / `@intCast` / `@ptrCast` / `@alignCast` / `@compileError` / `@atomicLoad` / `@atomicStore` / `@atomicRmw`（内存序 relaxed/acquire/release/acq_rel/seq_cst）
 
 ### 内存
 
@@ -93,5 +97,18 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 
 - `spawn(f, args...) o Thread(T)` — `join() !T` / `cancel() !void` / `is_done() bool` / `detach()`
 - `async fn` → `Future(R)`（R 含 !）；`await f`
-- 四模式类型：`init(alloc)` / `write(v)` / `read() T` / `try_read() ?T` / `close()`
+- 四模式类型：`init(alloc)` / `write(v)` / `read() T` / `try_read() ?T` / `close()` / **`send(v)` / `recv() T`（通道，Q-R12）**
+- 原子原语（Q-S3）：`@atomicLoad` / `@atomicStore` / `@atomicRmw` + 内存序五值
 - `Io.evented(alloc)` / `Io.threaded()`（运行时显式切换，Q35）
+
+## 系统编程扩展（内核/驱动方向，2026-08-14 评估补充）
+
+内核编程场景的标准库缺口——可自建，但应纳入 std；**1.x 候选，不阻塞 1.0 用户态系统编程**。前提：需先补齐 `05-open-questions-and-risks.md` 系统编程缺口 K1–K6（union/volatile/asm/int↔ptr/符号导出/裸机），否则以下模块在内核场景不可用。
+
+| 模块 | 内容 | 内核场景 |
+|---|---|---|
+| `mem.bitmap` | 位图 | 物理页分配器、inode 位图 |
+| `collections.intrusive` | 侵入式链表（节点内嵌对象，依赖指针自由） | TCB 链表、空闲块链表 |
+| `io.ring` | 定容无锁环形缓冲（SPSC） | 驱动 DMA、串口、IPC |
+| `collections.tree` | 红黑树/基数树 | 调度器就绪队列、地址空间 VMA |
+| `mem.page` | 页对齐分配、buddy 构建块、内存屏障封装 | 内核堆、页表 |

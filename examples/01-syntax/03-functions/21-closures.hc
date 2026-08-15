@@ -28,7 +28,7 @@ fn main(io: Io) !void {
     }
 }
 
-test "闭包捕获" {
+test fn closure_capture() !void {
     var a = 10;
     var add_a = |v| v + a;               // 只读捕获（默认）
     try expect_eq(apply(add_a, 5), 15);
@@ -39,7 +39,7 @@ test "闭包捕获" {
     try expect_eq(total, 3);
 }
 
-test "迭代器链立即求值" {
+test fn iterator_chain_eager() !void {
     var arr = [1, 2, 3, 4, 5];
     var evens = arr.iter().filter(|v| v % 2 == 0).map(|v| v * v);
     var sum = 0;

@@ -18,7 +18,7 @@ fn main(io: Io) !void {
     io.print("safe = {}\n", is_valid(0, 5));   // 短路保护：不会除零
 }
 
-test "短路求值" {
+test fn short_circuit_evaluation() !void {
     try expect(is_valid(10, 5));
     try expect(!is_valid(0, 5));     // 短路：x == 0 时不求值 (100 / x)
     try expect(is_valid(0, -1) == false);

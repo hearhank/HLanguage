@@ -3,7 +3,8 @@
 // Q25 定案（2026-08-13）：TCP 服务形态
 //   接收数据（传输）→ 反序列化（定义）→ 校验/变换（修改）→ 序列化回写（传输）→ 落盘（保存）
 
-struct Order {
+[continuous]
+class Order {   // 连续内存（内建 to_bytes；脚本生成作定制通道演示）
     id: i32,
     amount: f64,
     status: OrderStatus,
@@ -15,7 +16,8 @@ enum OrderStatus {
     cancelled,
 }
 
-// 脚本生成：序列化/反序列化/校验样板（Q23：types 元数据输入，就地替换本块）
+// 脚本生成：序列化/反序列化/校验样板（Q23：types 元数据输入，就地替换本块）——**E1 定制通道（第三块，最小集不实现）**
+//   最小功能集：Order 为 [continuous]，内建 to_bytes/from_bytes 直映射已可用；脚本作定制通道演示
 script {
     var fields = types.fields("Order");
     // 遍历 fields 拼接生成（示意）：
@@ -58,7 +60,7 @@ fn main(io: Io) !void {
     }
 }
 
-test "端到端（演示）" {
+test fn end_to_end_demo() !void {
     // S4 演示型（Q-T6）：81 为 TCP 服务（listen 8080），且序列化样板由脚本生成（未展开）；
     // 端到端验收在 M7 以真实网络运行（04-stdlib-scope 端到端基准）
     try expect(true);

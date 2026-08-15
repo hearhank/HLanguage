@@ -30,7 +30,7 @@ class Logger {
 }
 
 fn main(io: Io) !void {
-    var logger: o Logger = Logger.new(alloc);
+    var logger: o Logger = alloc.init(Logger);   // 无参构造（C1'）
     logger.min_level = Level.info;
 
     logger.log(&io, Level.debug, "hidden");    // 低于 min_level
@@ -38,8 +38,8 @@ fn main(io: Io) !void {
     logger.log(&io, Level.error, "boom");
 }
 
-test "日志级别" {
-    var logger: o Logger = Logger.new(alloc);
+test fn log_levels() !void {
+    var logger: o Logger = alloc.init(Logger);
     logger.min_level = Level.info;
     try expect_eq(level_rank(Level.error), 3);
     try expect_eq(level_rank(Level.debug), 0);

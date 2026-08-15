@@ -3,7 +3,7 @@
 //   - orelse 默认值 / .? 断言 / if (opt) |v| 捕获（20 已示基础）
 //   - 嵌套字段 optional + 默认值链
 
-struct Config {
+class Config {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     host: ?String,
     port: ?i32,
 }
@@ -13,8 +13,8 @@ fn lookup_port(name: &[u8]) ?i32 {
 }
 
 fn main(io: Io) !void {
-    // 字段类型 ?T 时值自动装箱；null 字面量
-    var cfg = Config{ host = null, port = 8080 };
+    // 字段类型 ?T 时值自动装箱；null 字面量；构造 = alloc.init（C1'）
+    var cfg = alloc.init(Config{host = null, port = 8080});
 
     // 可选值 + 默认值链
     var host = cfg.host orelse String.from("localhost", alloc);
@@ -30,10 +30,10 @@ fn main(io: Io) !void {
     }
 }
 
-test "字段 optional 默认值" {
-    var cfg = Config{ host = null, port = 8080 };
+test fn field_optional_default() !void {
+    var cfg = alloc.init(Config{host = null, port = 8080});
     var port = cfg.port orelse 8080;
     try expect_eq(port, 8080);
     var host = cfg.host orelse String.from("localhost", alloc);
-    try expect_eq_slices(host.to_bytes(), "localhost");
+    try expect_eq_slices(host.as_slice(), "localhost");
 }

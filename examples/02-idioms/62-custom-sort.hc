@@ -3,16 +3,16 @@
 //   - sort 接受比较器闭包（返回 i32 序）
 //   - 按不同字段/方向排序（Fn2 调用接口，Q13）
 
-struct Person {
+class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     name: String,
     age: i32,
 }
 
 fn main(io: Io) !void {
     var people = Vec(Person).init(alloc);
-    people.append(Person{ name = String.from("alice", alloc), age = 30 });
-    people.append(Person{ name = String.from("bob", alloc), age = 25 });
-    people.append(Person{ name = String.from("carol", alloc), age = 35 });
+    people.append(alloc.init(Person{name = String.from("alice", alloc), age = 30}));   // 带参构造（C1'）
+    people.append(alloc.init(Person{name = String.from("bob", alloc), age = 25}));
+    people.append(alloc.init(Person{name = String.from("carol", alloc), age = 35}));
 
     // 按年龄升序（闭包比较器）
     sort(&mut people, |a, b| a.age - b.age);
@@ -25,11 +25,11 @@ fn main(io: Io) !void {
     }
 }
 
-test "自定义比较器排序" {
+test fn custom_comparator_sort() !void {
     var people = Vec(Person).init(alloc);
-    people.append(Person{ name = String.from("alice", alloc), age = 30 });
-    people.append(Person{ name = String.from("bob", alloc), age = 25 });
-    people.append(Person{ name = String.from("carol", alloc), age = 35 });
+    people.append(alloc.init(Person{name = String.from("alice", alloc), age = 30}));
+    people.append(alloc.init(Person{name = String.from("bob", alloc), age = 25}));
+    people.append(alloc.init(Person{name = String.from("carol", alloc), age = 35}));
     sort(&mut people, |a, b| a.age - b.age);   // 按年龄升序
     try expect_eq(people[0].age, 25);   // bob
     try expect_eq(people[2].age, 35);   // carol

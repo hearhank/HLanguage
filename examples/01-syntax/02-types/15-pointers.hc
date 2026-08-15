@@ -18,11 +18,11 @@ fn main(io: Io) !void {
     var sp: *[3]i32 = &arr;
     io.print("{}\n", sp[1]);
 
-    // 唯一写者：同一变量同一时间最多一个 &mut（运行时登记）
-    // var w2: *mut i32 = &mut x;  // 运行时错误！x 已有写者 w（携带位置）
+    // 指针自由（Q-S11）：多个 &mut 可同时存在（唯一写者概念取消，指针问题用户负责）
+    // var w2: *mut i32 = &mut x;  // 合法（无唯一写者限制）
 }
 
-test "指针读写与降级" {
+test fn pointer_read_write_downgrade() !void {
     var mut x: i32 = 42;
     var p: *i32 = &x;
     var w: *mut i32 = &mut x;
@@ -31,7 +31,7 @@ test "指针读写与降级" {
     try expect_eq(x, 100);
 }
 
-test "自动解引用索引" {
+test fn auto_deref_index() !void {
     var arr = [1, 2, 3];
     var sp: *[3]i32 = &arr;
     try expect_eq(sp[1], 2);

@@ -31,7 +31,7 @@ fn main(io: Io) !void {
     io.print("even*10 sum = {}\n", sum);
 }
 
-test "数据管道变换" {
+test fn data_pipeline_transform() !void {
     var nums = Vec(i32).init(alloc);
     nums.append(1);
     nums.append(2);

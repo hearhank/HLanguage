@@ -18,7 +18,7 @@ class Subject {
 }
 
 fn main(io: Io) !void {
-    var subject: o Subject = Subject.new(alloc);
+    var subject: o Subject = alloc.init(Subject);   // 无参构造（C1'）
 
     subject.subscribe(|event, payload| io.print("[{}] {}\n", event, payload));
 
@@ -26,8 +26,8 @@ fn main(io: Io) !void {
     subject.publish("user.logout", "alice");
 }
 
-test "发布订阅" {
-    var subject: o Subject = Subject.new(alloc);
+test fn publish_subscribe() !void {
+    var subject: o Subject = alloc.init(Subject);
     var mut received = 0;
     subject.subscribe(|event, payload| { received += 1; });   // 可写捕获
     subject.publish("user.login", "alice");

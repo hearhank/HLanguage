@@ -36,16 +36,16 @@ class Document: Drawable, Saveable {
 }
 
 fn main(io: Io) !void {
-    var doc: o Document = Document.new(alloc);
+    var doc: o Document = alloc.init(Document);   // 无参构造（C1'）
     doc.title = String.from("组合示例", alloc);
-    doc.body.append(Paragraph.new(alloc));
+    doc.body.append(alloc.init(Paragraph));
     io.print("paragraphs = {}\n", doc.body.len);
 }
 
-test "class 组合" {
-    var doc: o Document = Document.new(alloc);
+test fn class_composition() !void {
+    var doc: o Document = alloc.init(Document);
     doc.title = String.from("组合示例", alloc);
-    doc.body.append(Paragraph.new(alloc));
+    doc.body.append(alloc.init(Paragraph));
     try expect_eq(doc.body.len, 1);
-    try expect_eq_slices(doc.title.to_bytes(), "组合示例");
+    try expect_eq_slices(doc.title.as_slice(), "组合示例");
 }

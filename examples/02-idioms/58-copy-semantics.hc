@@ -1,10 +1,11 @@
-// 58-copy-semantics.hc — 复制语义（B3/Q16）
+// 58-copy-semantics.hc — 复制语义（B3/Q16/Q1'）
 //
-//   - 标量/纯值 struct：赋值即复制（值语义）
-//   - 数组/集合/复杂类型：引用类型——复制需显式 copy（B3）
-//   - String = u8[] 别名（Q3）：赋值别名共享（Q3c），深拷贝需显式 copy
+//   - 标量/Continuous：赋值即复制（值语义）
+//   - 数组/集合/复杂类型：引用类型——赋值 = 编译错误（Q1'），复制需显式 copy(&x)
+//   - String = u8[] 别名（Q3）：复制需显式 copy(&x)（默认深复制，浅复制需显式标注）
 
-struct Point {
+[continuous]
+class Point {   // 连续内存值类型（H1 特性标注）
     mut x: f32,
     y: f32,
 }
@@ -29,14 +30,14 @@ fn main(io: Io) !void {
     v2.append(2);
     io.print("v1 len = {}, v2 len = {}\n", v1.len, v2.len);
 
-    // String = u8[] 别名（Q3/Q3c）：赋值别名共享；concat 返回新 String
+    // String = u8[] 别名（Q3/Q1'）：复制走显式 copy；concat 返回新 String
     var s1 = String.from("hi", alloc);
-    var s2 = s1;                     // 别名共享（s1 保持唯一拥有）
+    var s2 = copy(&s1);               // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");         // concat 返回新 String
     io.print("{} {}\n", s1, s3);     // s1 未变
 }
 
-test "标量与纯值 struct 复制" {
+test fn scalar_and_continuous_copy() !void {
     var a: i32 = 5;
     var b = a;
     b = 10;
@@ -48,7 +49,7 @@ test "标量与纯值 struct 复制" {
     try expect_eq(p1.x, 1.0);   // 复制互不影响
 }
 
-test "集合显式 copy" {
+test fn collection_explicit_copy() !void {
     var v1 = Vec(i32).init(alloc);
     v1.append(1);
     var v2 = copy(&v1);   // 显式深拷贝（B3）
@@ -57,10 +58,10 @@ test "集合显式 copy" {
     try expect_eq(v2.len, 2);
 }
 
-test "String 别名共享" {
+test fn string_copy_owns() !void {
     var s1 = String.from("hi", alloc);
-    var s2 = s1;   // 别名共享（Q3c）：不复制
+    var s2 = copy(&s1);   // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");   // concat 返回新 String
-    try expect_eq_slices(s1.to_bytes(), "hi");   // 原变量未变
-    try expect_eq_slices(s3.to_bytes(), "hi!");
+    try expect_eq_slices(s1.as_slice(), "hi");   // 原变量未变
+    try expect_eq_slices(s3.as_slice(), "hi!");
 }

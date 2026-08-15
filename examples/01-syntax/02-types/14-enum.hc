@@ -30,7 +30,7 @@ fn main(io: Io) !void {
     }
 }
 
-test "枚举实例化" {
+test fn enum_instantiation() !void {
     var v: Value = Value{int = 42};
     var label = switch (v) {
         int => |i| i,
@@ -40,7 +40,7 @@ test "枚举实例化" {
     try expect_eq(label, 42);
 }
 
-test "无负载常量" {
+test fn payloadless_constant() !void {
     var n: Value = Value.none;
     try expect(switch (n) {
         none => true,

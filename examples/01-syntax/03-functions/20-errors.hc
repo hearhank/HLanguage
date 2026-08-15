@@ -26,7 +26,7 @@ fn main(io: Io) !void {
     io.print("config: {}\n", data);
 }
 
-test "read_config 文件缺失 → NotFound" {
+test fn read_config_missing_not_found() !void {
     // 真实 IO（Q-T4）：随机文件名保证不存在 → 期望 NotFound
-    try expect_error(NotFound, read_config(test_io, "config_missing_42.txt"));
+    try expect_error(error.NotFound, read_config(test_io, "config_missing_42.txt"));
 }

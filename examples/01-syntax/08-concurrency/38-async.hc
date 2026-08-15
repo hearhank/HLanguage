@@ -30,7 +30,7 @@ fn main(io: Io) !void {
     var v2 = try await fut2;
 }
 
-test "async 并发 await" {
+test fn async_concurrent_await() !void {
     // S3（Q-T6）：不跑网络（fetch_url 依赖外部）；测纯解析路径
     var fut1: Future(!JsonValue) = parse_json("{\"a\":1}");
     var fut2: Future(!JsonValue) = parse_json("[1,2]");

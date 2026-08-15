@@ -39,13 +39,13 @@ fn main(io: Io) !void {
     io.print("read {} bytes\n", data.len);
 }
 
-test "if 表达式" {
+test fn if_expression() !void {
     var x: i32 = 7;
     var label: &[u8] = if (x > 5) "big" else "small";
     try expect_eq_slices(label, "big");
 }
 
-test "while 续步" {
+test fn while_continue_step() !void {
     var mut i: i32 = 0;
     var sum = 0;
     while (i < 5) : (i += 1) {
@@ -54,7 +54,7 @@ test "while 续步" {
     try expect_eq(sum, 10);
 }
 
-test "for 可写捕获" {
+test fn for_mutable_capture() !void {
     var mut arr2 = [10, 20, 30];
     for (arr2) |mut item| {
         item *= 2;

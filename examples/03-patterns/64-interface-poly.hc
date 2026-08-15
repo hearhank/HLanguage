@@ -8,13 +8,15 @@ interface Shape {
     fn area(self: *Self) f32;
 }
 
-struct Rect: Shape {
+[continuous]
+class Rect: Shape {
     w: f32,
     h: f32,
     fn area(self: *Self) f32 { return self.w * self.h; }
 }
 
-struct Circle: Shape {
+[continuous]
+class Circle: Shape {
     r: f32,
     fn area(self: *Self) f32 { return pi * self.r * self.r; }
 }
@@ -48,14 +50,14 @@ fn main(io: Io) !void {
     io.print("total = {}\n", total_area(&shapes));
 }
 
-test "静态路径单态化" {
+test fn static_path_monomorphization() !void {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
     try expect(describe(&rect) > 11.99 and describe(&rect) < 12.01);
     try expect(describe(&circ) > 12.56 and describe(&circ) < 12.57);
 }
 
-test "异构集合装箱" {
+test fn heterogeneous_boxing() !void {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
     var shapes: o Vec(*Shape) = Vec(*Shape).init(alloc);

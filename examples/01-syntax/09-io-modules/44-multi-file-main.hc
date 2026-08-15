@@ -15,7 +15,7 @@ fn main(io: Io) !void {
     io.print("total = {}\n", total);
 }
 
-test "多文件项目" {
+test fn multi_file_project() !void {
     var lines = Vec(Orders.Line).init(alloc);
     lines.append(Orders.Line{ item = String.from("apple", alloc), price = 3.0 });
     lines.append(Orders.Line{ item = String.from("banana", alloc), price = 2.0 });

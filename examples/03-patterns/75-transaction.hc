@@ -28,7 +28,7 @@ fn main(io: Io) !void {
     io.print("done\n");
 }
 
-test "事务模式（演示）" {
+test fn transaction_demo() !void {
     // S4 演示型（Q-T6）：transfer 读写真实文件（journal.log/余额文件），不在测试中执行；
     // 文件事务行为断言留 M7 标准库测试
     try expect(true);

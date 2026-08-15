@@ -8,20 +8,22 @@ interface Parser {
     fn parse(self: *Self, data: &[u8]) anyerror!Value;
 }
 
-struct JsonParser: Parser {
+[continuous]
+class JsonParser: Parser {   // 无字段（连续）；实现 Parser
     fn parse(self: *Self, data: &[u8]) anyerror!Value {
         return json.parse(data) catch return error.InvalidJson;
     }
 }
 
-struct CsvParser: Parser {
+[continuous]
+class CsvParser: Parser {   // 无字段（连续）；实现 Parser
     fn parse(self: *Self, data: &[u8]) anyerror!Value {
         return csv.parse(data) catch return error.BadRow;
     }
 }
 
 fn main(io: Io) !void {
-    var json_p = JsonParser{};
+    var json_p = JsonParser{};   // 连续类型（空字段）：字面量构造
     var csv_p = CsvParser{};
 
     // anyerror：调用方按具体实现 catch 处理
@@ -38,7 +40,7 @@ fn main(io: Io) !void {
     io.print("parsed2: {}\n", v2);
 }
 
-test "接口错误契约" {
+test fn interface_error_contract() !void {
     var json_p = JsonParser{};
     var v = json_p.parse("{\"a\":1}") catch |err| {
         try expect(false);   // 合法 JSON 不应失败

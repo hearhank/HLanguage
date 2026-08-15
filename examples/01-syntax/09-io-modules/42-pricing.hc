@@ -9,7 +9,7 @@ namespace Pricing {
     }
 }
 
-test "Pricing.with_tax" {
+test fn pricing_with_tax() !void {
     var total = Pricing.with_tax(100.0, 0.1);
     try expect(total > 109.99 and total < 110.01);
 }

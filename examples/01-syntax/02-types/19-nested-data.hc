@@ -1,10 +1,11 @@
 // 19-nested-data.hc — 嵌套数据结构（定义数据深度）
 //
-//   - struct 内嵌 struct / enum / 数组（组合，12.12/12.13）
-//   - 字面量嵌套：Point{...} / Value{...} / [1,2,3] 组合
-//   - 含数组字段的 struct：数组为引用类型 → struct 归其它对象（B3）
+//   - class 内嵌 class(连续) / enum / 数组（组合，12.12/12.13）
+//   - 字面量嵌套：Position{...} / Value{...} / [1,2,3] 组合
+//   - 含数组字段的 class：数组为引用类型 → 未标 continuous（堆上，B3）
 
-struct Position {
+[continuous]   // 连续内存值类型（H1 特性标注）
+class Position {
     x: f32,
     y: f32,
 }
@@ -15,21 +16,22 @@ enum Kind {
     item,
 }
 
-struct Entity {
+class Entity {   // 含 Vec/数组字段 → 未标 continuous（堆上）
     kind: Kind,
-    pos: Position,          // struct 内嵌 struct（值）
+    pos: Position,          // 连续类型内嵌（值）
     tags: Vec(&[u8]),       // 复杂类型字段（堆，默认拥有 Q16）
     history: [8]f32,        // 数组字段（引用类型，B3）
 }
 
 fn main(io: Io) !void {
-    // 嵌套字面量：struct{ enum, struct, 数组 }
-    var e = Entity{
-        kind = Kind.enemy,
-        pos = Position{ x = 1.0, y = 2.0 },
-        tags = Vec(&[u8]).init(alloc),
-        history = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    };
+    // 嵌套构造：连续类型用字面量，Entity 用 new 样板（Q22）
+    var e = Entity.new(
+        alloc,
+        Kind.enemy,
+        Position{ x = 1.0, y = 2.0 },
+        Vec(&[u8]).init(alloc),
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    );
     e.tags.append("boss");
 
     // 访问链（自动解引用，A3）
@@ -45,13 +47,14 @@ fn main(io: Io) !void {
     io.print("{}\n", desc);
 }
 
-test "嵌套结构与 switch" {
-    var e = Entity{
-        kind = Kind.enemy,
-        pos = Position{ x = 1.0, y = 2.0 },
-        tags = Vec(&[u8]).init(alloc),
-        history = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    };
+test fn nested_struct_and_switch() !void {
+    var e = Entity.new(
+        alloc,
+        Kind.enemy,
+        Position{ x = 1.0, y = 2.0 },
+        Vec(&[u8]).init(alloc),
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    );
     e.tags.append("boss");
 
     try expect_eq(e.kind == Kind.enemy, true);

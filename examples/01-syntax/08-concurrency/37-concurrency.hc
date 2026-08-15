@@ -32,19 +32,19 @@ fn main(io: Io) !void {
     io.print("total = {}\n", total);
 }
 
-test "线程 join" {
+test fn thread_join() !void {
     var t: o Thread(i32) = spawn(compute, 6, 7);
     var result = try t.join();
     try expect_eq(result, 42);
 }
 
-test "四模式共享容器" {
+test fn four_mode_shared_container() !void {
     var shared = ManyToMany(i32).init(alloc);
     shared.write(42);
     try expect_eq(shared.read(), 42);
 }
 
-test "async 作用域绑定" {
+test fn async_scope_binding() !void {
     var base = 10;
     var fut: Future(i32) = async_add(&base, 5);
     var total = await fut;   // 冻结窗口：await 前 base 不可写（Q19）

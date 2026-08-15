@@ -12,7 +12,7 @@ fn main(io: Io) !void {
     io.print("{}\n", square(5));        // using 后直接使用
 }
 
-test "命名空间访问" {
+test fn namespace_access() !void {
     try expect_eq(Math.square(5), 25);   // 限定访问
     try expect_eq(square(5), 25);        // using 后直接使用（Q21）
 }

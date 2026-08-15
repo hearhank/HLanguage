@@ -19,7 +19,7 @@ class Query {
 }
 
 fn main(io: Io) !void {
-    var mut q: o Query = Query.new(alloc);
+    var mut q: o Query = alloc.init(Query);   // 无参构造（C1'）
 
     // 链式调用：where().limit()（*mut 链不复制——资格随链传递）
     q.where("age > 18").limit(10);
@@ -27,9 +27,9 @@ fn main(io: Io) !void {
     io.print("limit = {}\n", q.limit_n);
 }
 
-test "builder 链式调用" {
-    var mut q: o Query = Query.new(alloc);
+test fn builder_chaining() !void {
+    var mut q: o Query = alloc.init(Query);
     q.where("age > 18").limit(10);   // 链：*mut 资格延续（Q25）
-    try expect_eq_slices(q.where_clause.to_bytes(), "age > 18");
+    try expect_eq_slices(q.where_clause.as_slice(), "age > 18");
     try expect_eq(q.limit_n, 10);
 }

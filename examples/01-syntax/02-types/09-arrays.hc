@@ -31,18 +31,18 @@ fn main(io: Io) !void {
     // var bad = [[1, 2], [3, 4, 5]];  // 错误（Q42）
 }
 
-test "多维数组" {
+test fn multi_dimensional_arrays() !void {
     var grid = [[1, 2], [3, 4]];
     try expect_eq(grid[1][0], 3);
     try expect_eq(grid.len, 2);
 }
 
-test "sum_row" {
+test fn sum_row_test() !void {
     var flat = [1, 2, 3];
     try expect_eq(sum_row(&flat), 6);
 }
 
-test "显式类型" {
+test fn explicit_array_type() !void {
     var matrix: [2][2]i32 = [[5, 6], [7, 8]];
     try expect_eq(matrix[0][1], 6);
 }

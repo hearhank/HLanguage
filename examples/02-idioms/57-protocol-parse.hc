@@ -1,14 +1,15 @@
 // 57-protocol-parse.hc — 二进制协议解析（长度前缀帧）
 //
 //   - 帧格式：[u64 长度][payload bytes]
-//   - POD struct → bytes（Q36 零拷贝视图）；端序固定 LE（Q38）
-//   - ⚠️ 注意：含切片/指针字段的 struct 不可 to_bytes 直映射（会序列化指针值）——
+//   - 连续类型 → bytes（Q36 零拷贝视图）；端序固定 LE（Q38）
+//   - ⚠️ 注意：含切片/指针字段的类型不可标 [continuous]（会序列化指针值）——
 //     需递归序列化（脚本定制，Q37 精神）或定长缓冲
 
-struct Message {
+[continuous]
+class Message {   // 连续内存：可 to_bytes 直映射（8 字节）
     id: i32,
     kind: u8,
-}   // POD：可 to_bytes 直映射（8 字节）
+}
 
 fn encode(m: *Message) o Vec(u8) {
     var payload = m.to_bytes();
@@ -32,7 +33,7 @@ fn main(io: Io) !void {
     io.print("id = {}\n", decoded.id);
 }
 
-test "编码解码往返" {
+test fn encode_decode_roundtrip() !void {
     var msg = Message{ id = 7, kind = 1 };
     var frame = encode(&msg);
     try expect_eq(frame.len, 16);   // 8（u64 前缀）+ 8（POD 字节）

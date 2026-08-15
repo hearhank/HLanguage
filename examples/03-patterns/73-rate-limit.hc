@@ -12,7 +12,7 @@ class TokenBucket {
         return TokenBucket{ capacity = capacity, tokens = capacity, last_refill = now };
     }
 
-    fn allow(self: *mut Self, io: Io) bool {
+    fn allow(self: *mut Self, io: *T) bool where T: Io {
         // 补充令牌（按流逝时间）
         var elapsed = io.time.now() - self.last_refill;
         self.tokens = min(self.capacity, self.tokens + elapsed);
@@ -29,17 +29,17 @@ class TokenBucket {
 fn main(io: Io) !void {
     var bucket: o TokenBucket = TokenBucket.new(3, io.time.now());
     for (0..5) |_| {
-        io.print("allowed = {}\n", bucket.allow(io));
+        io.print("allowed = {}\n", bucket.allow(&io));
     }
+}
 
-    test "令牌桶" {
-        var bucket: o TokenBucket = TokenBucket.new(3, test_io.time.now());
-        var allowed = 0;
-        for (0..5) |_| {
-            if (bucket.allow(test_io)) {
-                allowed += 1;
-            }
+test fn token_bucket() !void {
+    var bucket: o TokenBucket = TokenBucket.new(3, test_io.time.now());
+    var allowed = 0;
+    for (0..5) |_| {
+        if (bucket.allow(&test_io)) {
+            allowed += 1;
         }
-        try expect(allowed >= 3);   // 至少初始 3 令牌；时间流逝可能补充更多
     }
+    try expect(allowed >= 3);   // 至少初始 3 令牌；时间流逝可能补充更多
 }

@@ -18,7 +18,7 @@ class EventBus {
 }
 
 fn main(io: Io) !void {
-    var bus: o EventBus = EventBus.new(alloc);
+    var bus: o EventBus = alloc.init(EventBus);   // 无参构造（C1'）
     var mut count = 0;
 
     // 只读捕获（默认）
@@ -34,8 +34,8 @@ fn main(io: Io) !void {
     io.print("handled {} events\n", count);
 }
 
-test "事件回调" {
-    var bus: o EventBus = EventBus.new(alloc);
+test fn event_callback() !void {
+    var bus: o EventBus = alloc.init(EventBus);
     var mut count = 0;
     bus.on(mut |event| { count += 1; });   // 可写捕获（Q26：双向登记）
     bus.emit("click");

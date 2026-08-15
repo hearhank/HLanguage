@@ -37,11 +37,11 @@ fn main(io: Io) !void {
     io.print("depth = {}\n", root.depth());
 }
 
-test "递归 fib" {
+test fn recursive_fib() !void {
     try expect_eq(fib(10), 55);
 }
 
-test "tree 深度" {
+test fn tree_depth() !void {
     var root: o Node = Node.new(1, alloc);
     var child: o Node = Node.new(2, alloc);
     child.children.append(Node.new(3, alloc));

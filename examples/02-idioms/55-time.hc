@@ -15,7 +15,7 @@ fn main(io: Io) !void {
     io.print("slept 50ms\n");
 }
 
-test "时间计时" {
+test fn time_elapsed() !void {
     var start = test_io.time.now();
     test_io.time.sleep(10);
     var elapsed = test_io.time.now() - start;

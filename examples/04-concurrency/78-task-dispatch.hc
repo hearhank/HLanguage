@@ -36,7 +36,7 @@ fn main(io: Io) !void {
     io.print("total = {}\n", total);   // 0²+1²+…+19² = 2470
 }
 
-test "任务分发与汇合" {
+test fn task_dispatch() !void {
     var tasks = ManyToOne(i32).init(alloc);
     var out = OneToMany(i32).init(alloc);
     for (0..20) |i| {

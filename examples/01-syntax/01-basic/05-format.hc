@@ -15,6 +15,6 @@ fn main(io: Io) !void {
     // io.print("{x}\n", "str");    // 错误：说明符与类型不匹配（Q2 comptime 校验）
 }
 
-test "format 入口可运行" {
+test fn format_entry_runs() !void {
     try main(test_io);   // S2：格式串全部合法，运行不抛错
 }

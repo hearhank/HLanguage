@@ -32,7 +32,7 @@ fn main(io: Io) !void {
     io.print("sum = {}\n", sum);   // 0²+1²+…+9² = 285
 }
 
-test "生产者消费者" {
+test fn producer_consumer() !void {
     var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
     var p_thread: o Thread(void) = spawn(producer, &ch, 10);
     var c_thread: o Thread(i32) = spawn(consumer, &ch, 10);

@@ -18,7 +18,7 @@ fn main(io: Io) !void {
     try handle_request(&io, &arena);
 }
 
-test "arena 统一回收" {
+test fn arena_unified_reclaim() !void {
     var arena = Arena.init(alloc);
     var buf = arena.alloc(1024);
     try expect_eq(buf.len, 1024);

@@ -19,7 +19,7 @@ class Person {
 }
 
 fn main(io: Io) !void {
-    var mut p: o Person = Person.new(alloc);
+    var mut p: o Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
     p.name = String.from("alice", alloc);
     p.addr.city = String.from("beijing", alloc);
 
@@ -30,7 +30,7 @@ fn main(io: Io) !void {
     io.print("{}\n", p2.addr.city);
 }
 
-test "嵌套 class JSON（演示）" {
+test fn nested_class_json_demo() !void {
     // S4 演示型（Q-T6）：Person.to_json 为内建默认语义（示例以空体标注），
     // 递归嵌套序列化实现在标准库内建；断言留 M7 标准库测试
     try expect(true);

@@ -24,7 +24,7 @@ fn main(io: Io) !void {
     }
 }
 
-test "for 区间和" {
+test fn for_range_sum() !void {
     var sum = 0;
     for (0..10) |i| {
         sum += i;
@@ -32,7 +32,7 @@ test "for 区间和" {
     try expect_eq(sum, 45);
 }
 
-test "下标迭代" {
+test fn index_iteration() !void {
     var arr = [10, 20, 30];
     var total = 0;
     for (0..arr.len) |idx| {
