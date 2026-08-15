@@ -1,0 +1,10 @@
+[package]
+name = "hc-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "H language toolchain CLI (hc run / hc test / hc build)"
+
+[dependencies]
+hc = { path = "../hc" }
+hc-rt = { path = "../hc-rt" }

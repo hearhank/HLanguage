@@ -1,0 +1,8 @@
+[package]
+name = "hc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "H language compiler frontend (lexer / parser / AST / diagnostics)"
+
+[dependencies]

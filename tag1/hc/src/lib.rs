@@ -1,0 +1,38 @@
+//! H 语言编译器前端（M1 前端：lexer / parser / AST / 诊断 / 模块）
+//!
+//! 对应实现计划（07-bootstrap-plan.md）第一块语言系统 M1。
+//! tag1 垂直切片范围：核心语法子集 + 基础诊断；完整所有权/重载等留后续。
+
+pub mod ast;
+pub mod diag;
+pub mod lexer;
+pub mod parser;
+pub mod semantic;
+pub mod token;
+
+pub use ast::Program;
+pub use diag::Diagnostic;
+
+/// 语义检查（M2 静态 pass）：返回诊断列表（空 = 通过）
+pub fn check_semantics(program: &Program) -> Vec<Diagnostic> {
+    semantic::check(program)
+}
+
+/// 解析源码为程序 AST；失败返回收集到的诊断（首个错误）与部分解析结果。
+pub fn parse_source(source: &str) -> Result<ast::Program, Vec<Diagnostic>> {
+    let tokens = lexer::lex(source);
+    let diags: Vec<Diagnostic> = tokens
+        .iter()
+        .filter_map(|t| match t.kind {
+            token::TokenKind::Error(msg) => Some(Diagnostic::error(
+                t.span.clone(),
+                format!("lex error: {msg}"),
+            )),
+            _ => None,
+        })
+        .collect();
+    if !diags.is_empty() {
+        return Err(diags);
+    }
+    parser::Parser::new(source, tokens).parse_program()
+}

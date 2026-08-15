@@ -11,6 +11,11 @@ interface Saveable {
     fn save(self: *Self, io: *T) !void where T: Io;
 }
 
+class TextStyle {            // 样式（组合成员；缺此定义导致 UnknownType——示例缺陷修复）
+    mut bold: bool,
+    mut size: i32,
+}
+
 class Paragraph {
     mut text: String,
     mut style: TextStyle,        // 组合：段落 = 文本 + 样式

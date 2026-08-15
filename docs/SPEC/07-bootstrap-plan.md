@@ -214,3 +214,64 @@ graph TD
 - **差异点（三块）**：第一块语言系统（M0–M4）≈ 02 的 M1–M6（前端/语义/双后端/运行时）；第二块最小外围（M5–M7）≈ 02 的 M7–M8 主体（标准库最小/工具链最小），**不含**脚本生成完整/并发完整/系统编程；第三块（E1–E7）承接脚本生成（M3 完整）、并发（M5）、系统编程缺口、自举（M9）与 1.x 项
 - 自举（E7）为**第三块的实现要求**（可自举），不阻塞第一、二块（最小功能集）交付
 - 两文档互相引用；里程碑验收以本计划功能模块为准绳
+
+---
+
+## 八、实现状态（tag1 垂直切片，2026-08-15）
+
+> 项目根目录 `tag1/` 为第一阶段（最小功能集）首轮实现。**垂直切片范围**：全部 7 个里程碑的核心功能打通，非全量交付；余量按模块登记于下表（下一轮迭代补齐）。
+
+### 已实现（✅）
+
+| 里程碑 | 模块 | 说明 |
+|---|---|---|
+| M0.1 | cargo 三 crate 工作区 | `hc`（前端）/ `hc-rt`（运行时）/ `hc-tools`（CLI）；零外部依赖，可编译 |
+| M1.1 | Lexer | 关键字全集、运算符（含 `%%`/`..`/`=>`/`|x|`/`||`/`^=`）、`@` 前缀、字符串/`"""` 原始串/字符、数字（进制+后缀+`_`）、注释、位置 |
+| M1.2 | Parser + AST | 变量/常量/global/函数/`test fn`/class/enum/interface/namespace/using/特性标注 `[continuous] [pad] [align]`；if/while/for/switch/defer/errdefer；闭包；元组解构；错误集别名；`alloc.init` 双形态；尾随逗号；关键字变体/方法名 |
+| M1.3 | 诊断 | 多错误收集、行/列位置、源码行指示 |
+| M2.1 | 名称解析 | 作用域链、函数登记（重载池）、类型登记、接口三用途占位 |
+| M2.2 | 类型检查（子集） | 标量/String/数组/切片/元组/可选/错误联合/指针；**泛型 where 编译时验证占位**（接口限制运行时拆除） |
+| M2.3 | 推断（子集） | 变量绑定推断、字面量惰性宽度、返回类型（单路径） |
+| M2.4 | 所有权（子集） | 分配来源判定（非 Arena 作用域注册 / Arena / global）、作用域 LIFO 销毁、`move` 标记解析；**完整编译时检查归 M2 后续** |
+| M2.7 | 函数 | 重载（**具体优先于泛型**）、可选参数（尾部默认）、闭包（只读/mut 捕获、env 快照） |
+| M3.2 | 脚本模式 | tree-walking 解释器（`hc run`）；defer/错误传播/`try`/`catch`/`orelse`（含控制流兜底） |
+| M4.3 | @ 内建（部分） | `@` 前缀 token 解析 |
+| M4.4 | 序列化内建 | `to_bytes`/`from_bytes`（连续类型直映射、集合 u64 前缀）、`to_json`/`from_json`（class/Map） |
+| M4.5 | 标量接口族 | `a.add(b)` 等方法形式（add/sub/mul/div/neg/mod/abs/eq/lt）、`String.compare` |
+| M4.6 | 迭代内建 | 数组/切片/Str/Map 可迭代（含 `|kv|` 键值对）；`iter()/filter()/map()` 立即求值链 |
+| M5.1 | mem | `Arena.init`、`arena.alloc(n)`、`alloc.alloc(n)` |
+| M5.2 | collections | `Vec`（append/len/iter/from_bytes）、`Map`（put/get/contains/remove/len/遍历）、String 方法集（concat/split/join/find/substring/replace/as_slice/to_bytes） |
+| M5.5 | 工具 | `sort`（含比较器闭包）、`binary_search`、`sqrt`、`math` 命名空间、`parse_int`/`parse_float`、parser 辅助内建 |
+| M6.1 | 测试 | `test fn` 收集运行；断言五件套；`[PASS]/[FAIL]/[SKIP]` + 汇总；失败非零退出码；`test_io`/`alloc` 注入 |
+| M7.1 | CLI | `hc run` / `hc test` / `hc check` / `hc build`（字节码镜像 + 启动器过渡产物） |
+| **M2.2+** | **语义检查器**（2026-08-15 梯队 1） | 静态 pass（`hc/src/semantic.rs`，load 前运行）：**标量宽度检查**（`var g: u8 = 256` 编译期报错）、**引用赋值禁止**（`var w: Vec(i32) = v` 报错——要求 `copy(&v)` 或指针）、连续类型赋值放行、**错误集成员检查**（return `error.X` 必须属于函数错误集）、**definite assignment（C7）**（`alloc.init(T)` 无参构造后字段未全赋值即 return → 编译期报错）、类型元数据收集 |
+| **M4.3+** | **@ 内建补充**（2026-08-15） | `@intFromEnum`/`@enumFromInt`（变体序 ↔ 枚举，M4.3 子集） |
+| **M8** | **Table 类型**（2026-08-15） | `Table(T).init(alloc, rows, cols, init)` 构造 + `t[i, j]` 多参索引（仅 Table 合法） |
+| **L1** | **copy 浅复制**（2026-08-15） | `copy(&x, .shallow)`（CopyMode 内建枚举，`.name` 推断枚举字面量）；默认深复制不变 |
+| **L1** | **`.name` 推断枚举字面量**（2026-08-15） | `copy(&x, .shallow)` ≡ `copy(&x, CopyMode.shallow)` |
+| **M2.5** | **definite assignment（C7）**（2026-08-15 收尾） | `alloc.init(T)` 无参构造跟踪待初始化字段集；字段赋值逐一消除；return 时缺失字段 → CompileError（修复 Dot/Field 解析形态差异） |
+
+**测试基线**：`cargo test --workspace` 全绿（13 前端单测 + 41 示例集成 + 13 语义验收 + 7 错误渲染 = 74 全过）；`hc test examples/` 全目录 **106/134 通过**（28 项失败属已知类别，见下）。
+
+> **2026-08-15 梯队 1 更新**：语义检查器（宽度/引用赋值/错误集成员/definite assignment）、`@intFromEnum`/`@enumFromInt`、Table 类型、copy 浅复制、`.name` 推断枚举均已落地（`cargo test` 74 全绿）。
+
+### 未实现（登记后续迭代）
+
+| 模块 | 功能 | 归口 |
+|---|---|---|
+| M1.4 | 跨文件模块（包内文件共享命名空间） | M1.4/M7.2 |
+| M2.2 完整 | 类型检查完整（表达式级类型检查、期望类型传播、表/元组/连续类型字段校验） | M2 |
+| M2.4/M2.5 | 所有权编译时检查、Debug 悬垂标记 | M2.4/M2.5/M4.7 |
+| M2.6 | 错误码表（包 ID + 包内码） | M2.6 |
+| M2 完整 | 期望类型传播（返回类型参与重载选择） | M2 |
+| M3.1/M3.3 | 共享 IR / LLVM 原生后端（`hc build`） | M3 |
+| M4.2 | 错误码运行时表示、`@panic`、`ExitType` 退出映射 | M4.2 |
+| M4.3 | @ 内建全集 | M4.3 |
+| M5.4 | 真实 io（fs/net/env/args/exit） | M5.4 |
+| M5.5 | 时间 | M5.5 |
+| E1 | 脚本生成（`script` 块）、comptime 完整（类型即值） | E1（第三块） |
+| E2 | 并发/异步/线程全部 | E2（第三块） |
+
+**示例验收说明**：剩余 28 个失败示例分属——E1 元编程（35/34-comptime、63-template）、E2 并发（37–39/76–80）、多文件模块（41/43/44）、真实 IO（20/69）、std 扩展（55-time、73-token-bucket、68-memoize、49-arena、57-encode、26-error-union）、示例缺陷（65-composition 引用未定义类型 TextStyle）。
+
+**已知取舍**：tree-walking 解释器替代字节码 VM；`hc build` 占位（LLVM 依赖外部系统库，留 M3.3）；u64 移位按 64 位截断（xorshift 语义）；闭包捕获整个作用域链（自由变量精确分析留后续）。
