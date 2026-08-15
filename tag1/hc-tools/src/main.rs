@@ -19,6 +19,7 @@ USAGE:
     hc run <file.hc>           运行脚本模式（解释执行）
     hc test [file.hc|dir]      运行 test fn（默认当前目录全部 .hc）
     hc check <file.hc>         仅检查（词法/语法/装载）
+    hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
     hc build <file.hc>         编译（tag1 占位：LLVM 后端归 M3.3）
     hc --version
     hc --help
@@ -75,6 +76,13 @@ fn run_cli() -> ExitCode {
                 }
                 Err(code) => code,
             }
+        }
+        "errors" => {
+            let Some(path) = args.get(2) else {
+                eprintln!("error: `hc errors` requires a file path");
+                return ExitCode::from(2);
+            };
+            errors_file(Path::new(path))
         }
         "build" => {
             let Some(path) = args.get(2) else {
@@ -182,6 +190,45 @@ fn build_file(path: &Path) -> ExitCode {
     println!("  字节码镜像: {}", hbc_path.display());
     println!("  启动器    : {}", launcher.display());
     println!("运行方式：{}", launcher.display());
+    ExitCode::SUCCESS
+}
+
+/// `hc errors file.hc`：输出错误码表（M2.6）——错误名 ↔ 码（包 ID + 包内码）+ 首次出现位置
+fn errors_file(path: &Path) -> ExitCode {
+    let source = match read_source(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    let program = match hc::parse_source(&source) {
+        Ok(p) => p,
+        Err(diags) => {
+            eprint!("{}", diag::render(&diags, &source));
+            return ExitCode::FAILURE;
+        }
+    };
+    // 语义检查（错误码表在合法程序上输出）
+    let errs: Vec<_> = hc::check_semantics(&program);
+    if let Some(d) = errs.iter().find(|d| d.is_error()) {
+        eprintln!("{}:{}: {}", d.span.line, d.span.col, d.message);
+        return ExitCode::FAILURE;
+    }
+    let table = hc::error_code_table(&program);
+    println!(
+        "错误码表（包 ID {}，{} 个错误）：",
+        table.package_id(),
+        table.len()
+    );
+    for entry in table.entries() {
+        println!(
+            "  error.{:<24} 0x{:08X}  (pkg {} + code {}, 首次出现 at {}:{})",
+            entry.name,
+            entry.code,
+            hc::ErrorCodeTable::package_of(entry.code),
+            hc::ErrorCodeTable::index_of(entry.code),
+            entry.span.line,
+            entry.span.col
+        );
+    }
     ExitCode::SUCCESS
 }
 

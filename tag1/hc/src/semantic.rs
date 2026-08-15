@@ -950,9 +950,22 @@ impl Checker {
                 }
             }
             Stmt::Return(e, span) => {
-                // M2.6：错误集成员检查——return error.X 必须属于函数返回的错误集
-                if let Some(constraint) = &err_constraint {
-                    if let Some(Expr::ErrorLit(ename, _)) = e {
+                // M2.6：错误传播模型——函数声明了错误联合（E!T/!T）→ error.X 沿调用链
+                // 传播直到 try/catch 处理；**未标记错误类型**（返回值非错误联合）→ 编译错误
+                // （错误不进入传播链，运行时由根作用域记录输出后 panic 式中止）
+                let ret_is_error_union = matches!(&ret_ty, Some(SType::ErrorUnion(..)));
+                if let Some(Expr::ErrorLit(ename, _)) = e {
+                    if !ret_is_error_union {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "cannot return `error.{ename}`: function does not declare an \
+                                 error union return type (`E!T` / `!T`)——未标记错误类型，\
+                                 错误不参与传播链"
+                            ),
+                        ));
+                    } else if let Some(constraint) = &err_constraint {
+                        // 错误集成员检查：return error.X 必须属于函数返回的错误集
                         let members = self.error_sets.get(constraint);
                         match members {
                             Some(set) if set.contains(ename) => {}
@@ -971,7 +984,8 @@ impl Checker {
                     }
                 }
                 // 期望类型传播：return 表达式的类型 vs 函数返回类型
-                // （return error.X = 返回错误值，非 payload——错误集成员检查已单独处理）
+                // （return error.X = 返回错误值，非 payload——错误集成员检查已单独处理；
+                //  return f() 且 f 返回 E!T → 错误联合直接传递，跳过 payload 检查）
                 if let Some(Expr::ErrorLit(..)) = e {
                     // 跳过 payload 兼容检查
                 } else if let Some(e) = e {
@@ -982,7 +996,12 @@ impl Checker {
                             SType::ErrorUnion(_, inner) => inner.as_ref(),
                             other => other,
                         };
-                        self.check_assignable(&Some(payload.clone()), &et, span, "return");
+                        // 错误联合值 → 错误联合函数：直接传递（错误或 payload 都合法）
+                        let error_union_pass = matches!(expect, SType::ErrorUnion(..))
+                            && matches!(&et, Some(SType::ErrorUnion(..)));
+                        if !error_union_pass {
+                            self.check_assignable(&Some(payload.clone()), &et, span, "return");
+                        }
                     }
                 }
                 // definite assignment（C7 保守版）：返回未完全初始化的 alloc.init(T) 实例

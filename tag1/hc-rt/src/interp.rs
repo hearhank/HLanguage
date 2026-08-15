@@ -58,7 +58,17 @@ impl RtError {
     pub fn render(&self, source: &str) -> String {
         let _ = source;
         match &self.span {
-            Some(s) => format!("{}:{}:{}: {}", s.line, s.col, "error", self.name,),
+            // M2.6：错误报告以原始错误位置为前提（错误名 + 源码行列，不输出调用链）
+            Some(s) => {
+                if self.message.is_empty() {
+                    format!("error.{} at {}:{}", self.name, s.line, s.col)
+                } else {
+                    format!(
+                        "error.{} at {}:{}: {}",
+                        self.name, s.line, s.col, self.message
+                    )
+                }
+            }
             None => {
                 if self.message.is_empty() {
                     format!("error.{}", self.name)
@@ -162,6 +172,8 @@ pub struct Interp {
     next_fd: i64,
     /// 程序参数（M5.4：io.args()；由 CLI 注入，默认取进程参数）
     pub args: Vec<String>,
+    /// 错误名 → 首次出现位置（M2.6 错误码表；根作用域未处理错误报告定位用）
+    error_locs: HashMap<String, Span>,
 }
 
 impl Interp {
@@ -183,6 +195,17 @@ impl Interp {
             files: HashMap::new(),
             next_fd: 1,
             args: std::env::args().skip(1).collect(),
+            error_locs: HashMap::new(),
+        }
+    }
+
+    /// M2.6：从错误码表记录错误名 → 首次出现位置（同名保留首个）
+    fn record_error_locs(&mut self, program: &Program) {
+        let table = hc::error_code_table(program);
+        for entry in table.entries() {
+            self.error_locs
+                .entry(entry.name.clone())
+                .or_insert_with(|| entry.span.clone());
         }
     }
 
@@ -197,6 +220,7 @@ impl Interp {
                 format!("{}:{}: {}", d.span.line, d.span.col, d.message),
             ));
         }
+        self.record_error_locs(program);
         // 第一遍：登记类型
         for d in &program.decls {
             self.register_type_decl(d)?;
@@ -277,6 +301,7 @@ impl Interp {
     /// M1.4：加载同包兄弟文件声明（符号登记），跳过其 test 与 main（入口/测试归属目标文件）
     pub fn load_siblings(&mut self, programs: &[&Program]) -> Result<()> {
         for p in programs {
+            self.record_error_locs(p);
             for d in &p.decls {
                 self.register_type_decl(d)?;
             }
@@ -1458,7 +1483,10 @@ impl Interp {
             Expr::Try(e, _) => {
                 let v = self.eval(e)?;
                 match v {
-                    Value::Err(name) => Err(RtError::new(&name, None)),
+                    // M2.6：错误沿**值通道**从当前函数返回（signal → 函数边界转
+                    // Ok(Value::Err)），调用方 catch/try 可拦截；不转 RtError（抛错
+                    // 通道会绕过 catch——错误传播必须经 try/catch 处理）
+                    Value::Err(_) => Err(RtError::signal(Flow::Return(v))),
                     other => Ok(other),
                 }
             }
@@ -4278,10 +4306,26 @@ impl Interp {
         let r = self.call_fn(&main_def, &main_args, &Span::new(0, 0, 0, 0));
         self.in_main = false;
         match r {
+            // 未处理错误到达根作用域（值通道）：记录错误名位置后 panic 式中止
+            Ok(Value::Err(name)) => {
+                let e = RtError::new(&name, self.error_locs.get(&name).cloned());
+                Err(e)
+            }
             Ok(_) => Ok(()),
             // io.exit：正常退出信号（exit_code 已记录）
             Err(e) if e.name == "ExitRequested" => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => {
+                // M2.6：未处理错误到达根作用域 → 记录错误名位置（原始错误定位），
+                // panic 式中止（无恢复/不输出调用链；hc-tools 打印后非零退出）
+                if e.span.is_none() && !e.is_signal() {
+                    if let Some(sp) = self.error_locs.get(&e.name).cloned() {
+                        let mut e2 = e.clone();
+                        e2.span = Some(sp);
+                        return Err(e2);
+                    }
+                }
+                Err(e)
+            }
         }
     }
 
@@ -4306,6 +4350,12 @@ impl Interp {
             let r = self.exec_fn_body(&t.body, &[]);
             let _ = self.pop_scope();
             match r {
+                Ok(Value::Err(name)) => {
+                    // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL（不中止其它测试，Q-T2）
+                    self.test_out
+                        .push(format!("[FAIL] {} (error.{})", t.name, name));
+                    failed += 1;
+                }
                 Ok(_) => {
                     self.test_out.push(format!("[PASS] {}", t.name));
                     passed += 1;

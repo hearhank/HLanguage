@@ -5,6 +5,7 @@
 
 pub mod ast;
 pub mod diag;
+pub mod errorcodes;
 pub mod lexer;
 pub mod parser;
 pub mod semantic;
@@ -12,10 +13,16 @@ pub mod token;
 
 pub use ast::Program;
 pub use diag::Diagnostic;
+pub use errorcodes::{ErrorCodeTable, ErrorEntry};
 
 /// 语义检查（M2 静态 pass）：返回诊断列表（空 = 通过）
 pub fn check_semantics(program: &Program) -> Vec<Diagnostic> {
     semantic::check(program)
+}
+
+/// 错误码表（M2.6）：编译期维护「错误名 ↔ 码」全局唯一映射（tag1 单包 = 包 ID 0）
+pub fn error_code_table(program: &Program) -> ErrorCodeTable {
+    errorcodes::collect(program, 0)
 }
 
 /// 解析源码为程序 AST；失败返回收集到的诊断（首个错误）与部分解析结果。
