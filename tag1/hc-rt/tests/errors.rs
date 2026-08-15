@@ -185,3 +185,39 @@ fn marked_error_payload_ok_path() {
         "const FileError = error{ NotFound };\nfn f(x: i32) FileError!i32 {\n    if (x < 0) return error.NotFound;\n    return x;\n}\ntest fn t() !void {\n    var v = try f(5);\n    try expect_eq(v, 5);\n}\n",
     );
 }
+
+#[test]
+fn root_error_carries_code() {
+    // M4.2：未处理错误到根 → RtError 携带错误码（M2.6 表：包 ID + 包内序）
+    let src = "const FileError = error{ NotFound, PermissionDenied };\nfn f() FileError!i32 {\n    return error.PermissionDenied;\n}\nfn main(io: Io) !void {\n    var v = try f();\n}\n";
+    let program = hc::parse_source(src).expect("parse");
+    let mut interp = Interp::new(src);
+    interp.load(&program).expect("load");
+    let e = interp.run_main().expect_err("未处理错误到根");
+    assert_eq!(e.name, "PermissionDenied");
+    // PermissionDenied 包内序 1（声明序）
+    assert_eq!(e.code, Some(1));
+}
+
+#[test]
+fn error_code_matches_compile_table() {
+    // M4.2：运行时错误值与编译期错误码表一致（hc::error_code_table）
+    let src = "const FileError = error{ Alpha, Beta };\nfn f() FileError!i32 {\n    return error.Beta;\n}\ntest fn t() !void {\n    var got = 0;\n    var v = f() catch |err| {\n        try expect_eq(err, error.Beta);\n        got = 1;\n        0;\n    };\n    try expect_eq(got, 1);\n}\n";
+    let program = hc::parse_source(src).expect("parse");
+    let table = hc::error_code_table(&program);
+    assert_eq!(table.code_of("Alpha"), Some(0));
+    assert_eq!(table.code_of("Beta"), Some(1));
+    let mut interp = Interp::new(src);
+    interp.load(&program).expect("load");
+    let (p, f, _s) = interp.run_tests();
+    assert_eq!(f, 0, "{:?}", interp.test_out);
+    assert!(p >= 1);
+}
+
+#[test]
+fn dynamic_error_name_allocated() {
+    // M4.2：运行时未登记错误名（io 错误）→ 动态分配码（不崩、可 catch 处理）
+    run_ok(
+        "test fn t() !void {\n    var f = io.fs.read_file(\"__no_such_hc_test_file__\", alloc) catch |err| {\n        try expect_eq(err, error.NotFound);\n        return;\n    };\n}\n",
+    );
+}

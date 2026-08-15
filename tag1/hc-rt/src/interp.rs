@@ -21,6 +21,8 @@ pub struct RtError {
     pub name: String,
     pub span: Option<Span>,
     pub message: String,
+    /// M4.2：错误码（M2.6 表「包 ID + 包内码」；根作用域报告输出）
+    pub code: Option<u32>,
     /// 内部控制流信号（跨 eval 边界传播 return/break/continue——
     /// `catch return x` / `orelse continue` / switch 臂内 return 等）
     pub signal: Option<Flow>,
@@ -32,6 +34,7 @@ impl RtError {
             name: name.to_string(),
             span,
             message: String::new(),
+            code: None,
             signal: None,
         }
     }
@@ -40,6 +43,7 @@ impl RtError {
             name: name.to_string(),
             span: None,
             message: message.into(),
+            code: None,
             signal: None,
         }
     }
@@ -49,31 +53,41 @@ impl RtError {
             name: "__ctrl_flow__".into(),
             span: None,
             message: String::new(),
+            code: None,
             signal: Some(flow),
         }
     }
     fn is_signal(&self) -> bool {
         self.signal.is_some()
     }
+    /// M4.2：附加错误码（根作用域报告用）
+    pub fn with_code(mut self, code: u32) -> Self {
+        self.code = Some(code);
+        self
+    }
     pub fn render(&self, source: &str) -> String {
         let _ = source;
+        let code_str = self
+            .code
+            .map(|c| format!(" (0x{c:08X})"))
+            .unwrap_or_default();
         match &self.span {
             // M2.6：错误报告以原始错误位置为前提（错误名 + 源码行列，不输出调用链）
             Some(s) => {
                 if self.message.is_empty() {
-                    format!("error.{} at {}:{}", self.name, s.line, s.col)
+                    format!("error.{}{} at {}:{}", self.name, code_str, s.line, s.col)
                 } else {
                     format!(
-                        "error.{} at {}:{}: {}",
-                        self.name, s.line, s.col, self.message
+                        "error.{}{} at {}:{}: {}",
+                        self.name, code_str, s.line, s.col, self.message
                     )
                 }
             }
             None => {
                 if self.message.is_empty() {
-                    format!("error.{}", self.name)
+                    format!("error.{}{}", self.name, code_str)
                 } else {
-                    format!("error.{}: {}", self.name, self.message)
+                    format!("error.{}{}: {}", self.name, code_str, self.message)
                 }
             }
         }
@@ -178,6 +192,10 @@ pub struct Interp {
     tracked: std::collections::HashSet<usize>,
     /// Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
     debug_dangling: bool,
+    /// M4.2 错误码运行时表示：错误名 → 码（编译期表 + 运行时动态扩展）
+    error_codes: HashMap<String, u32>,
+    /// 码（包内序）→ 错误名（反向表）
+    error_names: Vec<String>,
 }
 
 impl Interp {
@@ -202,6 +220,8 @@ impl Interp {
             error_locs: HashMap::new(),
             tracked: std::collections::HashSet::new(),
             debug_dangling: true,
+            error_codes: HashMap::new(),
+            error_names: Vec::new(),
         }
     }
 
@@ -211,13 +231,47 @@ impl Interp {
         self
     }
 
-    /// M2.6：从错误码表记录错误名 → 首次出现位置（同名保留首个）
+    /// M2.6/M4.2：从编译期错误码表记录——错误名 → 首次出现位置（同名保留首个）
+    /// + 错误名 ↔ 码映射（运行时错误值携带码；未登记错误名动态分配）
     fn record_error_locs(&mut self, program: &Program) {
         let table = hc::error_code_table(program);
         for entry in table.entries() {
             self.error_locs
                 .entry(entry.name.clone())
                 .or_insert_with(|| entry.span.clone());
+            self.error_codes
+                .entry(entry.name.clone())
+                .or_insert(entry.code);
+        }
+        // 反向表：码 → 名（按包内序对齐编译期表）
+        for (name, code) in &self.error_codes {
+            let idx = hc::ErrorCodeTable::index_of(*code) as usize;
+            while self.error_names.len() <= idx {
+                self.error_names.push(String::new());
+            }
+            self.error_names[idx] = name.clone();
+        }
+    }
+
+    /// M4.2：错误名 → 错误值（码 = 编译期表；运行时未登记错误名动态分配，
+    /// 沿用当前包 ID 高位——anyerror 任意码）
+    fn err_val(&mut self, name: &str) -> Value {
+        let code = match self.error_codes.get(name) {
+            Some(c) => *c,
+            None => {
+                let pkg = hc::ErrorCodeTable::package_of(
+                    self.error_codes.values().next().copied().unwrap_or(0),
+                );
+                let idx = self.error_names.len() as u16;
+                let code = hc::ErrorCodeTable::encode(pkg, idx);
+                self.error_codes.insert(name.to_string(), code);
+                self.error_names.push(name.to_string());
+                code
+            }
+        };
+        Value::Err {
+            name: name.to_string(),
+            code,
         }
     }
 
@@ -1062,7 +1116,7 @@ impl Interp {
             }
             (Value::Str(st), SwitchPattern::Str(s)) => Ok(*st.borrow() == s.as_bytes()),
             (Value::Int(c), SwitchPattern::Char(pc)) => Ok(*c == *pc as i128),
-            (Value::Err(e), SwitchPattern::Error(pe)) => Ok(e == pe),
+            (Value::Err { name, .. }, SwitchPattern::Error(pe)) => Ok(name == pe),
             (Value::Bool(b), SwitchPattern::Ident(s)) => {
                 Ok((*b && s == "true") || (!*b && s == "false"))
             }
@@ -1222,7 +1276,7 @@ impl Interp {
             Expr::BoolLit(b, _) => Ok(Value::Bool(*b)),
             Expr::NullLit(_) => Ok(Value::Opt(None)),
             Expr::VoidLit(_) => Ok(Value::Void),
-            Expr::ErrorLit(name, _) => Ok(Value::Err(name.clone())),
+            Expr::ErrorLit(name, _) => Ok(self.err_val(name)),
             Expr::Ident(name, span) => {
                 // 隐式环境注入
                 match name.as_str() {
@@ -1538,18 +1592,20 @@ impl Interp {
                     // M2.6：错误沿**值通道**从当前函数返回（signal → 函数边界转
                     // Ok(Value::Err)），调用方 catch/try 可拦截；不转 RtError（抛错
                     // 通道会绕过 catch——错误传播必须经 try/catch 处理）
-                    Value::Err(_) => Err(RtError::signal(Flow::Return(v))),
+                    Value::Err { .. } => Err(RtError::signal(Flow::Return(v))),
                     other => Ok(other),
                 }
             }
             Expr::Catch(e, kind, _) => {
                 let v = self.eval(e)?;
                 match &v {
-                    Value::Err(name) => match kind.as_ref() {
+                    Value::Err { .. } => match kind.as_ref() {
                         CatchKind::Default(d) => self.eval(d),
                         CatchKind::Bind { name: bname, body } => {
                             self.push_scope();
-                            self.bind(bname, Value::Err(name.clone()));
+                            // 捕获绑定携带完整错误值（名 + 码）
+                            let err_clone = v.clone();
+                            self.bind(bname, err_clone);
                             let r = self.exec_block_inner(body);
                             let _ = self.pop_scope();
                             match r? {
@@ -2830,8 +2886,11 @@ impl Interp {
                 let want = self.deref_value(want);
                 let got = self.deref_value(got);
                 match (want, got) {
-                    (Value::Err(w), Value::Err(g)) if w == g => Ok(Some(Value::Void)),
-                    (Value::Err(w), Value::Err(g)) => {
+                    // M4.2：错误码比较（码全局唯一）
+                    (Value::Err { name: w, .. }, Value::Err { name: g, .. }) if w == g => {
+                        Ok(Some(Value::Void))
+                    }
+                    (Value::Err { name: w, .. }, Value::Err { name: g, .. }) => {
                         self.fail_info = Some(format!(
                             "expect_error failed at {}:{}: expected error.{w}, got error.{g}",
                             span.line, span.col
@@ -3537,7 +3596,7 @@ impl Interp {
                     .open(&path)
                 {
                     Ok(f) => Ok(Some(self.register_file(f))),
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // io.fs.create(path)：创建/截断供写入
@@ -3550,7 +3609,7 @@ impl Interp {
                     .open(&path)
                 {
                     Ok(f) => Ok(Some(self.register_file(f))),
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // io.fs.read_file(path, alloc)：整文件读取
@@ -3558,7 +3617,7 @@ impl Interp {
                 let path = self.eval_path_arg(args, 0, span)?;
                 match std::fs::read(&path) {
                     Ok(b) => Ok(Some(Value::str_bytes(b))),
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // io.fs.read_all(file, alloc)：从句柄读整个文件（从头）
@@ -3607,14 +3666,14 @@ impl Interp {
                             .map_err(|e| RtError::msg("Io", format!("append: {e}")))?;
                         Ok(Some(Value::Void))
                     }
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             "remove" => {
                 let path = self.eval_path_arg(args, 0, span)?;
                 match std::fs::remove_file(&path) {
                     Ok(_) => Ok(Some(Value::Void)),
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             "rename" => {
@@ -3622,7 +3681,7 @@ impl Interp {
                 let to = self.eval_path_arg(args, 1, span)?;
                 match std::fs::rename(&from, &to) {
                     Ok(_) => Ok(Some(Value::Void)),
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // io.fs.read_int(path)：十进制文本 → i64
@@ -3631,9 +3690,9 @@ impl Interp {
                 match std::fs::read(&path) {
                     Ok(b) => match String::from_utf8_lossy(&b).trim().parse::<i64>() {
                         Ok(n) => Ok(Some(Value::Int(n as i128))),
-                        Err(_) => Ok(Some(Value::Err("InvalidFormat".into()))),
+                        Err(_) => Ok(Some(self.err_val("InvalidFormat"))),
                     },
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // io.fs.write_int(path, v)：十进制文本写入（创建/截断）
@@ -3642,7 +3701,7 @@ impl Interp {
                 let v = self.eval_int_arg(args, 1, span)?;
                 match std::fs::write(&path, v.to_string().as_bytes()) {
                     Ok(_) => Ok(Some(Value::Void)),
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // io.fs.list_dir(path)：目录条目名
@@ -3656,7 +3715,7 @@ impl Interp {
                             .collect();
                         Ok(Some(Value::arr(names)))
                     }
-                    Err(e) => Ok(Some(Value::Err(self.io_error_name(&e)))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             _ => Ok(None),
@@ -4366,8 +4425,9 @@ impl Interp {
         self.in_main = false;
         match r {
             // 未处理错误到达根作用域（值通道）：记录错误名位置后 panic 式中止
-            Ok(Value::Err(name)) => {
+            Ok(Value::Err { name, code }) => {
                 let e = RtError::new(&name, self.error_locs.get(&name).cloned());
+                let e = e.with_code(code);
                 Err(e)
             }
             Ok(_) => Ok(()),
@@ -4409,7 +4469,7 @@ impl Interp {
             let r = self.exec_fn_body(&t.body, &[]);
             let _ = self.pop_scope();
             match r {
-                Ok(Value::Err(name)) => {
+                Ok(Value::Err { name, .. }) => {
                     // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL（不中止其它测试，Q-T2）
                     self.test_out
                         .push(format!("[FAIL] {} (error.{})", t.name, name));

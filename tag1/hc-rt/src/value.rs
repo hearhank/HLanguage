@@ -34,8 +34,12 @@ pub enum Value {
     },
     /// 可选值
     Opt(Option<Rc<Value>>),
-    /// 错误值（错误名）
-    Err(String),
+    /// 错误值（M4.2：码 + 名字——码 = M2.6 编译期错误码表「包 ID + 包内码」，
+    /// 全局唯一；运行时未登记错误名动态分配）
+    Err {
+        name: String,
+        code: u32,
+    },
     /// 指针（共享槽）
     Ptr(Rc<RefCell<Value>>),
     /// 函数引用（tag1：仅命名函数）
@@ -136,7 +140,7 @@ impl Value {
             },
             Value::Opt(Some(v)) => format!("?{}", v.display()),
             Value::Opt(None) => "null".to_string(),
-            Value::Err(e) => format!("error.{e}"),
+            Value::Err { name, .. } => format!("error.{name}"),
             Value::Ptr(p) => p.borrow().display(),
             Value::Fn(f) => format!("fn {f}"),
             Value::Closure(_) => "closure".to_string(),
@@ -226,7 +230,7 @@ impl Value {
                 (None, None) => true,
                 _ => false,
             },
-            (Value::Err(a), Value::Err(b)) => a == b,
+            (Value::Err { code: a, .. }, Value::Err { code: b, .. }) => a == b,
             (Value::Ptr(a), Value::Ptr(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), b) => a.borrow().value_eq(b),
             (a, Value::Ptr(b)) => a.value_eq(&b.borrow()),
@@ -273,7 +277,7 @@ impl Value {
             Value::Class(c) => c.borrow().name.clone(),
             Value::Enum { name, .. } => name.clone(),
             Value::Opt(_) => "optional".into(),
-            Value::Err(_) => "error".into(),
+            Value::Err { .. } => "error".into(),
             Value::Ptr(_) => "pointer".into(),
             Value::Fn(_) => "fn".into(),
             Value::Closure(_) => "closure".into(),

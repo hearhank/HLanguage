@@ -237,6 +237,7 @@ graph TD
 | M2.6 | 错误码表（**M2.6 完整**，2026-08-16） | 编译器维护「错误名 ↔ 码」全局唯一映射（`hc/src/errorcodes.rs`）；**编码 = 高位 16 位包 ID + 低位 16 位包内序**（L5 定案，跨包不冲突）；每错误记录**首次出现位置**（span）——错误报告以原始错误位置为前提（不输出调用链）；三类来源全收集（错误集声明成员 / `error.X` 字面量 / switch 模式）；`hc errors <file>` 输出表；**错误传播模型**：函数声明错误联合（`E!T`/`!T`）→ `error.X` 沿**值通道**传播直到 `try`/`catch` 处理（try 不转抛错通道，catch 全链可拦截）；**未标记错误类型**（返回值非错误联合）`return error.X` → 编译错误；未处理错误到根作用域 → 记录错误名位置输出（`error.Name at 行:列`）→ panic 式中止（非零退出，无恢复） |
 | M3.2 | 脚本模式 | tree-walking 解释器（`hc run`）；defer/错误传播/`try`/`catch`/`orelse`（含控制流兜底） |
 | M4.3 | @ 内建（部分） | `@` 前缀 token 解析 |
+| M4.2 | 错误码运行时表示（**M4.2 完整**，2026-08-16） | **`Value::Err { name, code }`**（码 = M2.6 表「包 ID + 包内码」，全局唯一；运行时未登记错误名动态分配——anyerror 任意码）；比较/匹配/断言走码或名；**根作用域报告带码**（`error.NotFound (0x00000000) at 1:6`）；`@panic`/`ExitType`/`io.exit` 已有；成功路径零额外负载（值枚举无 Err 开销） |
 | M4.4 | 序列化内建 | `to_bytes`/`from_bytes`（连续类型直映射、集合 u64 前缀）、`to_json`/`from_json`（class/Map） |
 | M4.5 | 标量接口族 | `a.add(b)` 等方法形式（add/sub/mul/div/neg/mod/abs/eq/lt）、`String.compare` |
 | M4.6 | 迭代内建 | 数组/切片/Str/Map 可迭代（含 `|kv|` 键值对）；`iter()/filter()/map()` 立即求值链 |
@@ -253,7 +254,7 @@ graph TD
 | M2.5 | **definite assignment（C7）**（2026-08-15 收尾） | `alloc.init(T)` 无参构造跟踪待初始化字段集；字段赋值逐一消除；return 时缺失字段 → CompileError（修复 Dot/Field 解析形态差异） |
 | M2.5/M4.7 | Debug 悬垂标记（**已落地**，2026-08-16） | `&x` 登记目标 cell；**作用域退出 = 目标销毁 → 目标 cell 内容标记 `Value::Dangling`**（有指针持有的 cell 不释放、地址唯一——无地址碰撞误判）；解引用访问（`d.*`/`p.x`/`s[i]`/写路径）已标记 → `DanglingPointer` 抛错**带位置**；`debug_dangling` 开关（Debug 默认开，Release 裸读用户负责）；取指针不抛错（Q18） |
 
-**测试基线（2026-08-16）**：`hc` 前端 **29** 单测（13 原有 + 9 M2.6 + 7 M2.4） + `hc-rt` errors **14** + semantics **40**（13 原有 + 24 M2.2 + 3 M2.5 悬垂）全绿；`hc test examples/` 全目录 **122/134 通过**（12 失败全属第三块 E1/E2 特性，见下）。
+**测试基线（2026-08-16）**：`hc` 前端 **29** 单测（13 原有 + 9 M2.6 + 7 M2.4） + `hc-rt` errors **17** + semantics **40**（13 原有 + 24 M2.2 + 3 M2.5 悬垂）全绿；`hc test examples/` 全目录 **122/134 通过**（12 失败全属第三块 E1/E2 特性，见下）。
 
 > **2026-08-15 梯队 1 更新**：语义检查器（宽度/引用赋值/错误集成员/definite assignment）、`@intFromEnum`/`@enumFromInt`、Table 类型、copy 浅复制、`.name` 推断枚举均已落地。
 
@@ -265,6 +266,8 @@ graph TD
 
 > **2026-08-16 梯队 4 更新（M2.4/M2.5）**：**M2.4 所有权编译时检查**——分配来源跟踪（VarInfo.source）+ move 合法性（Arena/global/值类型禁止，对齐 C④）+ 引用逃逸 Q18（`return &局部/参数` 禁止，带所有权参数须 `return move`）落地（`semantic.rs`；AST 保留 `Expr::Move`）；**M2.5/M4.7 Debug 悬垂标记**——`&x` 登记、作用域退出把目标 cell 标记 `Value::Dangling`、解引用访问抛 `DanglingPointer` 带位置、`debug_dangling` 开关（Release 裸读）落地（`interp.rs`/`value.rs`；cell 内容标记方案无地址碰撞）。前端单测 22→29、semantics 37→40；示例回归 122/134 不变。
 
+> **2026-08-16 梯队 5 更新（M4.2 错误码运行时表示）**：`Value::Err` 从字符串迁移为 **`{ name, code }`**（码 = M2.6 编译期表；运行时未登记错误名动态分配）；错误比较/匹配/断言走码；根作用域报告带码（`error.NotFound (0x00000000) at 行:列`）；`@panic`/`ExitType`/`io.exit` 保持。errors 14→17；示例回归 122/134 不变。错误系统闭环：编译期表（M2.6）↔ 运行时值（M4.2）一致。
+
 ### 未实现（登记后续迭代）
 
 | 模块 | 功能 | 归口 |
@@ -275,7 +278,7 @@ graph TD
 | M2.6 | 错误码表（包 ID + 包内码）——**2026-08-16 已落地**（见已实现表） | M2.6 |
 | M2 完整 | 期望类型传播（返回类型参与重载选择）——**2026-08-16 已落地**（静态 match_overloads ret_matches + 运行时 expected_ret，双端一致） | M2 |
 | M3.1/M3.3 | 共享 IR / LLVM 原生后端（`hc build`） | M3 |
-| M4.2 | 错误码运行时表示、`@panic`、`ExitType` 退出映射 | M4.2 |
+| M4.2 | 错误码运行时表示、`@panic`、`ExitType` 退出映射——**2026-08-16 已落地**（见已实现表） | M4.2 |
 | M4.3 | @ 内建全集 | M4.3 |
 | M5.4 | 真实 io（fs/net/env/args/exit） | M5.4 |
 | M5.5 | 时间 | M5.5 |

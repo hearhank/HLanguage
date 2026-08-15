@@ -137,9 +137,9 @@
 
 **目标**：错误 union 运行时、`try` 传播、悬垂错误报告。
 
-- [ ] error union 运行时表示与 `try` 传播
-- [ ] 悬垂访问错误的触发与报告（带出错位置）
-- [ ] 不可恢复错误策略（panic 式，可配置中止/回卷）
+- [x] error union 运行时表示与 `try` 传播（tag1：`Value::Err { name, code }` 码运行时表示 + 值通道传播 + catch 全链拦截，2026-08-16）
+- [x] 悬垂访问错误的触发与报告（带出错位置）（tag1：`DanglingPointer` 带位置，M2.5）
+- [x] 不可恢复错误策略（panic 式，可配置中止/回卷）（tag1：`@panic` abort + 根作用域 panic 式中止，无 unwind/recover）
 
 **验收**：错误测试套件通过；悬垂错误报告含触发位置。
 
