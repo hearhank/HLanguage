@@ -2186,13 +2186,27 @@ impl Checker {
                     None
                 }
             }
-            "panic" | "compileError" => Some(SType::Void),
+            "panic" => Some(SType::Void),
+            // M4.3：@compileError = 编译期错误（强制编译失败）
+            "compileError" => {
+                let msg = match args.first() {
+                    Some(Expr::StrLit { value, .. }) => value.clone(),
+                    _ => "(no message)".to_string(),
+                };
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("@compileError: {msg}"),
+                ));
+                Some(SType::Void)
+            }
             "addWithOverflow" | "subWithOverflow" | "mulWithOverflow" => {
                 Some(SType::Tuple(vec![SType::Unknown, SType::Bool]))
             }
-            "sizeOf" | "alignOf" | "offsetOf" => Some(SType::Int {
+            "sizeOf" | "alignOf" | "offsetOf" | "intCast" => Some(SType::Int {
                 width: IntWidth::USize,
             }),
+            "typeOf" => Some(SType::Str),
+            "ptrCast" | "alignCast" => Some(SType::Unknown),
             _ => {
                 let _ = (span, scopes);
                 None

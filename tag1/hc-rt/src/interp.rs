@@ -2651,6 +2651,153 @@ impl Interp {
                 };
                 Err(RtError::msg("Panic", msg))
             }
+            // ---------- M4.3 @ 内建基础集 ----------
+            "@sizeOf" => {
+                // @sizeOf(T)：类型字节大小（连续类型与 to_bytes 布局一致）
+                let ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                match self.type_size_of(&ty) {
+                    Some(s) => Ok(Some(Value::Int(s as i128))),
+                    None => Err(RtError::msg(
+                        "UnknownType",
+                        format!("@sizeOf: unknown type `{ty}`"),
+                    )),
+                }
+            }
+            "@alignOf" => {
+                // @alignOf(T)：自然对齐（标量 = 宽度；连续 class = 最大字段对齐；其余 8）
+                let ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let align = match ty.as_str() {
+                    "i8" | "u8" | "bool" => 1,
+                    "i16" | "u16" | "f16" => 2,
+                    "i32" | "u32" | "f32" => 4,
+                    "i128" | "u128" | "f128" => 16,
+                    _ => {
+                        // 连续 class：最大字段对齐
+                        let mut max_a = 1usize;
+                        if let Some(TypeDef::Class { fields, traits, .. }) = self.types.get(&ty) {
+                            if traits.iter().any(|t| matches!(t, Trait::Continuous)) {
+                                for fd in fields {
+                                    if let Some(s) = self.field_serialized_size(&fd.ty) {
+                                        let a = if matches!(
+                                            fd.ty.strip(),
+                                            Type::Named(n, _)
+                                                if Self::scalar_size(n) == s
+                                                    && !self.is_nested_continuous(n)
+                                        ) {
+                                            s
+                                        } else {
+                                            1
+                                        };
+                                        max_a = max_a.max(a);
+                                    }
+                                }
+                                max_a
+                            } else {
+                                8
+                            }
+                        } else {
+                            8
+                        }
+                    }
+                };
+                Ok(Some(Value::Int(align as i128)))
+            }
+            "@offsetOf" => {
+                // @offsetOf(T, field)：连续 class 字段偏移（与 to_bytes 填充一致）
+                let ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let field = match &args[1] {
+                    Expr::Ident(f, _) => f.clone(),
+                    Expr::StrLit { value, .. } => value.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                match self.continuous_layout(&ty) {
+                    Some((layout, _)) => match layout.iter().find(|(n, _, _)| *n == field) {
+                        Some((_, off, _)) => Ok(Some(Value::Int(*off as i128))),
+                        None => Err(RtError::msg(
+                            "UnknownField",
+                            format!("@offsetOf: `{ty}` has no field `{field}`"),
+                        )),
+                    },
+                    None => Err(RtError::msg(
+                        "NotContinuous",
+                        format!("@offsetOf: `{ty}` is not a continuous type"),
+                    )),
+                }
+            }
+            "@typeOf" => {
+                // @typeOf(expr)：表达式运行时类型名（tag1 简化：type_name）
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                Ok(Some(Value::str(&v.type_name())))
+            }
+            "@intCast" => {
+                // @intCast(T, x)：整数转换（Debug 范围检查，溢出抛错带位置）
+                let ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let v = self.eval(&args[1])?;
+                let v = self.deref_value(v);
+                let i = match v {
+                    Value::Int(i) => i,
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                if let Some((min, max)) = Self::int_width_bounds(&ty) {
+                    if i < min || i > max {
+                        return Err(RtError::new("IntCastOverflow", Some(span.clone())));
+                    }
+                }
+                Ok(Some(Value::Int(i)))
+            }
+            "@ptrCast" | "@alignCast" => {
+                // @ptrCast(T, p) / @alignCast(T, p)：tag1 指针无类型化——透传
+                let v = self.eval(
+                    args.last()
+                        .ok_or_else(|| RtError::new("ArityMismatch", Some(span.clone())))?,
+                )?;
+                Ok(Some(v))
+            }
+            "@compileError" => {
+                // 语义层应已拦截（编译期错误）；运行时到达 = 未拦截路径
+                let msg = if args.is_empty() {
+                    "compileError".to_string()
+                } else {
+                    let v = self.eval(&args[0])?;
+                    self.deref_value(v).display()
+                };
+                Err(RtError::msg(
+                    "CompileError",
+                    format!("@compileError: {msg}"),
+                ))
+            }
+            "@addWithOverflow" | "@subWithOverflow" | "@mulWithOverflow" => {
+                // 返回 (T, bool) 元组；tag1 Int = i128 无溢出（标志恒 false）
+                let a = self.eval(&args[0])?;
+                let b = self.eval(&args[1])?;
+                let a = match self.deref_value(a) {
+                    Value::Int(i) => i,
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let b = match self.deref_value(b) {
+                    Value::Int(i) => i,
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let r = match name {
+                    "@addWithOverflow" => a.wrapping_add(b),
+                    "@subWithOverflow" => a.wrapping_sub(b),
+                    _ => a.wrapping_mul(b),
+                };
+                Ok(Some(Value::arr(vec![Value::Int(r), Value::Bool(false)])))
+            }
             "sqrt" => {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
@@ -4099,6 +4246,154 @@ impl Interp {
             "i16" | "u16" => 2,
             "i32" | "u32" | "f32" => 4,
             _ => 8, // i64/u64/isize/usize/f64/f16/f128
+        }
+    }
+
+    /// M4.3：连续 class 布局——字段 (名, 偏移, 大小) 列表 + 总大小
+    /// （与 to_bytes 直映射一致：自然对齐 + 字段间填充 + 尾部圆整；嵌套连续视为对齐 1）
+    fn continuous_layout(&self, ty: &str) -> Option<(Vec<(String, usize, usize)>, usize)> {
+        let (fdecls, traits) = match self.types.get(ty) {
+            Some(TypeDef::Class { fields, traits, .. }) => (fields, traits),
+            _ => return None,
+        };
+        if !traits.iter().any(|t| matches!(t, Trait::Continuous)) {
+            return None;
+        }
+        let mut layout: Vec<(String, usize, usize)> = Vec::new();
+        let mut offset = 0usize;
+        let mut max_align = 1usize;
+        for fd in fdecls {
+            let size = match self.field_serialized_size(&fd.ty) {
+                Some(s) => s,
+                None => continue, // 非标量字段不占字节（与 class_to_bytes 一致）
+            };
+            let align = if matches!(fd.ty.strip(), Type::Named(n, _) if Self::scalar_size(n) == size && !self.is_nested_continuous(n))
+            {
+                size
+            } else {
+                1 // 嵌套连续（对齐 1，与 class_to_bytes 一致）
+            };
+            max_align = max_align.max(align);
+            while offset % align != 0 {
+                offset += 1;
+            }
+            layout.push((fd.name.clone(), offset, size));
+            offset += size;
+        }
+        while offset % max_align != 0 {
+            offset += 1;
+        }
+        Some((layout, offset))
+    }
+
+    fn is_nested_continuous(&self, n: &str) -> bool {
+        matches!(
+            self.types.get(n),
+            Some(TypeDef::Class { traits, .. })
+                if traits.iter().any(|t| matches!(t, Trait::Continuous))
+        )
+    }
+
+    /// 字段序列化字节大小（连续布局用；标量 / 嵌套连续 / 元组）
+    fn field_serialized_size(&self, t: &Type) -> Option<usize> {
+        match t.strip() {
+            Type::Named(n, _) => {
+                if Self::is_scalar_name(n) {
+                    Some(Self::scalar_size(n))
+                } else if self.is_nested_continuous(n) {
+                    self.continuous_layout(n).map(|(_, size)| size)
+                } else {
+                    None
+                }
+            }
+            Type::Tuple(ts) => {
+                let mut s = 0usize;
+                for x in ts {
+                    s += self.field_serialized_size(x)?;
+                }
+                Some(s)
+            }
+            _ => None,
+        }
+    }
+
+    fn is_scalar_name(n: &str) -> bool {
+        matches!(
+            n,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f16"
+                | "f32"
+                | "f64"
+                | "f128"
+                | "bool"
+        )
+    }
+
+    /// M4.3：@intCast 目标宽度范围（Debug 溢出检查）
+    fn int_width_bounds(n: &str) -> Option<(i128, i128)> {
+        match n {
+            "i8" => Some((i8::MIN as i128, i8::MAX as i128)),
+            "i16" => Some((i16::MIN as i128, i16::MAX as i128)),
+            "i32" => Some((i32::MIN as i128, i32::MAX as i128)),
+            "i64" => Some((i64::MIN as i128, i64::MAX as i128)),
+            "i128" => Some((i128::MIN, i128::MAX)),
+            "isize" => Some((isize::MIN as i128, isize::MAX as i128)),
+            "u8" => Some((0, u8::MAX as i128)),
+            "u16" => Some((0, u16::MAX as i128)),
+            "u32" => Some((0, u32::MAX as i128)),
+            "u64" => Some((0, u64::MAX as i128)),
+            "u128" => Some((0, u128::MAX as i128)),
+            "usize" => Some((0, usize::MAX as i128)),
+            _ => None,
+        }
+    }
+
+    /// M4.3：@sizeOf(T) 类型字节大小
+    fn type_size_of(&self, ty: &str) -> Option<usize> {
+        match ty {
+            "i8" | "u8" | "bool" => Some(1),
+            "i16" | "u16" | "f16" => Some(2),
+            "i32" | "u32" | "f32" => Some(4),
+            "i128" | "u128" | "f128" => Some(16),
+            "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
+            // 引用类型（String/集合/Table/堆上 class/指针/切片）= 指针宽
+            "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
+            _ => match self.types.get(ty) {
+                Some(TypeDef::Class { traits, .. })
+                    if traits.iter().any(|t| matches!(t, Trait::Continuous)) =>
+                {
+                    self.continuous_layout(ty).map(|(_, size)| size)
+                }
+                Some(TypeDef::Class { .. }) => Some(8), // 堆上 = 指针
+                Some(TypeDef::Enum { variants }) => {
+                    // 纯常量枚举 1 字节；带负载 = 最大负载大小（简化）
+                    if variants.iter().all(|v| v.payload.is_none()) {
+                        Some(1)
+                    } else {
+                        let mut max_s = 1usize;
+                        for v in variants {
+                            if let Some(p) = &v.payload {
+                                if let Some(s) = self.field_serialized_size(p) {
+                                    max_s = max_s.max(s);
+                                }
+                            }
+                        }
+                        Some(max_s)
+                    }
+                }
+                Some(TypeDef::Interface { .. }) => Some(8),
+                _ => None,
+            },
         }
     }
 

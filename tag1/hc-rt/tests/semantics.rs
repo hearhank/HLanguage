@@ -517,3 +517,68 @@ fn m25_dangling_release_bare_read() {
     assert_eq!(f, 0, "Release 裸读不检测: {:?}", interp.test_out);
     assert!(p >= 1);
 }
+
+// ---------- M4.3 @ 内建基础集验收 ----------
+
+#[test]
+fn m43_sizeof_scalars_and_continuous() {
+    // @sizeOf：标量宽度 + 连续类型（与 to_bytes 布局一致）
+    run_ok(
+        "[continuous]\nclass Point { x: f32, y: f64 }\ntest fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
+    );
+}
+
+#[test]
+fn m43_alignof_and_offsetof() {
+    // @alignOf / @offsetOf：自然对齐 + 字段偏移（含填充）
+    run_ok(
+        "[continuous]\nclass Point { x: f32, y: f64 }\ntest fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
+    );
+}
+
+#[test]
+fn m43_intcast_ok_and_overflow() {
+    // @intCast：范围检查（Debug 溢出抛错）
+    run_ok(
+        "test fn t() !void {\n    try expect_eq(@intCast(u8, 255), 255);\n    try expect_eq(@intCast(i16, -32768), -32768);\n}\n",
+    );
+    // 溢出 → 运行时错误
+    let src = "fn main(io: Io) !void {\n    var x = @intCast(u8, 256);\n}\n";
+    let program = hc::parse_source(src).expect("parse");
+    let mut interp = Interp::new(src);
+    interp.load(&program).expect("load");
+    let e = interp.run_main().expect_err("溢出应报错");
+    assert_eq!(e.name, "IntCastOverflow");
+}
+
+#[test]
+fn m43_typeof_returns_type_name() {
+    run_ok(
+        "test fn t() !void {\n    var x: f64 = 1.0;\n    try expect_eq_slices(@typeOf(x), \"f64\");\n    try expect_eq_slices(@typeOf(42), \"i128\");\n}\n",
+    );
+}
+
+#[test]
+fn m43_add_with_overflow_tuple() {
+    // @addWithOverflow → (T, bool) 元组
+    run_ok(
+        "test fn t() !void {\n    var ov = @addWithOverflow(100, 200);\n    try expect_eq(ov[0], 300);\n    try expect_eq(ov[1], false);\n    var sv = @subWithOverflow(10, 3);\n    try expect_eq(sv[0], 7);\n}\n",
+    );
+}
+
+#[test]
+fn m43_ptrcast_passthrough() {
+    // @ptrCast：tag1 指针无类型化——透传，可解引用
+    run_ok(
+        "test fn t() !void {\n    var x: i32 = 42;\n    var p = @ptrCast(i32, &x);\n    try expect_eq(p.*, 42);\n}\n",
+    );
+}
+
+#[test]
+fn m43_compile_error_rejected() {
+    // @compileError = 编译期错误（强制编译失败）
+    run_compile_error(
+        "test fn t() !void {\n    @compileError(\"boom\");\n}\n",
+        "compileError",
+    );
+}
