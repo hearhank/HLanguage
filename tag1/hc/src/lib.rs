@@ -20,6 +20,11 @@ pub fn check_semantics(program: &Program) -> Vec<Diagnostic> {
     semantic::check(program)
 }
 
+/// M1.4：跨文件语义检查——外部（兄弟文件/依赖包）符号并入登记
+pub fn check_semantics_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnostic> {
+    semantic::check_with_extern(program, externs)
+}
+
 /// 错误码表（M2.6）：编译期维护「错误名 ↔ 码」全局唯一映射（tag1 单包 = 包 ID 0）
 pub fn error_code_table(program: &Program) -> ErrorCodeTable {
     errorcodes::collect(program, 0)

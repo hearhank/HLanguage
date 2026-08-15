@@ -403,3 +403,63 @@ fn m24_return_global_ref_ok() {
     // 返回 global 引用 → 合法（global 归根作用域，比函数长命）
     check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\ntest fn t() !void {}\n");
 }
+
+// ---------- M1.4 跨文件模块验收 ----------
+
+#[test]
+fn m14_extern_symbols_enable_crossfile_check() {
+    // 外部（兄弟文件）namespace 符号并入语义检查——限定类型字段校验生效
+    let ext =
+        parse_source("namespace Orders {\n    pub struct Line { item: String, price: f64 }\n}\n")
+            .expect("parse ext");
+    let main = parse_source(
+        "using Orders;\ntest fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
+    )
+    .expect("parse main");
+    let diags = hc::check_semantics_extern(&main, &[&ext]);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.is_error() && d.message.contains("has no field")),
+        "跨文件类型字段校验应报未知字段: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn m14_using_imports_type() {
+    // using 导入类型：`Line` 不限定直接引用（扁平名）
+    let ext =
+        parse_source("namespace Orders { pub struct Line { item: String } }\n").expect("parse ext");
+    let main = parse_source(
+        "using Orders;\ntest fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
+    )
+    .expect("parse main");
+    let diags = hc::check_semantics_extern(&main, &[&ext]);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "using 导入后扁平类型可用: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn m14_using_alias_qualified_call() {
+    // using NS as M：M.member 限定调用（语义可解析）
+    let ext = parse_source("namespace Math { pub fn square(x: i32) i32 { return x * x; } }\n")
+        .expect("parse ext");
+    let main = parse_source("using Math as M;\ntest fn t() !void {\n    var r = M.square(5);\n}\n")
+        .expect("parse main");
+    let diags = hc::check_semantics_extern(&main, &[&ext]);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "using as 别名限定调用合法: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn m14_single_file_unchanged() {
+    // 无外部符号时行为不变（check_semantics 兼容）
+    check_clean("fn square(x: i32) i32 { return x * x; }\ntest fn t() !void {\n    try expect_eq(square(5), 25);\n}\n");
+}

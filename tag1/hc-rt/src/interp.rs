@@ -200,6 +200,8 @@ pub struct Interp {
     error_codes: HashMap<String, u32>,
     /// 码（包内序）→ 错误名（反向表）
     error_names: Vec<String>,
+    /// M1.4：同包兄弟文件（外部符号——跨文件语义检查用）
+    extern_programs: Vec<Program>,
 }
 
 impl Interp {
@@ -229,6 +231,7 @@ impl Interp {
             debug_dangling: true,
             error_codes: HashMap::new(),
             error_names: Vec::new(),
+            extern_programs: Vec::new(),
         }
     }
 
@@ -285,8 +288,10 @@ impl Interp {
     // ---------- 程序装载 ----------
 
     pub fn load(&mut self, program: &Program) -> Result<()> {
-        // 第零遍：语义检查（M2 静态 pass——宽度/引用赋值/类型错误编译期报错）
-        let diags = hc::check_semantics(program);
+        // 第零遍：语义检查（M2 静态 pass——宽度/引用赋值/类型错误编译期报错；
+        // M1.4：同包兄弟文件符号并入，跨文件引用可准确检查）
+        let externs: Vec<&Program> = self.extern_programs.iter().collect();
+        let diags = hc::check_semantics_extern(program, &externs);
         if let Some(d) = diags.iter().find(|d| d.is_error()) {
             return Err(RtError::msg(
                 "CompileError",
@@ -341,23 +346,57 @@ impl Interp {
             Decl::Using { path, alias, .. } => {
                 let prefix = path.join(".");
                 let qp = format!("{prefix}.");
+                let flat_of = |member: &str| match alias {
+                    Some(a) => format!("{a}.{member}"),
+                    None => member.to_string(),
+                };
+                // 函数导入（跳过方法：成员名不含 `.`）
                 let keys: Vec<String> = self
                     .funcs
                     .keys()
-                    .filter(|k| k.starts_with(&qp))
+                    .filter(|k| k.starts_with(&qp) && !k[qp.len()..].contains('.'))
                     .cloned()
                     .collect();
                 for k in keys {
                     let member = k[qp.len()..].to_string();
-                    let flat = match alias {
-                        Some(a) => format!("{a}.{member}"),
-                        None => member,
-                    };
+                    let flat = flat_of(&member);
                     // 文件自身定义优先：扁平名已存在则不覆盖
                     if !self.funcs.contains_key(&flat) {
                         let defs = self.funcs.get(&k).cloned().unwrap_or_default();
                         if !defs.is_empty() {
                             self.funcs.entry(flat).or_default().extend(defs);
+                        }
+                    }
+                }
+                // 类型导入（using NS 后 `Line` 可直接引用）
+                let tkeys: Vec<String> = self
+                    .types
+                    .keys()
+                    .filter(|k| k.starts_with(&qp))
+                    .cloned()
+                    .collect();
+                for k in tkeys {
+                    let member = k[qp.len()..].to_string();
+                    let flat = flat_of(&member);
+                    if !self.types.contains_key(&flat) {
+                        if let Some(def) = self.types.get(&k) {
+                            self.types.insert(flat, def.clone());
+                        }
+                    }
+                }
+                // 全局导入
+                let gkeys: Vec<String> = self
+                    .globals
+                    .keys()
+                    .filter(|k| k.starts_with(&qp))
+                    .cloned()
+                    .collect();
+                for k in gkeys {
+                    let member = k[qp.len()..].to_string();
+                    let flat = flat_of(&member);
+                    if !self.globals.contains_key(&flat) {
+                        if let Some(def) = self.globals.get(&k) {
+                            self.globals.insert(flat, def.clone());
                         }
                     }
                 }
@@ -373,6 +412,10 @@ impl Interp {
 
     /// M1.4：加载同包兄弟文件声明（符号登记），跳过其 test 与 main（入口/测试归属目标文件）
     pub fn load_siblings(&mut self, programs: &[&Program]) -> Result<()> {
+        // M1.4：记录外部符号（跨文件语义检查用）
+        for p in programs {
+            self.extern_programs.push((*p).clone());
+        }
         for p in programs {
             self.record_error_locs(p);
             for d in &p.decls {
@@ -3921,6 +3964,7 @@ impl Interp {
         args: &[Expr],
         span: &Span,
     ) -> Result<Option<Value>> {
+        let _ = args;
         let fd = self.net_fd(v, span)?;
         match field {
             // listener.local_port() !u16：实际监听端口（listen 0 端口动态分配用）

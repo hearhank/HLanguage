@@ -180,6 +180,12 @@ enum AllocSource {
 }
 
 pub fn check(program: &Program) -> Vec<Diagnostic> {
+    check_with_extern(program, &[])
+}
+
+/// M1.4：跨文件语义检查——外部（兄弟文件/依赖包）符号并入登记，
+/// 使限定名（`Orders.Line`）与 using 导入（`square(5)`）可被准确检查
+pub fn check_with_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnostic> {
     let mut checker = Checker {
         types: HashMap::new(),
         funcs: HashMap::new(),
@@ -188,7 +194,12 @@ pub fn check(program: &Program) -> Vec<Diagnostic> {
         namespaces: std::collections::HashSet::new(),
         diags: Vec::new(),
     };
+    // 先收集外部符号（只登记不检查——诊断归属主文件）
+    for ext in externs {
+        checker.collect(ext);
+    }
     checker.collect(program);
+    checker.apply_usings(program);
     checker.validate_continuous();
     checker.check_program(program);
     checker.diags
@@ -267,11 +278,13 @@ impl Checker {
 
     fn collect(&mut self, program: &Program) {
         for d in &program.decls {
-            self.collect_decl(d);
+            self.collect_decl_prefixed(d, "");
         }
     }
 
-    fn collect_decl(&mut self, d: &Decl) {
+    /// M1.4：声明收集（Q21 命名空间）——扁平名 + 限定名双登记
+    /// （`square` 供包内直接引用 / using 导入；`Math.square` 供限定访问）
+    fn collect_decl_prefixed(&mut self, d: &Decl, prefix: &str) {
         match d {
             Decl::Class {
                 name,
@@ -282,32 +295,41 @@ impl Checker {
                 ..
             } => {
                 let continuous = traits.iter().any(|t| matches!(t, Trait::Continuous));
-                self.types.insert(
-                    name.clone(),
-                    TypeInfo {
-                        kind: TypeKind::Class {
-                            fields: fields.clone(),
-                            ifaces: ifaces.clone(),
-                            methods: methods.clone(),
-                            traits: traits.clone(),
-                        },
-                        continuous,
+                let info = TypeInfo {
+                    kind: TypeKind::Class {
+                        fields: fields.clone(),
+                        ifaces: ifaces.clone(),
+                        methods: methods.clone(),
+                        traits: traits.clone(),
                     },
-                );
+                    continuous,
+                };
+                if prefix.is_empty() {
+                    self.types.insert(name.clone(), info);
+                } else {
+                    self.types.insert(format!("{prefix}{name}"), info.clone());
+                    self.types.insert(name.clone(), info);
+                }
                 for m in methods {
                     self.register_sig(&format!("{name}.{}", m.name), m);
+                    if !prefix.is_empty() {
+                        self.register_sig(&format!("{prefix}{name}.{}", m.name), m);
+                    }
                 }
             }
             Decl::Enum { name, variants, .. } => {
-                self.types.insert(
-                    name.clone(),
-                    TypeInfo {
-                        kind: TypeKind::Enum {
-                            variants: variants.clone(),
-                        },
-                        continuous: false,
+                let info = TypeInfo {
+                    kind: TypeKind::Enum {
+                        variants: variants.clone(),
                     },
-                );
+                    continuous: false,
+                };
+                if prefix.is_empty() {
+                    self.types.insert(name.clone(), info);
+                } else {
+                    self.types.insert(format!("{prefix}{name}"), info.clone());
+                    self.types.insert(name.clone(), info);
+                }
             }
             Decl::Interface {
                 name,
@@ -315,16 +337,19 @@ impl Checker {
                 methods,
                 ..
             } => {
-                self.types.insert(
-                    name.clone(),
-                    TypeInfo {
-                        kind: TypeKind::Interface {
-                            supers: supers.clone(),
-                            methods: methods.clone(),
-                        },
-                        continuous: false,
+                let info = TypeInfo {
+                    kind: TypeKind::Interface {
+                        supers: supers.clone(),
+                        methods: methods.clone(),
                     },
-                );
+                    continuous: false,
+                };
+                if prefix.is_empty() {
+                    self.types.insert(name.clone(), info);
+                } else {
+                    self.types.insert(format!("{prefix}{name}"), info.clone());
+                    self.types.insert(name.clone(), info);
+                }
             }
             Decl::Fn {
                 name,
@@ -337,12 +362,24 @@ impl Checker {
                 let sig = self.make_sig(params.clone(), ret.clone(), where_clause.clone());
                 // test fn 不进重载池（运行时按 test 名收集）
                 if !is_test {
-                    self.funcs.entry(name.clone()).or_default().push(sig);
+                    self.funcs
+                        .entry(name.clone())
+                        .or_default()
+                        .push(sig.clone());
+                    if !prefix.is_empty() {
+                        self.funcs
+                            .entry(format!("{prefix}{name}"))
+                            .or_default()
+                            .push(sig);
+                    }
                 }
             }
             Decl::Global { name, ty, .. } => {
                 if let Some(t) = ty {
                     self.globals.insert(name.clone(), t.clone());
+                    if !prefix.is_empty() {
+                        self.globals.insert(format!("{prefix}{name}"), t.clone());
+                    }
                 }
             }
             Decl::Const { name, ty, .. } => {
@@ -351,14 +388,93 @@ impl Checker {
                     if let Some(rest) = tn.strip_prefix("error_set:") {
                         let members: ErrorSet =
                             rest.split(',').map(|s| s.trim().to_string()).collect();
-                        self.error_sets.insert(name.clone(), members);
+                        self.error_sets.insert(name.clone(), members.clone());
+                        if !prefix.is_empty() {
+                            self.error_sets.insert(format!("{prefix}{name}"), members);
+                        }
                     }
                 }
             }
             Decl::Namespace { name, decls, .. } => {
                 self.namespaces.insert(name.clone());
+                let np = format!("{prefix}{name}.");
                 for inner in decls {
-                    self.collect_decl(inner);
+                    self.collect_decl_prefixed(inner, &np);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// M1.4：语义层 `using NS;` 导入——限定名（函数/类型/全局）复制为扁平名
+    /// （与运行时 apply_usings 对齐；文件自身定义优先）
+    fn apply_usings(&mut self, program: &Program) {
+        for d in &program.decls {
+            self.collect_using_decl(d);
+        }
+    }
+
+    fn collect_using_decl(&mut self, d: &Decl) {
+        match d {
+            Decl::Using { path, alias, .. } => {
+                let prefix = format!("{}.{}", path.join("."), "");
+                let flat_of = |member: &str| match alias {
+                    Some(a) => format!("{a}.{member}"),
+                    None => member.to_string(),
+                };
+                // 函数（跳过方法：成员名不含 `.`）
+                let fkeys: Vec<String> = self
+                    .funcs
+                    .keys()
+                    .filter(|k| k.starts_with(&prefix) && !k[prefix.len()..].contains('.'))
+                    .cloned()
+                    .collect();
+                for k in fkeys {
+                    let member = k[prefix.len()..].to_string();
+                    let flat = flat_of(&member);
+                    if !self.funcs.contains_key(&flat) {
+                        let defs = self.funcs.get(&k).cloned().unwrap_or_default();
+                        if !defs.is_empty() {
+                            self.funcs.entry(flat).or_default().extend(defs);
+                        }
+                    }
+                }
+                // 类型
+                let tkeys: Vec<String> = self
+                    .types
+                    .keys()
+                    .filter(|k| k.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                for k in tkeys {
+                    let member = k[prefix.len()..].to_string();
+                    let flat = flat_of(&member);
+                    if !self.types.contains_key(&flat) {
+                        if let Some(info) = self.types.get(&k) {
+                            self.types.insert(flat, info.clone());
+                        }
+                    }
+                }
+                // 全局
+                let gkeys: Vec<String> = self
+                    .globals
+                    .keys()
+                    .filter(|k| k.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                for k in gkeys {
+                    let member = k[prefix.len()..].to_string();
+                    let flat = flat_of(&member);
+                    if !self.globals.contains_key(&flat) {
+                        if let Some(t) = self.globals.get(&k) {
+                            self.globals.insert(flat, t.clone());
+                        }
+                    }
+                }
+            }
+            Decl::Namespace { decls, .. } => {
+                for inner in decls {
+                    self.collect_using_decl(inner);
                 }
             }
             _ => {}
