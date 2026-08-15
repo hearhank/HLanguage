@@ -184,6 +184,10 @@ pub struct Interp {
     /// 文件句柄注册表（M5.4 真实 IO：File 值持 fd → 真实 std::fs::File）
     files: HashMap<i64, std::fs::File>,
     next_fd: i64,
+    /// M5.4 io.net：TCP 流/监听器注册表（TcpConn/TcpListener 值持 fd）
+    tcp_streams: HashMap<i64, std::net::TcpStream>,
+    tcp_listeners: HashMap<i64, std::net::TcpListener>,
+    next_net_fd: i64,
     /// 程序参数（M5.4：io.args()；由 CLI 注入，默认取进程参数）
     pub args: Vec<String>,
     /// 错误名 → 首次出现位置（M2.6 错误码表；根作用域未处理错误报告定位用）
@@ -216,6 +220,9 @@ impl Interp {
             tmp_field_cells: Vec::new(),
             files: HashMap::new(),
             next_fd: 1,
+            tcp_streams: HashMap::new(),
+            tcp_listeners: HashMap::new(),
+            next_net_fd: 1,
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
             tracked: std::collections::HashSet::new(),
@@ -809,11 +816,13 @@ impl Interp {
         }
     }
 
-    /// M5.4：Io 实例（含 fs/time 子模块；fs = 路径式文件 API，time = 毫秒时钟）
+    /// M5.4：Io 实例（含 fs/time/net 子模块；fs = 路径式文件 API，time = 毫秒时钟，
+    /// net = TCP 基础）
     fn io_value(&self) -> Value {
         let mut f = HashMap::new();
         f.insert("fs".into(), Value::class("Fs", HashMap::new()));
         f.insert("time".into(), Value::class("Time", HashMap::new()));
+        f.insert("net".into(), Value::class("Net", HashMap::new()));
         Value::class("Io", f)
     }
 
@@ -3586,14 +3595,34 @@ impl Interp {
                     Err(RtError::new("TypeError", Some(span.clone())))
                 }
             }
-            // M5.4 真实 IO：io.fs 模块函数 / io.time / File 句柄方法
+            // M5.4 真实 IO：io.fs 模块函数 / io.time / File 句柄方法 / io.net
             (Value::Class(c), m) if c.borrow().name == "Fs" => self.call_fs_method(m, args, span),
             (Value::Class(c), m) if c.borrow().name == "Time" => {
                 self.call_time_method(m, args, span)
             }
+            (Value::Class(c), m) if c.borrow().name == "Net" => self.call_net_method(m, args, span),
+            (Value::Class(c), m) if c.borrow().name == "TcpConn" => {
+                let v = Value::Class(c.clone());
+                self.call_conn_method(m, &v, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "TcpListener" => {
+                let v = Value::Class(c.clone());
+                self.call_listener_method(m, &v, args, span)
+            }
             (Value::Class(c), m) if c.borrow().name == "File" => {
                 let v = Value::Class(c.clone());
                 self.call_file_method(m, &v, args, span)
+            }
+            // io.stdin()：从标准输入读一行（无缓冲换行去除）
+            (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
+                let mut line = String::new();
+                match std::io::stdin().read_line(&mut line) {
+                    Ok(0) | Err(_) => Ok(Some(Value::str(""))),
+                    Ok(_) => {
+                        let trimmed = line.trim_end_matches(['\n', '\r']);
+                        Ok(Some(Value::str(trimmed)))
+                    }
+                }
             }
             // M5.4 程序环境：io.args() / io.env(name)
             (Value::Class(c), "args") if c.borrow().name == "Io" => Ok(Some(Value::arr(
@@ -3732,6 +3761,207 @@ impl Interp {
         Value::class("File", fields)
     }
 
+    // ---------- M5.4 io.net（TCP 基础） ----------
+
+    /// TcpConn/TcpListener 值 → 注册表 fd
+    fn net_fd(&self, v: &Value, span: &Span) -> Result<i64> {
+        if let Value::Class(c) = v {
+            if let Some(Value::Int(fd)) = c.borrow().fields.get("fd") {
+                return Ok(*fd as i64);
+            }
+        }
+        Err(RtError::new("BadFd", Some(span.clone())))
+    }
+
+    fn call_net_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            // io.net.connect(host, port, alloc) !TcpConn
+            "connect" => {
+                let host = self.eval_str_arg(args, 0, span)?;
+                let port = self.eval_int_arg(args, 1, span)? as u16;
+                let host = String::from_utf8_lossy(&host).to_string();
+                match std::net::TcpStream::connect((host.as_str(), port)) {
+                    Ok(stream) => {
+                        let fd = self.next_net_fd;
+                        self.next_net_fd += 1;
+                        let _ = stream.set_nodelay(true);
+                        self.tcp_streams.insert(fd, stream);
+                        let mut f = HashMap::new();
+                        f.insert("fd".into(), Value::Int(fd as i128));
+                        Ok(Some(Value::class("TcpConn", f)))
+                    }
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // io.net.listen(host, port, alloc) !TcpListener
+            "listen" => {
+                let host = self.eval_str_arg(args, 0, span)?;
+                let port = self.eval_int_arg(args, 1, span)? as u16;
+                let host = String::from_utf8_lossy(&host).to_string();
+                let addr = format!("{host}:{port}");
+                match std::net::TcpListener::bind(&addr) {
+                    Ok(listener) => {
+                        let fd = self.next_net_fd;
+                        self.next_net_fd += 1;
+                        self.tcp_listeners.insert(fd, listener);
+                        let mut f = HashMap::new();
+                        f.insert("fd".into(), Value::Int(fd as i128));
+                        Ok(Some(Value::class("TcpListener", f)))
+                    }
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn call_conn_method(
+        &mut self,
+        field: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let fd = self.net_fd(v, span)?;
+        match field {
+            // conn.write(data)：写字节（EOF → 错误）
+            "write" => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                let stream = self
+                    .tcp_streams
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match stream.write_all(&data) {
+                    Ok(_) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // conn.read(n) &[u8]：读至多 n 字节
+            "read" => {
+                let n = self.eval_int_arg(args, 0, span)?;
+                let n = n.max(0) as usize;
+                let stream = self
+                    .tcp_streams
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let mut buf = vec![0u8; n];
+                match stream.read(&mut buf) {
+                    Ok(0) => Ok(Some(Value::str_bytes(vec![]))),
+                    Ok(k) => {
+                        buf.truncate(k);
+                        Ok(Some(Value::str_bytes(buf)))
+                    }
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // conn.read_all() &[u8]：读到 EOF（流关闭）
+            "read_all" => {
+                let stream = self
+                    .tcp_streams
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let mut buf = Vec::new();
+                match stream.read_to_end(&mut buf) {
+                    Ok(_) => Ok(Some(Value::str_bytes(buf))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // 帧读写（u32 LE 前缀帧）：write_u32_le(n) / read_u32_le() !u32
+            "write_u32_le" => {
+                let n = self.eval_int_arg(args, 0, span)?;
+                let stream = self
+                    .tcp_streams
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match stream.write_all(&(n as u32).to_le_bytes()) {
+                    Ok(_) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            "read_u32_le" => {
+                let stream = self
+                    .tcp_streams
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let mut buf = [0u8; 4];
+                match stream.read_exact(&mut buf) {
+                    Ok(_) => Ok(Some(Value::Int(u32::from_le_bytes(buf) as i128))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // conn.shutdown()：半关闭写（对端 read 返回 EOF）
+            "shutdown" => {
+                let stream = self
+                    .tcp_streams
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match stream.shutdown(std::net::Shutdown::Write) {
+                    Ok(_) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // conn.close()：关闭并注销
+            "close" => {
+                self.tcp_streams.remove(&fd);
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn call_listener_method(
+        &mut self,
+        field: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let fd = self.net_fd(v, span)?;
+        match field {
+            // listener.local_port() !u16：实际监听端口（listen 0 端口动态分配用）
+            "local_port" => {
+                let listener = self
+                    .tcp_listeners
+                    .get(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match listener.local_addr() {
+                    Ok(addr) => Ok(Some(Value::Int(addr.port() as i128))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // listener.accept() !TcpConn：阻塞接受连接
+            "accept" => {
+                let listener = self
+                    .tcp_listeners
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match listener.accept() {
+                    Ok((stream, _peer)) => {
+                        let cfd = self.next_net_fd;
+                        self.next_net_fd += 1;
+                        let _ = stream.set_nodelay(true);
+                        self.tcp_streams.insert(cfd, stream);
+                        let mut f = HashMap::new();
+                        f.insert("fd".into(), Value::Int(cfd as i128));
+                        Ok(Some(Value::class("TcpConn", f)))
+                    }
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            // listener.close()：关闭并注销
+            "close" => {
+                self.tcp_listeners.remove(&fd);
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn call_fs_method(&mut self, field: &str, args: &[Expr], span: &Span) -> Result<Option<Value>> {
         match field {
             // io.fs.open(path)：读写、不创建（缺失 → error.NotFound，Zig 式）
@@ -3746,10 +3976,11 @@ impl Interp {
                     Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
-            // io.fs.create(path)：创建/截断供写入
+            // io.fs.create(path)：创建/截断（读写权限——供写入后 seek/read 验证）
             "create" => {
                 let path = self.eval_path_arg(args, 0, span)?;
                 match std::fs::OpenOptions::new()
+                    .read(true)
                     .write(true)
                     .create(true)
                     .truncate(true)
@@ -3906,6 +4137,67 @@ impl Interp {
                 file.read_to_end(&mut buf)
                     .map_err(|e| RtError::msg("Io", format!("read: {e}")))?;
                 Ok(Some(Value::str_bytes(buf)))
+            }
+            // M5.4：f.seek(offset)——绝对定位
+            "seek" => {
+                let off = self.eval_int_arg(args, 0, span)?;
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                file.seek(std::io::SeekFrom::Start(off.max(0) as u64))
+                    .map_err(|e| RtError::msg("Io", format!("seek: {e}")))?;
+                Ok(Some(Value::Void))
+            }
+            // f.pos() !u64：当前位置
+            "pos" => {
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let pos = file
+                    .stream_position()
+                    .map_err(|e| RtError::msg("Io", format!("pos: {e}")))?;
+                Ok(Some(Value::Int(pos as i128)))
+            }
+            // f.read_at(offset, len) &[u8]：指定位置读（不改变当前位置）
+            "read_at" => {
+                let off = self.eval_int_arg(args, 0, span)?;
+                let len = self.eval_int_arg(args, 1, span)?.max(0) as usize;
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let saved = file
+                    .stream_position()
+                    .map_err(|e| RtError::msg("Io", format!("pos: {e}")))?;
+                file.seek(std::io::SeekFrom::Start(off.max(0) as u64))
+                    .map_err(|e| RtError::msg("Io", format!("seek: {e}")))?;
+                let mut buf = vec![0u8; len];
+                let k = file
+                    .read(&mut buf)
+                    .map_err(|e| RtError::msg("Io", format!("read: {e}")))?;
+                buf.truncate(k);
+                let _ = file.seek(std::io::SeekFrom::Start(saved));
+                Ok(Some(Value::str_bytes(buf)))
+            }
+            // f.write_at(offset, data)：指定位置写（不改变当前位置）
+            "write_at" => {
+                let off = self.eval_int_arg(args, 0, span)?;
+                let data = self.eval_str_arg(args, 1, span)?;
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let saved = file
+                    .stream_position()
+                    .map_err(|e| RtError::msg("Io", format!("pos: {e}")))?;
+                file.seek(std::io::SeekFrom::Start(off.max(0) as u64))
+                    .map_err(|e| RtError::msg("Io", format!("seek: {e}")))?;
+                file.write_all(&data)
+                    .map_err(|e| RtError::msg("Io", format!("write: {e}")))?;
+                let _ = file.seek(std::io::SeekFrom::Start(saved));
+                Ok(Some(Value::Void))
             }
             _ => Ok(None),
         }
