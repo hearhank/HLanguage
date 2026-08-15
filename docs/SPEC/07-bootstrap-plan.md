@@ -229,26 +229,27 @@ graph TD
 | M1.1 | Lexer | 关键字全集、运算符（含 `%%`/`..`/`=>`/`|x|`/`||`/`^=`）、`@` 前缀、字符串/`"""` 原始串/字符、数字（进制+后缀+`_`）、注释、位置 |
 | M1.2 | Parser + AST | 变量/常量/global/函数/`test fn`/class/enum/interface/namespace/using/特性标注 `[continuous] [pad] [align]`；if/while/for/switch/defer/errdefer；闭包；元组解构；错误集别名；`alloc.init` 双形态；尾随逗号；关键字变体/方法名 |
 | M1.3 | 诊断 | 多错误收集、行/列位置、源码行指示 |
-| M2.1 | 名称解析 | 作用域链、函数登记（重载池）、类型登记、接口三用途占位 |
+| M2.1 | 名称解析（**M2.1 完整**，2026-08-16） | 作用域链、函数登记（重载池）、类型登记、**接口三用途真实实现**（① implements 标注 = 方法契约验证，含超接口递归 ② where T: 约束调用点验证 ③ 编译可验证——签名兼容精确判定；内建接口 ICompare/INumber/IInt/IUint/IFloat/IIterable/Io 跳过契约检查） |
 | M2.2 | 类型检查（**M2.2 完整**，2026-08-16） | 标量/String/数组/切片/元组/可选/错误联合/指针；**表达式级类型检查**（全部 Expr 变体静态推断）；**期望类型传播**（var 初始化/赋值/return/调用实参/二元运算/条件/迭代）；**字段与索引校验**（NamedLit 字段存在/必填/类型/未知、元组越界、Table 双整数索引）；**存储形态验证**（[continuous] 字段全值类型否则编译错误）；**运算符接口族检查**（算术→INumber、位→整数、序/等→ICompare）；**泛型 where 约束调用点验证**（标量→INumber 族、class→冒号标注接口） |
-| M2.3 | 推断（子集） | 变量绑定推断、字面量惰性宽度、返回类型（单路径） |
+| M2.3 | 推断（**补全**，2026-08-16） | 变量绑定/字面量惰性宽度/返回类型推断；**泛型 T（经 *T 形参绑定具体化）、指针形态（&x 只读 / &mut x 可写）、多路径返回统一（一致通过 / 冲突报错要求显式）、重载歧义**（int 字面量 i32 精确胜 f64 兼容；i32/i64 同为精确 → 歧义；期望类型传播选返回类型；具体优先泛型） |
 | M2.4 | 所有权（**编译时检查完整**，2026-08-16） | 分配来源判定（非 Arena 作用域注册 / Arena / global）、作用域 LIFO 销毁、`move` 标记（AST `Expr::Move` 保留）；**新增**：**分配来源跟踪**（VarInfo.source：None 值类型 / NonArena / Arena / Global / Unknown，按 init 形态+类型判定）；**move 合法性**（Arena/global/值类型无所有权 → 编译错误，对齐 C④）；**引用逃逸（Q18）**（`return &局部/参数` → 编译错误，带所有权参数须 `return move`；global 引用放行）；引用类型赋值禁止 / copy 深浅复制保留 |
-| M2.7 | 函数 | 重载（**具体优先于泛型**）、可选参数（尾部默认）、闭包（只读/mut 捕获、env 快照） |
-| M2.6 | 错误码表（**M2.6 完整**，2026-08-16） | 编译器维护「错误名 ↔ 码」全局唯一映射（`hc/src/errorcodes.rs`）；**编码 = 高位 16 位包 ID + 低位 16 位包内序**（L5 定案，跨包不冲突）；每错误记录**首次出现位置**（span）——错误报告以原始错误位置为前提（不输出调用链）；三类来源全收集（错误集声明成员 / `error.X` 字面量 / switch 模式）；`hc errors <file>` 输出表；**错误传播模型**：函数声明错误联合（`E!T`/`!T`）→ `error.X` 沿**值通道**传播直到 `try`/`catch` 处理（try 不转抛错通道，catch 全链可拦截）；**未标记错误类型**（返回值非错误联合）`return error.X` → 编译错误；未处理错误到根作用域 → 记录错误名位置输出（`error.Name at 行:列`）→ panic 式中止（非零退出，无恢复） |
+| M2.7 | 函数 | 重载（**具体优先于泛型**）、可选参数（尾部默认）、闭包（只读/mut/**move** 捕获、**按值返回规则**） |
+| M2.6 | 错误码表（**M2.6 完整**，2026-08-16） | 编译器维护「错误名 ↔ 码」全局唯一映射（`hc/src/errorcodes.rs`）；**编码 = 高位 16 位包 ID + 低位 16 位包内序**（L5 定案，跨包不冲突）；每错误记录**首次出现位置**（span）——错误报告以原始错误位置为前提（不输出调用链）；三类来源全收集（错误集声明成员 / `error.X` 字面量 / switch 模式）；`hc errors <file>` 输出表；**错误传播模型**：函数声明错误联合（`E!T`/`!T`）→ `error.X` 沿**值通道**传播直到 `try`/`catch` 处理（try 不转抛错通道，catch 全链可拦截）；**未标记错误类型**（返回值非错误联合）`return error.X` → 编译错误；未处理错误到根作用域 → 记录错误名位置输出（`error.Name at 行:列`）→ panic 式中止（非零退出，无恢复）；**`!T` 推断收集（Q-S8）**：编译器从函数体收集 `return error.X` + `try`/`return` 传播的实际返回集（固定点闭包，显式 `E!T` const 集并入）；递归自调用无法收集 → 退化为 anyerror + warning 提示显式标注（`hc::inferred_error_sets`） |
 | M3.1 | 共享 IR（**已落地**，2026-08-16） | `hc/src/ir.rs`：线性指令 + 标签形态（`IrInst`/`IrConst`/`IrBinOp`），AST→IR 降级 `lower` + 参考解释器 `run_ir`（双后端共同语义源，ADR-0004）；覆盖：标量运算/比较/短路 `and or`/if（语句 + 表达式 + else-if + optional 捕获 `|v|`）/while（含续步 `(i += 1)`）/return/try/catch（默认值 + 绑定块值，块值只求值一次）/orelse/error 字面量/全局与命名空间调用（多级限定名 `io.net.connect` 展平）/断言内建；**作用域槽分配**（块退出恢复外层绑定）、**复合赋值** `x += 1`、**checked 算术**（溢出 `Overflow`、除/模零 `DivisionByZero`，与 tree-walking arith 一致）；错误值走值通道（try 返回 / catch 拦截）；不做（记录扩展）：defer/errdefer、for/switch、break/continue、闭包、集合/class 方法、指针操作 |
 | M3.2 | 脚本模式 | tree-walking 解释器（`hc run`）；defer/错误传播/`try`/`catch`/`orelse`（含控制流兜底）；**M3.4 修复**：块值（末位表达式语句）+ 多级 namespace 限定调用（io.net.double）；**过渡形态**：`hc run --ir` 显式模式标志接入 IR 参考解释器（M3.2 字节码 VM 的前身，见梯队 11） |
 | M3.4 | 双模式一致性（**已落地**，2026-08-16） | `hc-rt/tests/consistency.rs`：同一程序分别经 **tree-walking 解释器**（脚本模式）与 **IR 参考解释器**（`run_ir`，M3.1 唯一语义源）运行全部 `test fn`，PASS/FAIL 必须完全一致（ADR-0004 承诺根基，CI 硬门槛）；结果归一化：IR `Ok(非错误)` = PASS、`Ok(错误值)` = FAIL（M2.6 未处理错误到根 panic 式失败）、`Err` = FAIL；覆盖 M3.1 切片全功能（标量/短路/if 三形态/while 续步/递归/try/catch/orelse/error 字面量/断言/限定名调用含多级 namespace/作用域遮蔽/复合赋值/除零溢出）；**一致性驱动的运行时修复**：① tree-walker 块值缺漏——`exec_stmt` 丢弃末位表达式值导致 catch 块值/块表达式恒 void（改为末位表达式产生 `Flow::Value`，语句位 if/块丢弃防早退）；② tree-walker 多级 namespace 限定调用未查函数表（eval_call Field 分支先查扁平限定名，与单级 Dot 形态一致） |
 | M4.3 | @ 内建（基础集完整，2026-08-16） | `@` 前缀 token 解析；**@sizeOf**（标量/连续 class 布局与 to_bytes 一致/枚举/引用类型=指针宽）、**@alignOf**（自然对齐）、**@offsetOf**（连续字段偏移含填充）、**@typeOf**（类型名）、**@intCast**（Debug 范围检查溢出抛错）、**@ptrCast**/@alignCast（透传）、**@compileError**（编译期错误拦截）、**@addWithOverflow**/@sub/@mul（(T,bool) 元组）；@intFromEnum/@enumFromInt/@panic 已有 |
 | M4.2 | 错误码运行时表示（**M4.2 完整**，2026-08-16） | **`Value::Err { name, code }`**（码 = M2.6 表「包 ID + 包内码」，全局唯一；运行时未登记错误名动态分配——anyerror 任意码）；比较/匹配/断言走码或名；**根作用域报告带码**（`error.NotFound (0x00000000) at 1:6`）；`@panic`/`ExitType`/`io.exit` 已有；成功路径零额外负载（值枚举无 Err 开销） |
-| M4.4 | 序列化内建 | `to_bytes`/`from_bytes`（连续类型直映射、集合 u64 前缀）、`to_json`/`from_json`（class/Map） |
-| M4.5 | 标量接口族 | `a.add(b)` 等方法形式（add/sub/mul/div/neg/mod/abs/eq/lt）、`String.compare` |
-| M4.6 | 迭代内建 | 数组/切片/Str/Map 可迭代（含 `|kv|` 键值对）；`iter()/filter()/map()` 立即求值链 |
+| M4.4 | 序列化内建（**补全**，2026-08-16） | `to_bytes`/`from_bytes`（连续类型直映射、**packed/align 尊重**、集合 u64 前缀）、`to_json`/`from_json`（class/Map、**堆类型完整**）、`box` 装箱 |
+| M4.5 | 标量接口族（**补全**，2026-08-16） | 内建标量自动实现 `ICompare`/`INumber`/`IInt`/`IUint`/`IFloat`；**运算符绑定**（`a + b` ≡ `a.add(b)`）；**完整方法族**（add/sub/mul/div/neg/mod/abs/eq/lt 等）；String 内建实现 `ICompare` |
+| M4.6 | 迭代内建（**补全**，2026-08-16） | **IIterable 三态**（`IIterable(*T)` / `IIterable(*mut T)` / `IIterable(o T)`）；数组/切片/Vec/Map/Table/String 内建实现；**`iter()` 显式迭代器对象**；`filter()/map()` 立即求值链 |
 | M5.1 | mem | `Arena.init`、`arena.alloc(n)`、`alloc.alloc(n)` |
-| M5.2 | collections | `Vec`（append/len/iter/from_bytes）、`Map`（put/get/contains/remove/len/遍历）、String 方法集（concat/split/join/find/substring/replace/as_slice/to_bytes） |
+| M5.2 | collections（**Deque 补全**，2026-08-16） | `Vec`（append/len/iter/from_bytes）、`Map`（put/get/contains/remove/len/遍历）、String 方法集（concat/split/join/find/substring/replace/as_slice/to_bytes）、**`Deque` 双端**（push_front/back、pop_front/back、front/back、get/put/remove——越界 `IndexOutOfBounds` / 空返回 null，共享 `Value::Arr` 值模型） |
 | M5.4 | io 完整（**M5.4 完整**，2026-08-16） | `io.print` 格式串；`io.fs`（open/create/read_file/read_all/write_all/append/remove/rename/list_dir/read_int/write_int + **seek/pos/read_at/write_at**）；**`io.net` TCP**（connect/listen(0 端口)/local_port/accept 阻塞/write/read(n)/read_all/shutdown/close + **u32 LE 帧读写** read_u32_le/write_u32_le）；程序环境（args/env/stdin 读一行/stdout/stderr/io.exit(ExitType, code)） |
 | M5.5 | 工具 | `io.time.now()`（毫秒）/`sleep`（ms）；`sort`（含比较器闭包）、`binary_search`、`sqrt`、`math` 命名空间、`parse_int`/`parse_float`、parser 辅助内建 |
 | M6.1 | 测试 | `test fn` 收集运行；断言五件套；`[PASS]/[FAIL]/[SKIP]` + 汇总；失败非零退出码；`test_io`/`alloc` 注入 |
 | M7.1 | CLI | `hc run` / `hc run --ir`（IR 参考解释器过渡模式，M3.2 字节码 VM 过渡形态）/ `hc test` / `hc check` / `hc build`（字节码镜像 + 启动器过渡产物） |
+| M7.2 | build.zon 包基础（**已落地**，2026-08-16） | `build.zon` 清单解析（`hc-tools/src/buildzon.rs`：`const build = Build{ name, version, kind, files, deps }` 数据字面量 → Manifest，含尾逗号数组/十六进制 fingerprint/`Kind.exe/lib/script`）；**pub 边界过滤**（AST `Decl`/`FieldDecl` 加 `pub` 字段；语义 `collect_decl_prefixed_filter` + 运行时 `register_*_filter`/`exec_decl_top_filter` 跨包仅登记 `pub` 项）；**本地依赖装载**（`Interp::load_dep` + `hc check/run/test` 经 `load_manifest_deps_into`/`load_deps_into` 递归装载带 `path` 的依赖、visited 防环；无 path 注册中心依赖告警跳过）；`using pkg.xxx` / `pkg.xxx` 跨包访问；示例 `tag1/examples/02-packages/` |
 | **M2.2+** | **语义检查器**（2026-08-15 梯队 1） | 静态 pass（`hc/src/semantic.rs`，load 前运行）：**标量宽度检查**（`var g: u8 = 256` 编译期报错）、**引用赋值禁止**（`var w: Vec(i32) = v` 报错——要求 `copy(&v)` 或指针）、连续类型赋值放行、**错误集成员检查**（return `error.X` 必须属于函数错误集）、**definite assignment（C7）**（`alloc.init(T)` 无参构造后字段未全赋值即 return → 编译期报错）、类型元数据收集 |
 | **M4.3+** | **@ 内建补充**（2026-08-15） | `@intFromEnum`/`@enumFromInt`（变体序 ↔ 枚举，M4.3 子集） |
 | **M8** | **Table 类型**（2026-08-15） | `Table(T).init(alloc, rows, cols, init)` 构造 + `t[i, j]` 多参索引（仅 Table 合法） |
@@ -257,7 +258,7 @@ graph TD
 | M2.5 | **definite assignment（C7）**（2026-08-15 收尾） | `alloc.init(T)` 无参构造跟踪待初始化字段集；字段赋值逐一消除；return 时缺失字段 → CompileError（修复 Dot/Field 解析形态差异） |
 | M2.5/M4.7 | Debug 悬垂标记（**已落地**，2026-08-16） | `&x` 登记目标 cell；**作用域退出 = 目标销毁 → 目标 cell 内容标记 `Value::Dangling`**（有指针持有的 cell 不释放、地址唯一——无地址碰撞误判）；解引用访问（`d.*`/`p.x`/`s[i]`/写路径）已标记 → `DanglingPointer` 抛错**带位置**；`debug_dangling` 开关（Debug 默认开，Release 裸读用户负责）；取指针不抛错（Q18） |
 
-**测试基线（2026-08-16）**：`hc` 前端 **33** 单测（13 原有 + 9 M2.6 + 7 M2.4 + 4 M1.4） + **IR 22**（M3.1） + `hc-rt` errors **17** + semantics **47**（13 原有 + 24 M2.2 + 3 M2.5 + 7 M4.3） + **io 6**（net echo/帧/fs seek/时间/环境/连接拒绝） + **一致性 14**（M3.4） + **hc-tools 8**（`run_ir_source` 单测，M3.2 过渡）全绿；`hc test examples/` 全目录 **122/134 通过**（12 失败全属第三块 E1/E2 特性，见下）。
+**测试基线（2026-08-16）**：`hc` 前端 **34** 单测（13 原有 + 9 M2.6 + 7 M2.4 + 4 M1.4 + 1 ArrayLit 尾逗号） + **IR 22**（M3.1） + `hc-rt` errors **18** + semantics **47**（13 原有 + 24 M2.2 + 3 M2.5 + 7 M4.3） + **io 6**（net echo/帧/fs seek/时间/环境/连接拒绝） + **一致性 14**（M3.4） + **dep 3**（M7.2 跨包/pub 边界） + **hc-tools 13**（8 `run_ir_source` + 5 buildzon，M3.2 过渡/M7.2）全绿；`hc test examples/` 全目录 **120/134 通过**（14 失败分属第三块 E1/E2 特性 + 25/26 跨文件泛型重载碰撞，见下）。
 
 > **2026-08-15 梯队 1 更新**：语义检查器（宽度/引用赋值/错误集成员/definite assignment）、`@intFromEnum`/`@enumFromInt`、Table 类型、copy 浅复制、`.name` 推断枚举均已落地。
 
@@ -283,6 +284,10 @@ graph TD
 
 > **2026-08-16 梯队 11 更新（IR 接入 `hc run --ir`，M3.2 字节码 VM 过渡形态）**：显式模式标志 `hc run --ir <file>` 用 **IR 参考解释器**（`run_ir`，M3.1 唯一语义源）替代 tree-walking 执行（`hc-tools/src/main.rs`，核心抽成 `run_ir_source`——不依赖文件系统/退出码，可单测）。**执行流程**：解析 → 语义检查（准确优先：能精确判定才报错，与 tree-walking load 内建检查对齐）→ `lower` → 查 `func_index` 有 `main`（无 → NoMain）→ `run_ir(module, "main", [])`；**切片范围 = M3.1 切片**（标量/短路/if/while/return/try/catch/orelse/error 字面量/限定名调用/断言内建），**不支持** io/集合/class/闭包/指针/for/switch/defer/break/continue/全局变量；**main 入口**：零参 `main` 可完整运行，`main(io: Io)` 的 io 参数为 Void 占位（用 io.* 走 NoFunction + 提示，正常）；**根错误映射**：`Ok(Err)` → `error.X 到达入口（未处理）` 非零退出（panic 式失败，无恢复）、`Ok(_)` → 成功（退出码 0，main 返回非零 Int 不影响）、`Err(IrError)` → `error.{name}: {message}` 非零退出（NoFunction/TypeError 追加「程序使用了 IR 切片外特性（io/集合/指针等）——请用默认 tree-walking 模式 hc run <file>」提示）；**默认 `hc run`（无 `--ir`）tree-walking 路径零改动**。新增 `hc-tools` 单测 8 个（切片内成功含 if/while/try/catch、main(io) Void 占位、未处理错误、除零、NoMain、切片外 io.print 提示、解析诊断）；示例回归 122/134 不变。
 
+> **2026-08-16 梯队 12 更新（M2/M4 子集补全 + M2.6 `!T` 推断收集）**：按「M2/M4 子集补全」范围逐项落地——① **M4.6 迭代内建补全**（IIterable 三态 `*T`/`*mut T`/`o T` + Vec/Table 迭代 + `iter()` 显式迭代器对象）；② **M4.5 标量接口族**（运算符绑定 `a + b ≡ a.add(b)` + ICompare/INumber/IInt/IUint/IFloat 完整方法族，String 实现 ICompare）；③ **M4.4 序列化内建**（packed/align 尊重 + 堆类型 json 完整 + box）；④ **M2.7 闭包**（move 捕获 + 按值返回规则）；⑤ **M2.3 推断补全**（泛型 T 经 *T 形参绑定、指针形态、多路径返回统一、重载歧义——i32 精确胜 f64、i32/i64 同精度歧义、期望类型传播、具体优先泛型）；⑥ **M2.1 接口三用途真实实现**（implements 契约验证含超接口递归 + where 约束 + 签名兼容精确判定，内建接口跳过）；⑦ **M5.2 Deque 运行时**（push_front/back、pop_front/back、front/back、get/put/remove，越界 `IndexOutOfBounds` / 空 null，共享 `Value::Arr`）；⑧ **M2.6 `!T` 推断收集（Q-S8）**（`hc::inferred_error_sets`：从函数体收集 `return error.X` + `try`/`return` 传播固定点闭包，显式 `E!T` const 集并入；递归自调用 → 退化为 anyerror + warning 提示显式标注）。**测试基线**：新增 `hc/tests/inferred_errors.rs` 6（直接收集/传播/显式并入/递归退化/互递归）、`hc-rt/tests/interfaces.rs` 7、`hc-rt/tests/deque.rs` 4、`hc-rt/tests/inference.rs` 补 5、`hc-rt/tests/closures.rs` 4、`hc-rt/tests/scalar.rs` 2、`hc-rt/tests/serialize.rs` 4；hc 前端 33 + IR 22 + inferred_errors 6 全绿；hc-rt 非 examples 全绿（errors 18 / semantics 47 / consistency 14 / io 6 / iter 4 / interfaces 7 / deque 4 / inference 11 / closures 4 / scalar 2 / serialize 4）；`ex46_recursion` 栈溢出仍为已知红项。**第一部分剩余缺口**：M3.3 LLVM 原生后端、M3.2 字节码 VM（见「未实现」表）。
+
+> **2026-08-16 梯队 13 更新（M7.2 build.zon 包基础 + pub 边界过滤）**：按「M7.2 包基础」范围落地——① **ArrayLit 尾逗号**（`parser.rs` 镜像 TupleLit 尾逗号处理，`[1, 2, ]` 合法——build.zon 的 `files`/`deps` 数组带尾逗号）；② **AST pub 字段**（`Decl::{Global,Const,Fn,Class,Enum,Interface,Namespace}` 与 `FieldDecl` 加 `pub`；`Decl::is_pub()`；类方法默认公开、类字段默认私有不变）；③ **解析器保留 pub**（顶层 `pub` 声明 + 类体 `pub` 字段/方法；`script` 关键字名可解析）；④ **语义侧依赖收集**（`check_with_extern_deps`：同包兄弟 `collect` 全可见 + 依赖包 `collect_dep` 以包名前缀登记、`collect_decl_prefixed_filter` 的 `skip_flat` 抑制扁平名 + `pub_only` 过滤非 pub 项；`hc::check_semantics_extern_deps`）；⑤ **运行时依赖装载**（`Interp::load_dep`：`dep_programs` + `register_type/fn_decl_prefixed_filter` pub+前缀 + `exec_decl_top_filter` pub 全局/常量；不注入 ExitType/不 apply_usings/不 record_error_locs——错误集包隔离）；⑥ **build.zon 解析**（`hc-tools/src/buildzon.rs`：`Manifest`/`Kind`/`Dep`，`parse`/`load_from_dir`，十六进制 fingerprint 复用 `hc_rt::parse_int_text`）；⑦ **CLI 接线**（`hc check/run/test` 经 `load_manifest_deps_into`/`load_deps_into` 递归装载带 `path` 的本地依赖、visited 防环，无 path 注册中心依赖告警跳过；`hc build` 打印包/文件/依赖信息——LLVM 仍归 M3.3）。**测试**：新增 `hc-rt/tests/dep.rs` 3（跨包限定/using 平铺/非 pub 不可见/namespace 前缀）+ `hc-tools` buildzon 5；示例 `tag1/examples/02-packages/`（app 依赖 ../jsonlib，`using jsonlib;` 跨包调用 + `fn secret` 私有不可见）。**基线**：示例回归 **120/134 不变**——14 失败中 12 属 E1/E2/接口错误契约，另 **25/26 为跨文件泛型 `load_config` 重载碰撞**（同目录两文件同名泛型函数经兄弟加载双登记 → 「ambiguous call」CompileError，b538e4a 起既存，非本轮回归）。
+
 ### 未实现（登记后续迭代）
 
 | 模块 | 功能 | 归口 |
@@ -292,14 +297,16 @@ graph TD
 | M2.4/M2.5 | 所有权编译时检查、Debug 悬垂标记——**2026-08-16 已落地**（见已实现表） | M2.4/M2.5/M4.7 |
 | M2.6 | 错误码表（包 ID + 包内码）——**2026-08-16 已落地**（见已实现表） | M2.6 |
 | M2 完整 | 期望类型传播（返回类型参与重载选择）——**2026-08-16 已落地**（静态 match_overloads ret_matches + 运行时 expected_ret，双端一致） | M2 |
+| M3.2 | 字节码 VM（tag1 为 tree-walking 解释器 + IR 参考解释器过渡形态，字节码 VM 归后续） | M3 |
 | M3.3 | LLVM 原生后端（`hc build` 占位——LLVM 依赖外部系统库） | M3 |
 | M4.2 | 错误码运行时表示、`@panic`、`ExitType` 退出映射——**2026-08-16 已落地**（见已实现表） | M4.2 |
 | M4.3 | @ 内建全集——**基础集已落地**（2026-08-16，余下见已实现表） | M4.3 |
 | M5.4 | 真实 io（fs/net/env/args/exit）——**2026-08-16 已落地**（见已实现表） | M5.4 |
 | M5.5 | 时间——**已落地**（2026-08-16 核实：io.time.now/sleep） | M5.5 |
+| M7.2 | build.zon 包基础（依赖清单 = H 数据字面量解析；指纹校验/注册中心归第三块）——**2026-08-16 已落地**（清单解析 + pub 边界过滤 + 本地依赖装载；见已实现表） | M7.2 |
 | E1 | 脚本生成（`script` 块）、comptime 完整（类型即值） | E1（第三块） |
 | E2 | 并发/异步/线程全部 | E2（第三块） |
 
-**示例验收说明（2026-08-16）**：剩余 12 个失败示例分属——E1 元编程（35-comptime、34-generics、63-template）、E2 并发（37–39/76–80）、接口错误契约（24-interface-errors 引用未实现 json/csv 库）——均为第三块（第二部分）特性或未实现库，属已知失败。
+**示例验收说明（2026-08-16）**：剩余 14 个失败示例分属——E1 元编程（35-comptime、34-generics、63-template）、E2 并发（37–39/76–80）、接口错误契约（24-interface-errors 引用未实现 json/csv 库）、**跨文件泛型重载碰撞（25-error-context、26-error-set-union——同目录两文件同名泛型 `load_config` 经兄弟加载双登记 → 重载歧义 CompileError）**——前者均为第三块（第二部分）特性或未实现库，属已知失败；25/26 为 M1.4 跨文件兄弟加载 + M2.3 重载歧义检测的组合，已登记后续处理（跨文件重载去重）。
 
 **已知取舍**：tree-walking 解释器替代字节码 VM；`hc build` 占位（LLVM 依赖外部系统库，留 M3.3）；u64 移位按 64 位截断（xorshift 语义）；闭包捕获整个作用域链（自由变量精确分析留后续）；`ex46_recursion` 递归示例栈溢出（tree-walking 递归深度，测试套件已知红项）。

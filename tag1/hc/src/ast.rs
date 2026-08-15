@@ -15,12 +15,14 @@ pub enum Decl {
         name: String,
         ty: Option<Type>,
         init: Option<Expr>,
+        pub_: bool,
         span: Span,
     },
     Const {
         name: String,
         ty: Option<Type>,
         init: Expr,
+        pub_: bool,
         span: Span,
     },
     Fn {
@@ -32,6 +34,8 @@ pub enum Decl {
         body: Block,
         span: Span,
         is_test: bool,
+        /// 跨包导出（默认私有；`pub` 管包边界）
+        pub_: bool,
     },
     Class {
         name: String,
@@ -39,22 +43,26 @@ pub enum Decl {
         traits: Vec<Trait>,
         fields: Vec<FieldDecl>,
         methods: Vec<Method>,
+        pub_: bool,
         span: Span,
     },
     Enum {
         name: String,
         variants: Vec<EnumVariant>,
+        pub_: bool,
         span: Span,
     },
     Interface {
         name: String,
         supers: Vec<Type>,
         methods: Vec<Method>,
+        pub_: bool,
         span: Span,
     },
     Namespace {
         name: String,
         decls: Vec<Decl>,
+        pub_: bool,
         span: Span,
     },
     Using {
@@ -66,6 +74,22 @@ pub enum Decl {
         body: Block,
         span: Span,
     },
+}
+
+impl Decl {
+    /// 跨包导出标志（`using`/`script` 无包边界概念，恒 false）
+    pub fn is_pub(&self) -> bool {
+        match self {
+            Decl::Global { pub_, .. }
+            | Decl::Const { pub_, .. }
+            | Decl::Fn { pub_, .. }
+            | Decl::Class { pub_, .. }
+            | Decl::Enum { pub_, .. }
+            | Decl::Interface { pub_, .. }
+            | Decl::Namespace { pub_, .. } => *pub_,
+            Decl::Using { .. } | Decl::Script { .. } => false,
+        }
+    }
 }
 
 pub enum Trait {
@@ -106,6 +130,8 @@ pub struct Param {
 pub struct FieldDecl {
     pub name: String,
     pub ty: Type,
+    /// 跨包导出（Q3：属性默认私有，`pub` 显式导出）
+    pub pub_: bool,
     pub span: Span,
 }
 

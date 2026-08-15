@@ -168,6 +168,18 @@ fn main(io: Io) !void {
     parse_source(src).expect("parse alloc.init dual forms");
 }
 
+#[test]
+fn parse_array_trailing_comma() {
+    // ArrayLit 尾逗号（M7.2 build.zon `files`/`deps` 数组依赖）
+    let src = r#"
+const build = Build{
+    files = [ "a.hc", "b.hc", ],
+    deps = [ Pkg{ name = "x", path = "../x" }, ],
+};
+"#;
+    parse_source(src).expect("parse array trailing comma");
+}
+
 // ---------- M2.6 错误码表验收 ----------
 
 use hc::error_code_table;

@@ -99,10 +99,13 @@ impl Parser {
     // ---------- 声明 ----------
 
     fn parse_decl(&mut self) -> Result<Decl, Diagnostic> {
-        // 可见性标注 pub（tag1：包边界检查归 M1.4，此处跳过）
-        if self.at(&TokenKind::KwPub) {
+        // 可见性标注 pub（Q3/M7.2：跨包导出标志，默认私有）
+        let is_pub = if self.at(&TokenKind::KwPub) {
             self.advance();
-        }
+            true
+        } else {
+            false
+        };
         // 特性标注（仅 class 前）：[continuous] [pad] [align(T)]
         let mut traits = Vec::new();
         while self.at(&TokenKind::LBracket) {
@@ -115,11 +118,11 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::KwGlobal => {
                 self.advance();
-                self.parse_global(start)
+                self.parse_global(start, is_pub)
             }
             TokenKind::KwConst => {
                 self.advance();
-                self.parse_const(start)
+                self.parse_const(start, is_pub)
             }
             TokenKind::KwFn => {
                 self.advance();
@@ -132,6 +135,7 @@ impl Parser {
                     body,
                     span,
                     is_test: false,
+                    pub_: is_pub,
                 })
             }
             TokenKind::KwTest => {
@@ -146,19 +150,20 @@ impl Parser {
                     body,
                     span,
                     is_test: true,
+                    pub_: is_pub,
                 })
             }
             TokenKind::KwClass | TokenKind::KwTree => {
                 self.advance();
-                self.parse_class(start, traits)
+                self.parse_class(start, traits, is_pub)
             }
             TokenKind::KwEnum => {
                 self.advance();
-                self.parse_enum(start)
+                self.parse_enum(start, is_pub)
             }
             TokenKind::KwInterface => {
                 self.advance();
-                self.parse_interface(start)
+                self.parse_interface(start, is_pub)
             }
             TokenKind::KwNamespace => {
                 self.advance();
@@ -179,6 +184,7 @@ impl Parser {
                 Ok(Decl::Namespace {
                     name,
                     decls,
+                    pub_: is_pub,
                     span: start.merge(&end),
                 })
             }
@@ -244,7 +250,7 @@ impl Parser {
         Ok(Some(tr))
     }
 
-    fn parse_global(&mut self, start: Span) -> Result<Decl, Diagnostic> {
+    fn parse_global(&mut self, start: Span, is_pub: bool) -> Result<Decl, Diagnostic> {
         let name = self.expect_ident()?;
         let ty = if self.at(&TokenKind::Colon) {
             self.advance();
@@ -263,11 +269,12 @@ impl Parser {
             name,
             ty,
             init,
+            pub_: is_pub,
             span: start,
         })
     }
 
-    fn parse_const(&mut self, start: Span) -> Result<Decl, Diagnostic> {
+    fn parse_const(&mut self, start: Span, is_pub: bool) -> Result<Decl, Diagnostic> {
         let name = self.expect_ident()?;
         let ty = if self.at(&TokenKind::Colon) {
             self.advance();
@@ -297,6 +304,7 @@ impl Parser {
                     vec![],
                 )),
                 init: Expr::VoidLit(span.clone()),
+                pub_: is_pub,
                 span,
             });
         }
@@ -328,6 +336,7 @@ impl Parser {
                         vec![],
                     )),
                     init: Expr::VoidLit(span.clone()),
+                    pub_: is_pub,
                     span,
                 });
             }
@@ -338,6 +347,7 @@ impl Parser {
             name,
             ty,
             init,
+            pub_: is_pub,
             span: start,
         })
     }
@@ -425,7 +435,7 @@ impl Parser {
         Ok(params)
     }
 
-    fn parse_class(&mut self, start: Span, traits: Vec<Trait>) -> Result<Decl, Diagnostic> {
+    fn parse_class(&mut self, start: Span, traits: Vec<Trait>, is_pub: bool) -> Result<Decl, Diagnostic> {
         let name = self.expect_ident()?;
         let mut ifaces = Vec::new();
         if self.at(&TokenKind::Colon) {
@@ -443,6 +453,13 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            // Q3：成员可见性——方法默认公开；属性默认私有，`pub` 显式导出
+            let member_pub = if self.at(&TokenKind::KwPub) {
+                self.advance();
+                true
+            } else {
+                false
+            };
             if self.at(&TokenKind::KwFn) {
                 self.advance();
                 let mstart = self.span();
@@ -455,9 +472,6 @@ impl Parser {
                     body: mbody,
                     span: mspan,
                 });
-            } else if self.at(&TokenKind::KwPub) {
-                // 可见性标注（Q3：方法默认公开、属性默认私有）——tag1：解析并忽略
-                self.advance();
             } else {
                 // 字段：name: Type,（可带 mut 前缀——属性无所有权标注，Q3/H5）
                 if self.at(&TokenKind::KwMut) {
@@ -470,6 +484,7 @@ impl Parser {
                 fields.push(FieldDecl {
                     name: fname,
                     ty: fty,
+                    pub_: member_pub,
                     span: fstart,
                 });
                 if self.at(&TokenKind::Comma) {
@@ -487,11 +502,12 @@ impl Parser {
             traits,
             fields,
             methods,
+            pub_: is_pub,
             span: start.merge(&end),
         })
     }
 
-    fn parse_enum(&mut self, start: Span) -> Result<Decl, Diagnostic> {
+    fn parse_enum(&mut self, start: Span, is_pub: bool) -> Result<Decl, Diagnostic> {
         let name = self.expect_ident()?;
         self.expect(&TokenKind::LBrace, "`{` to open enum body")?;
         let mut variants = Vec::new();
@@ -537,6 +553,7 @@ impl Parser {
         Ok(Decl::Enum {
             name,
             variants,
+            pub_: is_pub,
             span: start.merge(&end),
         })
     }
@@ -587,7 +604,7 @@ impl Parser {
         })
     }
 
-    fn parse_interface(&mut self, start: Span) -> Result<Decl, Diagnostic> {
+    fn parse_interface(&mut self, start: Span, is_pub: bool) -> Result<Decl, Diagnostic> {
         let name = self.expect_ident()?;
         let mut supers = Vec::new();
         if self.at(&TokenKind::Colon) {
@@ -616,6 +633,7 @@ impl Parser {
             name,
             supers,
             methods,
+            pub_: is_pub,
             span: start.merge(&end),
         })
     }
@@ -1884,6 +1902,10 @@ impl Parser {
                         items.push(self.parse_expr()?);
                         if self.at(&TokenKind::Comma) {
                             self.advance();
+                            // 尾逗号：`[a, b, ]`
+                            if self.at(&TokenKind::RBracket) {
+                                break;
+                            }
                         } else {
                             break;
                         }
@@ -2112,6 +2134,11 @@ impl Parser {
             TokenKind::KwNull => {
                 self.advance();
                 Ok("null".to_string())
+            }
+            // M7.2：`Kind.script`（build.zon kind 值）——script 为关键字，作名称放行
+            TokenKind::KwScript => {
+                self.advance();
+                Ok("script".to_string())
             }
             other => Err(Diagnostic::error(
                 self.span(),

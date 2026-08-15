@@ -1,0 +1,11 @@
+// build.zon — jsonlib 依赖包（无依赖）
+//
+// 清单即数据：const build = Build{ ... }（H 数据字面量）
+// 依赖声明跨包可见性由 pub 控制（见 json.hc）。
+
+const build = Build{
+    name = "jsonlib",
+    version = "0.1.0",
+    kind = Kind.lib,
+    files = [ "json.hc", ],
+};

@@ -6,11 +6,14 @@
 //! - `hc build <file.hc>`：tag1 占位（LLVM 原生后端归 M3.3）
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use hc::diag;
 use hc_rt::Interp;
+
+mod buildzon;
 
 const USAGE: &str = "hc <command> [args...]
 
@@ -163,6 +166,22 @@ fn build_file(path: &Path) -> ExitCode {
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
 
+    // M7.2：build.zon 包清单（LLVM 原生后端仍归 M3.3，此处仅报告清单信息）
+    match buildzon::load_from_dir(dir) {
+        Ok(Some(m)) => {
+            println!("包：{} {}（{:?}）", m.name, m.version, m.kind);
+            if !m.files.is_empty() {
+                println!("  文件：{}", m.files.join(", "));
+            }
+            if !m.deps.is_empty() {
+                let names: Vec<&str> = m.deps.iter().map(|d| d.name.as_str()).collect();
+                println!("  依赖：{}", names.join(", "));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("[warn] build.zon 解析失败: {e}"),
+    }
+
     // 2) 字节码镜像：HBC1 + u64 源码长度 + 源码
     let src_bytes = source.as_bytes();
     let mut image = Vec::new();
@@ -252,6 +271,10 @@ fn check_file(path: &Path) -> Result<(), ExitCode> {
             if let Err(code) = load_siblings_into(&mut interp, path) {
                 return Err(code);
             }
+            // M7.2：build.zon 本地依赖
+            if let Err(code) = load_manifest_deps_into(&mut interp, path) {
+                return Err(code);
+            }
             interp.load(&program).map_err(|e| {
                 eprintln!("{}", e.render(&source));
                 ExitCode::FAILURE
@@ -280,6 +303,10 @@ fn run_file(path: &Path) -> ExitCode {
     let mut interp = Interp::new(&source);
     // M1.4：同包兄弟文件（同目录 .hc）先登记符号
     if let Err(code) = load_siblings_into(&mut interp, path) {
+        return code;
+    }
+    // M7.2：build.zon 本地依赖（using pkg.xxx 跨包访问）
+    if let Err(code) = load_manifest_deps_into(&mut interp, path) {
         return code;
     }
     if let Err(e) = interp.load(&program) {
@@ -427,6 +454,109 @@ fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> 
     })
 }
 
+// ---------- M7.2：build.zon 本地依赖装载 ----------
+
+/// 目录顶层 .hc 文件（依赖包文件清单；不递归——目录 = 包）
+fn dir_hc_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().map_or(false, |e| e == "hc") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// 读取目标文件所在目录的 build.zon（如有）并递归装载本地依赖
+fn load_manifest_deps_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let manifest = match buildzon::load_from_dir(dir) {
+        Ok(Some(m)) => m,
+        Ok(None) => return Ok(()),
+        Err(e) => {
+            eprintln!("[warn] build.zon 解析失败: {e}");
+            return Ok(());
+        }
+    };
+    let mut visited = HashSet::new();
+    if let Ok(canon) = std::fs::canonicalize(dir) {
+        visited.insert(canon);
+    }
+    load_deps_into(interp, dir, &manifest, &mut visited)
+}
+
+/// M7.2：递归装载本地依赖包（build.zon `deps` 中带 `path` 的项）；
+/// 无 path 的注册中心依赖跳过；依赖文件缺省回退「目录全部 .hc」。
+fn load_deps_into(
+    interp: &mut Interp,
+    dir: &Path,
+    manifest: &buildzon::Manifest,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<(), ExitCode> {
+    for dep in &manifest.deps {
+        let Some(rel) = &dep.path else {
+            eprintln!(
+                "[warn] 依赖 {} 无本地 path（注册中心归第三块），跳过",
+                dep.name
+            );
+            continue;
+        };
+        let dep_dir = dir.join(rel);
+        let canon = std::fs::canonicalize(&dep_dir).unwrap_or_else(|_| dep_dir.clone());
+        if !visited.insert(canon.clone()) {
+            continue; // 已装载（防环）
+        }
+        let dep_manifest = match buildzon::load_from_dir(&canon) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                eprintln!("[warn] 依赖 {} 目录 {} 无 build.zon", dep.name, canon.display());
+                continue;
+            }
+            Err(e) => {
+                eprintln!("[warn] 依赖 {} 清单解析失败: {e}", dep.name);
+                continue;
+            }
+        };
+        // 依赖包文件清单：缺省回退「该目录全部 .hc」
+        let mut dep_files = if dep_manifest.files.is_empty() {
+            dir_hc_files(&canon)
+        } else {
+            dep_manifest.files.iter().map(|f| canon.join(f)).collect()
+        };
+        dep_files.sort();
+
+        let mut programs: Vec<hc::Program> = Vec::new();
+        for f in &dep_files {
+            match std::fs::read_to_string(f) {
+                Ok(src) => match hc::parse_source(&src) {
+                    Ok(p) => programs.push(p),
+                    Err(diags) => {
+                        eprintln!("[warn] 依赖文件解析失败 {}:", f.display());
+                        for d in &diags {
+                            eprintln!("  {}", d.message);
+                        }
+                    }
+                },
+                Err(e) => eprintln!("[warn] 跳过依赖文件 {}: {e}", f.display()),
+            }
+        }
+        if !programs.is_empty() {
+            let refs: Vec<&hc::Program> = programs.iter().collect();
+            if let Err(e) = interp.load_dep(&dep.name, &refs) {
+                eprintln!("[FAIL] 依赖 {} 装载: {} {}", dep.name, e.name, e.message);
+                return Err(ExitCode::FAILURE);
+            }
+        }
+        // 递归装载依赖的依赖
+        load_deps_into(interp, &canon, &dep_manifest, visited)?;
+    }
+    Ok(())
+}
+
 type ParsedFile = (PathBuf, String, hc::Program);
 
 fn test_dir(target: &Path) -> ExitCode {
@@ -508,6 +638,12 @@ fn test_dir(target: &Path) -> ExitCode {
                     all_ok = false;
                     continue;
                 }
+            }
+            // M7.2：build.zon 本地依赖（using pkg.xxx 跨包访问）
+            if load_manifest_deps_into(&mut interp, f).is_err() {
+                total_f += 1;
+                all_ok = false;
+                continue;
             }
             if let Err(e) = interp.load(program) {
                 eprintln!("[FAIL] {name} (load error: {})", e.name);

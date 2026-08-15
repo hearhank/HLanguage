@@ -180,12 +180,21 @@ enum AllocSource {
 }
 
 pub fn check(program: &Program) -> Vec<Diagnostic> {
-    check_with_extern(program, &[])
+    check_with_extern_deps(program, &[], &[])
 }
 
-/// M1.4：跨文件语义检查——外部（兄弟文件/依赖包）符号并入登记，
+/// M1.4：跨文件语义检查——外部（兄弟文件）符号并入登记，
 /// 使限定名（`Orders.Line`）与 using 导入（`square(5)`）可被准确检查
 pub fn check_with_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnostic> {
+    check_with_extern_deps(program, externs, &[])
+}
+
+/// M7.2：主程序 + 同包兄弟 + 依赖包（包名前缀 + 仅 pub 可见）的联合语义检查
+pub fn check_with_extern_deps(
+    program: &Program,
+    externs: &[&Program],
+    deps: &[(&str, &Program)],
+) -> Vec<Diagnostic> {
     let mut checker = Checker {
         types: HashMap::new(),
         funcs: HashMap::new(),
@@ -200,6 +209,10 @@ pub fn check_with_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnos
     // 先收集外部符号（只登记不检查——诊断归属主文件）
     for ext in externs {
         checker.collect(ext);
+    }
+    // 依赖包：包名前缀 + pub 过滤
+    for (name, dep) in deps {
+        checker.collect_dep(dep, name);
     }
     checker.collect(program);
     checker.apply_usings(program);
@@ -328,6 +341,29 @@ impl Checker {
     /// M1.4：声明收集（Q21 命名空间）——扁平名 + 限定名双登记
     /// （`square` 供包内直接引用 / using 导入；`Math.square` 供限定访问）
     fn collect_decl_prefixed(&mut self, d: &Decl, prefix: &str) {
+        self.collect_decl_prefixed_filter(d, prefix, false, false);
+    }
+
+    /// M7.2：依赖包收集——包名前缀 + 仅 `pub` + 不登记扁平名
+    fn collect_dep(&mut self, program: &Program, prefix: &str) {
+        let p = format!("{prefix}.");
+        for d in &program.decls {
+            self.collect_decl_prefixed_filter(d, &p, true, true);
+        }
+    }
+
+    /// 声明收集核心：`skip_flat` 抑制扁平名（依赖包）；`pub_only` 只登记 `pub` 项（跨包边界）
+    fn collect_decl_prefixed_filter(
+        &mut self,
+        d: &Decl,
+        prefix: &str,
+        skip_flat: bool,
+        pub_only: bool,
+    ) {
+        // 跨包边界：非 pub 顶层声明（含非 pub namespace 整体）不可见
+        if pub_only && !d.is_pub() {
+            return;
+        }
         match d {
             Decl::Class {
                 name,
@@ -347,14 +383,20 @@ impl Checker {
                     },
                     continuous,
                 };
-                if prefix.is_empty() {
+                if skip_flat {
+                    if !prefix.is_empty() {
+                        self.types.insert(format!("{prefix}{name}"), info);
+                    }
+                } else if prefix.is_empty() {
                     self.types.insert(name.clone(), info);
                 } else {
                     self.types.insert(format!("{prefix}{name}"), info.clone());
                     self.types.insert(name.clone(), info);
                 }
                 for m in methods {
-                    self.register_sig(&format!("{name}.{}", m.name), m);
+                    if !skip_flat {
+                        self.register_sig(&format!("{name}.{}", m.name), m);
+                    }
                     if !prefix.is_empty() {
                         self.register_sig(&format!("{prefix}{name}.{}", m.name), m);
                     }
@@ -367,7 +409,11 @@ impl Checker {
                     },
                     continuous: false,
                 };
-                if prefix.is_empty() {
+                if skip_flat {
+                    if !prefix.is_empty() {
+                        self.types.insert(format!("{prefix}{name}"), info);
+                    }
+                } else if prefix.is_empty() {
                     self.types.insert(name.clone(), info);
                 } else {
                     self.types.insert(format!("{prefix}{name}"), info.clone());
@@ -387,7 +433,11 @@ impl Checker {
                     },
                     continuous: false,
                 };
-                if prefix.is_empty() {
+                if skip_flat {
+                    if !prefix.is_empty() {
+                        self.types.insert(format!("{prefix}{name}"), info);
+                    }
+                } else if prefix.is_empty() {
                     self.types.insert(name.clone(), info);
                 } else {
                     self.types.insert(format!("{prefix}{name}"), info.clone());
@@ -405,10 +455,12 @@ impl Checker {
                 let sig = self.make_sig(params.clone(), ret.clone(), where_clause.clone());
                 // test fn 不进重载池（运行时按 test 名收集）
                 if !is_test {
-                    self.funcs
-                        .entry(name.clone())
-                        .or_default()
-                        .push(sig.clone());
+                    if !skip_flat {
+                        self.funcs
+                            .entry(name.clone())
+                            .or_default()
+                            .push(sig.clone());
+                    }
                     if !prefix.is_empty() {
                         self.funcs
                             .entry(format!("{prefix}{name}"))
@@ -419,7 +471,9 @@ impl Checker {
             }
             Decl::Global { name, ty, .. } => {
                 if let Some(t) = ty {
-                    self.globals.insert(name.clone(), t.clone());
+                    if !skip_flat {
+                        self.globals.insert(name.clone(), t.clone());
+                    }
                     if !prefix.is_empty() {
                         self.globals.insert(format!("{prefix}{name}"), t.clone());
                     }
@@ -431,7 +485,9 @@ impl Checker {
                     if let Some(rest) = tn.strip_prefix("error_set:") {
                         let members: ErrorSet =
                             rest.split(',').map(|s| s.trim().to_string()).collect();
-                        self.error_sets.insert(name.clone(), members.clone());
+                        if !skip_flat {
+                            self.error_sets.insert(name.clone(), members.clone());
+                        }
                         if !prefix.is_empty() {
                             self.error_sets.insert(format!("{prefix}{name}"), members);
                         }
@@ -439,10 +495,16 @@ impl Checker {
                 }
             }
             Decl::Namespace { name, decls, .. } => {
-                self.namespaces.insert(name.clone());
+                if skip_flat {
+                    if !prefix.is_empty() {
+                        self.namespaces.insert(format!("{prefix}{name}"));
+                    }
+                } else {
+                    self.namespaces.insert(name.clone());
+                }
                 let np = format!("{prefix}{name}.");
                 for inner in decls {
-                    self.collect_decl_prefixed(inner, &np);
+                    self.collect_decl_prefixed_filter(inner, &np, skip_flat, pub_only);
                 }
             }
             _ => {}
@@ -891,6 +953,7 @@ impl Checker {
                 name,
                 ty,
                 init,
+                pub_: _,
                 span,
             } => {
                 // 全局初始化宽度检查

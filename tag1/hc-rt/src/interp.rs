@@ -202,6 +202,8 @@ pub struct Interp {
     error_names: Vec<String>,
     /// M1.4：同包兄弟文件（外部符号——跨文件语义检查用）
     extern_programs: Vec<Program>,
+    /// M7.2：依赖包（包名 + 程序；跨包语义检查 + pub 过滤装载用）
+    dep_programs: Vec<(String, Program)>,
 }
 
 impl Interp {
@@ -232,6 +234,7 @@ impl Interp {
             error_codes: HashMap::new(),
             error_names: Vec::new(),
             extern_programs: Vec::new(),
+            dep_programs: Vec::new(),
         }
     }
 
@@ -289,9 +292,14 @@ impl Interp {
 
     pub fn load(&mut self, program: &Program) -> Result<()> {
         // 第零遍：语义检查（M2 静态 pass——宽度/引用赋值/类型错误编译期报错；
-        // M1.4：同包兄弟文件符号并入，跨文件引用可准确检查）
+        // M1.4：同包兄弟文件符号并入；M7.2：依赖包按包名前缀 + pub 过滤并入）
         let externs: Vec<&Program> = self.extern_programs.iter().collect();
-        let diags = hc::check_semantics_extern(program, &externs);
+        let deps: Vec<(&str, &Program)> = self
+            .dep_programs
+            .iter()
+            .map(|(n, p)| (n.as_str(), p))
+            .collect();
+        let diags = hc::check_semantics_extern_deps(program, &externs, &deps);
         if let Some(d) = diags.iter().find(|d| d.is_error()) {
             return Err(RtError::msg(
                 "CompileError",
@@ -435,6 +443,31 @@ impl Interp {
         Ok(())
     }
 
+    /// M7.2：加载依赖包声明——包名前缀登记，仅 `pub` 项可见（跨包边界），
+    /// 不登记扁平名（不污染主包命名空间）、不注入 ExitType、不展开依赖自身 using、
+    /// 不并入错误集（错误码按包隔离，tag1 单包 ID 0）。
+    pub fn load_dep(&mut self, name: &str, programs: &[&Program]) -> Result<()> {
+        for p in programs {
+            self.dep_programs.push((name.to_string(), (*p).clone()));
+        }
+        for p in programs {
+            for d in &p.decls {
+                self.register_type_decl_prefixed_filter(d, name, true, true)?;
+            }
+        }
+        for p in programs {
+            for d in &p.decls {
+                self.register_fn_decl_prefixed_filter(d, name, true, true)?;
+            }
+        }
+        for p in programs {
+            for d in &p.decls {
+                self.exec_decl_top_filter(d, name, true)?;
+            }
+        }
+        Ok(())
+    }
+
     fn register_type_decl(&mut self, d: &Decl) -> Result<()> {
         self.register_type_decl_prefixed(d, "")
     }
@@ -443,6 +476,20 @@ impl Interp {
     /// 扁平名（`Line`）供包内直接引用；限定名（`Orders.Line`）供
     /// `Vec(Orders.Line)` / `Orders.Line{...}` 限定访问（M1.4）。
     fn register_type_decl_prefixed(&mut self, d: &Decl, prefix: &str) -> Result<()> {
+        self.register_type_decl_prefixed_filter(d, prefix, false, false)
+    }
+
+    /// 类型登记核心：`skip_flat` 抑制扁平名（依赖包）；`pub_only` 只登记 pub（跨包边界）
+    fn register_type_decl_prefixed_filter(
+        &mut self,
+        d: &Decl,
+        prefix: &str,
+        skip_flat: bool,
+        pub_only: bool,
+    ) -> Result<()> {
+        if pub_only && !d.is_pub() {
+            return Ok(());
+        }
         match d {
             Decl::Class {
                 name,
@@ -463,7 +510,9 @@ impl Interp {
                     fields: fields.clone(),
                     methods: methods.clone(),
                 };
-                self.types.insert(name.clone(), type_def.clone());
+                if !skip_flat {
+                    self.types.insert(name.clone(), type_def.clone());
+                }
                 if !prefix.is_empty() {
                     self.types.insert(qname.clone(), type_def);
                 }
@@ -485,7 +534,9 @@ impl Interp {
                 let type_def = TypeDef::Enum {
                     variants: variants.clone(),
                 };
-                self.types.insert(name.clone(), type_def.clone());
+                if !skip_flat {
+                    self.types.insert(name.clone(), type_def.clone());
+                }
                 if !prefix.is_empty() {
                     self.types.insert(format!("{prefix}.{name}"), type_def);
                 }
@@ -494,7 +545,9 @@ impl Interp {
                 let type_def = TypeDef::Interface {
                     supers: supers.clone(),
                 };
-                self.types.insert(name.clone(), type_def.clone());
+                if !skip_flat {
+                    self.types.insert(name.clone(), type_def.clone());
+                }
                 if !prefix.is_empty() {
                     self.types.insert(format!("{prefix}.{name}"), type_def);
                 }
@@ -506,7 +559,7 @@ impl Interp {
                     format!("{prefix}.{name}")
                 };
                 for inner in decls {
-                    self.register_type_decl_prefixed(inner, &new_prefix)?;
+                    self.register_type_decl_prefixed_filter(inner, &new_prefix, skip_flat, pub_only)?;
                 }
             }
             _ => {}
@@ -520,14 +573,14 @@ impl Interp {
 
     /// 兄弟文件函数注册：跳过 test fn 与 main（M1.4 包加载）
     fn register_fn_decl_skip_entry(&mut self, d: &Decl) -> Result<()> {
-        self.register_fn_decl_prefixed_filter(d, "", true)
+        self.register_fn_decl_prefixed_filter(d, "", true, false)
     }
 
     /// 函数注册（Q21 命名空间）：扁平名 + 限定名双注册。
     /// 扁平名（`square`）供 `using Math;` 后直接调用；限定名（`Math.square`）
     /// 供 `Math.square(5)` 静态调用（eval_call Dot 分支经 funcs 命中）。
     fn register_fn_decl_prefixed(&mut self, d: &Decl, prefix: &str) -> Result<()> {
-        self.register_fn_decl_prefixed_filter(d, prefix, false)
+        self.register_fn_decl_prefixed_filter(d, prefix, false, false)
     }
 
     fn register_fn_decl_prefixed_filter(
@@ -535,7 +588,11 @@ impl Interp {
         d: &Decl,
         prefix: &str,
         skip_entry: bool,
+        pub_only: bool,
     ) -> Result<()> {
+        if pub_only && !d.is_pub() {
+            return Ok(());
+        }
         match d {
             Decl::Fn {
                 name,
@@ -583,7 +640,7 @@ impl Interp {
                     format!("{prefix}.{name}")
                 };
                 for inner in decls {
-                    self.register_fn_decl_prefixed_filter(inner, &new_prefix, skip_entry)?;
+                    self.register_fn_decl_prefixed_filter(inner, &new_prefix, skip_entry, pub_only)?;
                 }
             }
             _ => {}
@@ -623,6 +680,54 @@ impl Interp {
             }
             Decl::Script { .. } => {
                 // E1：第三块实现；tag1 不执行
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// M7.2：依赖包 global/const 初始化——限定名登记（`json.CONST`），仅 pub 项。
+    /// 错误集别名不导出（错误码按包隔离）。
+    fn exec_decl_top_filter(&mut self, d: &Decl, prefix: &str, pub_only: bool) -> Result<()> {
+        if pub_only && !d.is_pub() {
+            return Ok(());
+        }
+        match d {
+            Decl::Global { name, init, .. } => {
+                let v = match init {
+                    Some(e) => self.eval(e)?,
+                    None => Value::Void,
+                };
+                let key = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                self.globals.insert(key, Rc::new(RefCell::new(v)));
+            }
+            Decl::Const { name, init, ty, .. } => {
+                if let Some(Type::Named(tn, _)) = ty {
+                    if tn.starts_with("error_set:") {
+                        return Ok(());
+                    }
+                }
+                let v = self.eval(init)?;
+                let key = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                self.globals.insert(key, Rc::new(RefCell::new(v)));
+            }
+            Decl::Namespace { name, decls, .. } => {
+                let new_prefix = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                for inner in decls {
+                    self.exec_decl_top_filter(inner, &new_prefix, pub_only)?;
+                }
             }
             _ => {}
         }

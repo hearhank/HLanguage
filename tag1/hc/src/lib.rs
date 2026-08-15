@@ -27,6 +27,23 @@ pub fn check_semantics_extern(program: &Program, externs: &[&Program]) -> Vec<Di
     semantic::check_with_extern(program, externs)
 }
 
+/// M7.2：主程序 + 依赖包联合语义检查（依赖包以包名前缀登记、仅 pub 可见）
+pub fn check_semantics_deps(
+    program: &Program,
+    deps: &[(&str, &Program)],
+) -> Vec<Diagnostic> {
+    semantic::check_with_extern_deps(program, &[], deps)
+}
+
+/// M7.2：主程序 + 同包兄弟 + 依赖包的联合语义检查（兄弟全可见；依赖按前缀 + pub）
+pub fn check_semantics_extern_deps(
+    program: &Program,
+    externs: &[&Program],
+    deps: &[(&str, &Program)],
+) -> Vec<Diagnostic> {
+    semantic::check_with_extern_deps(program, externs, deps)
+}
+
 /// 错误码表（M2.6）：编译期维护「错误名 ↔ 码」全局唯一映射（tag1 单包 = 包 ID 0）
 pub fn error_code_table(program: &Program) -> ErrorCodeTable {
     errorcodes::collect(program, 0)
