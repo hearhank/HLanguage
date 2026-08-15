@@ -187,3 +187,293 @@ test fn t() !void {
 }\n",
     );
 }
+
+// ---------- M2.2 表达式级类型检查验收 ----------
+
+#[test]
+fn m22_var_init_type_mismatch() {
+    // 表达式级类型检查：var x: i32 = 字符串 → 编译错误
+    run_compile_error(
+        "fn main(io: Io) !void { var x: i32 = \"str\"; }\n",
+        "type mismatch",
+    );
+}
+
+#[test]
+fn m22_return_type_mismatch() {
+    // 期望类型传播：return 表达式 vs 函数返回类型
+    run_compile_error(
+        "fn f() i32 { return \"str\"; }\nfn main(io: Io) !void {}\n",
+        "type mismatch in return",
+    );
+}
+
+#[test]
+fn m22_return_ok() {
+    run_ok("fn f() f64 { return 3.5; }\ntest fn t() !void { try expect_eq(f(), 3.5); }\n");
+}
+
+#[test]
+fn m22_named_lit_unknown_field() {
+    // NamedLit 构造：未知字段
+    run_compile_error(
+        "[continuous]
+class Point { x: f32, y: f32 }
+test fn t() !void {
+    var p = Point{ x = 1.0, z = 2.0 };
+}\n",
+        "unknown field",
+    );
+}
+
+#[test]
+fn m22_named_lit_missing_field() {
+    // NamedLit 构造：必填字段缺失
+    run_compile_error(
+        "[continuous]
+class Point { x: f32, y: f32 }
+test fn t() !void {
+    var p = Point{ x = 1.0 };
+}\n",
+        "missing field",
+    );
+}
+
+#[test]
+fn m22_named_lit_field_type_mismatch() {
+    // NamedLit 构造：字段类型不匹配
+    run_compile_error(
+        "[continuous]
+class Point { x: f32, y: f32 }
+test fn t() !void {
+    var p = Point{ x = \"s\", y = 2.0 };
+}\n",
+        "type mismatch in field",
+    );
+}
+
+#[test]
+fn m22_field_access_unknown() {
+    // 字段访问：不存在字段
+    run_compile_error(
+        "[continuous]
+class Point { x: f32, y: f32 }
+test fn t() !void {
+    var p = Point{ x = 1.0, y = 2.0 };
+    io.print(\"{}\n\", p.z);
+}\n",
+        "has no field",
+    );
+}
+
+#[test]
+fn m22_field_access_len() {
+    // 内建字段：容器 .len
+    run_ok(
+        "test fn t() !void {
+    var v = Vec(i32).init(alloc);
+    v.append(1);
+    v.append(2);
+    try expect_eq(v.len, 2);
+}\n",
+    );
+}
+
+#[test]
+fn m22_table_double_index_ok() {
+    run_ok(
+        "test fn t() !void {
+    var tbl = Table(i32).init(alloc, 2, 2, 0);
+    try expect_eq(tbl[1, 0], 0);
+}\n",
+    );
+}
+
+#[test]
+fn m22_continuous_rejects_ref_field() {
+    // 存储形态验证：[continuous] 含引用字段 → 编译错误
+    run_compile_error(
+        "[continuous]
+class Bad { s: String }
+test fn t() !void {}\n",
+        "non-value field",
+    );
+}
+
+#[test]
+fn m22_binary_numeric_required() {
+    // 运算符检查：算术需数值
+    run_compile_error(
+        "test fn t() !void {
+    var x = 1 + \"a\";
+}\n",
+        "requires numeric",
+    );
+}
+
+#[test]
+fn m22_binary_integer_required() {
+    // 位运算需整数
+    run_compile_error(
+        "test fn t() !void {
+    var x = 1.0 & 2.0;
+}\n",
+        "requires integer",
+    );
+}
+
+#[test]
+fn m22_binary_ok() {
+    run_ok(
+        "test fn t() !void {
+    try expect_eq(1 + 2 * 3, 7);
+    try expect_eq(10 >> 1, 5);
+}\n",
+    );
+}
+
+#[test]
+fn m22_condition_requires_bool() {
+    // 条件表达式检查
+    run_compile_error(
+        "[continuous]
+class Foo { a: i32 }
+test fn t() !void {
+    var f = Foo{ a = 1 };
+    if (f) { }
+}\n",
+        "condition must be",
+    );
+}
+
+#[test]
+fn m22_for_not_iterable() {
+    // 迭代契约：不可迭代类型 → 编译错误
+    run_compile_error(
+        "test fn t() !void {
+    var n = 42;
+    for (n) |x| { }
+}\n",
+        "not iterable",
+    );
+}
+
+#[test]
+fn m22_for_iterable_ok() {
+    run_ok(
+        "test fn t() !void {
+    var sum = 0;
+    for ([1, 2, 3]) |x| { sum += x; }
+    try expect_eq(sum, 6);
+}\n",
+    );
+}
+
+#[test]
+fn m22_where_constraint_satisfied() {
+    // 泛型 where 约束：T=整数满足 INumber → 通过
+    run_ok(
+        "fn sum(items: &[T]) T where T: INumber {
+    var total = items[0];
+    for (items[1..]) |v| { total = total + v; }
+    return total;
+}
+test fn t() !void {
+    var ints = [10, 20, 30];
+    try expect_eq(sum(&ints), 60);
+}\n",
+    );
+}
+
+#[test]
+fn m22_where_constraint_violated() {
+    // 泛型 where 约束违反：Point 不实现 INumber → 编译错误
+    run_compile_error(
+        "[continuous]
+class Point { x: f32 }
+fn sum(items: &[T]) T where T: INumber {
+    return items[0];
+}
+test fn t() !void {
+    var pts = [Point{ x = 1.0 }];
+    var s = sum(&pts);
+}\n",
+        "does not satisfy",
+    );
+}
+
+#[test]
+fn m22_enum_variant_rejected() {
+    // 枚举变体校验
+    run_compile_error(
+        "enum Kind { player, enemy }
+test fn t() !void {
+    var k = Kind.chest;
+}\n",
+        "has no variant",
+    );
+}
+
+#[test]
+fn m22_orelse_requires_optional() {
+    // orelse 需可选值
+    run_compile_error(
+        "test fn t() !void {
+    var x = 1 orelse 2;
+}\n",
+        "requires an optional",
+    );
+}
+
+#[test]
+fn m22_try_requires_error_union() {
+    // try 需错误联合
+    run_compile_error(
+        "fn f() i32 { return 1; }
+test fn t() !void {
+    var x = try f();
+}\n",
+        "requires an error union",
+    );
+}
+
+#[test]
+fn m22_tuple_destructure_mismatch() {
+    // 元组解构数量不匹配
+    run_compile_error(
+        "fn divmod(a: i32, b: i32) (i32, i32) { return (a / b, a % b); }
+test fn t() !void {
+    var (q, r, s) = divmod(10, 3);
+}\n",
+        "tuple destructure",
+    );
+}
+
+#[test]
+fn m22_assign_pointer_field() {
+    // 方法内通过 self 指针写字段（自动解引用）→ 通过
+    run_ok(
+        "class Counter {
+    mut count: i32,
+    fn inc(self: *mut Self) void { self.count += 1; }
+}
+test fn t() !void {
+    var c = alloc.init(Counter);
+    c.count = 0;
+    c.inc();
+    try expect_eq(c.count, 1);
+}\n",
+    );
+}
+
+#[test]
+fn m22_slice_range_index() {
+    // 范围索引 arr[1..] → 切片
+    run_ok(
+        "test fn t() !void {
+    var arr = [1, 2, 3, 4];
+    var s: &[i32] = &arr[1..];
+    try expect_eq(s.len, 3);
+}\n",
+    );
+}

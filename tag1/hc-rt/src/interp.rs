@@ -403,6 +403,7 @@ impl Interp {
                 body,
                 is_test,
                 span,
+                ..
             } => {
                 // 兄弟文件：不登记 test fn（测试归属目标文件）与 main（入口归属目标文件）
                 if skip_entry && (*is_test || name == "main") {

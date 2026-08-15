@@ -123,11 +123,12 @@ impl Parser {
             }
             TokenKind::KwFn => {
                 self.advance();
-                let (name, params, ret, body, span) = self.parse_fn_rest(start)?;
+                let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
                 Ok(Decl::Fn {
                     name,
                     params,
                     ret,
+                    where_clause,
                     body,
                     span,
                     is_test: false,
@@ -136,11 +137,12 @@ impl Parser {
             TokenKind::KwTest => {
                 self.advance();
                 self.expect(&TokenKind::KwFn, "`fn` after `test`")?;
-                let (name, params, ret, body, span) = self.parse_fn_rest(start)?;
+                let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
                 Ok(Decl::Fn {
                     name,
                     params,
                     ret,
+                    where_clause,
                     body,
                     span,
                     is_test: true,
@@ -339,7 +341,17 @@ impl Parser {
     fn parse_fn_rest(
         &mut self,
         start: Span,
-    ) -> Result<(String, Vec<Param>, Option<Type>, Block, Span), Diagnostic> {
+    ) -> Result<
+        (
+            String,
+            Vec<Param>,
+            Option<Type>,
+            Vec<(String, Type)>,
+            Block,
+            Span,
+        ),
+        Diagnostic,
+    > {
         let name = self.expect_name_or_keyword()?;
         self.expect(&TokenKind::LParen, "`(` after function name")?;
         let params = self.parse_params()?;
@@ -349,7 +361,8 @@ impl Parser {
         } else {
             None
         };
-        // where 子句（tag1：解析并忽略——接口约束运行时拆除归 M2）
+        // where 子句（M2.2：泛型约束保存，供语义检查器验证调用点约束）
+        let mut where_clause: Vec<(String, Type)> = Vec::new();
         if self.at(&TokenKind::KwWhere) {
             self.advance();
             // 方法名恰为 `where` 时此处不是约束子句
@@ -357,9 +370,10 @@ impl Parser {
                 // 回退：已消费 where 关键字本身（函数名）；直接返回
             } else {
                 loop {
-                    let _ = self.expect_ident()?;
+                    let tn = self.expect_ident()?;
                     self.expect(&TokenKind::Colon, "`:` in where clause")?;
-                    let _ = self.parse_type()?;
+                    let iface = self.parse_type()?;
+                    where_clause.push((tn, iface));
                     if self.at(&TokenKind::Comma) {
                         self.advance();
                     } else {
@@ -370,7 +384,7 @@ impl Parser {
         }
         let body = self.parse_block()?;
         let end = self.span();
-        Ok((name, params, ret, body, start.merge(&end)))
+        Ok((name, params, ret, where_clause, body, start.merge(&end)))
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, Diagnostic> {
@@ -428,11 +442,12 @@ impl Parser {
             if self.at(&TokenKind::KwFn) {
                 self.advance();
                 let mstart = self.span();
-                let (mname, mparams, mret, mbody, mspan) = self.parse_fn_rest(mstart)?;
+                let (mname, mparams, mret, mwhere, mbody, mspan) = self.parse_fn_rest(mstart)?;
                 methods.push(Method {
                     name: mname,
                     params: mparams,
                     ret: mret,
+                    where_clause: mwhere,
                     body: mbody,
                     span: mspan,
                 });
@@ -536,12 +551,14 @@ impl Parser {
             None
         };
         // where 子句（接口方法：where T: Io）
+        let mut where_clause: Vec<(String, Type)> = Vec::new();
         if self.at(&TokenKind::KwWhere) {
             self.advance();
             loop {
-                let _ = self.expect_ident()?;
+                let tn = self.expect_ident()?;
                 self.expect(&TokenKind::Colon, "`:` in where clause")?;
-                let _ = self.parse_type()?;
+                let iface = self.parse_type()?;
+                where_clause.push((tn, iface));
                 if self.at(&TokenKind::Comma) {
                     self.advance();
                 } else {
@@ -557,6 +574,7 @@ impl Parser {
             name,
             params,
             ret,
+            where_clause,
             body: Block {
                 stmts: vec![],
                 span: mspan.clone(),

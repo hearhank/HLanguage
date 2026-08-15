@@ -27,6 +27,8 @@ pub enum Decl {
         name: String,
         params: Vec<Param>,
         ret: Option<Type>,
+        /// where 子句（M2.2：泛型约束）：(泛型参数名, 约束接口)
+        where_clause: Vec<(String, Type)>,
         body: Block,
         span: Span,
         is_test: bool,
@@ -112,6 +114,8 @@ pub struct Method {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
+    /// where 子句（M2.2：泛型约束）：(泛型参数名, 约束接口)
+    pub where_clause: Vec<(String, Type)>,
     pub body: Block,
     pub span: Span,
 }

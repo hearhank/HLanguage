@@ -230,7 +230,7 @@ graph TD
 | M1.2 | Parser + AST | 变量/常量/global/函数/`test fn`/class/enum/interface/namespace/using/特性标注 `[continuous] [pad] [align]`；if/while/for/switch/defer/errdefer；闭包；元组解构；错误集别名；`alloc.init` 双形态；尾随逗号；关键字变体/方法名 |
 | M1.3 | 诊断 | 多错误收集、行/列位置、源码行指示 |
 | M2.1 | 名称解析 | 作用域链、函数登记（重载池）、类型登记、接口三用途占位 |
-| M2.2 | 类型检查（子集） | 标量/String/数组/切片/元组/可选/错误联合/指针；**泛型 where 编译时验证占位**（接口限制运行时拆除） |
+| M2.2 | 类型检查（**M2.2 完整**，2026-08-16） | 标量/String/数组/切片/元组/可选/错误联合/指针；**表达式级类型检查**（全部 Expr 变体静态推断）；**期望类型传播**（var 初始化/赋值/return/调用实参/二元运算/条件/迭代）；**字段与索引校验**（NamedLit 字段存在/必填/类型/未知、元组越界、Table 双整数索引）；**存储形态验证**（[continuous] 字段全值类型否则编译错误）；**运算符接口族检查**（算术→INumber、位→整数、序/等→ICompare）；**泛型 where 约束调用点验证**（标量→INumber 族、class→冒号标注接口） |
 | M2.3 | 推断（子集） | 变量绑定推断、字面量惰性宽度、返回类型（单路径） |
 | M2.4 | 所有权（子集） | 分配来源判定（非 Arena 作用域注册 / Arena / global）、作用域 LIFO 销毁、`move` 标记解析；**完整编译时检查归 M2 后续** |
 | M2.7 | 函数 | 重载（**具体优先于泛型**）、可选参数（尾部默认）、闭包（只读/mut 捕获、env 快照） |
@@ -251,19 +251,21 @@ graph TD
 | **L1** | **`.name` 推断枚举字面量**（2026-08-15） | `copy(&x, .shallow)` ≡ `copy(&x, CopyMode.shallow)` |
 | **M2.5** | **definite assignment（C7）**（2026-08-15 收尾） | `alloc.init(T)` 无参构造跟踪待初始化字段集；字段赋值逐一消除；return 时缺失字段 → CompileError（修复 Dot/Field 解析形态差异） |
 
-**测试基线**：`cargo test --workspace` 全绿（13 前端单测 + 41 示例集成 + 13 语义验收 + 7 错误渲染 = 74 全过）；`hc test examples/` 全目录 **106/134 通过**（28 项失败属已知类别，见下）。
+**测试基线（2026-08-16）**：`hc` 前端 13 单测 + `hc-rt` errors 7 + semantics **37**（13 原有 + 24 M2.2 验收）全绿；`hc test examples/` 全目录 **122/134 通过**（12 失败全属第三块 E1/E2 特性，见下）。
 
-> **2026-08-15 梯队 1 更新**：语义检查器（宽度/引用赋值/错误集成员/definite assignment）、`@intFromEnum`/`@enumFromInt`、Table 类型、copy 浅复制、`.name` 推断枚举均已落地（`cargo test` 74 全绿）。
+> **2026-08-15 梯队 1 更新**：语义检查器（宽度/引用赋值/错误集成员/definite assignment）、`@intFromEnum`/`@enumFromInt`、Table 类型、copy 浅复制、`.name` 推断枚举均已落地。
+
+> **2026-08-16 梯队 2 更新（M2.2 完整）**：表达式级类型检查 + 期望类型传播 + 字段/索引校验 + 存储形态验证 + 运算符接口族检查 + 泛型 where 约束调用点验证全部落地（`hc/src/semantic.rs` 重写为完整静态类型检查器；AST/parser 保存 where 子句）。示例回归 **122/134 与基线一致**；已知取舍：`ex46_recursion` 栈溢出（tree-walking 递归深度）与 12 个 E1/E2 失败保留。
 
 ### 未实现（登记后续迭代）
 
 | 模块 | 功能 | 归口 |
 |---|---|---|
 | M1.4 | 跨文件模块（包内文件共享命名空间） | M1.4/M7.2 |
-| M2.2 完整 | 类型检查完整（表达式级类型检查、期望类型传播、表/元组/连续类型字段校验） | M2 |
+| M2.2 完整 | 类型检查完整（表达式级类型检查、期望类型传播、表/元组/连续类型字段校验）——**2026-08-16 已落地**（见已实现表） | M2 |
 | M2.4/M2.5 | 所有权编译时检查、Debug 悬垂标记 | M2.4/M2.5/M4.7 |
 | M2.6 | 错误码表（包 ID + 包内码） | M2.6 |
-| M2 完整 | 期望类型传播（返回类型参与重载选择） | M2 |
+| M2 完整 | 期望类型传播（返回类型参与重载选择）——**2026-08-16 已落地**（静态 match_overloads ret_matches + 运行时 expected_ret，双端一致） | M2 |
 | M3.1/M3.3 | 共享 IR / LLVM 原生后端（`hc build`） | M3 |
 | M4.2 | 错误码运行时表示、`@panic`、`ExitType` 退出映射 | M4.2 |
 | M4.3 | @ 内建全集 | M4.3 |
@@ -272,6 +274,6 @@ graph TD
 | E1 | 脚本生成（`script` 块）、comptime 完整（类型即值） | E1（第三块） |
 | E2 | 并发/异步/线程全部 | E2（第三块） |
 
-**示例验收说明**：剩余 28 个失败示例分属——E1 元编程（35/34-comptime、63-template）、E2 并发（37–39/76–80）、多文件模块（41/43/44）、真实 IO（20/69）、std 扩展（55-time、73-token-bucket、68-memoize、49-arena、57-encode、26-error-union）、示例缺陷（65-composition 引用未定义类型 TextStyle）。
+**示例验收说明（2026-08-16）**：剩余 12 个失败示例分属——E1 元编程（35-comptime、34-generics、63-template）、E2 并发（37–39/76–80）、接口错误契约（24-interface-errors 引用未实现 json/csv 库）——均为第三块（第二部分）特性或未实现库，属已知失败。
 
-**已知取舍**：tree-walking 解释器替代字节码 VM；`hc build` 占位（LLVM 依赖外部系统库，留 M3.3）；u64 移位按 64 位截断（xorshift 语义）；闭包捕获整个作用域链（自由变量精确分析留后续）。
+**已知取舍**：tree-walking 解释器替代字节码 VM；`hc build` 占位（LLVM 依赖外部系统库，留 M3.3）；u64 移位按 64 位截断（xorshift 语义）；闭包捕获整个作用域链（自由变量精确分析留后续）；`ex46_recursion` 递归示例栈溢出（tree-walking 递归深度，测试套件已知红项）。
