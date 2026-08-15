@@ -174,6 +174,10 @@ pub struct Interp {
     pub args: Vec<String>,
     /// 错误名 → 首次出现位置（M2.6 错误码表；根作用域未处理错误报告定位用）
     error_locs: HashMap<String, Span>,
+    /// M2.5/M4.7 Debug 悬垂标记：被取过地址的目标 cell 地址集合
+    tracked: std::collections::HashSet<usize>,
+    /// Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
+    debug_dangling: bool,
 }
 
 impl Interp {
@@ -196,7 +200,15 @@ impl Interp {
             next_fd: 1,
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
+            tracked: std::collections::HashSet::new(),
+            debug_dangling: true,
         }
+    }
+
+    /// M2.5/M4.7：Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
+    pub fn set_debug_dangling(&mut self, on: bool) -> &mut Self {
+        self.debug_dangling = on;
+        self
     }
 
     /// M2.6：从错误码表记录错误名 → 首次出现位置（同名保留首个）
@@ -521,6 +533,18 @@ impl Interp {
 
     fn pop_scope(&mut self) -> Result<()> {
         let scope = self.scopes.pop().expect("scope stack underflow");
+        // M2.5/M4.7 Debug 悬垂标记：作用域退出 = 目标销毁（LIFO）→ 把被取过地址的
+        // 目标 cell 内容标记为 Dangling（有指针持有的 cell 不释放、地址唯一——
+        // 无地址碰撞误判；Release 关闭时不标记）
+        if self.debug_dangling {
+            for (name, cell) in &scope.vars {
+                let _ = name;
+                let addr = Rc::as_ptr(cell) as usize;
+                if self.tracked.remove(&addr) {
+                    *cell.borrow_mut() = Value::Dangling;
+                }
+            }
+        }
         self.run_defers(scope, false)
     }
 
@@ -1084,6 +1108,25 @@ impl Interp {
         }
     }
 
+    /// M2.5/M4.7：仅检查悬垂（不解引用）——指针指向已销毁目标 → 抛错带位置
+    fn check_dangling(&self, v: &Value, span: &Span) -> Result<()> {
+        if self.debug_dangling {
+            if let Value::Ptr(c) = v {
+                if matches!(&*c.borrow(), Value::Dangling) {
+                    return Err(RtError::new("DanglingPointer", Some(span.clone())));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// M2.5/M4.7：解引用访问（带悬垂检查）——Debug 下访问已销毁目标
+    /// 的指针 → 抛错带位置；Release（debug_dangling=false）裸读（用户负责）
+    fn deref_checked(&self, v: Value, span: &Span) -> Result<Value> {
+        self.check_dangling(&v, span)?;
+        Ok(self.deref_value(v))
+    }
+
     /// 捕获当前作用域链（闭包环境快照）
     fn capture_env(&self) -> Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>> {
         self.scopes
@@ -1278,6 +1321,7 @@ impl Interp {
             }
             Expr::Field { base, field, span } => {
                 let b = self.eval(base)?;
+                self.check_dangling(&b, span)?;
                 self.eval_field(b, field, span)
             }
             Expr::Index {
@@ -1286,6 +1330,7 @@ impl Interp {
                 span,
             } => {
                 let b = self.eval(base)?;
+                self.check_dangling(&b, span)?;
                 let b = self.deref_value(b);
                 // 切片取段 &arr[1..3] / "abc"[0..2]：索引为 Range 表达式
                 if indices.len() == 1 {
@@ -1399,19 +1444,26 @@ impl Interp {
                     _ => Err(RtError::new("NotIndexable", Some(span.clone()))),
                 }
             }
-            Expr::Deref(e, _) => {
+            Expr::Deref(e, span) => {
                 let v = self.eval(e)?;
-                Ok(self.deref_value(v))
+                self.deref_checked(v, span)
             }
-            Expr::AddrOf(e, _, _) => {
+            Expr::AddrOf(e, _, span) => {
                 // &x / &mut x：产生共享槽指针
                 match e.as_ref() {
                     Expr::Ident(name, _) => match self.lookup(name) {
-                        Some(cell) => Ok(Value::Ptr(cell)),
+                        Some(cell) => {
+                            // M2.5 Debug 悬垂标记：登记目标——目标销毁时标记指针
+                            if self.debug_dangling {
+                                self.tracked.insert(Rc::as_ptr(&cell) as usize);
+                            }
+                            Ok(Value::Ptr(cell))
+                        }
                         None => Err(RtError::msg("UndefinedName", format!("undefined `{name}`"))),
                     },
                     Expr::Field { base, field, .. } => {
                         let b = self.eval(base)?;
+                        self.check_dangling(&b, span)?;
                         let b = self.deref_value(b);
                         match b {
                             Value::Class(c) => {
@@ -1618,6 +1670,9 @@ impl Interp {
                     Err(RtError::msg("TupleArity", "expected tuple in destructure"))
                 }
             }
+            // M2.4：move 运行时等同内层（所有权转移语义由作用域销毁体现；
+            // 合法性检查在语义层）
+            Expr::Move(inner, _) => self.eval(inner),
         }
     }
 
@@ -1872,6 +1927,7 @@ impl Interp {
             Expr::Deref(inner, _) => {
                 // p.* = v：写入指针指向的槽
                 let p = self.eval(inner)?;
+                self.check_dangling(&p, span)?;
                 match p {
                     Value::Ptr(cell) => {
                         *cell.borrow_mut() = new_v;
@@ -1881,6 +1937,7 @@ impl Interp {
             }
             Expr::Field { base, field, .. } => {
                 let b = self.eval(base)?;
+                self.check_dangling(&b, span)?;
                 let b = self.deref_value(b);
                 if let Value::Class(c) = b {
                     c.borrow_mut().fields.insert(field.clone(), new_v);
@@ -1896,6 +1953,7 @@ impl Interp {
                     }
                 }
                 let b = self.eval(base)?;
+                self.check_dangling(&b, span)?;
                 let b = self.deref_value(b);
                 if let Value::Class(c) = b {
                     c.borrow_mut().fields.insert(field.clone(), new_v);
@@ -1905,6 +1963,7 @@ impl Interp {
             }
             Expr::Index { base, indices, .. } => {
                 let b = self.eval(base)?;
+                self.check_dangling(&b, span)?;
                 let b = self.deref_value(b);
                 // 可写切片 &mut arr[0..2]：索引为 Range
                 if indices.len() == 1 {

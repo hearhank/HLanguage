@@ -293,6 +293,7 @@ fn collect_expr(e: &Expr, table: &mut ErrorCodeTable) {
             collect_expr(value, table);
         }
         Expr::TupleDestructure(_, value, _) => collect_expr(value, table),
+        Expr::Move(inner, _) => collect_expr(inner, table),
         Expr::Closure { body, .. } => collect_block(body, table),
         _ => {}
     }

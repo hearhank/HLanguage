@@ -477,3 +477,43 @@ fn m22_slice_range_index() {
 }\n",
     );
 }
+
+// ---------- M2.5 Debug 悬垂标记验收 ----------
+
+const DANGLING_SRC: &str = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\ntest fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
+
+#[test]
+fn m25_dangling_access_rejected_debug() {
+    // Debug（默认）：目标销毁后解引用访问 → DanglingPointer（带位置）
+    let program = hc::parse_source(DANGLING_SRC).expect("parse");
+    let mut interp = Interp::new(DANGLING_SRC);
+    interp.load(&program).expect("load");
+    interp.run_tests();
+    assert!(
+        interp
+            .test_out
+            .iter()
+            .any(|l| l.contains("DanglingPointer")),
+        "Debug 应检测悬垂访问: {:?}",
+        interp.test_out
+    );
+}
+
+#[test]
+fn m25_dangling_hold_not_accessed_ok() {
+    // 取出/持有悬垂引用不抛错；只有解引用访问才触发（Q18：取指针不抛错）
+    let src = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\ntest fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
+    run_ok(src);
+}
+
+#[test]
+fn m25_dangling_release_bare_read() {
+    // Release（debug_dangling=false）：裸读（用户负责），不检测
+    let program = hc::parse_source(DANGLING_SRC).expect("parse");
+    let mut interp = Interp::new(DANGLING_SRC);
+    interp.set_debug_dangling(false);
+    interp.load(&program).expect("load");
+    let (p, f, _s) = interp.run_tests();
+    assert_eq!(f, 0, "Release 裸读不检测: {:?}", interp.test_out);
+    assert!(p >= 1);
+}

@@ -1490,9 +1490,12 @@ impl Parser {
                 Ok(Expr::Try(Box::new(e), start))
             }
             TokenKind::KwMove => {
-                // move x：所有权转移标记（tag1：运行时等同 x——所有权检查归 M2.4）
+                // move x：所有权转移标记（M2.4——保留供语义检查器验证
+                // 唯一约束 = 拥有所有权；原绑定仍可访问，悬垂/冲突由用户负责）
                 self.advance();
-                self.parse_unary()
+                let inner = self.parse_unary()?;
+                let end = self.span();
+                Ok(Expr::Move(Box::new(inner), start.merge(&end)))
             }
             _ => self.parse_postfix(),
         }
@@ -2148,6 +2151,7 @@ impl Expr {
             | Expr::ErrorLit(_, span)
             | Expr::FnRef(_, span)
             | Expr::TupleDestructure(_, _, span)
+            | Expr::Move(_, span)
             | Expr::Closure { span, .. } => span.clone(),
         }
     }

@@ -316,3 +316,90 @@ fn m26_package_id_encoded() {
         0x0002
     );
 }
+
+// ---------- M2.4 所有权编译时检查验收 ----------
+
+/// 断言语义检查产生含指定片段的错误
+fn check_has_error(src: &str, frag: &str) {
+    let program = parse_source(src).expect("parse should succeed");
+    let diags = hc::check_semantics(&program);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.is_error() && d.message.contains(frag)),
+        "期望错误含 `{frag}`，实际: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+/// 断言语义检查通过（无 error 诊断）
+fn check_clean(src: &str) {
+    let program = parse_source(src).expect("parse should succeed");
+    let diags = hc::check_semantics(&program);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "不应有错误诊断: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn m24_move_arena_rejected() {
+    // move Arena 分配对象 → 编译错误（所有权归 Arena）
+    check_has_error(
+        "fn take(y: o String) void {}\ntest fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
+        "allocated by Arena",
+    );
+}
+
+#[test]
+fn m24_move_global_rejected() {
+    // move global → 编译错误（所有权归根作用域）
+    check_has_error(
+        "global g: String = String.from(\"x\", alloc);\ntest fn t() !void {\n    take(move g);\n}\nfn take(y: o String) void {}\n",
+        "cannot move global",
+    );
+}
+
+#[test]
+fn m24_move_value_type_rejected() {
+    // move 值类型（无所有权）→ 编译错误
+    check_has_error(
+        "fn take(n: i32) void {}\ntest fn t() !void {\n    var n = 42;\n    take(move n);\n}\n",
+        "value type has no ownership",
+    );
+}
+
+#[test]
+fn m24_move_owned_ok() {
+    // move 有所有权对象（非 Arena 分配）→ 合法
+    check_clean(
+        "fn make() o String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\ntest fn t() !void {}\n",
+    );
+}
+
+#[test]
+fn m24_return_local_ref_rejected() {
+    // Q18：返回局部变量引用 → 编译错误（引用逃逸）
+    check_has_error(
+        "fn f() *i32 {\n    var x: i32 = 1;\n    return &x;\n}\n",
+        "escapes function scope",
+    );
+}
+
+#[test]
+fn m24_return_owned_param_must_move() {
+    // 带所有权参数：返回引用 → 错误；必须 `return move param`
+    check_has_error(
+        "fn f(y: o String) *String {\n    return &y;\n}\n",
+        "escapes function scope",
+    );
+    // move 返回所有权 → 合法
+    check_clean("fn f(y: o String) o String {\n    return move y;\n}\ntest fn t() !void {}\n");
+}
+
+#[test]
+fn m24_return_global_ref_ok() {
+    // 返回 global 引用 → 合法（global 归根作用域，比函数长命）
+    check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\ntest fn t() !void {}\n");
+}

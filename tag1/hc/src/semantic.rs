@@ -155,11 +155,28 @@ struct FnSig {
     generics: Vec<String>,
 }
 
-/// 变量声明类型（静态推断 / definite assignment 跟踪）
+/// 变量声明类型（静态推断 / definite assignment 跟踪 / 分配来源）
 #[derive(Clone)]
 struct VarInfo {
     ty: Option<SType>,
     pending_fields: Option<std::collections::HashSet<String>>,
+    /// 分配来源（M2.4 所有权：move 唯一约束 = 拥有所有权）
+    source: AllocSource,
+}
+
+/// 分配来源（M2.4：谁负责销毁 / 可否 move）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AllocSource {
+    /// 无所有权（标量/连续类型/指针/切片/字面量值）——禁止 move
+    None,
+    /// 非 Arena 分配（alloc.init / copy / 集合构造 / 函数返回引用类型）→ 当前作用域负责
+    NonArena,
+    /// Arena 分配（arena.alloc / arena.init / Arena.init）→ 归 Arena 统一回收——禁止 move
+    Arena,
+    /// global 声明 → 归根作用域——禁止 move
+    Global,
+    /// 参数 / 未判定——保守放行
+    Unknown,
 }
 
 pub fn check(program: &Program) -> Vec<Diagnostic> {
@@ -531,6 +548,8 @@ impl Checker {
                         VarInfo {
                             ty: Some(st),
                             pending_fields: None,
+                            // 参数来源由调用点决定（o T 拥有 / 借用）——保守放行
+                            source: AllocSource::Unknown,
                         },
                     );
                 }
@@ -549,6 +568,7 @@ impl Checker {
                         VarInfo {
                             ty: Some(self_ty),
                             pending_fields: None,
+                            source: AllocSource::Unknown,
                         },
                     );
                     // 方法参数（self 显式声明时已含；此处避免重复登记由 check_block 内 params
@@ -597,6 +617,7 @@ impl Checker {
                 VarInfo {
                     ty: Some(st),
                     pending_fields: None,
+                    source: AllocSource::Unknown,
                 },
             );
         }
@@ -832,22 +853,27 @@ impl Checker {
                 }
                 // definite assignment（C7）：alloc.init(T) 无参构造 → 跟踪待初始化字段
                 let pending = self.alloc_init_pending(init.as_ref());
+                // M2.4：分配来源（move 合法性用）
+                let source = self.infer_source(init.as_ref(), init_ty.as_ref());
                 let var_ty = declared.or(init_ty);
                 scopes.last_mut().unwrap().insert(
                     name.clone(),
                     VarInfo {
                         ty: var_ty,
                         pending_fields: pending,
+                        source,
                     },
                 );
             }
             Stmt::ConstDecl { name, init, .. } => {
                 let t = self.expr_ty(init, scopes, None);
+                let source = self.infer_source(Some(init), t.as_ref());
                 scopes.last_mut().unwrap().insert(
                     name.clone(),
                     VarInfo {
                         ty: t,
                         pending_fields: None,
+                        source,
                     },
                 );
             }
@@ -899,6 +925,7 @@ impl Checker {
                         VarInfo {
                             ty: cap_ty,
                             pending_fields: None,
+                            source: AllocSource::Unknown,
                         },
                     );
                     self.check_block(&ifs.then_b, scopes, err_constraint.clone(), ret_ty.clone());
@@ -924,6 +951,7 @@ impl Checker {
                     VarInfo {
                         ty: None, // 元素类型：Map 为键值对，集合元素——保守放行
                         pending_fields: None,
+                        source: AllocSource::Unknown,
                     },
                 );
                 self.check_block(&f.body, scopes, err_constraint, ret_ty);
@@ -942,6 +970,7 @@ impl Checker {
                                     _ => None,
                                 },
                                 pending_fields: None,
+                                source: AllocSource::Unknown,
                             },
                         );
                     }
@@ -950,6 +979,22 @@ impl Checker {
                 }
             }
             Stmt::Return(e, span) => {
+                // M2.4 Q18：返回值引用被编译期禁止（引用逃逸到比目标更长寿的
+                // 作用域 = 悬垂唯一产生路径）——局部变量与参数均不可；
+                // 带所有权参数须 `return move param` 转移所有权
+                if let Some(Expr::AddrOf(inner, _, _)) = e {
+                    if let Expr::Ident(name, _) = inner.as_ref() {
+                        if scopes.iter().rev().any(|s| s.contains_key(name)) {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot return reference to `{name}`: reference escapes \
+                                     function scope（若 `{name}` 拥有所有权，用 `return move {name}` 转移）"
+                                ),
+                            ));
+                        }
+                    }
+                }
                 // M2.6：错误传播模型——函数声明了错误联合（E!T/!T）→ error.X 沿调用链
                 // 传播直到 try/catch 处理；**未标记错误类型**（返回值非错误联合）→ 编译错误
                 // （错误不进入传播链，运行时由根作用域记录输出后 panic 式中止）
@@ -1464,12 +1509,14 @@ impl Checker {
                                 }
                             }
                             let pending = self.alloc_init_pending(init.as_ref());
+                            let source = self.infer_source(init.as_ref(), init_ty.as_ref());
                             let var_ty = declared.or(init_ty);
                             sc2.last_mut().unwrap().insert(
                                 name.clone(),
                                 VarInfo {
                                     ty: var_ty,
                                     pending_fields: pending,
+                                    source,
                                 },
                             );
                             last = None;
@@ -1507,6 +1554,39 @@ impl Checker {
                     }
                 }
                 vt.unwrap_or(SType::Unknown)
+            }
+            Expr::Move(inner, span) => {
+                // M2.4：move 唯一约束 = 拥有所有权（非 Arena/global/值类型）
+                if let Expr::Ident(name, _) = inner.as_ref() {
+                    if let Some(src) = self.lookup_var_source(name, scopes) {
+                        match src {
+                            AllocSource::Arena => self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot move `{name}`: allocated by Arena (ownership \
+                                     belongs to the arena; move the whole arena instead)"
+                                ),
+                            )),
+                            AllocSource::Global => self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot move global `{name}` (ownership belongs to \
+                                     root scope)"
+                                ),
+                            )),
+                            AllocSource::None => self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot move `{name}`: value type has no ownership \
+                                     (move transfers destroy responsibility)"
+                                ),
+                            )),
+                            _ => {}
+                        }
+                    }
+                }
+                self.expr_ty(inner, scopes, expected)
+                    .unwrap_or(SType::Unknown)
             }
             Expr::Closure { .. } => SType::Unknown,
         };
@@ -2672,6 +2752,76 @@ impl Checker {
         scopes.iter().rev().any(|s| s.contains_key(name))
             || self.globals.contains_key(name)
             || is_builtin_ns(name)
+    }
+
+    /// 变量分配来源（M2.4：move 合法性检查）
+    fn lookup_var_source(
+        &self,
+        name: &str,
+        scopes: &[HashMap<String, VarInfo>],
+    ) -> Option<AllocSource> {
+        for s in scopes.iter().rev() {
+            if let Some(v) = s.get(name) {
+                return Some(v.source);
+            }
+        }
+        if self.globals.contains_key(name) {
+            return Some(AllocSource::Global);
+        }
+        None
+    }
+
+    /// 初始化表达式 → 分配来源（形态优先，类型兜底）
+    fn infer_source(&self, init: Option<&Expr>, init_ty: Option<&SType>) -> AllocSource {
+        if let Some(e) = init {
+            match e {
+                // alloc.init / alloc.alloc / arena.alloc / arena.init
+                Expr::Call { callee, .. } => {
+                    if let Expr::Dot { base, field, .. } = callee.as_ref() {
+                        if let Expr::Ident(b, _) = base.as_ref() {
+                            match (b.as_str(), field.as_str()) {
+                                ("alloc", _) => return AllocSource::NonArena,
+                                ("arena", _) => return AllocSource::Arena,
+                                ("Arena", "init") => return AllocSource::Arena,
+                                // 内建类型构造（String.from / Vec.init 等，Dot 形态）→ 新建对象
+                                (b, f)
+                                    if is_builtin_type(b)
+                                        && matches!(f, "init" | "from" | "new") =>
+                                {
+                                    return AllocSource::NonArena;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // 集合/内建类型构造（Field 形态：Vec.init / Table.init）
+                    if let Expr::Field { base, field, .. } = callee.as_ref() {
+                        if let Expr::Ident(b, _) = base.as_ref() {
+                            if is_builtin_type(b)
+                                && matches!(field.as_str(), "init" | "from" | "new")
+                            {
+                                return AllocSource::NonArena;
+                            }
+                        }
+                    }
+                    // copy / box：新建对象归当前作用域
+                    if let Expr::Ident(name, _) = callee.as_ref() {
+                        if matches!(name.as_str(), "copy" | "box") {
+                            return AllocSource::NonArena;
+                        }
+                    }
+                }
+                // 数组字面量 = 新建引用对象（作用域负责）
+                Expr::ArrayLit(..) => return AllocSource::NonArena,
+                _ => {}
+            }
+        }
+        // 类型兜底：引用类型 → 新建对象；值类型 → 无所有权；未知 → 放行
+        match init_ty {
+            Some(t) if self.type_is_ref_st(t) => AllocSource::NonArena,
+            Some(_) => AllocSource::None,
+            None => AllocSource::Unknown,
+        }
     }
 }
 

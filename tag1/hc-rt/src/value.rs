@@ -46,6 +46,8 @@ pub enum Value {
     Alloc,
     /// 空值 / void
     Void,
+    /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
+    Dangling,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +142,7 @@ impl Value {
             Value::Closure(_) => "closure".to_string(),
             Value::Alloc => "alloc".to_string(),
             Value::Void => "void".to_string(),
+            Value::Dangling => "<dangling>".to_string(),
         }
     }
 
@@ -276,6 +279,7 @@ impl Value {
             Value::Closure(_) => "closure".into(),
             Value::Alloc => "alloc".into(),
             Value::Void => "void".into(),
+            Value::Dangling => "dangling".into(),
         }
     }
 }

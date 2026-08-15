@@ -363,6 +363,8 @@ pub enum Expr {
     FnRef(String, Span),
     /// 多值返回/解构 var (a, b) = f()（tag1：以元组处理）
     TupleDestructure(Vec<String>, Box<Expr>, Span),
+    /// move x：所有权转移标记（M2.4——调用点显式；原绑定仍可访问，悬垂用户负责）
+    Move(Box<Expr>, Span),
     /// 闭包：|v| expr / mut |v| { ... } / |v, w| expr
     Closure {
         params: Vec<String>,
