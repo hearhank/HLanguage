@@ -8,7 +8,7 @@
 use crate::ast::*;
 use crate::diag::Diagnostic;
 use crate::token::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------- 静态类型 ----------
 
@@ -192,6 +192,9 @@ pub fn check_with_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnos
         globals: HashMap::new(),
         error_sets: HashMap::new(),
         namespaces: std::collections::HashSet::new(),
+        collect_infer_ret: false,
+        infer_ret: None,
+        infer_ret_conflict: false,
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）
@@ -201,7 +204,21 @@ pub fn check_with_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnos
     checker.collect(program);
     checker.apply_usings(program);
     checker.validate_continuous();
+    checker.validate_interface_impls(program);
     checker.check_program(program);
+    // M2.6 Q-S8：!T 推断错误集——递归无法收集 → 退化为 anyerror + 提示显式标注（warning）
+    let inferred = infer_error_sets(program);
+    for name in &inferred.incomplete {
+        if let Some(span) = find_fn_span(program, name) {
+            checker.diags.push(Diagnostic::warning(
+                span,
+                format!(
+                    "cannot infer error set for `{name}` (recursive): `!T` degrades to \
+                     `anyerror`; annotate explicitly with a named error set (`E!T`)"
+                ),
+            ));
+        }
+    }
     checker.diags
 }
 
@@ -214,6 +231,12 @@ struct Checker {
     error_sets: HashMap<String, ErrorSet>,
     /// 命名空间声明（M1.4：namespace NS { ... }）
     namespaces: std::collections::HashSet<String>,
+    /// M2.3：当前函数未标注返回类型 → 收集 return 表达式类型（多路径统一推断）
+    collect_infer_ret: bool,
+    /// M2.3：已统一（首个 return 类型）或 None
+    infer_ret: Option<SType>,
+    /// M2.3：已报过多路径推断冲突（避免重复报错）
+    infer_ret_conflict: bool,
     diags: Vec<Diagnostic>,
 }
 
@@ -271,6 +294,26 @@ fn is_builtin_type(name: &str) -> bool {
 /// 内建集合类型（可迭代 / 引用语义）
 fn is_collection(name: &str) -> bool {
     matches!(name, "Vec" | "Map" | "Deque" | "Table" | "String")
+}
+
+/// 递归收集 class 声明（namespace 内展平），供接口实现验证用
+fn collect_class_decls<'a>(
+    decls: &'a [Decl],
+    out: &mut Vec<(&'a str, &'a Vec<Type>, &'a Vec<Method>, &'a Span)>,
+) {
+    for d in decls {
+        match d {
+            Decl::Class {
+                name,
+                ifaces,
+                methods,
+                span,
+                ..
+            } => out.push((name.as_str(), ifaces, methods, span)),
+            Decl::Namespace { decls, .. } => collect_class_decls(decls, out),
+            _ => {}
+        }
+    }
 }
 
 impl Checker {
@@ -545,6 +588,134 @@ impl Checker {
         }
     }
 
+    /// M2.1 接口三用途真实实现（去占位）：验证 class 的 implements 冒号标注实际满足
+    /// 接口方法契约（① 标记 class 功能 → 须有对应方法实现；③ 类型参数编译可验证 →
+    /// 单态化检查实现：方法名 + 参数/返回签名兼容）。内建接口（ICompare/INumber/
+    /// IIterable/Io 等）不在 types 表登记 → 跳过（编译器内建实现）。
+    fn validate_interface_impls(&mut self, program: &Program) {
+        // 快照 class 声明（含 span），避免与 self.types 借用冲突
+        let mut classes: Vec<(&str, &Vec<Type>, &Vec<Method>, &Span)> = Vec::new();
+        collect_class_decls(&program.decls, &mut classes);
+        for (name, ifaces, methods, span) in classes {
+            for iface in ifaces {
+                let iname = match iface.strip() {
+                    Type::Named(n, _) => n.clone(),
+                    _ => continue,
+                };
+                let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+                self.check_iface_impl(name, &iname, methods, span, &mut visited);
+            }
+        }
+    }
+
+    /// 递归收集 class 声明（namespace 内展平）
+    fn check_iface_impl(
+        &mut self,
+        class_name: &str,
+        iface_name: &str,
+        class_methods: &[Method],
+        span: &Span,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if !visited.insert(iface_name.to_string()) {
+            return; // 循环继承防护
+        }
+        let (iface_methods, supers) = match self.types.get(iface_name).map(|i| &i.kind) {
+            Some(TypeKind::Interface { methods, supers }) => (methods.clone(), supers.clone()),
+            _ => return, // 内建/未知接口：放行（编译器内建实现）
+        };
+        for im in &iface_methods {
+            let satisfied = class_methods
+                .iter()
+                .any(|cm| cm.name == im.name && self.method_satisfies(im, cm, class_name));
+            if !satisfied {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!(
+                        "class `{class_name}` does not implement method `{}` required by interface `{iface_name}`",
+                        self.method_sig_display(im)
+                    ),
+                ));
+            }
+        }
+        for s in &supers {
+            if let Type::Named(sn, _) = s.strip() {
+                self.check_iface_impl(class_name, sn, class_methods, span, visited);
+            }
+        }
+    }
+
+    /// 接口方法契约是否被 class 方法满足（方法名相同 + 参数个数与类型兼容 + 返回类型兼容；
+    /// Self 在两侧均替换为实现类型）
+    fn method_satisfies(&self, iface_m: &Method, class_m: &Method, class_name: &str) -> bool {
+        if iface_m.params.len() != class_m.params.len() {
+            return false;
+        }
+        for (ip, cp) in iface_m.params.iter().zip(class_m.params.iter()) {
+            if !self.sig_type_compat(&ip.ty, &cp.ty, class_name) {
+                return false;
+            }
+        }
+        match (&iface_m.ret, &class_m.ret) {
+            (None, None) => true,
+            (Some(ir), Some(cr)) => self.sig_type_compat(ir, cr, class_name),
+            _ => false,
+        }
+    }
+
+    /// 接口/实现签名类型兼容：Self → 实现类型替换后静态类型相等；
+    /// 任一为未知/推断/泛型时宽松放行（能精确判定才报错）
+    fn sig_type_compat(&self, a: &Type, b: &Type, class_name: &str) -> bool {
+        let a = self.subst_self_ty(a, class_name);
+        let b = self.subst_self_ty(b, class_name);
+        let (sa, sb) = (self.ty_of(&a), self.ty_of(&b));
+        if sa == sb {
+            return true;
+        }
+        matches!(sa, SType::Unknown | SType::Infer | SType::Generic(_))
+            || matches!(sb, SType::Unknown | SType::Infer | SType::Generic(_))
+    }
+
+    /// 类型中 `Self` 替换为实现类型（接口/class 方法签名比较用）
+    fn subst_self_ty(&self, t: &Type, class_name: &str) -> Type {
+        match t {
+            Type::Named(n, args) if n == "Self" => Type::Named(class_name.to_string(), vec![]),
+            Type::Named(n, args) => Type::Named(
+                n.clone(),
+                args.iter().map(|x| self.subst_self_ty(x, class_name)).collect(),
+            ),
+            Type::Ptr(inner, m) => Type::Ptr(Box::new(self.subst_self_ty(inner, class_name)), *m),
+            Type::Slice(inner, m) => {
+                Type::Slice(Box::new(self.subst_self_ty(inner, class_name)), *m)
+            }
+            Type::Optional(inner) => {
+                Type::Optional(Box::new(self.subst_self_ty(inner, class_name)))
+            }
+            Type::ErrorUnion(e, inner) => Type::ErrorUnion(
+                e.as_ref().map(|x| Box::new(self.subst_self_ty(x, class_name))),
+                Box::new(self.subst_self_ty(inner, class_name)),
+            ),
+            Type::Tuple(ts) => Type::Tuple(
+                ts.iter().map(|x| self.subst_self_ty(x, class_name)).collect(),
+            ),
+            Type::Array(n, inner) => Type::Array(*n, Box::new(self.subst_self_ty(inner, class_name))),
+            other => other.clone(),
+        }
+    }
+
+    /// 接口方法签名展示（错误信息用）：`name(a: T, ...) -> ret`
+    fn method_sig_display(&self, m: &Method) -> String {
+        let params: Vec<String> = m
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, self.ty_display(&p.ty)))
+            .collect();
+        match &m.ret {
+            Some(r) => format!("{}({}) -> {}", m.name, params.join(", "), self.ty_display(r)),
+            None => format!("{}({})", m.name, params.join(", ")),
+        }
+    }
+
     /// 类型是否为值类型（标量/连续 class/元组/纯常量枚举/定长数组？——数组为引用类型）
     fn type_is_value(&self, t: &Type) -> bool {
         match t.strip() {
@@ -669,15 +840,32 @@ impl Checker {
                         },
                     );
                 }
+                // M2.3：未标注返回类型 → 从 return 表达式收集（多路径统一推断）
+                self.collect_infer_ret = ret_ty.is_none();
+                self.infer_ret = None;
+                self.infer_ret_conflict = false;
                 self.check_block(body, &mut scopes, constraint, ret_ty);
+                self.collect_infer_ret = false;
             }
             Decl::Class { name, methods, .. } => {
                 for m in methods {
                     let ret_ty = self.ret_stype(&m.ret);
                     let constraint = self.fn_error_constraint(&m.ret);
                     let mut scopes: Vec<HashMap<String, VarInfo>> = Vec::new();
-                    // self 参数注入：self: *Self
-                    let self_ty = SType::Ptr(Box::new(SType::Named(name.clone(), vec![])), false);
+                    // self 参数注入：按声明形态（*Self 只读 / *mut Self 可写 / Self 值）
+                    let self_ty = match m.params.first() {
+                        Some(p) if p.name == "self" => match p.ty.strip() {
+                            Type::Ptr(_, mut_) => SType::Ptr(
+                                Box::new(SType::Named(name.clone(), vec![])),
+                                *mut_,
+                            ),
+                            Type::Named(n, _) if n == "Self" => {
+                                SType::Named(name.clone(), vec![])
+                            }
+                            _ => SType::Ptr(Box::new(SType::Named(name.clone(), vec![])), false),
+                        },
+                        _ => SType::Ptr(Box::new(SType::Named(name.clone(), vec![])), false),
+                    };
                     scopes.push(HashMap::new());
                     scopes.last_mut().unwrap().insert(
                         "self".into(),
@@ -691,7 +879,12 @@ impl Checker {
                     // 处理——方法参数在 body 检查时按 params 登记，见 check_method_params）
                     let _ = constraint;
                     self.check_method_params(m, &mut scopes);
+                    // M2.3：未标注返回类型 → 从 return 表达式收集
+                    self.collect_infer_ret = ret_ty.is_none();
+                    self.infer_ret = None;
+                    self.infer_ret_conflict = false;
                     self.check_block(&m.body, &mut scopes, constraint, ret_ty);
+                    self.collect_infer_ret = false;
                 }
             }
             Decl::Global {
@@ -740,10 +933,11 @@ impl Checker {
     }
 
     /// 函数返回类型 → 静态类型（供 return 期望类型传播）
+    /// 未标注返回类型 → None（M2.3：从 return 表达式推断，多路径一致性检查）
     fn ret_stype(&self, ret: &Option<Type>) -> Option<SType> {
         match ret {
             Some(t) => Some(self.ty_of(t)),
-            None => Some(SType::Void),
+            None => None,
         }
     }
 
@@ -1002,6 +1196,8 @@ impl Checker {
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
+                // M2.3 指针形态：写只读指针 → 编译错误
+                self.check_ptr_write(target, scopes, span);
                 // 字段赋值 x.field = v → 消除 definite assignment 待初始化字段
                 let (x, field): (Option<&str>, Option<&str>) = match target.as_ref() {
                     Expr::Dot { base, field, .. } | Expr::Field { base, field, .. } => {
@@ -1162,6 +1358,32 @@ impl Checker {
                             && matches!(&et, Some(SType::ErrorUnion(..)));
                         if !error_union_pass {
                             self.check_assignable(&Some(payload.clone()), &et, span, "return");
+                        }
+                    }
+                    // M2.3：未标注返回类型 → 收集 return 类型，多路径不一致报错要求显式
+                    if self.collect_infer_ret {
+                        if let Some(t) = &et {
+                            if t.definite() && !matches!(t, SType::Void) {
+                                match self.infer_ret.take() {
+                                    Some(prev) => {
+                                        if !self.ret_infer_unifies(&prev, t)
+                                            && !self.infer_ret_conflict
+                                        {
+                                            self.diags.push(Diagnostic::error(
+                                                span.clone(),
+                                                format!(
+                                                    "inferred return type mismatch across paths: `{}` vs `{}`; annotate the return type explicitly",
+                                                    prev.name(),
+                                                    t.name()
+                                                ),
+                                            ));
+                                            self.infer_ret_conflict = true;
+                                        }
+                                        self.infer_ret = Some(prev);
+                                    }
+                                    None => self.infer_ret = Some(t.clone()),
+                                }
+                            }
                         }
                     }
                 }
@@ -1743,6 +1965,32 @@ impl Checker {
                     exp.name()
                 ),
             ));
+        }
+    }
+
+    /// M2.3 指针形态：写目标若解引用只读指针（`*T`）→ 编译错误（须 `*mut T`）。
+    /// `p.* = v` / `p.field = v` / `p[i] = v` 中基座为只读指针即拦截。
+    fn check_ptr_write(&mut self, target: &Expr, scopes: &[HashMap<String, VarInfo>], span: &Span) {
+        let base = match target {
+            Expr::Deref(inner, _) => Some(inner.as_ref()),
+            Expr::Field { base, .. } | Expr::Dot { base, .. } | Expr::Index { base, .. } => {
+                Some(base.as_ref())
+            }
+            _ => None,
+        };
+        let Some(base) = base else { return; };
+        let bt = self.expr_ty(base, scopes, None);
+        if let Some(SType::Ptr(inner, mut_)) = &bt {
+            if !*mut_ {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!(
+                        "cannot write through read-only pointer `*{}`; use `*mut {}`",
+                        inner.name(),
+                        inner.name()
+                    ),
+                ));
+            }
         }
     }
 
@@ -2378,12 +2626,17 @@ impl Checker {
             ));
             return None;
         }
-        // 逐候选匹配（具体优先泛型；同具体度返回类型匹配期望）
+        // 逐候选匹配（① 参数匹配精度：精确 > 兼容/强制/通配；② 具体优先泛型；
+        // ③ 同具体度按返回类型匹配期望分级；④ 同具体度同期望且签名不同 → 歧义报错要求显式）
         let mut best: Option<(&FnSig, HashMap<String, SType>)> = None;
         let mut best_is_generic = false;
+        let mut best_param_rank: u32 = 0;
+        let mut best_rank: u8 = 0;
+        let mut ambiguous_reported = false;
         for s in &pool {
             let mut map: HashMap<String, SType> = HashMap::new();
             let mut ok = true;
+            let mut param_rank_total: u32 = 0;
             // 实例方法调用：跳过接收者参数（运行时注入）
             let params: Vec<&Param> = if skip_self {
                 s.params[1.min(s.params.len())..].iter().collect()
@@ -2393,33 +2646,54 @@ impl Checker {
             for (p, at) in params.iter().zip(arg_tys.iter()) {
                 let pt = self.ty_of(&p.ty);
                 let at = at.clone().unwrap_or(SType::Unknown);
-                if !self.param_matches(&pt, &at, &mut map) {
+                let r = self.param_rank(&pt, &at, &mut map);
+                if r == 0 {
                     ok = false;
                     break;
                 }
+                param_rank_total += r as u32;
             }
             if !ok {
                 continue;
             }
             let is_generic = s.generics.iter().any(|g| map.contains_key(g));
+            let rank = self.ret_rank(&s.ret, &map, expected);
             let replace_best = match &best {
                 None => true,
-                Some(_) => {
-                    if !is_generic && best_is_generic {
+                Some(b) => {
+                    if param_rank_total > best_param_rank {
+                        true
+                    } else if param_rank_total < best_param_rank {
+                        false
+                    } else if !is_generic && best_is_generic {
                         true
                     } else if is_generic && !best_is_generic {
                         false
+                    } else if rank > best_rank {
+                        true
+                    } else if rank < best_rank {
+                        false
                     } else {
-                        // 同具体度：返回类型匹配期望
-                        let f_ret = self.ret_matches(&s.ret, &map, expected);
-                        let b_ret = self.ret_matches(&best.as_ref().unwrap().0.ret, &map, expected);
-                        f_ret && !b_ret
+                        // 同精度同具体度同期望匹配：签名不同 → 歧义（要求显式标注）
+                        if !self.sig_same(s, b.0) && !ambiguous_reported {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "ambiguous call to `{qname}`: multiple overloads match; \
+                                     annotate the expected type or make the argument type explicit"
+                                ),
+                            ));
+                            ambiguous_reported = true;
+                        }
+                        false
                     }
                 }
             };
             if replace_best {
                 best = Some((s, map.clone()));
                 best_is_generic = is_generic;
+                best_param_rank = param_rank_total;
+                best_rank = rank;
             }
         }
         let Some((sig, map)) = best else {
@@ -2473,18 +2747,19 @@ impl Checker {
         }
     }
 
-    /// 泛型具体化的返回类型是否匹配期望（与运行时 ret_matches_expected 对齐）
-    fn ret_matches(
+    /// 泛型具体化的返回类型与期望类型的匹配分级（M2.3 期望类型传播）：
+    /// 0 = 不匹配，1 = 数值/兼容匹配，2 = 精确匹配（精确 > 兼容 > 不匹配）。
+    fn ret_rank(
         &self,
         ret: &Option<Type>,
         map: &HashMap<String, SType>,
         expected: Option<&SType>,
-    ) -> bool {
+    ) -> u8 {
         let Some(exp) = expected else {
-            return false;
+            return 0;
         };
         let Some(r) = ret else {
-            return false;
+            return 0;
         };
         let inner = match r.strip() {
             Type::ErrorUnion(_, inner) => inner.strip(),
@@ -2492,134 +2767,171 @@ impl Checker {
         };
         let ret_st = self.substitute(&self.ty_of(inner), map);
         if matches!(ret_st, SType::Unknown) || matches!(exp, SType::Unknown) {
-            return false;
+            return 0;
         }
-        match exp {
-            SType::Named(expn, _) => match &ret_st {
-                SType::Named(retn, _) => expn == retn,
-                _ => false,
-            },
-            SType::Str => matches!(ret_st, SType::Str),
-            SType::Int { .. } | SType::Float => ret_st.numeric(),
-            _ => false,
+        if &ret_st == exp {
+            return 2;
         }
+        if self.compatible(&ret_st, exp) {
+            return 1;
+        }
+        0
     }
 
-    /// 实参 → 形参兼容（含泛型 T 绑定/统一）
-    fn param_matches(&self, pt: &SType, at: &SType, map: &mut HashMap<String, SType>) -> bool {
+    /// 两个重载签名是否结构相同（参数类型 + 返回类型；歧义检测排除重复登记）
+    fn sig_same(&self, a: &FnSig, b: &FnSig) -> bool {
+        if a.params.len() != b.params.len() {
+            return false;
+        }
+        a.params
+            .iter()
+            .zip(b.params.iter())
+            .all(|(pa, pb)| self.ty_of(&pa.ty) == self.ty_of(&pb.ty))
+            && self.ret_stype(&a.ret) == self.ret_stype(&b.ret)
+    }
+
+    /// 实参 → 形参匹配精度（M2.3 重载解析）：
+    /// 0 = 不匹配，1 = 兼容/强制/通配，2 = 精确（整数宽度不区分；泛型 T 绑定按具体类型计 2）。
+    fn param_rank(&self, pt: &SType, at: &SType, map: &mut HashMap<String, SType>) -> u8 {
         match pt {
             SType::Generic(n) => match map.get(n) {
-                Some(prev) => self.compatible(prev, at),
+                Some(prev) => {
+                    if !self.compatible(prev, at) {
+                        0
+                    } else if self.ret_infer_unifies(prev, at) {
+                        2
+                    } else {
+                        1
+                    }
+                }
                 None => {
                     map.insert(n.clone(), at.clone());
-                    true
+                    match at {
+                        SType::Unknown | SType::Infer => 1,
+                        _ => 2,
+                    }
                 }
             },
-            SType::Unknown | SType::Infer => true,
+            SType::Unknown | SType::Infer => 1,
             SType::Slice(inner) => match at {
-                SType::Slice(a) => self.param_matches(inner, a, map),
-                SType::Array(_, a) => self.param_matches(inner, a, map),
+                SType::Slice(a) => self.param_rank(inner, a, map),
+                SType::Array(_, a) => self.param_rank(inner, a, map),
                 // 引用默认切段：&arr → &[T]、&frame(Vec/String) → &[T]
                 SType::Ptr(a, _) => match a.as_ref() {
-                    SType::Array(_, elem) => self.param_matches(inner, elem, map),
-                    SType::Slice(elem) => self.param_matches(inner, elem, map),
+                    SType::Array(_, elem) => self.param_rank(inner, elem, map),
+                    SType::Slice(elem) => self.param_rank(inner, elem, map),
                     SType::Named(n, args) if n == "Vec" || n == "String" || n == "Deque" => {
                         // 整体匹配优先（&Vec(i32) 形参）；失败则元素级（&[u8] 形参收 Vec(u8)）
-                        self.param_matches(inner, a, map)
-                            || self.param_matches(
-                                inner,
-                                args.first().unwrap_or(&SType::Unknown),
-                                map,
-                            )
+                        let whole = self.param_rank(inner, a, map);
+                        let elem = self.param_rank(
+                            inner,
+                            args.first().unwrap_or(&SType::Unknown),
+                            map,
+                        );
+                        whole.max(elem)
                     }
-                    _ => self.param_matches(inner, a, map),
+                    _ => self.param_rank(inner, a, map),
                 },
-                SType::Str => self.param_matches(
-                    inner,
-                    &SType::Int {
-                        width: IntWidth::U8,
-                    },
-                    map,
-                ),
+                SType::Str => {
+                    self.param_rank(inner, &SType::Int { width: IntWidth::U8 }, map)
+                }
                 // 集合实参可作切片（Vec/String/Deque → 元素视图）
                 SType::Named(n, args) if n == "Vec" || n == "String" || n == "Deque" => {
-                    self.param_matches(inner, args.first().unwrap_or(&SType::Unknown), map)
+                    self.param_rank(inner, args.first().unwrap_or(&SType::Unknown), map)
                 }
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
-                _ => false,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
             SType::Ptr(inner, _) => match at {
-                SType::Ptr(a, _) => self.param_matches(inner, a, map),
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
+                SType::Ptr(a, _) => self.param_rank(inner, a, map),
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
                 // 值实参自动地址（运行时指针参数宽松：pick_fn 对 Ptr 形参放行）
-                other => self.param_matches(inner, other, map),
+                other => self.param_rank(inner, other, map),
             },
             SType::Optional(inner) => match at {
-                SType::Optional(a) => self.param_matches(inner, a, map),
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
-                _ => false,
+                SType::Optional(a) => self.param_rank(inner, a, map),
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
             SType::ErrorUnion(_, inner) => match at {
-                SType::ErrorUnion(_, a) => self.param_matches(inner, a, map),
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
-                _ => false,
+                SType::ErrorUnion(_, a) => self.param_rank(inner, a, map),
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
             SType::Tuple(pts) => match at {
                 SType::Tuple(ats) => {
-                    pts.len() == ats.len()
-                        && pts
-                            .iter()
-                            .zip(ats.iter())
-                            .all(|(p, a)| self.param_matches(p, a, map))
+                    if pts.len() != ats.len() {
+                        return 0;
+                    }
+                    let mut min = 2u8;
+                    for (p, a) in pts.iter().zip(ats.iter()) {
+                        let r = self.param_rank(p, a, map);
+                        if r == 0 {
+                            return 0;
+                        }
+                        min = min.min(r);
+                    }
+                    min
                 }
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
-                _ => false,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
             SType::Array(n, inner) => match at {
-                SType::Array(m, a) => n == m && self.param_matches(inner, a, map),
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
-                _ => false,
+                SType::Array(m, a) => {
+                    if n != m {
+                        0
+                    } else {
+                        self.param_rank(inner, a, map)
+                    }
+                }
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
             SType::Named(n, args) => match at {
                 SType::Named(m, margs) => {
-                    n == m
-                        && args.len() == margs.len()
-                        && args
-                            .iter()
-                            .zip(margs.iter())
-                            .all(|(p, a)| self.param_matches(p, a, map))
+                    if n != m || args.len() != margs.len() {
+                        return 0;
+                    }
+                    let mut min = 2u8;
+                    for (p, a) in args.iter().zip(margs.iter()) {
+                        let r = self.param_rank(p, a, map);
+                        if r == 0 {
+                            return 0;
+                        }
+                        min = min.min(r);
+                    }
+                    min
                 }
-                SType::Unknown | SType::Infer | SType::Generic(_) => true,
-                _ => false,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
-            SType::Int { width: _ } => match at {
-                SType::Int { .. }
-                | SType::Float
-                | SType::Unknown
-                | SType::Infer
-                | SType::Generic(_) => true,
-                _ => false,
+            SType::Int { .. } => match at {
+                SType::Int { .. } => 2,
+                SType::Float => 1,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
             SType::Float => match at {
-                SType::Int { .. }
-                | SType::Float
-                | SType::Unknown
-                | SType::Infer
-                | SType::Generic(_) => true,
-                _ => false,
+                SType::Float => 2,
+                SType::Int { .. } => 1,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
             },
-            SType::Bool => matches!(
-                at,
-                SType::Bool | SType::Unknown | SType::Infer | SType::Generic(_)
-            ),
-            SType::Str => matches!(
-                at,
-                SType::Str | SType::Unknown | SType::Infer | SType::Generic(_)
-            ),
-            SType::Void => matches!(
-                at,
-                SType::Void | SType::Unknown | SType::Infer | SType::Generic(_)
-            ),
+            SType::Bool => match at {
+                SType::Bool => 2,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
+            },
+            SType::Str => match at {
+                SType::Str => 2,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
+            },
+            SType::Void => match at {
+                SType::Void => 2,
+                SType::Unknown | SType::Infer | SType::Generic(_) => 1,
+                _ => 0,
+            },
         }
     }
 
@@ -2661,6 +2973,41 @@ impl Checker {
                 a == b
                     && aa.len() == bb.len()
                     && aa.iter().zip(bb.iter()).all(|(x, y)| self.compatible(x, y))
+            }
+            _ => false,
+        }
+    }
+
+    /// M2.3：return 类型多路径统一（比 `compatible` 严格——int/float 不互通；
+    /// 整数宽度不区分；Unknown/Infer/泛型视为通配）
+    fn ret_infer_unifies(&self, a: &SType, b: &SType) -> bool {
+        if a == b {
+            return true;
+        }
+        match (a, b) {
+            (SType::Unknown, _) | (_, SType::Unknown) => true,
+            (SType::Infer, _) | (_, SType::Infer) => true,
+            (SType::Generic(_), _) | (_, SType::Generic(_)) => true,
+            (SType::Int { .. }, SType::Int { .. }) => true,
+            (SType::Ptr(a, _), SType::Ptr(b, _)) => self.ret_infer_unifies(a, b),
+            (SType::Slice(a), SType::Slice(b)) => self.ret_infer_unifies(a, b),
+            (SType::Optional(a), SType::Optional(b)) => self.ret_infer_unifies(a, b),
+            (SType::ErrorUnion(ea, a), SType::ErrorUnion(eb, b)) => {
+                // 错误集允许不同（推断收集归 M2.6）；payload 须统一
+                let _ = (ea, eb);
+                self.ret_infer_unifies(a, b)
+            }
+            (SType::Tuple(a), SType::Tuple(b)) => {
+                a.len() == b.len()
+                    && a.iter().zip(b.iter()).all(|(x, y)| self.ret_infer_unifies(x, y))
+            }
+            (SType::Array(na, a), SType::Array(nb, b)) => {
+                na == nb && self.ret_infer_unifies(a, b)
+            }
+            (SType::Named(na, aa), SType::Named(nb, bb)) => {
+                na == nb
+                    && aa.len() == bb.len()
+                    && aa.iter().zip(bb.iter()).all(|(x, y)| self.ret_infer_unifies(x, y))
             }
             _ => false,
         }
@@ -3051,4 +3398,366 @@ fn width_name(w: IntWidth) -> &'static str {
         IntWidth::USize => "usize",
         IntWidth::Comptime => "comptime_int",
     }
+}
+
+// ---------- M2.6 Q-S8：!T 推断错误集收集 ----------
+
+/// !T 推断错误集收集结果（Q-S8）
+pub struct InferredErrorSets {
+    /// 函数名（含命名空间 / `Type.method` 前缀）→ 推断错误集成员。
+    /// 仅覆盖可完整收集的 `!T` 函数；显式 `E!T` 与 `anyerror!T` 不在此列。
+    pub sets: HashMap<String, HashSet<String>>,
+    /// 无法完整收集（递归自调用）的 `!T` 函数名 → Q-S8 退化为 anyerror（提示显式标注）。
+    pub incomplete: Vec<String>,
+}
+
+/// 返回类型的错误联合形态（`fn`/方法）
+enum FnErrorForm {
+    /// E!T：显式命名错误集（const 别名）
+    Explicit(String),
+    /// !T：推断错误集（从函数体收集）
+    Infer,
+    /// anyerror!T：接口契约，不静态约束
+    Anyerror,
+    /// 非错误联合
+    None,
+}
+
+fn fn_error_form(ret: &Option<Type>) -> FnErrorForm {
+    match ret {
+        Some(Type::ErrorUnion(Some(err), _)) => match err.strip() {
+            Type::Named(n, _) if n == "anyerror" => FnErrorForm::Anyerror,
+            Type::Named(n, _) => FnErrorForm::Explicit(n.clone()),
+            _ => FnErrorForm::Anyerror,
+        },
+        Some(Type::ErrorUnion(None, _)) => FnErrorForm::Infer,
+        _ => FnErrorForm::None,
+    }
+}
+
+/// 单个函数体的错误收集：direct = `return error.X`；propagates = `try g()` / `return g()`
+struct BodyErrors {
+    direct: HashSet<String>,
+    propagates: Vec<String>,
+}
+
+/// 解析被调名（`g` / `ns.g`）——方法调用（`obj.m()`）无法静态判定类型，跳过
+fn callee_name(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Ident(name, _) => Some(name.clone()),
+        Expr::Dot { base, field, .. } => match base.as_ref() {
+            Expr::Ident(ns, _) => Some(format!("{ns}.{field}")),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn collect_body_errors(b: &Block, out: &mut BodyErrors) {
+    for s in &b.stmts {
+        collect_stmt_errors(s, out);
+    }
+}
+
+fn collect_stmt_errors(s: &Stmt, out: &mut BodyErrors) {
+    match s {
+        Stmt::VarDecl { init, .. } => {
+            if let Some(e) = init {
+                collect_expr_errors(e, out);
+            }
+        }
+        Stmt::ConstDecl { init, .. } => collect_expr_errors(init, out),
+        Stmt::Expr(e) => collect_expr_errors(e, out),
+        Stmt::If(ifs) => {
+            collect_expr_errors(&ifs.cond, out);
+            collect_body_errors(&ifs.then_b, out);
+            if let Some(eb) = &ifs.else_b {
+                collect_stmt_errors(eb, out);
+            }
+        }
+        Stmt::While(w) => {
+            collect_expr_errors(&w.cond, out);
+            if let Some(step) = &w.step {
+                collect_expr_errors(step, out);
+            }
+            collect_body_errors(&w.body, out);
+        }
+        Stmt::For(f) => {
+            collect_expr_errors(&f.iter, out);
+            collect_body_errors(&f.body, out);
+        }
+        Stmt::Switch(sw) => {
+            collect_expr_errors(&sw.subject, out);
+            for arm in &sw.arms {
+                collect_body_errors(&arm.body, out);
+            }
+        }
+        Stmt::Return(e, _) => {
+            if let Some(e) = e {
+                // return g()：g 返回错误联合 → 其错误集随联合直接传递
+                if let Expr::Call { callee, .. } = e {
+                    if let Some(n) = callee_name(callee) {
+                        out.propagates.push(n);
+                    }
+                }
+                collect_expr_errors(e, out);
+            }
+        }
+        Stmt::Defer(e, _) | Stmt::Errdefer(e, _) => collect_expr_errors(e, out),
+        Stmt::Block(b) => collect_body_errors(b, out),
+        _ => {}
+    }
+}
+
+fn collect_expr_errors(e: &Expr, out: &mut BodyErrors) {
+    match e {
+        Expr::ErrorLit(name, _) => {
+            out.direct.insert(name.clone());
+        }
+        Expr::Try(inner, _) => {
+            // try g()：g 的错误集传播到当前函数
+            if let Expr::Call { callee, .. } = inner.as_ref() {
+                if let Some(n) = callee_name(callee) {
+                    out.propagates.push(n);
+                }
+            }
+            collect_expr_errors(inner, out);
+        }
+        Expr::ArrayLit(items, _) | Expr::TupleLit(items, _) => {
+            for it in items {
+                collect_expr_errors(it, out);
+            }
+        }
+        Expr::NamedLit { fields, .. } => {
+            for (_, v) in fields {
+                collect_expr_errors(v, out);
+            }
+        }
+        Expr::Dot { base, .. } | Expr::Field { base, .. } | Expr::Deref(base, _) => {
+            collect_expr_errors(base, out);
+        }
+        Expr::Index { base, indices, .. } => {
+            collect_expr_errors(base, out);
+            for i in indices {
+                collect_expr_errors(i, out);
+            }
+        }
+        Expr::AddrOf(inner, _, _)
+        | Expr::Unary(_, inner, _)
+        | Expr::Unwrap(inner, _)
+        | Expr::Orelse(inner, _, _)
+        | Expr::Move(inner, _) => {
+            collect_expr_errors(inner, out);
+        }
+        Expr::Binary(_, l, r, _) => {
+            collect_expr_errors(l, out);
+            collect_expr_errors(r, out);
+        }
+        Expr::Catch(inner, kind, _) => {
+            collect_expr_errors(inner, out);
+            match kind.as_ref() {
+                CatchKind::Default(d) => collect_expr_errors(d, out),
+                CatchKind::Bind { body, .. } => collect_body_errors(body, out),
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            collect_expr_errors(callee, out);
+            for a in args {
+                collect_expr_errors(a, out);
+            }
+        }
+        Expr::IfExpr {
+            cond,
+            then_e,
+            else_e,
+            ..
+        } => {
+            collect_expr_errors(cond, out);
+            collect_expr_errors(then_e, out);
+            collect_expr_errors(else_e, out);
+        }
+        Expr::SwitchExpr { subject, arms, .. } => {
+            collect_expr_errors(subject, out);
+            for arm in arms {
+                collect_body_errors(&arm.body, out);
+            }
+        }
+        Expr::Block(b, _) => collect_body_errors(b, out),
+        Expr::Assign { target, value, .. } => {
+            collect_expr_errors(target, out);
+            collect_expr_errors(value, out);
+        }
+        Expr::TupleDestructure(_, value, _) => collect_expr_errors(value, out),
+        Expr::Closure { body, .. } => collect_body_errors(body, out),
+        _ => {}
+    }
+}
+
+/// 登记全部函数/方法（命名空间前缀展平）与显式错误集 const 别名
+fn collect_fn_table<'a>(
+    decls: &'a [Decl],
+    prefix: &str,
+    form: &mut HashMap<String, FnErrorForm>,
+    bodies: &mut HashMap<String, &'a Block>,
+    explicit: &mut HashMap<String, HashSet<String>>,
+) {
+    for d in decls {
+        match d {
+            Decl::Fn { name, ret, body, .. } => {
+                let key = format!("{prefix}{name}");
+                form.insert(key.clone(), fn_error_form(ret));
+                bodies.insert(key, body);
+            }
+            Decl::Class { name, methods, .. } => {
+                for m in methods {
+                    let key = format!("{prefix}{name}.{}", m.name);
+                    form.insert(key.clone(), fn_error_form(&m.ret));
+                    bodies.insert(key, &m.body);
+                }
+            }
+            Decl::Const { name, ty, .. } => {
+                if let Some(Type::Named(tn, _)) = ty {
+                    if let Some(rest) = tn.strip_prefix("error_set:") {
+                        let members: HashSet<String> =
+                            rest.split(',').map(|s| s.trim().to_string()).collect();
+                        explicit.insert(format!("{prefix}{name}"), members);
+                    }
+                }
+            }
+            Decl::Namespace { name, decls, .. } => {
+                collect_fn_table(decls, &format!("{prefix}{name}."), form, bodies, explicit);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 递归可达检测：start 经 propagate 边可达自身
+fn reaches_self(start: &str, edges: &HashMap<String, Vec<String>>) -> bool {
+    fn dfs(
+        cur: &str,
+        start: &str,
+        edges: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if let Some(nexts) = edges.get(cur) {
+            for next in nexts {
+                if next == start {
+                    return true;
+                }
+                if visited.insert(next.clone()) && dfs(next, start, edges, visited) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    let mut visited = HashSet::new();
+    visited.insert(start.to_string());
+    dfs(start, start, edges, &mut visited)
+}
+
+/// 定位函数/方法的 span（供诊断定位；命名空间前缀匹配）
+fn find_fn_span(program: &Program, key: &str) -> Option<Span> {
+    fn walk(decls: &[Decl], prefix: &str, key: &str) -> Option<Span> {
+        for d in decls {
+            match d {
+                Decl::Fn { name, span, .. } => {
+                    if format!("{prefix}{name}") == key {
+                        return Some(span.clone());
+                    }
+                }
+                Decl::Class { name, methods, .. } => {
+                    for m in methods {
+                        if format!("{prefix}{name}.{}", m.name) == key {
+                            return Some(m.span.clone());
+                        }
+                    }
+                }
+                Decl::Namespace { name, decls, .. } => {
+                    if let Some(s) = walk(decls, &format!("{prefix}{name}."), key) {
+                        return Some(s);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    walk(&program.decls, "", key)
+}
+
+/// Q-S8：`!T` 推断错误集——从函数体收集 `return error.X` + `try`/`return` 传播的
+/// 实际返回集（固定点闭包）。递归自调用无法收集 → 退化为 anyerror（incomplete）。
+pub fn infer_error_sets(program: &Program) -> InferredErrorSets {
+    let mut form: HashMap<String, FnErrorForm> = HashMap::new();
+    let mut bodies: HashMap<String, &Block> = HashMap::new();
+    let mut explicit: HashMap<String, HashSet<String>> = HashMap::new();
+    collect_fn_table(&program.decls, "", &mut form, &mut bodies, &mut explicit);
+
+    // 每个函数体：直接返回的错误 + 传播的被调名
+    let mut direct: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, body) in &bodies {
+        let mut be = BodyErrors {
+            direct: HashSet::new(),
+            propagates: Vec::new(),
+        };
+        collect_body_errors(body, &mut be);
+        direct.insert(name.clone(), be.direct);
+        edges.insert(name.clone(), be.propagates);
+    }
+
+    // 固定点：!T 函数集合 = 直接错误 ∪ 被调已知集（显式 const / 其它 !T）
+    let mut sets: HashMap<String, HashSet<String>> = HashMap::new();
+    for (name, f) in &form {
+        if matches!(f, FnErrorForm::Infer) {
+            sets.insert(name.clone(), direct.get(name).cloned().unwrap_or_default());
+        }
+    }
+    for _ in 0..64 {
+        let mut changed = false;
+        let names: Vec<String> = sets.keys().cloned().collect();
+        for f in names {
+            let mut new: HashSet<String> = direct.get(&f).cloned().unwrap_or_default();
+            if let Some(callees) = edges.get(&f) {
+                for g in callees {
+                    match form.get(g) {
+                        Some(FnErrorForm::Explicit(name)) => {
+                            if let Some(m) = explicit.get(name) {
+                                new.extend(m.iter().cloned());
+                            }
+                        }
+                        Some(FnErrorForm::Infer) => {
+                            if let Some(s) = sets.get(g) {
+                                new.extend(s.iter().cloned());
+                            }
+                        }
+                        Some(FnErrorForm::Anyerror) | Some(FnErrorForm::None) | None => {
+                            // 接口契约 / 非错误联合 / 内建·外部未知被调：不传播（保守 best-effort）
+                        }
+                    }
+                }
+            }
+            if new != sets[&f] {
+                sets.insert(f, new);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // 递归自调用 → 无法完整收集 → 退化为 anyerror（Q-S8）
+    let mut incomplete: Vec<String> = Vec::new();
+    for (name, f) in &form {
+        if matches!(f, FnErrorForm::Infer) && reaches_self(name, &edges) {
+            incomplete.push(name.clone());
+            sets.remove(name);
+        }
+    }
+    incomplete.sort();
+
+    InferredErrorSets { sets, incomplete }
 }

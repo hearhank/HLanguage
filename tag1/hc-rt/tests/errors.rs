@@ -107,6 +107,16 @@ fn io_exit_error_code() {
 }
 
 #[test]
+fn zero_arg_main_runs() {
+    // 零参 main：入口按参数个数选版本（不应误传 io 实参 → ArityMismatch）
+    let src = "fn main() i32 { return 42; }\n";
+    let program = hc::parse_source(src).expect("parse");
+    let mut interp = Interp::new(src);
+    interp.load(&program).expect("load");
+    interp.run_main().expect("zero-arg main should run");
+}
+
+#[test]
 fn exit_type_variants() {
     // ExitType 内建枚举：Exit / Error 两个变体
     run_ok(

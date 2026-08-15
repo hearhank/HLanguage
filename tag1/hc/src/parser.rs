@@ -227,7 +227,11 @@ impl Parser {
                 self.expect(&TokenKind::LParen, "`(` after align")?;
                 let t = self.parse_type()?;
                 self.expect(&TokenKind::RParen, "`)`")?;
-                Trait::Align(format!("{:?}", t))
+                // 存储类型名（供布局计算 scalar_size 使用），非 Debug 字符串
+                Trait::Align(match &t {
+                    Type::Named(n, _) => n.clone(),
+                    other => format!("{:?}", other),
+                })
             }
             _ => {
                 return Err(Diagnostic::error(
@@ -1490,8 +1494,13 @@ impl Parser {
                 Ok(Expr::Try(Box::new(e), start))
             }
             TokenKind::KwMove => {
-                // move x：所有权转移标记（M2.4——保留供语义检查器验证
-                // 唯一约束 = 拥有所有权；原绑定仍可访问，悬垂/冲突由用户负责）
+                // move |v| ... = move 捕获闭包；否则 move x（所有权转移标记，M2.4——
+                // 保留供语义检查器验证唯一约束 = 拥有所有权；原绑定仍可访问，悬垂/冲突由用户负责）
+                if self.peek_n(1) == &TokenKind::Pipe
+                    || (self.peek_n(1) == &TokenKind::KwMut && self.peek_n(2) == &TokenKind::Pipe)
+                {
+                    return self.parse_closure(start);
+                }
                 self.advance();
                 let inner = self.parse_unary()?;
                 let end = self.span();
@@ -2001,14 +2010,22 @@ impl Parser {
         }
     }
 
-    /// 闭包：|v| expr / |v, w| { ... } / mut |v| ...（Q13：FnN 调用接口）
+    /// 闭包：|v| expr / |v, w| { ... } / mut |v| ... / move |v| ...（Q13：FnN 调用接口）
     fn parse_closure(&mut self, start: Span) -> Result<Expr, Diagnostic> {
-        let is_mut = if self.at(&TokenKind::KwMut) {
-            self.advance();
-            true
-        } else {
-            false
-        };
+        // 捕获模式前缀：mut（可写）/ move（转移捕获）——可叠放，粒度 = 整个闭包
+        let mut is_mut = false;
+        let mut is_move = false;
+        loop {
+            if self.at(&TokenKind::KwMut) {
+                self.advance();
+                is_mut = true;
+            } else if self.at(&TokenKind::KwMove) {
+                self.advance();
+                is_move = true;
+            } else {
+                break;
+            }
+        }
         self.expect(&TokenKind::Pipe, "`|` to open closure params")?;
         let mut params = Vec::new();
         if !self.at(&TokenKind::Pipe) {
@@ -2037,6 +2054,7 @@ impl Parser {
             params,
             body,
             is_mut,
+            is_move,
             span: start.merge(&end),
         })
     }

@@ -15,6 +15,7 @@ pub mod token;
 pub use ast::Program;
 pub use diag::Diagnostic;
 pub use errorcodes::{ErrorCodeTable, ErrorEntry};
+pub use semantic::InferredErrorSets;
 
 /// 语义检查（M2 静态 pass）：返回诊断列表（空 = 通过）
 pub fn check_semantics(program: &Program) -> Vec<Diagnostic> {
@@ -29,6 +30,11 @@ pub fn check_semantics_extern(program: &Program, externs: &[&Program]) -> Vec<Di
 /// 错误码表（M2.6）：编译期维护「错误名 ↔ 码」全局唯一映射（tag1 单包 = 包 ID 0）
 pub fn error_code_table(program: &Program) -> ErrorCodeTable {
     errorcodes::collect(program, 0)
+}
+
+/// M2.6 Q-S8：`!T` 推断错误集收集（函数名 → 推断错误集成员；递归 → incomplete）
+pub fn inferred_error_sets(program: &Program) -> InferredErrorSets {
+    semantic::infer_error_sets(program)
 }
 
 /// 解析源码为程序 AST；失败返回收集到的诊断（首个错误）与部分解析结果。

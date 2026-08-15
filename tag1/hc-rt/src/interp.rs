@@ -1121,6 +1121,60 @@ impl Interp {
         self.call_fn(&fdef, &vals, &Span::new(0, 0, 0, 0))
     }
 
+    /// 将任意可迭代值转换为元素数组（立即求值；iter/filter/map 方法链共用）。
+    /// Arr/Slice → 元素浅克隆；Str → 字节 Int；Map → KV 类；用户类型 → next() 直到 null。
+    fn iter_to_arr(&mut self, v: &Value) -> Result<Value> {
+        let deref = self.deref_value(v.clone());
+        match &deref {
+            Value::Arr(a) => {
+                let items = a.borrow().iter().map(|c| c.borrow().clone()).collect();
+                Ok(Value::arr(items))
+            }
+            Value::Slice { data, start, len } => {
+                let d = data.borrow();
+                let items = d[*start..*start + *len]
+                    .iter()
+                    .map(|c| c.borrow().clone())
+                    .collect();
+                Ok(Value::arr(items))
+            }
+            Value::Str(s) => {
+                let items = s.borrow().iter().map(|b| Value::Int(*b as i128)).collect();
+                Ok(Value::arr(items))
+            }
+            Value::Class(c) if c.borrow().name == "Map" => {
+                let d = c.borrow();
+                let items = d
+                    .fields
+                    .iter()
+                    .map(|(k, val)| {
+                        let mut f = HashMap::new();
+                        f.insert("key".to_string(), Value::str(k));
+                        f.insert("value".to_string(), val.clone());
+                        Value::class("KV", f)
+                    })
+                    .collect();
+                Ok(Value::arr(items))
+            }
+            Value::Class(_) => {
+                let mut items = Vec::new();
+                loop {
+                    let next_v = self.eval_next_method(&deref)?;
+                    match next_v {
+                        Value::Opt(Some(v)) => items.push((*v).clone()),
+                        Value::Opt(None) | Value::Void => break,
+                        other => items.push(other),
+                    }
+                }
+                Ok(Value::arr(items))
+            }
+            _ => Err(RtError::msg(
+                "NotIterable",
+                format!("value of type `{}` is not iterable", deref.type_name()),
+            )),
+        }
+    }
+
     fn exec_switch(&mut self, sw: &SwitchStmt) -> Result<Flow> {
         let subject = self.eval(&sw.subject)?;
         let subject = self.deref_value(subject);
@@ -1767,14 +1821,32 @@ impl Interp {
                 params,
                 body,
                 is_mut,
+                is_move,
                 ..
             } => {
                 // 捕获环境：当前作用域链中所有共享槽（tag1：捕获整个链，语义 = 捕获所有外部变量）
                 let env = self.capture_env();
+                // move 捕获（M2.7）：深拷贝整个作用域链——闭包持有独立副本，
+                // 脱离原作用域生命周期（原绑定销毁/悬垂不影响闭包）
+                let env = if *is_move {
+                    env.into_iter()
+                        .map(|m| {
+                            m.into_iter()
+                                .map(|(k, cell)| {
+                                    let v = self.deep_copy(cell.borrow().clone());
+                                    (k, Rc::new(RefCell::new(v)))
+                                })
+                                .collect()
+                        })
+                        .collect()
+                } else {
+                    env
+                };
                 Ok(Value::Closure(ClosureData {
                     params: params.clone(),
                     body: body.clone(),
                     is_mut: *is_mut,
+                    is_move: *is_move,
                     env,
                 }))
             }
@@ -2749,7 +2821,7 @@ impl Interp {
                 }
             }
             "@alignOf" => {
-                // @alignOf(T)：自然对齐（标量 = 宽度；连续 class = 最大字段对齐；其余 8）
+                // @alignOf(T)：自然对齐（标量 = 宽度；连续 class = pad/align 尊重；其余 8）
                 let ty = match &args[0] {
                     Expr::Ident(n, _) => n.clone(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
@@ -2759,34 +2831,7 @@ impl Interp {
                     "i16" | "u16" | "f16" => 2,
                     "i32" | "u32" | "f32" => 4,
                     "i128" | "u128" | "f128" => 16,
-                    _ => {
-                        // 连续 class：最大字段对齐
-                        let mut max_a = 1usize;
-                        if let Some(TypeDef::Class { fields, traits, .. }) = self.types.get(&ty) {
-                            if traits.iter().any(|t| matches!(t, Trait::Continuous)) {
-                                for fd in fields {
-                                    if let Some(s) = self.field_serialized_size(&fd.ty) {
-                                        let a = if matches!(
-                                            fd.ty.strip(),
-                                            Type::Named(n, _)
-                                                if Self::scalar_size(n) == s
-                                                    && !self.is_nested_continuous(n)
-                                        ) {
-                                            s
-                                        } else {
-                                            1
-                                        };
-                                        max_a = max_a.max(a);
-                                    }
-                                }
-                                max_a
-                            } else {
-                                8
-                            }
-                        } else {
-                            8
-                        }
-                    }
+                    _ => self.continuous_align(&ty).unwrap_or(8),
                 };
                 Ok(Some(Value::Int(align as i128)))
             }
@@ -3400,6 +3445,80 @@ impl Interp {
                 a.borrow_mut().push(Rc::new(RefCell::new(v)));
                 Ok(Some(Value::Void))
             }
+            // Deque 双端队列操作（M5.2：Vec/Deque 共享 Arr 值模型；方法按名分派）
+            (Value::Arr(a), "push_back") => {
+                let v = self.eval(&args[0])?;
+                a.borrow_mut().push(Rc::new(RefCell::new(v)));
+                Ok(Some(Value::Void))
+            }
+            (Value::Arr(a), "push_front") => {
+                let v = self.eval(&args[0])?;
+                a.borrow_mut().insert(0, Rc::new(RefCell::new(v)));
+                Ok(Some(Value::Void))
+            }
+            (Value::Arr(a), "pop_back") => {
+                let v = a.borrow_mut().pop().map(|cell| cell.borrow().clone());
+                Ok(Some(match v {
+                    Some(x) => Value::Opt(Some(Rc::new(x))),
+                    None => Value::Opt(None),
+                }))
+            }
+            (Value::Arr(a), "pop_front") => {
+                let mut arr = a.borrow_mut();
+                let v = if arr.is_empty() {
+                    None
+                } else {
+                    Some(arr.remove(0).borrow().clone())
+                };
+                Ok(Some(match v {
+                    Some(x) => Value::Opt(Some(Rc::new(x))),
+                    None => Value::Opt(None),
+                }))
+            }
+            (Value::Arr(a), "front") => {
+                let v = a.borrow().first().map(|cell| cell.borrow().clone());
+                Ok(Some(match v {
+                    Some(x) => Value::Opt(Some(Rc::new(x))),
+                    None => Value::Opt(None),
+                }))
+            }
+            (Value::Arr(a), "back") => {
+                let v = a.borrow().last().map(|cell| cell.borrow().clone());
+                Ok(Some(match v {
+                    Some(x) => Value::Opt(Some(Rc::new(x))),
+                    None => Value::Opt(None),
+                }))
+            }
+            // Deque 最小方法集：get ?T / put / remove（Map 同款语义）
+            (Value::Arr(a), "get") => {
+                let idx = self.eval(&args[0])?;
+                let i = self.as_index(&idx, span)?;
+                let v = a.borrow().get(i).map(|cell| cell.borrow().clone());
+                Ok(Some(match v {
+                    Some(x) => Value::Opt(Some(Rc::new(x))),
+                    None => Value::Opt(None),
+                }))
+            }
+            (Value::Arr(a), "put") => {
+                let idx = self.eval(&args[0])?;
+                let i = self.as_index(&idx, span)?;
+                let v = self.eval(&args[1])?;
+                let mut arr = a.borrow_mut();
+                if i >= arr.len() {
+                    return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
+                }
+                arr[i] = Rc::new(RefCell::new(v));
+                Ok(Some(Value::Void))
+            }
+            (Value::Arr(a), "remove") => {
+                let idx = self.eval(&args[0])?;
+                let i = self.as_index(&idx, span)?;
+                let mut arr = a.borrow_mut();
+                if i >= arr.len() {
+                    return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
+                }
+                Ok(Some(arr.remove(i).borrow().clone()))
+            }
             // extend(other)：追加另一集合/字节串的全部元素（57-protocol-parse 帧拼接）
             (Value::Arr(a), "extend") => {
                 let v = self.eval(&args[0])?;
@@ -3463,27 +3582,21 @@ impl Interp {
                 }
                 Ok(Some(Value::arr(items)))
             }
-            // 迭代器链（12.8：立即求值变换，产生新数据对象）
-            (Value::Arr(a), "iter") => Ok(Some(Value::Arr(a.clone()))),
-            (Value::Slice { data, start, len }, "iter") => {
-                let d = data.borrow();
-                let items: Vec<Value> = d[*start..*start + *len]
-                    .iter()
-                    .map(|c| c.borrow().clone())
-                    .collect();
-                drop(d);
-                Ok(Some(Value::arr(items)))
-            }
-            (Value::Arr(a), "filter") => {
+            // 迭代器链（12.8：立即求值变换，产生新数据对象）——统一覆盖全部内建
+            // 可迭代类型（Arr/Slice/Str/Map/用户类型）经 iter_to_arr 归一化为元素数组
+            (_, "iter") => Ok(Some(self.iter_to_arr(self_v)?)),
+            (_, "filter") => {
                 let f = self.eval(&args[0])?;
                 let f = self.deref_value(f);
                 if let Value::Closure(closure) = f {
+                    let Value::Arr(a) = self.iter_to_arr(self_v)? else {
+                        unreachable!("iter_to_arr 恒返回 Arr")
+                    };
                     let src = a.borrow().clone();
                     let mut out = Vec::new();
-                    for cell in &src {
+                    for cell in src {
                         let item = cell.borrow().clone();
-                        let keep = self.call_closure_bool(&closure, &[item.clone()], span)?;
-                        if keep {
+                        if self.call_closure_bool(&closure, &[item.clone()], span)? {
                             out.push(item);
                         }
                     }
@@ -3492,10 +3605,13 @@ impl Interp {
                     Err(RtError::new("TypeError", Some(span.clone())))
                 }
             }
-            (Value::Arr(a), "map") => {
+            (_, "map") => {
                 let f = self.eval(&args[0])?;
                 let f = self.deref_value(f);
                 if let Value::Closure(closure) = f {
+                    let Value::Arr(a) = self.iter_to_arr(self_v)? else {
+                        unreachable!("iter_to_arr 恒返回 Arr")
+                    };
                     let src = a.borrow().clone();
                     let mut out = Vec::new();
                     for cell in src {
@@ -4616,7 +4732,8 @@ impl Interp {
     }
 
     /// M4.3：连续 class 布局——字段 (名, 偏移, 大小) 列表 + 总大小
-    /// （与 to_bytes 直映射一致：自然对齐 + 字段间填充 + 尾部圆整；嵌套连续视为对齐 1）
+    /// （与 to_bytes 直映射一致：自然对齐 + 字段间填充 + 尾部圆整；
+    ///   [pad] = 紧凑对齐 1；[align(T)] = 尾部圆整到 T 的对齐值）
     fn continuous_layout(&self, ty: &str) -> Option<(Vec<(String, usize, usize)>, usize)> {
         let (fdecls, traits) = match self.types.get(ty) {
             Some(TypeDef::Class { fields, traits, .. }) => (fields, traits),
@@ -4625,19 +4742,19 @@ impl Interp {
         if !traits.iter().any(|t| matches!(t, Trait::Continuous)) {
             return None;
         }
+        let packed = traits.iter().any(|t| matches!(t, Trait::Pad));
         let mut layout: Vec<(String, usize, usize)> = Vec::new();
         let mut offset = 0usize;
         let mut max_align = 1usize;
         for fd in fdecls {
             let size = match self.field_serialized_size(&fd.ty) {
                 Some(s) => s,
-                None => continue, // 非标量字段不占字节（与 class_to_bytes 一致）
+                None => continue, // 非序列化字段不占字节
             };
-            let align = if matches!(fd.ty.strip(), Type::Named(n, _) if Self::scalar_size(n) == size && !self.is_nested_continuous(n))
-            {
-                size
+            let align = if packed {
+                1
             } else {
-                1 // 嵌套连续（对齐 1，与 class_to_bytes 一致）
+                self.field_align(&fd.ty, size)
             };
             max_align = max_align.max(align);
             while offset % align != 0 {
@@ -4646,10 +4763,53 @@ impl Interp {
             layout.push((fd.name.clone(), offset, size));
             offset += size;
         }
-        while offset % max_align != 0 {
+        // 尾部圆整：[pad] → 1；[align(T)] → T 对齐值；否则最大字段对齐
+        let tail_align = if packed {
+            1
+        } else if let Some(Trait::Align(a)) = traits.iter().find(|t| matches!(t, Trait::Align(_))) {
+            Self::scalar_size(a)
+        } else {
+            max_align
+        };
+        while offset % tail_align != 0 {
             offset += 1;
         }
         Some((layout, offset))
+    }
+
+    /// 字段自然对齐值（连续布局用；标量 = 宽度；嵌套连续 = 其自身 alignOf；其余 1）
+    fn field_align(&self, t: &Type, size: usize) -> usize {
+        match t.strip() {
+            Type::Named(n, _) if self.is_nested_continuous(n) => {
+                self.continuous_align(n).unwrap_or(1)
+            }
+            Type::Named(n, _) if Self::scalar_size(n) == size => size,
+            _ => 1,
+        }
+    }
+
+    /// 连续 class 的对齐值：pad → 1；align(T) → T 对齐值；否则最大字段对齐
+    fn continuous_align(&self, ty: &str) -> Option<usize> {
+        let (fdecls, traits) = match self.types.get(ty) {
+            Some(TypeDef::Class { fields, traits, .. }) => (fields, traits),
+            _ => return None,
+        };
+        if !traits.iter().any(|t| matches!(t, Trait::Continuous)) {
+            return None;
+        }
+        if traits.iter().any(|t| matches!(t, Trait::Pad)) {
+            return Some(1);
+        }
+        if let Some(Trait::Align(a)) = traits.iter().find(|t| matches!(t, Trait::Align(_))) {
+            return Some(Self::scalar_size(a));
+        }
+        let mut max_a = 1usize;
+        for fd in fdecls {
+            if let Some(s) = self.field_serialized_size(&fd.ty) {
+                max_a = max_a.max(self.field_align(&fd.ty, s));
+            }
+        }
+        Some(max_a)
     }
 
     fn is_nested_continuous(&self, n: &str) -> bool {
@@ -4763,57 +4923,54 @@ impl Interp {
         }
     }
 
-    /// class 实例 → 字节（字段按声明类型打包 + C 结构体自然对齐，M4.4 直映射）
+    /// class 实例 → 字节（M4.4 直映射；连续类型尊重 pad/align/嵌套/元组，堆上走自然对齐标量近似）
     fn class_to_bytes(&self, ty: &str, fields: &HashMap<String, Value>) -> Result<Vec<u8>> {
         let Some(TypeDef::Class { fields: fdecls, .. }) = self.types.get(ty) else {
             return Err(RtError::msg("UnknownType", format!("unknown type `{ty}`")));
         };
+        // 连续类型：布局驱动（与 @offsetOf/@sizeOf 同源）
+        if let Some((layout, total)) = self.continuous_layout(ty) {
+            let mut out = vec![0u8; total];
+            let offmap: HashMap<&str, (usize, usize)> = layout
+                .iter()
+                .map(|(n, o, s)| (n.as_str(), (*o, *s)))
+                .collect();
+            for fd in fdecls {
+                let Some(&(off, size)) = offmap.get(fd.name.as_str()) else {
+                    continue;
+                };
+                let v = fields.get(&fd.name).cloned().unwrap_or(Value::Void);
+                let v = self.deref_value(v);
+                self.write_field_bytes(&mut out, off, size, &fd.ty, &v)?;
+            }
+            return Ok(out);
+        }
+        // 堆上 class：自然对齐标量直映射（tag1 近似；非标量字段跳过——堆类型请用 to_json）
         let mut out = Vec::new();
         let mut offset = 0usize;
         let mut max_align = 1usize;
         for fd in fdecls {
-            let v = fields.get(&fd.name).unwrap_or(&Value::Void);
-            let v = self.deref_value(v.clone());
             let n = match fd.ty.strip() {
-                Type::Named(n, _) => n.clone(),
+                Type::Named(n, _) if Self::is_scalar_name(n) => n.clone(),
                 _ => continue,
             };
-            // 嵌套 class：递归序列化（内部自含对齐），视为对齐 1
-            if let Value::Class(c) = &v {
-                if c.borrow().name == n {
-                    let cd = c.borrow();
-                    out.extend(self.class_to_bytes(&n, &cd.fields)?);
-                    offset += out.len();
-                    continue;
-                }
-            }
+            let v = fields.get(&fd.name).cloned().unwrap_or(Value::Void);
+            let v = self.deref_value(v);
             if matches!(v, Value::Void) {
                 continue;
             }
             let size = Self::scalar_size(&n);
-            let align = size; // 自然对齐
+            let align = size;
             max_align = max_align.max(align);
             while offset % align != 0 {
                 out.push(0);
                 offset += 1;
             }
-            match (&n[..], &v) {
-                ("i8" | "u8", Value::Int(i)) => out.push(*i as u8),
-                ("i16" | "u16", Value::Int(i)) => out.extend_from_slice(&(*i as i16).to_le_bytes()),
-                ("i32" | "u32", Value::Int(i)) => out.extend_from_slice(&(*i as i32).to_le_bytes()),
-                ("i64" | "u64" | "isize" | "usize", Value::Int(i)) => {
-                    out.extend_from_slice(&(*i as i64).to_le_bytes())
-                }
-                ("f32", Value::Float(f)) => out.extend_from_slice(&(*f as f32).to_le_bytes()),
-                ("f64" | "f16" | "f128", Value::Float(f)) => {
-                    out.extend_from_slice(&f.to_le_bytes())
-                }
-                ("bool", Value::Bool(b)) => out.push(if *b { 1 } else { 0 }),
-                _ => {}
-            }
+            let mut buf = vec![0u8; size];
+            self.write_scalar(&mut buf, &n, &v);
+            out.extend_from_slice(&buf);
             offset += size;
         }
-        // 结构体尾部对齐：总大小圆整到最大字段对齐
         while offset % max_align != 0 {
             out.push(0);
             offset += 1;
@@ -4821,85 +4978,169 @@ impl Interp {
         Ok(out)
     }
 
-    /// bytes → class 实例（按字段声明类型解析 + 自然对齐跳填充）
+    /// bytes → class 实例（连续类型按布局解析；堆上按自然对齐标量近似）
     fn class_from_bytes(&self, ty: &str, bytes: &[u8]) -> Result<Value> {
         let Some(TypeDef::Class { fields: fdecls, .. }) = self.types.get(ty) else {
             return Err(RtError::msg("UnknownType", format!("unknown type `{ty}`")));
         };
+        // 连续类型：布局驱动（与 @offsetOf/@sizeOf 同源）
+        if let Some((layout, _total)) = self.continuous_layout(ty) {
+            let mut f = HashMap::new();
+            let offmap: HashMap<&str, (usize, usize)> = layout
+                .iter()
+                .map(|(n, o, s)| (n.as_str(), (*o, *s)))
+                .collect();
+            for fd in fdecls {
+                let v = match offmap.get(fd.name.as_str()) {
+                    Some(&(off, size)) => self.read_field_bytes(bytes, off, size, &fd.ty)?,
+                    None => Value::Void,
+                };
+                f.insert(fd.name.clone(), v);
+            }
+            return Ok(Value::class(ty, f));
+        }
+        // 堆上 class：自然对齐标量解析（tag1 近似；非标量字段置 Void）
         let mut pos = 0usize;
         let mut f = HashMap::new();
         for fd in fdecls {
             let n = match fd.ty.strip() {
-                Type::Named(n, _) => n.clone(),
+                Type::Named(n, _) if Self::is_scalar_name(n) => n.clone(),
                 _ => {
                     f.insert(fd.name.clone(), Value::Void);
                     continue;
                 }
             };
             let size = Self::scalar_size(&n);
-            let align = size; // 自然对齐
+            let align = size;
             while pos % align != 0 {
-                pos += 1; // 跳过填充字节
+                pos += 1;
             }
-            let v = match (&n[..], pos) {
-                ("i8" | "u8", _) => {
-                    let v = bytes.get(pos).copied().unwrap_or(0);
-                    pos += 1;
-                    Value::Int(v as i128)
-                }
-                ("i16" | "u16", _) => {
-                    let b = bytes
-                        .get(pos..pos + 2)
-                        .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
-                    let v = i16::from_le_bytes(b.try_into().unwrap());
-                    pos += 2;
-                    Value::Int(v as i128)
-                }
-                ("i32" | "u32", _) => {
-                    let b = bytes
-                        .get(pos..pos + 4)
-                        .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
-                    let v = i32::from_le_bytes(b.try_into().unwrap());
-                    pos += 4;
-                    Value::Int(v as i128)
-                }
-                ("i64" | "u64" | "isize" | "usize", _) => {
-                    let b = bytes
-                        .get(pos..pos + 8)
-                        .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
-                    let v = i64::from_le_bytes(b.try_into().unwrap());
-                    pos += 8;
-                    Value::Int(v as i128)
-                }
-                ("f32", _) => {
-                    let b = bytes
-                        .get(pos..pos + 4)
-                        .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
-                    let v = f32::from_le_bytes(b.try_into().unwrap()) as f64;
-                    pos += 4;
-                    Value::Float(v)
-                }
-                ("f64" | "f16" | "f128", _) => {
-                    let b = bytes
-                        .get(pos..pos + 8)
-                        .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
-                    let v = f64::from_le_bytes(b.try_into().unwrap());
-                    pos += 8;
-                    Value::Float(v)
-                }
-                ("bool", _) => {
-                    let v = bytes.get(pos).copied().unwrap_or(0);
-                    pos += 1;
-                    Value::Bool(v != 0)
-                }
-                _ => {
-                    // 嵌套 class：递归解析（长度未知——tag1 不支持连续类型嵌套反序列化边界，跳过）
-                    Value::Void
-                }
-            };
+            let v = self.read_scalar(bytes.get(pos..pos + size).unwrap_or(&[]), &n)?;
+            pos += size;
             f.insert(fd.name.clone(), v);
         }
         Ok(Value::class(ty, f))
+    }
+
+    /// 连续字段 → 字节（写入 out[off..off+size]；标量 / 嵌套连续 / 元组递归）
+    fn write_field_bytes(&self, out: &mut [u8], off: usize, size: usize, ty: &Type, v: &Value) -> Result<()> {
+        match ty.strip() {
+            Type::Named(n, _) if Self::is_scalar_name(n) => {
+                self.write_scalar(&mut out[off..off + size], n, v);
+            }
+            Type::Named(n, _) if self.is_nested_continuous(n) => {
+                let bytes = match v {
+                    Value::Class(c) => self.class_to_bytes(n, &c.borrow().fields)?,
+                    _ => vec![0u8; size], // 缺省字段零填充
+                };
+                let len = size.min(bytes.len());
+                out[off..off + len].copy_from_slice(&bytes[..len]);
+                if len < size {
+                    out[off + len..off + size].fill(0);
+                }
+            }
+            Type::Tuple(ts) => {
+                let items = match v {
+                    Value::Arr(a) => a.borrow().clone(),
+                    _ => Vec::new(),
+                };
+                let mut cur = off;
+                for (i, t) in ts.iter().enumerate() {
+                    let esz = self.field_serialized_size(t).unwrap_or(0);
+                    let ev = items
+                        .get(i)
+                        .map(|c| self.deref_value(c.borrow().clone()))
+                        .unwrap_or(Value::Void);
+                    if esz > 0 {
+                        self.write_field_bytes(out, cur, esz, t, &ev)?;
+                    }
+                    cur += esz;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// 字节 → 连续字段值（标量 / 嵌套连续 / 元组递归）
+    fn read_field_bytes(&self, bytes: &[u8], off: usize, size: usize, ty: &Type) -> Result<Value> {
+        match ty.strip() {
+            Type::Named(n, _) if Self::is_scalar_name(n) => {
+                self.read_scalar(bytes.get(off..off + size).unwrap_or(&[]), n)
+            }
+            Type::Named(n, _) if self.is_nested_continuous(n) => {
+                let sub = bytes
+                    .get(off..off + size)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
+                self.class_from_bytes(n, sub)
+            }
+            Type::Tuple(ts) => {
+                let mut items = Vec::new();
+                let mut cur = off;
+                for t in ts {
+                    let esz = self.field_serialized_size(t).unwrap_or(0);
+                    items.push(self.read_field_bytes(bytes, cur, esz, t)?);
+                    cur += esz;
+                }
+                Ok(Value::arr(items))
+            }
+            _ => Ok(Value::Void),
+        }
+    }
+
+    /// 标量值 → 小端字节（写入 out 前 size 字节；size 由 scalar_size 决定）
+    fn write_scalar(&self, out: &mut [u8], n: &str, v: &Value) {
+        match (n, v) {
+            ("i8" | "u8", Value::Int(i)) => out[0] = *i as u8,
+            ("i16" | "u16", Value::Int(i)) => out[..2].copy_from_slice(&(*i as i16).to_le_bytes()),
+            ("i32" | "u32", Value::Int(i)) => out[..4].copy_from_slice(&(*i as i32).to_le_bytes()),
+            ("i64" | "u64" | "isize" | "usize" | "i128" | "u128", Value::Int(i)) => {
+                out[..8].copy_from_slice(&(*i as i64).to_le_bytes())
+            }
+            ("f32", Value::Float(f)) => out[..4].copy_from_slice(&(*f as f32).to_le_bytes()),
+            ("f64" | "f16" | "f128", Value::Float(f)) => out[..8].copy_from_slice(&f.to_le_bytes()),
+            ("bool", Value::Bool(b)) => out[0] = if *b { 1 } else { 0 },
+            _ => {}
+        }
+    }
+
+    /// 标量字节 → 值（小端；len 由 scalar_size 决定）
+    fn read_scalar(&self, bytes: &[u8], n: &str) -> Result<Value> {
+        match n {
+            "i8" | "u8" => Ok(Value::Int(bytes.first().copied().unwrap_or(0) as i128)),
+            "i16" | "u16" => {
+                let b = bytes
+                    .get(..2)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
+                Ok(Value::Int(i16::from_le_bytes(b.try_into().unwrap()) as i128))
+            }
+            "i32" | "u32" => {
+                let b = bytes
+                    .get(..4)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
+                Ok(Value::Int(i32::from_le_bytes(b.try_into().unwrap()) as i128))
+            }
+            "i64" | "u64" | "isize" | "usize" | "i128" | "u128" => {
+                let b = bytes
+                    .get(..8)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
+                Ok(Value::Int(i64::from_le_bytes(b.try_into().unwrap()) as i128))
+            }
+            "f32" => {
+                let b = bytes
+                    .get(..4)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
+                Ok(Value::Float(f32::from_le_bytes(b.try_into().unwrap()) as f64))
+            }
+            "f64" | "f16" | "f128" => {
+                let b = bytes
+                    .get(..8)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
+                Ok(Value::Float(f64::from_le_bytes(b.try_into().unwrap())))
+            }
+            "bool" => Ok(Value::Bool(bytes.first().copied().unwrap_or(0) != 0)),
+            _ => Ok(Value::Void),
+        }
     }
 
     /// 任意值 → 字节（标量/嵌套；Int 在 i32 范围用 4 字节——i32 元素集合 12 字节）
@@ -4972,55 +5213,199 @@ impl Interp {
         }
     }
 
-    /// JSON 对象字符串 → (key, value) 表（tag1：仅标量字段）
+    /// JSON 对象字符串 → (key, value) 表（递归解析：支持嵌套对象/数组/字符串转义）
     fn parse_json_obj(&self, s: &str) -> Result<HashMap<String, Value>> {
-        let mut out = HashMap::new();
-        let s = s.trim();
-        let inner = s
-            .strip_prefix('{')
-            .and_then(|r| r.strip_suffix('}'))
-            .unwrap_or(s)
-            .trim();
-        if inner.is_empty() {
-            return Ok(out);
+        let (v, _) = self.parse_json_value(s)?;
+        match v {
+            Value::Class(c) => Ok(c.borrow().fields.clone()),
+            _ => Ok(HashMap::new()),
         }
-        for part in inner.split(',') {
-            let part = part.trim();
-            let Some(eq) = part.find(':') else { continue };
-            let key = part[..eq].trim().trim_matches('"').to_string();
-            let val = part[eq + 1..].trim();
-            let v = if val == "true" {
-                Value::Bool(true)
-            } else if val == "false" {
-                Value::Bool(false)
-            } else if val.starts_with('"') {
-                Value::str(val.trim_matches('"'))
-            } else if let Ok(i) = val.parse::<i128>() {
-                Value::Int(i)
-            } else if let Ok(f) = val.parse::<f64>() {
-                Value::Float(f)
-            } else {
-                continue;
-            };
-            out.insert(key, v);
-        }
-        Ok(out)
     }
 
-    /// JSON 对象 → class 实例（匹配字段名）
+    /// JSON 值解析（递归下降；返回 (值, 消费字节数)）
+    fn parse_json_value(&self, s: &str) -> Result<(Value, usize)> {
+        let s = s.trim_start();
+        match s.as_bytes().first().copied() {
+            Some(b'{') => self.parse_json_object(s),
+            Some(b'[') => self.parse_json_array(s),
+            Some(b'"') => self.parse_json_string(s),
+            Some(b't') if s.starts_with("true") => Ok((Value::Bool(true), 4)),
+            Some(b'f') if s.starts_with("false") => Ok((Value::Bool(false), 5)),
+            Some(b'n') if s.starts_with("null") => Ok((Value::Opt(None), 4)),
+            Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_json_number(s),
+            _ => Err(RtError::msg("InvalidJson", "unexpected token")),
+        }
+    }
+
+    fn parse_json_object(&self, s: &str) -> Result<(Value, usize)> {
+        let b = s.as_bytes();
+        let mut out = HashMap::new();
+        let mut pos = 1usize; // 跳过 '{'
+        loop {
+            while pos < b.len() && b[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos >= b.len() {
+                return Err(RtError::msg("InvalidJson", "unterminated object"));
+            }
+            if b[pos] == b'}' {
+                return Ok((Value::class("Map", out), pos + 1));
+            }
+            if b[pos] != b'"' {
+                return Err(RtError::msg("InvalidJson", "expected string key"));
+            }
+            let (key, klen) = self.parse_json_string(&s[pos..])?;
+            pos += klen;
+            while pos < b.len() && b[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos >= b.len() || b[pos] != b':' {
+                return Err(RtError::msg("InvalidJson", "expected ':'"));
+            }
+            pos += 1;
+            let (val, vlen) = self.parse_json_value(&s[pos..])?;
+            pos += vlen;
+            if let Value::Str(ks) = key {
+                out.insert(String::from_utf8_lossy(&ks.borrow()).to_string(), val);
+            }
+            while pos < b.len() && b[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            match b.get(pos).copied() {
+                Some(b',') => pos += 1,
+                Some(b'}') => return Ok((Value::class("Map", out), pos + 1)),
+                _ => return Err(RtError::msg("InvalidJson", "expected ',' or '}'")),
+            }
+        }
+    }
+
+    fn parse_json_array(&self, s: &str) -> Result<(Value, usize)> {
+        let b = s.as_bytes();
+        let mut items = Vec::new();
+        let mut pos = 1usize; // 跳过 '['
+        loop {
+            while pos < b.len() && b[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos >= b.len() {
+                return Err(RtError::msg("InvalidJson", "unterminated array"));
+            }
+            if b[pos] == b']' {
+                return Ok((Value::arr(items), pos + 1));
+            }
+            let (val, vlen) = self.parse_json_value(&s[pos..])?;
+            pos += vlen;
+            items.push(val);
+            while pos < b.len() && b[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            match b.get(pos).copied() {
+                Some(b',') => pos += 1,
+                Some(b']') => return Ok((Value::arr(items), pos + 1)),
+                _ => return Err(RtError::msg("InvalidJson", "expected ',' or ']'")),
+            }
+        }
+    }
+
+    fn parse_json_string(&self, s: &str) -> Result<(Value, usize)> {
+        let b = s.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 1usize; // 跳过开引号
+        while i < b.len() {
+            match b[i] {
+                b'"' => return Ok((Value::str_bytes(out), i + 1)),
+                b'\\' => {
+                    i += 1;
+                    if i >= b.len() {
+                        return Err(RtError::msg("InvalidJson", "bad escape"));
+                    }
+                    match b[i] {
+                        b'"' => out.push(b'"'),
+                        b'\\' => out.push(b'\\'),
+                        b'/' => out.push(b'/'),
+                        b'n' => out.push(b'\n'),
+                        b't' => out.push(b'\t'),
+                        b'r' => out.push(b'\r'),
+                        _ => return Err(RtError::msg("InvalidJson", "unknown escape")),
+                    }
+                    i += 1;
+                }
+                c => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        Err(RtError::msg("InvalidJson", "unterminated string"))
+    }
+
+    fn parse_json_number(&self, s: &str) -> Result<(Value, usize)> {
+        let b = s.as_bytes();
+        let mut i = 0usize;
+        while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], b'-' | b'+' | b'.' | b'e' | b'E')) {
+            i += 1;
+        }
+        let text = &s[..i];
+        let v = if text.contains('.') || text.contains('e') || text.contains('E') {
+            text.parse::<f64>()
+                .map(Value::Float)
+                .map_err(|_| RtError::msg("InvalidJson", "bad number"))?
+        } else {
+            match text.parse::<i128>() {
+                Ok(n) => Value::Int(n),
+                Err(_) => text
+                    .parse::<f64>()
+                    .map(Value::Float)
+                    .map_err(|_| RtError::msg("InvalidJson", "bad number"))?,
+            }
+        };
+        Ok((v, i))
+    }
+
+    /// JSON 对象 → class 实例（匹配字段名；嵌套对象按字段声明类型还原）
     fn class_from_json(&self, ty: &str, obj: &HashMap<String, Value>) -> Result<Value> {
         let Some(TypeDef::Class { fields: fdecls, .. }) = self.types.get(ty) else {
             return Err(RtError::msg("UnknownType", format!("unknown type `{ty}`")));
         };
         let mut f = HashMap::new();
         for fd in fdecls {
-            let v = obj
-                .get(&fd.name)
-                .cloned()
-                .unwrap_or_else(|| self.default_value(Some(&fd.ty)).unwrap_or(Value::Void));
+            let v = match obj.get(&fd.name) {
+                Some(v) => self.json_coerce(&fd.ty, v),
+                None => self.default_value(Some(&fd.ty)).unwrap_or(Value::Void),
+            };
             f.insert(fd.name.clone(), v);
         }
         Ok(Value::class(ty, f))
+    }
+
+    /// 解析后的 JSON 值 → 字段声明类型（嵌套对象（Map）还原为目标 class；集合元素递归还原）
+    fn json_coerce(&self, ty: &Type, v: &Value) -> Value {
+        match ty.strip() {
+            Type::Named(n, args) => {
+                // 集合元素类型还原（Vec(T)/Deque(T) 中的嵌套对象）
+                if (n == "Vec" || n == "Deque") && !args.is_empty() {
+                    if let Value::Arr(a) = v {
+                        let items: Vec<Value> = a
+                            .borrow()
+                            .iter()
+                            .map(|c| self.json_coerce(&args[0], &c.borrow()))
+                            .collect();
+                        return Value::arr(items);
+                    }
+                }
+                if let Value::Class(c) = v {
+                    let d = c.borrow();
+                    if d.name == "Map" && n != "Map" && self.types.contains_key(n) {
+                        // 嵌套 heap class：通用 JSON 对象（Map）→ 目标 class
+                        return self
+                            .class_from_json(n, &d.fields.clone())
+                            .unwrap_or_else(|_| v.clone());
+                    }
+                }
+                v.clone()
+            }
+            _ => v.clone(),
+        }
     }
 
     fn deep_copy(&self, v: Value) -> Value {
@@ -5077,10 +5462,23 @@ impl Interp {
             self.in_main = false;
             return Err(RtError::msg("NoMain", "no `main` entry point"));
         }
-        // main(io: Io) !void——单参数 io 版本或零参版本
-        let (main_def, main_args): (FnDef, Vec<Value>) = match self.pick_fn("main", &[io.clone()]) {
-            Ok(f) => (f, vec![io.clone()]),
-            Err(_) => (self.pick_fn("main", &[])?, vec![]),
+        // main(io: Io) !void——单参数 io 版本或零参版本。
+        // 注意 pick_fn 在候选唯一时短路返回、不校验参数个数（见 pick_fn），
+        // 零参 main 若仍走 `pick_fn("main", &[io])` 会拿到零参定义，再被
+        // call_fn 判 ArityMismatch。故按参数个数精确选：1 参 → 传 io；否则传 []。
+        let main_def = if self
+            .funcs
+            .get("main")
+            .map_or(false, |fns| fns.iter().any(|f| f.params.len() == 1))
+        {
+            self.pick_fn("main", &[io.clone()])?
+        } else {
+            self.pick_fn("main", &[])?
+        };
+        let main_args = if main_def.params.len() == 1 {
+            vec![io.clone()]
+        } else {
+            vec![]
         };
         let r = self.call_fn(&main_def, &main_args, &Span::new(0, 0, 0, 0));
         self.in_main = false;

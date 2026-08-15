@@ -1,6 +1,7 @@
 //! hc 工具链 CLI（M7.1：`hc build` / `hc run` / `hc test`——tag1 子集）
 //!
 //! - `hc run <file.hc>`：脚本模式（tree-walking 解释器）
+//! - `hc run --ir <file.hc>`：IR 参考解释器过渡模式（M3.2 字节码 VM 的过渡形态，标量子集）
 //! - `hc test [file.hc|dir]`：收集并运行 `test fn`，输出 [PASS]/[FAIL]/[SKIP] + 汇总
 //! - `hc build <file.hc>`：tag1 占位（LLVM 原生后端归 M3.3）
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
@@ -17,6 +18,7 @@ H 语言工具链（tag1 垂直切片）
 
 USAGE:
     hc run <file.hc>           运行脚本模式（解释执行）
+    hc run --ir <file.hc>      用 IR 参考解释器运行（M3.2 字节码 VM 过渡；标量子集）
     hc test [file.hc|dir]      运行 test fn（默认当前目录全部 .hc）
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
@@ -55,7 +57,16 @@ fn run_cli() -> ExitCode {
                 eprintln!("error: `hc run` requires a file path");
                 return ExitCode::from(2);
             };
-            run_file(Path::new(path))
+            // 显式模式标志：`hc run --ir <file>` 走 IR 参考解释器；否则默认 tree-walking
+            if path == "--ir" {
+                let Some(p) = args.get(3) else {
+                    eprintln!("error: `hc run --ir` requires a file path");
+                    return ExitCode::from(2);
+                };
+                run_file_ir(Path::new(p))
+            } else {
+                run_file(Path::new(path))
+            }
         }
         "test" => {
             let target = args
@@ -289,6 +300,82 @@ fn run_file(path: &Path) -> ExitCode {
     }
 }
 
+// ---------- `hc run --ir`：IR 参考解释器过渡模式（M3.2 字节码 VM 的过渡形态） ----------
+
+/// IR 运行结果归一化（对齐 M2.6 根作用域语义：未处理错误到根 → panic 式失败）
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IrRunOutcome {
+    /// main 正常返回（非错误值）——退出码 0
+    Success,
+    /// main 返回未处理的 error 值（值通道到达入口，panic 式失败，无恢复）
+    UnhandledError(String),
+}
+
+/// 用 IR 参考解释器运行源码入口 `main`（`hc run --ir` 核心，可测试）。
+///
+/// 流程：解析 → 语义检查（准确优先）→ `lower` → 查 `func_index` 有 `main` →
+/// `run_ir(module, "main", [])` → 结果归一化；失败返回可直接打印的文本
+/// （诊断渲染 / `error.{name}: {message}` + 切片外特性提示）。
+/// 不依赖文件系统与退出码——仅 `hc run --ir` 使用，默认路径不受影响。
+fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
+    // 1) 解析（失败渲染诊断）
+    let program = match hc::parse_source(source) {
+        Ok(p) => p,
+        Err(diags) => return Err(diag::render(&diags, source)),
+    };
+    // 2) 语义检查（准确优先：能精确判定才报错——与 tree-walking load 内建检查对齐；
+    //    有错误则渲染诊断返回失败）
+    let errs = hc::check_semantics(&program);
+    if errs.iter().any(|d| d.is_error()) {
+        return Err(diag::render(&errs, source));
+    }
+    // 3) 降级为线性 IR
+    let module = hc::ir::lower(&program);
+    // 4) 入口 main 必须存在（NoMain——先查表，避免 run_ir 的 NoFunction 误导为切片外）
+    if !module.func_index.contains_key("main") {
+        return Err("error.NoMain: 入口函数 `main` 未定义".into());
+    }
+    // 5) 运行（main(io: Io) 的 io 参数在 IR 下为 Void 占位——用了 io.* 会走 NoFunction
+    //    提示，正常；零参 main 可完整运行）
+    match hc::ir::run_ir(&module, "main", &[]) {
+        // 未处理错误值到达入口（值通道）：panic 式失败
+        Ok(hc::ir::IrValue::Err(name)) => Ok(IrRunOutcome::UnhandledError(name)),
+        Ok(_) => Ok(IrRunOutcome::Success),
+        Err(e) => {
+            let mut msg = format!("error.{}: {}", e.name, e.message);
+            // NoFunction/TypeError 常来自 io/集合/指针等 IR 切片外特性：追加提示
+            if e.name == "NoFunction" || e.name == "TypeError" {
+                msg.push_str(
+                    "\n程序使用了 IR 切片外特性（io/集合/指针等）——请用默认 \
+                     tree-walking 模式 `hc run <file>`",
+                );
+            }
+            Err(msg)
+        }
+    }
+}
+
+/// `hc run --ir file.hc`：只读文件 + 调用 `run_ir_source` + 映射退出码。
+/// 退出码语义：IR 模式只看 run_ir 结果（Ok=0，Err/未处理错误=非零）；
+/// main 返回非零 Int 不影响退出码。
+fn run_file_ir(path: &Path) -> ExitCode {
+    let source = match read_program(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    match run_ir_source(&source) {
+        Ok(IrRunOutcome::Success) => ExitCode::SUCCESS,
+        Ok(IrRunOutcome::UnhandledError(name)) => {
+            eprintln!("error.{name} 到达入口（未处理）");
+            ExitCode::FAILURE
+        }
+        Err(msg) => {
+            eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// 同目录兄弟 .hc 文件（M1.4：目录 = 包；build.zon 文件清单解析归 M7.2）
 fn sibling_files(path: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -463,5 +550,108 @@ fn collect_hc_files(dir: &Path, out: &mut Vec<PathBuf>) {
         } else if path.extension().map_or(false, |e| e == "hc") {
             out.push(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run_ir_source, IrRunOutcome};
+
+    /// 断言切片内程序运行成功
+    fn expect_success(src: &str) {
+        match run_ir_source(src) {
+            Ok(IrRunOutcome::Success) => {}
+            other => panic!("预期运行成功，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn slice_in_simple_return() {
+        // 零参 main 完整运行：标量 return
+        expect_success("fn main() i32 { return 42; }");
+    }
+
+    #[test]
+    fn slice_in_if_while_try_catch() {
+        // 含 if/else-if/while 续步/try/catch/error 字面量的程序
+        let src = r#"
+fn sum_to(n: i32) i32 {
+    var mut i: i32 = 0;
+    var mut sum: i32 = 0;
+    while (i < n) : (i += 1) { sum += i; }
+    return sum;
+}
+fn fail() !i32 { return error.NotFound; }
+fn ok() !i32 { return 5; }
+fn pick(x: i32) i32 {
+    if (x > 5) { return x; }
+    else if (x > 2) { return x * 2; }
+    return 0;
+}
+fn main() i32 {
+    var t = try ok();
+    var s = fail() catch 7;
+    return sum_to(5) + pick(3) + t + s;
+}
+"#;
+        expect_success(src);
+    }
+
+    #[test]
+    fn main_io_param_void_placeholder() {
+        // main(io: Io) 的 io 参数在 IR 下为 Void 占位；未用 io.* 时正常返回
+        expect_success("fn main(io: Io) void {}");
+    }
+
+    #[test]
+    fn unhandled_error_value() {
+        // main 返回未处理 error 值（值通道到入口）→ UnhandledError
+        let src = "fn main() !i32 { return error.NotFound; }";
+        match run_ir_source(src) {
+            Ok(IrRunOutcome::UnhandledError(name)) => assert_eq!(name, "NotFound"),
+            other => panic!("预期未处理错误，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn division_by_zero() {
+        // 整数除零 → DivisionByZero（对齐 tree-walking arith）
+        let src = "fn main() i32 { return 10 / 0; }";
+        match run_ir_source(src) {
+            Err(msg) => assert!(msg.contains("DivisionByZero"), "消息：{msg}"),
+            other => panic!("预期错误，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_main_entry() {
+        // 无 main 入口 → NoMain（不误导为切片外 NoFunction）
+        let src = "fn f() i32 { return 1; }";
+        match run_ir_source(src) {
+            Err(msg) => assert!(msg.contains("NoMain"), "消息：{msg}"),
+            other => panic!("预期 NoMain，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_slice_io_print_hint() {
+        // io.print 属 IR 切片外：io 内建放行语义检查；lower 展平 io.print → 运行 NoFunction
+        let src = r#"fn main() void { io.print("hi"); }"#;
+        match run_ir_source(src) {
+            Err(msg) => {
+                assert!(msg.contains("NoFunction"), "消息：{msg}");
+                assert!(
+                    msg.contains("IR 切片外特性") && msg.contains("hc run"),
+                    "缺少切片外提示，消息：{msg}"
+                );
+            }
+            other => panic!("预期 NoFunction，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_rendered() {
+        // 解析失败 → 渲染诊断文本
+        assert!(run_ir_source("fn main( {").is_err());
     }
 }

@@ -66,6 +66,7 @@ pub struct ClosureData {
     pub params: Vec<String>,
     pub body: hc::ast::Block,
     pub is_mut: bool,
+    pub is_move: bool,
     pub env: Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>>,
 }
 
