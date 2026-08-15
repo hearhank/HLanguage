@@ -731,7 +731,15 @@ impl Interp {
     }
 
     fn exec_block_inner(&mut self, b: &Block) -> Result<Flow> {
-        for stmt in &b.stmts {
+        let n = b.stmts.len();
+        for (i, stmt) in b.stmts.iter().enumerate() {
+            // 块值：最后一条语句为表达式时取其值（M3.4 对齐 IR 语义源——
+            // 之前被丢弃导致 catch 块值/块表达式恒为 void）
+            if i + 1 == n {
+                if let Stmt::Expr(e) = stmt {
+                    return Ok(Flow::Value(self.eval(e)?));
+                }
+            }
             let f = self.exec_stmt(stmt)?;
             if !matches!(f, Flow::None) {
                 return Ok(f);
@@ -743,7 +751,12 @@ impl Interp {
     fn exec_stmt(&mut self, s: &Stmt) -> Result<Flow> {
         match s {
             Stmt::Empty => Ok(Flow::None),
-            Stmt::Block(b) => self.exec_block(b),
+            // 语句位块：值丢弃（块值只经块表达式/函数末位表达式产生；
+            // 否则中间块会以 Flow::Value 早退跳过后续语句）
+            Stmt::Block(b) => match self.exec_block(b)? {
+                Flow::Value(_) => Ok(Flow::None),
+                other => Ok(other),
+            },
             Stmt::VarDecl {
                 name,
                 mut_,
@@ -800,7 +813,12 @@ impl Interp {
                 self.eval(e)?;
                 Ok(Flow::None)
             }
-            Stmt::If(ifs) => self.exec_if(ifs),
+            Stmt::If(ifs) => match self.exec_if(ifs)? {
+                // 语句位 if：值丢弃（if 表达式用 IfExpr 变体；否则中间 if 的
+                // 值会早退跳过后续语句）
+                Flow::Value(_) => Ok(Flow::None),
+                other => Ok(other),
+            },
             Stmt::While(w) => self.exec_while(w),
             Stmt::For(f) => self.exec_for(f),
             Stmt::Switch(sw) => match self.exec_switch(sw)? {
@@ -2149,6 +2167,18 @@ impl Interp {
     fn eval_call(&mut self, callee: &Expr, args: &[Expr], span: &Span) -> Result<Value> {
         // 方法调用 p.dist(q)：注入 self
         if let Expr::Field { base, field, .. } = callee {
+            // M3.4：多级命名空间限定调用（io.net.double）→ 静态函数表查找
+            // （与单级 Dot 形式一致；对象方法链如 io.net.connect 不在此表 → 落方法派发）
+            if let Some(qn) = qualified_flat_name(base, field) {
+                if self.funcs.contains_key(&qn) {
+                    let mut vals = Vec::new();
+                    for a in args {
+                        vals.push(self.eval(a)?);
+                    }
+                    let fdef = self.pick_fn(&qn, &vals)?;
+                    return self.call_fn(&fdef, &vals, span);
+                }
+            }
             // Type.new(...) 构造（base 为类型名）
             if let Expr::Ident(bname, _) = base.as_ref() {
                 if field == "new" && self.types.contains_key(bname) {
@@ -5160,6 +5190,32 @@ impl Flow {
 }
 
 /// 类型参数是否含泛型占位（大写类型名 T/U 等，tag1 启发式）
+/// 展平限定名链（io.net.double → "io.net.double"；根非 Ident → None——
+/// 对象方法链如 conn.read 的根是实例名，不在函数表）
+fn qualified_flat_name(base: &Expr, field: &str) -> Option<String> {
+    let mut parts = vec![field.to_string()];
+    let mut e = base;
+    loop {
+        match e {
+            Expr::Dot {
+                base: b, field: f, ..
+            }
+            | Expr::Field {
+                base: b, field: f, ..
+            } => {
+                parts.push(f.clone());
+                e = b.as_ref();
+            }
+            Expr::Ident(n, _) => {
+                parts.push(n.clone());
+                parts.reverse();
+                return Some(parts.join("."));
+            }
+            _ => return None,
+        }
+    }
+}
+
 fn type_has_generic(t: &Type) -> bool {
     match t.strip() {
         Type::Named(n, _) => {

@@ -940,16 +940,22 @@ impl IrValue {
     }
 }
 
+/// 递归深度上限（对齐 tree-walking `MAX_CALL_DEPTH`——双模式一致）
+pub const MAX_CALL_DEPTH: usize = 1000;
+
 /// 执行模块中名为 entry 的函数（测试/入口），参数按 IrModule 函数签名传入
 pub fn run_ir(module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
     let idx = *module
         .func_index
         .get(entry)
         .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
-    exec_func(module, idx, args)
+    exec_func(module, idx, args, 0)
 }
 
-fn exec_func(module: &IrModule, idx: usize, args: &[IrValue]) -> R<IrValue> {
+fn exec_func(module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R<IrValue> {
+    if depth >= MAX_CALL_DEPTH {
+        return Err(IrError::msg("StackOverflow", "maximum call depth exceeded"));
+    }
     let func = &module.funcs[idx];
     let mut slots: Vec<IrValue> = vec![IrValue::Void; func.n_slots];
     for (i, ps) in func.params.iter().enumerate() {
@@ -986,7 +992,7 @@ fn exec_func(module: &IrModule, idx: usize, args: &[IrValue]) -> R<IrValue> {
             }
             IrInst::Bin { op, temp, a, b } => {
                 let (av, bv) = (slots[*a].clone(), slots[*b].clone());
-                slots[*temp] = binop(*op, &av, &bv);
+                slots[*temp] = binop(*op, &av, &bv)?;
             }
             IrInst::Un { op, temp, a } => {
                 let av = slots[*a].clone();
@@ -1038,7 +1044,7 @@ fn exec_func(module: &IrModule, idx: usize, args: &[IrValue]) -> R<IrValue> {
                     .func_index
                     .get(name)
                     .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
-                slots[*temp] = exec_func(module, callee_idx, &arg_vals)?;
+                slots[*temp] = exec_func(module, callee_idx, &arg_vals, depth + 1)?;
             }
             IrInst::CallBuiltin { name, args, temp } => {
                 let arg_vals: Vec<IrValue> = args.iter().map(|a| slots[*a].clone()).collect();
@@ -1074,7 +1080,7 @@ fn find_label(func: &IrFunc, id: usize) -> R<usize> {
         })
 }
 
-fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> IrValue {
+fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> R<IrValue> {
     match op {
         IrBinOp::Add
         | IrBinOp::Sub
@@ -1084,53 +1090,65 @@ fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> IrValue {
         | IrBinOp::EucMod => {
             use IrValue::*;
             match (a, b) {
+                // 整数：溢出 → Overflow，除/模零 → DivisionByZero（对齐 tree-walking arith）
                 (Int(x), Int(y)) => {
-                    let r = match op {
-                        IrBinOp::Add => x + y,
-                        IrBinOp::Sub => x - y,
-                        IrBinOp::Mul => x * y,
+                    let v = match op {
+                        IrBinOp::Add => x.checked_add(*y),
+                        IrBinOp::Sub => x.checked_sub(*y),
+                        IrBinOp::Mul => x.checked_mul(*y),
                         IrBinOp::Div => {
                             if *y == 0 {
-                                return Int(0);
+                                return R::Err(IrError::msg("DivisionByZero", "division by zero"));
                             }
-                            x / y
+                            Some(x / y)
                         }
-                        IrBinOp::Mod | IrBinOp::EucMod => {
+                        IrBinOp::Mod => {
                             if *y == 0 {
-                                return Int(0);
+                                return R::Err(IrError::msg("DivisionByZero", "modulo by zero"));
                             }
-                            x % y
+                            Some(x % y)
                         }
-                        _ => 0,
+                        IrBinOp::EucMod => {
+                            if *y == 0 {
+                                return R::Err(IrError::msg(
+                                    "DivisionByZero",
+                                    "euclidean modulo by zero",
+                                ));
+                            }
+                            Some(x.rem_euclid(*y))
+                        }
+                        _ => None,
                     };
-                    Int(r)
+                    match v {
+                        Some(v) => Ok(Int(v)),
+                        None => R::Err(IrError::msg("Overflow", "integer overflow")),
+                    }
                 }
+                // 混合/浮点：IEEE 语义，除零 = inf（对齐 tree-walking arith Float 分支）
                 (Int(x), Float(y)) | (Float(y), Int(x)) => {
                     let (x, y) = (x.clone(), y.clone());
-                    let r = match op {
+                    let v = match op {
                         IrBinOp::Add => x as f64 + y,
                         IrBinOp::Sub => x as f64 - y,
                         IrBinOp::Mul => x as f64 * y,
+                        IrBinOp::Div => x as f64 / y,
+                        IrBinOp::Mod | IrBinOp::EucMod => (x as f64) % y,
                         _ => 0.0,
                     };
-                    Float(r)
+                    Ok(Float(v))
                 }
                 (Float(x), Float(y)) => {
-                    let r = match op {
+                    let v = match op {
                         IrBinOp::Add => x + y,
                         IrBinOp::Sub => x - y,
                         IrBinOp::Mul => x * y,
-                        IrBinOp::Div => {
-                            if *y == 0.0 {
-                                return Float(0.0);
-                            }
-                            x / y
-                        }
+                        IrBinOp::Div => x / y,
+                        IrBinOp::Mod | IrBinOp::EucMod => x % y,
                         _ => 0.0,
                     };
-                    Float(r)
+                    Ok(Float(v))
                 }
-                _ => Int(0),
+                _ => Ok(Int(0)),
             }
         }
         IrBinOp::BitAnd | IrBinOp::BitOr | IrBinOp::BitXor | IrBinOp::Shl | IrBinOp::Shr => {
@@ -1144,9 +1162,9 @@ fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> IrValue {
                         IrBinOp::Shr => x.wrapping_shr((*y % 128).max(0) as u32),
                         _ => 0,
                     };
-                    IrValue::Int(r)
+                    Ok(IrValue::Int(r))
                 }
-                _ => IrValue::Int(0),
+                _ => Ok(IrValue::Int(0)),
             }
         }
         IrBinOp::Eq | IrBinOp::Ne | IrBinOp::Lt | IrBinOp::Le | IrBinOp::Gt | IrBinOp::Ge => {
@@ -1159,7 +1177,7 @@ fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> IrValue {
                 IrBinOp::Ge => !value_lt(a, b),
                 _ => false,
             };
-            IrValue::Bool(r)
+            Ok(IrValue::Bool(r))
         }
     }
 }

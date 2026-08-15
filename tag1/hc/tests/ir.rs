@@ -264,10 +264,28 @@ fn top(x: i32) i32 { return x; }
 }
 
 #[test]
-fn div_zero_lenient() {
-    // 除零返回 0（与 tree-walking 宽松语义一致）
+fn div_zero_errors() {
+    // 整数除/模零 → DivisionByZero（对齐 tree-walking arith）
     let src = "fn d(a: i32) i32 { return a / 0; }";
-    assert_eq!(run(src, "d", &[IrValue::Int(10)]).unwrap(), IrValue::Int(0));
+    let e = run(src, "d", &[IrValue::Int(10)]).unwrap_err();
+    assert_eq!(e.name, "DivisionByZero");
+    let src2 = "fn m(a: i32) i32 { return a %% 0; }";
+    let e = run(src2, "m", &[IrValue::Int(10)]).unwrap_err();
+    assert_eq!(e.name, "DivisionByZero");
+    // 浮点除零 = IEEE inf（不报错）
+    let src3 = "fn f(a: f64) f64 { return a / 0.0; }";
+    assert_eq!(
+        run(src3, "f", &[IrValue::Float(1.0)]).unwrap(),
+        IrValue::Float(f64::INFINITY)
+    );
+}
+
+#[test]
+fn int_overflow_errors() {
+    // 整数算术溢出 → Overflow（对齐 tree-walking checked_*）
+    let src = "fn f(a: i32, b: i32) i32 { return a * b; }";
+    let e = run(src, "f", &[IrValue::Int(i128::MAX), IrValue::Int(2)]).unwrap_err();
+    assert_eq!(e.name, "Overflow");
 }
 
 #[test]
