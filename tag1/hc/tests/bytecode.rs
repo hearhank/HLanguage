@@ -433,3 +433,52 @@ fn f() i32 {
     assert_consistent(src, "f", &[]);
     assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(98));
 }
+
+#[test]
+fn phase5_global_const_round_trip() {
+    // LoadGlobal（opcode 41）/ StoreGlobal（opcode 42）+ 全局表经 encode/decode 往返，
+    // 字节码 VM 与参考解释器一致（每次调用独立 runtime → 全局重新初始化）。
+    let src = r#"
+global counter: i32 = 0;
+const BASE: i32 = 100;
+fn bump() i32 {
+    counter = counter + 1;
+    return counter + BASE;
+}
+fn read() i32 { return counter; }
+"#;
+    assert_consistent(src, "bump", &[]);
+    assert_consistent(src, "read", &[]);
+    assert_eq!(run_bc(src, "bump", &[]).unwrap(), IrValue::Int(101));
+    assert_eq!(run_bc(src, "read", &[]).unwrap(), IrValue::Int(0)); // 新 runtime 重新 init
+}
+
+#[test]
+fn phase5_global_const_decl_order_round_trip() {
+    // @__init__ 声明序：后声明 global 初始化引用先声明 global
+    let src = r#"
+global a: i32 = 5;
+global b: i32 = a * 2;
+fn read() i32 { return b + a; }
+"#;
+    assert_consistent(src, "read", &[]);
+    assert_eq!(run_bc(src, "read", &[]).unwrap(), IrValue::Int(15));
+}
+
+#[test]
+fn phase5_global_addr_round_trip() {
+    // GlobalAddr（opcode 43）：`&mut global` 别名写穿经 encode/decode 后一致
+    let src = r#"
+global counter: i32 = 0;
+fn bump() i32 {
+    var p = &mut counter;
+    p.* += 1;
+    return p.*;
+}
+fn read() i32 { return counter; }
+"#;
+    assert_consistent(src, "bump", &[]);
+    assert_consistent(src, "read", &[]);
+    assert_eq!(run_bc(src, "bump", &[]).unwrap(), IrValue::Int(1));
+    assert_eq!(run_bc(src, "read", &[]).unwrap(), IrValue::Int(0)); // 新 runtime 重新 init
+}

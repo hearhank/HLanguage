@@ -13,8 +13,8 @@
 //! **switch + range + for**（Phase 3：`MatchTest`/`IrPattern` first-match 线性链、
 //! `0..n` 区间糖、`IterMake/IterNext/IterWriteBack` 迭代含 mut 写回、无标签
 //! break/continue）。
-//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、带标签 break/continue、
-//! 闭包、函数引用、class 方法/动态调用、global/const（Phase 4/5/6 起）。
+//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、带标签 break/continue
+//! （Phase 6 起）。
 //! 复杂库操作 = `CallBuiltin` 原子指令。
 
 use crate::ast::*;
@@ -33,6 +33,10 @@ pub struct IrModule {
     /// 函数名（扁平 + 限定）→ 索引表（声明序，支持重载/可选参数多候选；
     /// 对齐 oracle `pick_fn` interp.rs:2665-2796 的候选池）
     pub func_index: HashMap<String, Vec<usize>>,
+    /// 全局/常量名（声明序，扁平——namespace 内 global 扁平化对齐 oracle
+    /// `exec_decl_top` 无前缀登记；错误集别名除外）。运行时 `IrRuntime::init`
+    /// 预分配 cell 后执行全部 `@__init__` 函数（多文件合并 = 多个 init 依次运行）。
+    pub globals: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +333,24 @@ pub enum IrInst {
         temp: usize,
         name: String,
     },
+    // ---- Phase 5：global / const ----
+    /// temp = 全局变量值（运行时按名查 [`Ctx::globals`] cell；未初始化 → NoGlobal）
+    LoadGlobal {
+        temp: usize,
+        name: String,
+    },
+    /// global = value（写穿全局 cell；对齐 oracle `lookup` → `Rc<RefCell>` 写回）
+    StoreGlobal {
+        name: String,
+        value: usize,
+    },
+    /// temp = 全局变量 cell 指针（`&global`/`&mut global`；`Ptr(cell)` 与局部
+    /// `AddrSlot` 同构——写穿经 `Deref`/`StorePtr` 回全局。对齐 oracle `AddrOf(Ident)`
+    /// 对全局名走 `lookup` → `Value::Ptr(global_cell)`）
+    GlobalAddr {
+        temp: usize,
+        name: String,
+    },
 }
 
 /// switch 模式（对齐 AST [`crate::ast::SwitchPattern`]；`Else` 不发射 MatchTest——
@@ -425,11 +447,71 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     let errors = crate::errorcodes::collect(program, 0);
     let types = build_type_table(program);
     let funcs = collect_func_names(program);
+    let globals = collect_globals(program);
     let mut module = IrModule::default();
     for d in &program.decls {
-        lower_decl(d, &mut module, &errors, &types, &funcs)?;
+        lower_decl(d, &mut module, &errors, &types, &funcs, &globals)?;
     }
+    // Phase 5：合成 `@__init__` 函数（声明序初始化 global/const；多文件合并 = 各模块
+    // 自带 init，运行时按 funcs 序依次执行）。不登记 func_index（不可被用户调用）。
+    if let Some(init) = lower_init_func(program, &errors, &types, &funcs, &globals, &mut module.closures)? {
+        module.funcs.push(init);
+    }
+    module.globals = globals_set_to_ordered(program);
     Ok(module)
+}
+
+/// 收集全局/常量名集合（扁平；错误集别名除外——类型级构造，非值全局）。
+fn collect_globals(program: &Program) -> HashSet<String> {
+    let mut set = HashSet::new();
+    collect_globals_in(&program.decls, &mut set);
+    set
+}
+
+/// 收集全局/常量名（声明序，供 `IrModule::globals` + `@__init__` 复用）。
+fn globals_set_to_ordered(program: &Program) -> Vec<String> {
+    let mut ordered = Vec::new();
+    collect_globals_ordered(&program.decls, &mut ordered);
+    ordered
+}
+
+fn collect_globals_in(decls: &[Decl], set: &mut HashSet<String>) {
+    for d in decls {
+        match d {
+            Decl::Global { name, .. } => {
+                set.insert(name.clone());
+            }
+            Decl::Const { name, ty, .. } => {
+                // 错误集别名：`const X = error{...}` / `const X = A || B`——类型级构造
+                if let Some(Type::Named(tn, _)) = ty {
+                    if tn.starts_with("error_set:") {
+                        continue;
+                    }
+                }
+                set.insert(name.clone());
+            }
+            Decl::Namespace { decls: nested, .. } => collect_globals_in(nested, set),
+            _ => {}
+        }
+    }
+}
+
+fn collect_globals_ordered(decls: &[Decl], ordered: &mut Vec<String>) {
+    for d in decls {
+        match d {
+            Decl::Global { name, .. } => ordered.push(name.clone()),
+            Decl::Const { name, ty, .. } => {
+                if let Some(Type::Named(tn, _)) = ty {
+                    if tn.starts_with("error_set:") {
+                        continue;
+                    }
+                }
+                ordered.push(name.clone());
+            }
+            Decl::Namespace { decls: nested, .. } => collect_globals_ordered(nested, ordered),
+            _ => {}
+        }
+    }
 }
 
 /// 预收集全部函数名（扁平 + 限定 + `{Type}.{method}`），供未解析 Ident → FnRef、
@@ -492,6 +574,7 @@ fn lower_decl(
     errors: &ErrorCodeTable,
     types: &TypeTable,
     funcs: &HashSet<String>,
+    globals: &HashSet<String>,
 ) -> Result<(), IrError> {
     match d {
         Decl::Fn {
@@ -501,14 +584,14 @@ fn lower_decl(
             is_test,
             ..
         } => {
-            let func = lower_func(name, params, body, *is_test, errors, types, funcs, &mut module.closures)?;
+            let func = lower_func(name, params, body, *is_test, errors, types, funcs, globals, &mut module.closures)?;
             register_func(module, name, func);
         }
         Decl::Namespace { name, decls, .. } => {
             // namespace 内函数：扁平名 + 限定名双注册（与运行时/语义一致）；
             // 多级 namespace（io.net.connect）注册全限定名
             let mut inner: Vec<(String, String, IrFunc)> = Vec::new();
-            collect_ns_funcs(decls, &[name.clone()], &mut inner, errors, types, funcs, &mut module.closures)?;
+            collect_ns_funcs(decls, &[name.clone()], &mut inner, errors, types, funcs, globals, &mut module.closures)?;
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
                 module.funcs.push(func);
@@ -518,10 +601,9 @@ fn lower_decl(
                 module.func_index.entry(qn).or_default().push(idx);
             }
         }
-        // 全局/常量声明：程序启动即需执行初始化，原生/IR 后端无此语义 → 拒绝而非静默丢弃
-        Decl::Global { span, .. } | Decl::Const { span, .. } => {
-            return Err(unsupported_ir_err("global/const 声明（程序启动初始化）", span));
-        }
+        // 全局/常量声明：由合成 `@__init__` 函数处理（Phase 5）——此处跳过，
+        // 启动初始化语义在 IrRuntime::init 中落地
+        Decl::Global { .. } | Decl::Const { .. } => {}
         // 类型级声明（class/enum/interface/using/script）：无顶层运行时代码；
         // class 方法登记为 `{Type}.{method}`（对齐 oracle interp.rs:522-535）——IIterable
         // 用户类型的 `next()` 经此查找。方法体降级失败 → 跳过登记（调用点 NoFunction
@@ -529,7 +611,7 @@ fn lower_decl(
         Decl::Class { name, methods, .. } => {
             for m in methods {
                 let fname = format!("{name}.{}", m.name);
-                if let Ok(func) = lower_func(&fname, &m.params, &m.body, false, errors, types, funcs, &mut module.closures) {
+                if let Ok(func) = lower_func(&fname, &m.params, &m.body, false, errors, types, funcs, globals, &mut module.closures) {
                     register_func(module, &fname, func);
                 }
             }
@@ -550,6 +632,7 @@ fn collect_ns_funcs(
     errors: &ErrorCodeTable,
     types: &TypeTable,
     funcs: &HashSet<String>,
+    globals: &HashSet<String>,
     closures: &mut Vec<IrFunc>,
 ) -> Result<(), IrError> {
     for d in decls {
@@ -563,7 +646,7 @@ fn collect_ns_funcs(
             } if !*is_test => {
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
-                let func = lower_func(name, params, body, false, errors, types, funcs, closures)?;
+                let func = lower_func(name, params, body, false, errors, types, funcs, globals, closures)?;
                 out.push((name.clone(), qn.join("."), func));
             }
             Decl::Namespace {
@@ -573,12 +656,10 @@ fn collect_ns_funcs(
             } => {
                 let mut p = path.to_vec();
                 p.push(name.clone());
-                collect_ns_funcs(nested, &p, out, errors, types, funcs, closures)?;
+                collect_ns_funcs(nested, &p, out, errors, types, funcs, globals, closures)?;
             }
-            // namespace 内 global/const：与顶层一致，拒绝（启动初始化语义缺失）
-            Decl::Global { span, .. } | Decl::Const { span, .. } => {
-                return Err(unsupported_ir_err("namespace 内 global/const 声明", span));
-            }
+            // namespace 内 global/const：扁平登记（对齐 oracle `exec_decl_top`），由 `@__init__` 处理
+            Decl::Global { .. } | Decl::Const { .. } => {}
             // 类型级声明在 namespace 内：安全忽略
             _ => {}
         }
@@ -601,9 +682,10 @@ fn lower_func(
     errors: &ErrorCodeTable,
     types: &TypeTable,
     funcs: &HashSet<String>,
+    globals: &HashSet<String>,
     closures: &mut Vec<IrFunc>,
 ) -> Result<IrFunc, IrError> {
-    let mut ctx = LowerCtx::new(errors.clone(), types.clone(), funcs, closures);
+    let mut ctx = LowerCtx::new(errors.clone(), types.clone(), funcs, globals, closures);
     ctx.push_scope();
     // 参数槽（声明序，从 0 开始）
     let param_slots: Vec<usize> = params.iter().map(|_| ctx.alloc_slot()).collect();
@@ -641,6 +723,86 @@ fn lower_func(
     })
 }
 
+/// Phase 5：合成 `@__init__` 函数——声明序初始化全部 global/const（`StoreGlobal`）。
+/// 错误集别名（`const X = error{...}` / `A || B`）为类型级构造，跳过。
+/// 返回 None 表示无值全局（无需启动初始化）。
+fn lower_init_func(
+    program: &Program,
+    errors: &ErrorCodeTable,
+    types: &TypeTable,
+    funcs: &HashSet<String>,
+    globals: &HashSet<String>,
+    closures: &mut Vec<IrFunc>,
+) -> Result<Option<IrFunc>, IrError> {
+    if globals.is_empty() {
+        return Ok(None);
+    }
+    let mut ctx = LowerCtx::new(errors.clone(), types.clone(), funcs, globals, closures);
+    ctx.push_scope();
+    for d in &program.decls {
+        lower_global_decl(d, &mut ctx)?;
+    }
+    ctx.pop_scope();
+    if let Some(e) = ctx.err {
+        return Err(e);
+    }
+    ctx.insts.push(IrInst::ReturnVoid);
+    let n_slots = ctx.next_slot;
+    Ok(Some(IrFunc {
+        name: "@__init__".to_string(),
+        params: vec![],
+        param_ty: vec![],
+        param_defaults: vec![],
+        defaults: vec![],
+        n_slots,
+        body: ctx.insts,
+        is_test: false,
+    }))
+}
+
+/// 递归降级 global/const 声明初始化（namespace 内扁平化，对齐 oracle `exec_decl_top`）。
+fn lower_global_decl(d: &Decl, ctx: &mut LowerCtx) -> Result<(), IrError> {
+    match d {
+        Decl::Global { name, init, .. } => {
+            let t = match init {
+                Some(e) => ctx.lower_expr(e),
+                None => {
+                    let t = ctx.alloc_slot();
+                    ctx.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Void,
+                    });
+                    t
+                }
+            };
+            ctx.push(IrInst::StoreGlobal {
+                name: name.clone(),
+                value: t,
+            });
+        }
+        Decl::Const { name, init, ty, .. } => {
+            // 错误集别名跳过（类型级）
+            if let Some(Type::Named(tn, _)) = ty {
+                if tn.starts_with("error_set:") {
+                    return Ok(());
+                }
+            }
+            let t = ctx.lower_expr(init);
+            ctx.push(IrInst::StoreGlobal {
+                name: name.clone(),
+                value: t,
+            });
+        }
+        Decl::Namespace { decls, .. } => {
+            for inner in decls {
+                lower_global_decl(inner, ctx)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// 可选参数默认值折叠为编译期常量（ADR-0009：可选参数 = 尾部 + 编译期常量默认值）。
 /// 字面量/枚举常量/错误字面量 → `IrConst`；其余（依赖参数/非常量表达式）→ None
 /// （运行时按「未提供」处理——pick_func 默认回退依赖 param_defaults，padding 依赖此常量）。
@@ -673,6 +835,8 @@ struct LowerCtx<'a> {
     types: TypeTable,
     /// 已知函数名集合（Phase 4）：未解析 Ident → 函数引用（FnRef）/ 静态方法调用判定
     funcs: &'a HashSet<String>,
+    /// 已知全局/常量名集合（Phase 5）：未解析 Ident → LoadGlobal；赋值目标 → StoreGlobal
+    globals: &'a HashSet<String>,
     /// 循环栈（Phase 3）：无标签 break/continue 定位（对齐 oracle 单级跳出；标签 → Phase 6）
     loops: Vec<LoopCtx>,
     /// 首个子集外特性错误（降级失败信号；降级继续推进以收集更多槽号，但最终报错）
@@ -687,6 +851,7 @@ impl<'a> LowerCtx<'a> {
         errors: ErrorCodeTable,
         types: TypeTable,
         funcs: &'a HashSet<String>,
+        globals: &'a HashSet<String>,
         closures: &'a mut Vec<IrFunc>,
     ) -> Self {
         LowerCtx {
@@ -697,6 +862,7 @@ impl<'a> LowerCtx<'a> {
             errors,
             types,
             funcs,
+            globals,
             loops: Vec::new(),
             err: None,
             closures,
@@ -827,11 +993,18 @@ impl<'a> LowerCtx<'a> {
             Expr::Ident(name, span) => match self.resolve(name) {
                 Some(slot) => self.push(IrInst::Load { temp: t, slot }),
                 // 函数名作为值（FnRef：apply(square, 5) / var f = square）——对齐 oracle
-                // interp.rs:1530-1535；未解析且非函数 → 全局变量/常量引用硬错误
+                // interp.rs:1530-1535
                 None if self.funcs.contains(name) => {
                     self.push(IrInst::FnRef { temp: t, name: name.clone() });
                 }
-                None => self.fail_void(t, "全局变量/常量引用", span),
+                // 全局/常量引用（Phase 5）：`LoadGlobal`——cell 由 IrRuntime::init 预分配
+                None if self.globals.contains(name) => {
+                    self.push(IrInst::LoadGlobal {
+                        temp: t,
+                        name: name.clone(),
+                    });
+                }
+                None => self.fail_void(t, "未知标识符", span),
             },
             Expr::Binary(op, l, r, _span) => {
                 let a = self.lower_expr(l);
@@ -1270,7 +1443,12 @@ impl<'a> LowerCtx<'a> {
             Expr::AddrOf(target, _, span) => match target.as_ref() {
                 Expr::Ident(name, _) => match self.resolve(name) {
                     Some(slot) => self.push(IrInst::AddrSlot { temp: t, slot }),
-                    None => self.fail_void(t, "全局变量/常量取址", span),
+                    // 全局/常量（Phase 5）：`&global` 别名 cell——`IrRuntime::init` 已
+                    // 预分配 cell，`Deref`/`StorePtr` 写穿回全局（对齐 oracle lookup→globals）
+                    None if self.globals.contains(name) => {
+                        self.push(IrInst::GlobalAddr { temp: t, name: name.clone() });
+                    }
+                    None => self.fail_void(t, "未知标识符取址", span),
                 },
                 _ => {
                     let v = self.lower_expr(target);
@@ -1369,12 +1547,13 @@ impl<'a> LowerCtx<'a> {
         let n_caps = captures.len();
         let func_idx = self.closures.len();
         let temp = self.alloc_slot();
-        // 闭包体用独立 LowerCtx（共享闭包缓冲、错误码表、类型表、函数名集合）
+        // 闭包体用独立 LowerCtx（共享闭包缓冲、错误码表、类型表、函数名/全局名集合）
         let errors = self.errors.clone();
         let types = self.types.clone();
         let funcs = self.funcs;
+        let globals = self.globals;
         let closures = &mut *self.closures;
-        let mut ctx = LowerCtx::new(errors, types, funcs, closures);
+        let mut ctx = LowerCtx::new(errors, types, funcs, globals, closures);
         ctx.push_scope();
         // 捕获参数槽（0..n_caps）与显式参数槽（n_caps..）
         for _ in 0..n_caps {
@@ -1472,6 +1651,38 @@ impl<'a> LowerCtx<'a> {
                                 b: v,
                             });
                             self.push(IrInst::Store { slot, temp: r });
+                            r
+                        }
+                    });
+                }
+                // 全局变量赋值（Phase 5）：`StoreGlobal`（复合赋值 = LoadGlobal + Bin + StoreGlobal）
+                if self.globals.contains(name) {
+                    let v = self.lower_expr(value);
+                    return Some(match op {
+                        AssignOp::Set => {
+                            self.push(IrInst::StoreGlobal {
+                                name: name.clone(),
+                                value: v,
+                            });
+                            v
+                        }
+                        _ => {
+                            let cur = self.alloc_slot();
+                            self.push(IrInst::LoadGlobal {
+                                temp: cur,
+                                name: name.clone(),
+                            });
+                            let r = self.alloc_slot();
+                            self.push(IrInst::Bin {
+                                op: to_assign_binop(op),
+                                temp: r,
+                                a: cur,
+                                b: v,
+                            });
+                            self.push(IrInst::StoreGlobal {
+                                name: name.clone(),
+                                value: r,
+                            });
                             r
                         }
                     });
@@ -2094,6 +2305,9 @@ pub struct IterItem {
 #[derive(Debug, Default)]
 pub struct Ctx {
     pub cells: Vec<Cell>,
+    /// 全局/常量名 → cell 索引（Phase 5）：cell 由 [`IrRuntime::init`] 预分配，
+    /// `@__init__`（`StoreGlobal`）写入初值；`LoadGlobal`/`StoreGlobal` 读写写穿。
+    pub globals: HashMap<String, usize>,
 }
 
 impl Ctx {
@@ -2723,13 +2937,53 @@ impl IrValue {
 /// 递归深度上限（对齐 tree-walking `MAX_CALL_DEPTH`——双模式一致）
 pub const MAX_CALL_DEPTH: usize = 1000;
 
-/// 执行模块中名为 entry 的函数（测试/入口），参数按 IrModule 函数签名传入。
-/// 每次调用建独立 [`Ctx`]（Phase 5 引入 IrRuntime 共享堆/全局）。
+/// 一次性执行模块中名为 entry 的函数（测试/入口）——建独立 [`IrRuntime`]（含全局初始化）。
 pub fn run_ir(module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
-    let mut ctx = Ctx::default();
-    let idx = pick_func(&ctx, module, entry, args)
-        .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
-    exec_func(&mut ctx, module, idx, args, 0)
+    let mut rt = IrRuntime::new();
+    rt.call(module, entry, args)
+}
+
+/// 运行时实例（Phase 5）：共享堆 + 全局 cell + `@__init__` 一次性初始化。
+/// 多测试/多函数共用同一实例时，全局只初始化一次、跨调用可见（对齐 oracle
+/// `Interp` 的 `globals: HashMap`）。一致性套件与 `hc run --ir`/字节码 VM 走此路径。
+#[derive(Debug, Default)]
+pub struct IrRuntime {
+    pub ctx: Ctx,
+    inited: bool,
+}
+
+impl IrRuntime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 启动初始化（幂等）：预分配全部全局 cell（声明序）→ 按 funcs 序执行所有
+    /// `@__init__` 函数（多文件合并 = 各模块 init 依次运行，entry 在前）。
+    pub fn init(&mut self, module: &IrModule) -> R<()> {
+        if self.inited {
+            return Ok(());
+        }
+        self.inited = true;
+        // 预分配全部全局 cell（声明序）——即使无全局也继续（保险：`@__init__` 仍须执行）
+        for name in &module.globals {
+            let cell = self.ctx.alloc(Cell::Value(IrValue::Void));
+            self.ctx.globals.insert(name.clone(), cell);
+        }
+        for (idx, f) in module.funcs.iter().enumerate() {
+            if f.name == "@__init__" {
+                exec_func(&mut self.ctx, module, idx, &[], 0)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 调用模块函数（自动先初始化全局）。
+    pub fn call(&mut self, module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
+        self.init(module)?;
+        let idx = pick_func(&self.ctx, module, entry, args)
+            .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
+        exec_func(&mut self.ctx, module, idx, args, 0)
+    }
 }
 
 /// 重载/可选参数分派（对齐 oracle `pick_fn` `interp.rs:2665-2796`）：
@@ -3412,6 +3666,28 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
             }
             IrInst::FnRef { temp, name } => {
                 ctx.set(&frame, *temp, IrValue::Fn(name.clone()));
+            }
+            // ---- Phase 5：global / const ----
+            IrInst::LoadGlobal { temp, name } => {
+                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
+                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                })?;
+                let v = ctx.cell_value(cell).clone();
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::StoreGlobal { name, value } => {
+                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
+                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                })?;
+                let v = ctx.get(&frame, *value).clone();
+                ctx.set_cell(cell, v);
+            }
+            // `&global`：预分配 cell 的 Ptr 别名（与局部 `AddrSlot` 同构，写穿共享 cell）
+            IrInst::GlobalAddr { temp, name } => {
+                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
+                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                })?;
+                ctx.set(&frame, *temp, IrValue::Ptr(cell));
             }
             IrInst::CallIndirect { temp, callee, args } => {
                 let callee_v = ctx.get(&frame, *callee).clone();

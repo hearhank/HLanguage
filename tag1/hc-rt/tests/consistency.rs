@@ -1,8 +1,10 @@
 //! M3.4 双模式一致性验收测试
 //!
 //! 同一程序分别经 **tree-walking 解释器**（hc-rt `Interp`，脚本模式）与
-//! **IR 参考解释器**（`hc::ir::run_ir`，M3.1 共享 IR 语义源）运行全部
+//! **IR 参考解释器**（`hc::ir::IrRuntime`，M3.1 共享 IR 语义源）运行全部
 //! `test fn`，PASS/FAIL 结果必须完全一致（ADR-0004 双模式一致性承诺根基）。
+//! IR 侧共享同一运行时实例：全局/const 只初始化一次，跨 test fn 可变全局可见
+//! （对齐 tree-walking 共享 `Interp` 的 `globals: HashMap`）。
 //!
 //! 结果归一化：
 //! - tree-walk：`[PASS]/[FAIL]`（`run_tests` 输出）
@@ -12,12 +14,13 @@
 //! 程序约束：必须通过语义检查（`Interp::load` 内置 M2 静态 pass）——例如
 //! `catch` 只能用于错误联合值、字面量必须在声明的宽度内。
 //! 覆盖范围 = M3.1 IR 切片：标量/短路/if/while/递归/try/catch/orelse/
-//! error 字面量/断言/限定名调用（含多级 namespace）/作用域/复合赋值/除零溢出。
+//! error 字面量/断言/限定名调用（含多级 namespace）/作用域/复合赋值/除零溢出；
+//! Phase 5 起含 global/const（`@__init__` 声明序初始化、跨 test fn 可变全局）。
 
 use std::collections::HashMap;
 use std::thread;
 
-use hc::ir::{lower, run_ir, IrValue};
+use hc::ir::{lower, IrRuntime, IrValue};
 use hc::parse_source;
 use hc_rt::Interp;
 
@@ -44,24 +47,29 @@ fn check(src: &str) -> (usize, usize) {
         .unwrap_or_else(|e| panic!("load failed: {}: {}", e.name, e.message));
     interp.run_tests();
     let mut tw: HashMap<String, bool> = HashMap::new(); // 测试名 → 是否 PASS
+    let mut tw_order: Vec<(String, bool)> = Vec::new(); // 声明序（tree-walk 按 span 序输出）
     for line in &interp.test_out {
         if let Some(rest) = line.strip_prefix("[PASS] ") {
             tw.insert(rest.to_string(), true);
+            tw_order.push((rest.to_string(), true));
         } else if let Some(rest) = line.strip_prefix("[FAIL] ") {
             let name = rest.split(' ').next().unwrap_or(rest);
             tw.insert(name.to_string(), false);
+            tw_order.push((name.to_string(), false));
         }
     }
     if tw.is_empty() {
         panic!("tree-walk 未运行任何 test fn");
     }
 
-    // 模式 B：IR 参考解释器
+    // 模式 B：IR 参考解释器（共享 IrRuntime：全局/const 只初始化一次，
+    // 跨 test fn 的可变全局与 tree-walking 的共享 Interp 语义对齐；声明序执行）
     let module = lower(&program).unwrap();
+    let mut rt = IrRuntime::new();
     let mut tw_pass = 0usize;
     let mut ir_pass = 0usize;
-    for (name, passed_tw) in &tw {
-        let r = run_ir(&module, name, &[]);
+    for (name, passed_tw) in &tw_order {
+        let r = rt.call(&module, name, &[]);
         let passed_ir = match &r {
             Ok(IrValue::Err { .. }) => false, // 未处理错误值到根 → FAIL（M2.6）
             Ok(_) => true,
@@ -930,6 +938,85 @@ fn sq(x: i32, y: i32) i32 { return x * y; }
 [test] fn overloads() void {
     expect_eq(sq(3), 9);
     expect_eq(sq(2, 4), 8);
+}
+"#,
+    );
+}
+
+#[test]
+fn global_const_init_and_cross_test_mutation() {
+    // Phase 5：global/const 声明序初始化（合成 `@__init__`）+ 跨 test fn 可变全局。
+    // 两模式均按声明序运行测试且共享运行时（tree-walk 共享 Interp、IR 共享 IrRuntime），
+    // 故 a 先于 b 执行、b 可见 a 的写入。
+    assert_all_pass(
+        r#"
+global counter: i32 = 0;
+const STEP: i32 = 2;
+
+[test] fn g_a_increments() void {
+    counter = counter + STEP;
+    expect_eq(counter, 2);
+}
+
+[test] fn g_b_sees_prev_mutation() void {
+    expect_eq(counter, 2);
+    counter += 1;
+    expect_eq(counter, 3);
+}
+
+[test] fn g_c_const_read() void {
+    expect_eq(STEP, 2);
+    expect_eq(counter, 3);
+}
+"#,
+    );
+}
+
+#[test]
+fn global_mutation_between_plain_fns() {
+    // 全局在普通函数间共享（非仅 test fn）：bump 读改写全局，main 级联可见。
+    assert_all_pass(
+        r#"
+global g: i32 = 10;
+fn bump() i32 {
+    g = g * 2;
+    return g;
+}
+[test] fn g_plain_fns() void {
+    var a = bump();
+    var b = bump();
+    expect_eq(a, 20);
+    expect_eq(b, 40);
+    expect_eq(g, 40);
+}
+"#,
+    );
+}
+
+#[test]
+fn global_address_of_writes_through() {
+    // `&global`/`&mut global` 别名全局 cell：`p.*` 写穿回全局，跨 test fn 可见。
+    // 对齐 oracle `AddrOf(Ident)` 对全局名走 `lookup` → 全局 `Rc<RefCell>` 共享。
+    assert_all_pass(
+        r#"
+global counter: i32 = 0;
+fn bump() i32 {
+    var p = &mut counter;
+    p.* += 1;
+    return p.*;
+}
+[test] fn g_addr_first() void {
+    expect_eq(bump(), 1);
+    expect_eq(counter, 1);
+}
+[test] fn g_addr_sees_prev() void {
+    expect_eq(bump(), 2);
+    expect_eq(counter, 2);
+}
+[test] fn g_addr_read_only() void {
+    var r = &counter;
+    expect_eq(r.*, 2);
+    expect_eq(counter, 2);
 }
 "#,
     );

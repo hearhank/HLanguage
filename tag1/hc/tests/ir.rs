@@ -428,12 +428,16 @@ fn deref_eq() bool {
 #[test]
 fn out_of_slice_constructs_are_hard_errors() {
     // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
-    // Phase 3 已将 for/switch、Phase 4 已把闭包纳入 IR 支持面（见下方正例测试）；
-    // 此处仅保留仍未实现者。
-    let src = "const X: i32 = 1;\nfn f() i32 { return X; }"; // 全局常量（Phase 5 程序启动初始化）
-    let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
-    let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
-    assert_eq!(e.name, "Unsupported", "预期 Unsupported 硬错误，src: {src}");
+    // Phase 3 for/switch、Phase 4 闭包、Phase 5 global/const 均已纳入 IR 支持面（见正例测试）；
+    // 此处仅保留仍未实现者（Phase 6：defer/errdefer）。
+    for src in [
+        "fn f() void { defer 1; }", // 延迟执行（Phase 6）
+        "fn f() void { errdefer 1; }", // 错误路径延迟（Phase 6）
+    ] {
+        let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
+        let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
+        assert_eq!(e.name, "Unsupported", "预期 Unsupported 硬错误，src: {src}");
+    }
 }
 
 // ---------- Phase 4：闭包 / 函数引用 / 方法 / 动态调用 / 重载 ----------
@@ -667,4 +671,96 @@ fn pick(s: String) i32 {
     assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "blue".into(), payload: None }]).unwrap(), IrValue::Int(3));
     assert_eq!(run(src, "pick", &[IrValue::Str("a".into())]).unwrap(), IrValue::Int(1));
     assert_eq!(run(src, "pick", &[IrValue::Str("z".into())]).unwrap(), IrValue::Int(0));
+}
+
+// ---------- Phase 5：global / const + @__init__ + IrRuntime ----------
+
+#[test]
+fn global_const_init_and_mutation() {
+    // global/const 声明序初始化（合成 `@__init__`），普通函数间共享可变全局。
+    let src = r#"
+global counter: i32 = 0;
+const BASE: i32 = 100;
+fn bump() i32 {
+    counter = counter + 1;
+    return counter + BASE;
+}
+"#;
+    assert_eq!(run(src, "bump", &[]).unwrap(), IrValue::Int(101));
+    assert_eq!(run(src, "bump", &[]).unwrap(), IrValue::Int(101)); // 单次调用独立 runtime → 重新 init
+}
+
+#[test]
+fn global_runtime_shares_state_across_calls() {
+    // IrRuntime 共享实例：全局只初始化一次，跨调用可变全局可见（对齐 tree-walk 共享 Interp）。
+    use hc::ir::{lower, IrRuntime};
+    let src = r#"
+global counter: i32 = 0;
+fn bump() i32 { counter += 1; return counter; }
+"#;
+    let program = parse_source(src).unwrap();
+    let module = lower(&program).unwrap();
+    let mut rt = IrRuntime::new();
+    assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(1));
+    assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(2));
+    assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(3));
+}
+
+#[test]
+fn const_init_order_is_declaration_order() {
+    // 后声明的 global 初始化表达式可引用先声明的 global（@__init__ 声明序）。
+    let src = r#"
+global a: i32 = 5;
+global b: i32 = a * 2;
+fn read() i32 { return b + a; }
+"#;
+    assert_eq!(run(src, "read", &[]).unwrap(), IrValue::Int(15));
+}
+
+#[test]
+fn global_unknown_name_is_hard_error() {
+    // 未知标识符（非局部/函数/全局）→ 降级期 Unsupported 硬错误，非静默 Void
+    let src = "fn f() i32 { return nonexistent_global; }";
+    let program = parse_source(src).unwrap();
+    let e = lower(&program).expect_err("预期降级失败（未知标识符）");
+    assert_eq!(e.name, "Unsupported", "预期 Unsupported 硬错误");
+}
+
+#[test]
+fn global_address_of_writes_through() {
+    // `&global`/`&mut global` 别名全局 cell：`Deref`/`StorePtr` 写穿回全局
+    // （对齐 oracle `lookup` → 全局 `Rc<RefCell>` 的 `AddrOf(Ident)` 分支）。
+    let src = r#"
+global counter: i32 = 0;
+fn f() i32 {
+    var p = &mut counter;
+    p.* = 7;
+    p.* += 1;
+    return counter;
+}
+fn read() i32 { return counter; }
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(8));
+    assert_eq!(run(src, "read", &[]).unwrap(), IrValue::Int(0)); // 独立 runtime → 重新 init
+}
+
+#[test]
+fn global_address_of_shared_runtime_persists() {
+    // IrRuntime 共享实例：`&global` 写穿跨调用持久（全局 cell 跨调用存活）
+    use hc::ir::{lower, IrRuntime};
+    let src = r#"
+global counter: i32 = 0;
+fn bump() i32 {
+    var p = &mut counter;
+    p.* += 1;
+    return p.*;
+}
+fn read() i32 { return counter; }
+"#;
+    let program = parse_source(src).unwrap();
+    let module = lower(&program).unwrap();
+    let mut rt = IrRuntime::new();
+    assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(1));
+    assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(2));
+    assert_eq!(rt.call(&module, "read", &[]).unwrap(), IrValue::Int(2));
 }

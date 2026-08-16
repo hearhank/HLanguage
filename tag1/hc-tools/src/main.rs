@@ -292,10 +292,13 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
     let mut funcs = entry.funcs;
     let mut func_index = entry.func_index;
     let mut closures = entry.closures;
+    let mut globals = entry.globals;
     for m in siblings {
         let offset = funcs.len();
         let coffset = closures.len();
-        // 函数表：追加前重映射其体内 MakeClosure.func（指向本模块闭包表）
+        // 函数表：追加前重映射其体内 MakeClosure.func（指向本模块闭包表）。
+        // 兄弟模块的 `@__init__` 一并追加——IrRuntime::init 按 funcs 序执行全部
+        // `@__init__`（entry 在前，对齐解释器 `load` 先入口后兄弟的 global 初始化序）。
         for mut f in m.funcs {
             for inst in &mut f.body {
                 if let hc::ir::IrInst::MakeClosure { func, .. } = inst {
@@ -322,11 +325,18 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
                 }
             }
         }
+        // 全局表：兄弟全局并入（去重，同名后者胜——对齐解释器后载入覆盖）
+        for g in m.globals {
+            if !globals.contains(&g) {
+                globals.push(g);
+            }
+        }
     }
     hc::ir::IrModule {
         funcs,
         closures,
         func_index,
+        globals,
     }
 }
 
@@ -1289,6 +1299,28 @@ fn main() i32 {
         // 限定名索引落在追加段（入口在前，偏移后合法）
         assert!(merged.func_index["Math.square"][0] < merged.funcs.len());
         assert!(merged.funcs.len() >= 2);
+    }
+
+    #[test]
+    fn merge_modules_concats_globals_and_init() {
+        // Phase 5 多文件：兄弟 global/const 并入全局表（去重保序），各模块 `@__init__` 保留。
+        // IrRuntime::init 预分配全部全局 cell 后按 funcs 序执行各 `@__init__`——同名全局
+        // 共享同一 cell，后者覆盖（对齐解释器「后载入覆盖」）。
+        let entry = hc::ir::lower(
+            &hc::parse_source("global app: i32 = 1;\nfn main() i32 { return app; }\n").unwrap(),
+        )
+        .unwrap();
+        let sib = hc::ir::lower(
+            &hc::parse_source("global lib: i32 = 2;\nglobal shared: i32 = 0;\n").unwrap(),
+        )
+        .unwrap();
+        let sib2 = hc::ir::lower(&hc::parse_source("global shared: i32 = 9;\n").unwrap()).unwrap();
+        let merged = merge_modules(entry, vec![sib, sib2]);
+        // 全局表：声明序 + 去重（同名只保留入口/先序一份）
+        assert_eq!(merged.globals, vec!["app", "lib", "shared"]);
+        // 各模块 `@__init__` 全部保留（funcs 序依次执行）
+        let init_count = merged.funcs.iter().filter(|f| f.name == "@__init__").count();
+        assert_eq!(init_count, 3);
     }
 
     #[test]

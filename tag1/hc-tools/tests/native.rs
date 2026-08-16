@@ -189,6 +189,73 @@ fn unhandled_error_value_is_failure() {
 }
 
 #[test]
+fn global_const_native_init_and_mutation() {
+    // Phase 5 原生：@__init__ 注入（main 前置执行）+ LoadGlobal/StoreGlobal 寻址 @.h_globals
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    let src = r#"
+global counter: i32 = 0;
+const BASE: i32 = 100;
+fn bump() i32 {
+    counter = counter + 1;
+    return counter + BASE;
+}
+fn main() i32 {
+    var a = bump();
+    var b = bump();
+    if (a != 101 or b != 102) { return 1; }
+    if (counter != 2) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn test_runner_global_init_runs_first() {
+    // 原生测试跑器：@__init__ 在首个 test fn 前执行（全局已初始化）
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    let src = "global g: i32 = 7;\n[test] fn t() !void { try expect_eq(g, 7); }\n";
+    let st = compile_tests_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn global_addr_native_writes_through() {
+    // Phase 5 原生：`&mut global` → GlobalAddr（@.h_globals 元素地址入 tag 7）——
+    // Deref/StorePtr 写穿回全局，跨调用持久（@__init__ 仅一次）。
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    let src = r#"
+global counter: i32 = 0;
+fn bump() i32 {
+    var p = &mut counter;
+    p.* += 1;
+    return p.*;
+}
+fn main() i32 {
+    var a = bump();
+    var b = bump();
+    if (a != 1 or b != 2) { return 1; }
+    if (counter != 2) { return 1; }
+    var r = &counter;
+    if (r.* != 2) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
 fn string_literal_and_compare() {
     if !zig_cc_available() {
         eprintln!("SKIP: zig cc 不可用");

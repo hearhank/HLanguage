@@ -52,10 +52,12 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .iter()
         .map(|(name, idxs)| (name.clone(), idxs.clone()))
         .collect();
+    let gidx = globals_index(module);
     let mut out = String::new();
     emit_preamble(&mut out, &strings);
+    emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
-        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs);
+        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs, &gidx);
     }
     emit_main_wrapper(&mut out, module);
     out
@@ -70,13 +72,37 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .iter()
         .map(|(name, idxs)| (name.clone(), idxs.clone()))
         .collect();
+    let gidx = globals_index(module);
     let mut out = String::new();
     emit_preamble(&mut out, &strings);
+    emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
-        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs);
+        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs, &gidx);
     }
     emit_test_runner(&mut out, module);
     out
+}
+
+/// 全局名 → `@.h_globals` 槽位（声明序，与 IR `IrModule::globals` 对齐）。
+fn globals_index(module: &IrModule) -> HashMap<String, usize> {
+    module
+        .globals
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (g.clone(), i))
+        .collect()
+}
+
+/// 模块级全局单元数组（`%Value` cell；LoadGlobal/StoreGlobal 寻址目标）。
+fn emit_globals(out: &mut String, module: &IrModule) {
+    if module.globals.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "@.h_globals = global [{} x %Value] zeroinitializer\n",
+        module.globals.len()
+    );
 }
 
 /// 收集全部字符串常量（去重、保序）。除 `Str` 常量外，还收集 Phase 2 指令携带的
@@ -181,6 +207,8 @@ const MSGS: &[Msg] = &[
     // 当前响亮拒绝（error.NotCallable / error.NoMethod），禁止静默误编译
     Msg { key: "notcallable", text: "error.NotCallable: closures/indirect calls not yet in native mode (Phase 7)" },
     Msg { key: "nomethod", text: "error.NoMethod: method calls not yet in native mode (Phase 7)" },
+    // Phase 5 全局单元
+    Msg { key: "noglobal", text: "error.NoGlobal: undefined global" },
 ];
 
 // ---------- 导言 ----------
@@ -2106,6 +2134,7 @@ fn emit_func(
     errors: &ErrorCodeTable,
     canon: &HashMap<String, Vec<usize>>,
     funcs: &[IrFunc],
+    gidx: &HashMap<String, usize>,
 ) {
     let _ = writeln!(out, "; hc_fn{idx} = {}", f.name);
     let params = (0..f.params.len())
@@ -2126,7 +2155,7 @@ fn emit_func(
         be.emit(format!("store %Value %p{i}, %Value* %sp.{ps}"));
     }
     for inst in &f.body {
-        be.inst(inst, strings, errors, canon, funcs);
+        be.inst(inst, strings, errors, canon, funcs, gidx);
     }
     out.push_str(&be.finish());
     out.push_str("}\n\n");
@@ -2134,8 +2163,27 @@ fn emit_func(
 
 // ---------- main 包装（原生 CRT 入口） ----------
 
+/// 发射对全部 `@__init__` 函数的调用（多文件合并 = 各模块 init 依次运行，entry 在前）。
+/// `@__init__` 不在 func_index（不可被用户调用），此处按 funcs 声明序找到并执行；
+/// 返回值是错误值 → 未处理错误到根（对齐 tree-walking `exec_decl_top` 失败即 panic）。
+fn emit_init_calls(out: &mut String, module: &IrModule) {
+    for (idx, f) in module.funcs.iter().enumerate() {
+        if f.name != "@__init__" {
+            continue;
+        }
+        let _ = writeln!(out, "  %_init{idx} = call %Value @\"hc_fn{idx}\"()");
+        let _ = writeln!(out, "  %_tag{idx} = extractvalue %Value %_init{idx}, 0");
+        let _ = writeln!(out, "  %_iserr{idx} = icmp eq i32 %_tag{idx}, 6");
+        let _ = writeln!(out, "  br i1 %_iserr{idx}, label %_initerr{idx}, label %_initok{idx}");
+        let _ = writeln!(out, "_initerr{idx}:");
+        out.push_str("  call void @hc_abort_unhandled()\n  unreachable\n");
+        let _ = writeln!(out, "_initok{idx}:");
+    }
+}
+
 fn emit_main_wrapper(out: &mut String, module: &IrModule) {
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
+    emit_init_calls(out, module);
     if let Some(idxs) = module.func_index.get("main") {
         // main 入口按 arity 精确取（无则首个——重载 main 不存在，安全兜底）
         let idx = idxs
@@ -2198,6 +2246,7 @@ fn emit_test_runner(out: &mut String, module: &IrModule) {
 
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
     out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
+    emit_init_calls(out, module);
     for (idx, f) in &tests {
         let run = format!("[RUN] {}", f.name);
         let rn = run.len() + 1;
@@ -2577,6 +2626,7 @@ impl BodyEmitter {
         errors: &ErrorCodeTable,
         canon: &HashMap<String, Vec<usize>>,
         funcs: &[IrFunc],
+        gidx: &HashMap<String, usize>,
     ) {
         match inst {
             IrInst::Const { temp, val } => self.const_(*temp, val, strings, errors),
@@ -2917,6 +2967,51 @@ impl BodyEmitter {
             IrInst::CallMethod { .. } => self.abort_feature("nomethod"),
             IrInst::Return { temp } => self.ret(*temp),
             IrInst::ReturnVoid => self.ret_void(),
+            // Phase 5 全局单元：`@.h_globals` 数组寻址读写（声明序槽位）
+            IrInst::LoadGlobal { temp, name } => {
+                if let Some(&i) = gidx.get(name) {
+                    let gp = self.r();
+                    self.emit(format!(
+                        "{gp} = getelementptr inbounds [{n} x %Value], ptr @.h_globals, i64 0, i64 {i}",
+                        n = gidx.len()
+                    ));
+                    let gv = self.r();
+                    self.emit(format!("{gv} = load %Value, %Value* {gp}"));
+                    self.emit(format!("store %Value {gv}, %Value* %sp.{temp}"));
+                } else {
+                    self.abort_feature("noglobal");
+                }
+            }
+            IrInst::StoreGlobal { name, value } => {
+                if let Some(&i) = gidx.get(name) {
+                    let gv = self.r();
+                    self.emit(format!("{gv} = load %Value, %Value* %sp.{value}"));
+                    let gp = self.r();
+                    self.emit(format!(
+                        "{gp} = getelementptr inbounds [{n} x %Value], ptr @.h_globals, i64 0, i64 {i}",
+                        n = gidx.len()
+                    ));
+                    self.emit(format!("store %Value {gv}, %Value* {gp}"));
+                } else {
+                    self.abort_feature("noglobal");
+                }
+            }
+            // `&global`：全局单元数组元素地址入 tag 7（Ptr）载荷——与局部 AddrSlot
+            // 同构，Deref/StorePtr 写穿经 `@hc_deref`/`@hc_store_ptr` 回全局。
+            IrInst::GlobalAddr { temp, name } => {
+                if let Some(&i) = gidx.get(name) {
+                    let gp = self.r();
+                    self.emit(format!(
+                        "{gp} = getelementptr inbounds [{n} x %Value], ptr @.h_globals, i64 0, i64 {i}",
+                        n = gidx.len()
+                    ));
+                    let p = self.r();
+                    self.emit(format!("{p} = ptrtoint %Value* {gp} to i128"));
+                    self.build_store(*temp, T_PTR, p);
+                } else {
+                    self.abort_feature("noglobal");
+                }
+            }
         }
     }
 }

@@ -4,7 +4,9 @@
 //! [`crate::ir::run_ir`]，不另写 dispatch 循环，禁止各后端私语义。
 //! 覆盖范围 = M3.1 切片（标量 / 控制流 / 函数调用 / 错误值通道）
 //! + Phase 1 指针（取址 / 解引用 / 写穿）+ Phase 2 聚合（字段/索引/字面量/
-//! 解构/move/unwrap）+ Phase 3 switch + range + for（opcode 31–36 + 模式描述符）。
+//! 解构/move/unwrap）+ Phase 3 switch + range + for（opcode 31–36 + 模式描述符）
+//! + Phase 4 闭包/函数引用/方法/重载（opcode 37–40 + 闭包表）+ Phase 5 global/const
+//! （opcode 41–43 + 全局表，43 = `&global` 取址）。
 //! 子集外特性同 `ir::lower` 以 `error.Unsupported` 硬错误拒绝。
 //!
 //! 格式（全小端）：
@@ -15,6 +17,7 @@
 //!   · u8×n_param_defaults · (present? Const)* × n_defaults · u32 n_slots · u8 is_test
 //!   · u32 n_insts · { opcode u8 · 操作数 }*
 //! 闭包表（Phase 4）: u32 n_closures · 函数 × n_closures（同上格式）
+//! 全局表（Phase 5，还原 IrModule.globals）: u32 n_globals · { name } × n_globals
 //! ```
 //! 常量载荷保留全精度：`i128` 16 字节、`f64` 8 字节、字符串长度前缀。
 
@@ -23,7 +26,8 @@ use crate::ir::{run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrP
 use std::collections::HashMap;
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
-pub const VERSION: u32 = 2;
+/// v3：Phase 5 增全局表 + LoadGlobal/StoreGlobal/GlobalAddr opcode（41-43）。
+pub const VERSION: u32 = 3;
 
 // ---------- 常量 / 运算符 / 指令 标签 ----------
 
@@ -127,6 +131,11 @@ pub fn encode(module: &IrModule) -> Vec<u8> {
     push_u32(&mut out, module.closures.len() as u32);
     for f in &module.closures {
         encode_func(&mut out, f);
+    }
+    // 全局表（Phase 5）：声明序名字列表（cell 由运行时预分配）
+    push_u32(&mut out, module.globals.len() as u32);
+    for name in &module.globals {
+        push_str(&mut out, name);
     }
     out
 }
@@ -507,6 +516,22 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
                 push_u32(out, *a as u32);
             }
         }
+        // Phase 5 global/const：opcode 41-42
+        IrInst::LoadGlobal { temp, name } => {
+            out.push(41);
+            push_u32(out, *temp as u32);
+            push_str(out, name);
+        }
+        IrInst::StoreGlobal { name, value } => {
+            out.push(42);
+            push_str(out, name);
+            push_u32(out, *value as u32);
+        }
+        IrInst::GlobalAddr { temp, name } => {
+            out.push(43);
+            push_u32(out, *temp as u32);
+            push_str(out, name);
+        }
     }
 }
 
@@ -611,10 +636,17 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
     for _ in 0..n_closures {
         closures.push(decode_func(&mut r)?);
     }
+    // 全局表（Phase 5）：声明序名字列表
+    let n_globals = r.u32()? as usize;
+    let mut globals = Vec::with_capacity(n_globals);
+    for _ in 0..n_globals {
+        globals.push(r.str()?);
+    }
     Ok(IrModule {
         funcs,
         closures,
         func_index,
+        globals,
     })
 }
 
@@ -940,6 +972,19 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
                 v
             },
         },
+        // Phase 5 global/const：opcode 41-42
+        41 => IrInst::LoadGlobal {
+            temp: r.u32()? as usize,
+            name: r.str()?,
+        },
+        42 => IrInst::StoreGlobal {
+            name: r.str()?,
+            value: r.u32()? as usize,
+        },
+        43 => IrInst::GlobalAddr {
+            temp: r.u32()? as usize,
+            name: r.str()?,
+        },
         _ => return Err(format!("未知指令 opcode {op}")),
     })
 }
@@ -1242,6 +1287,7 @@ mod tests {
             funcs: vec![f0, f1],
             closures: vec![c0],
             func_index,
+            globals: vec!["g_counter".to_string(), "g_name".to_string()],
         }
     }
 
