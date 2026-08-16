@@ -288,6 +288,8 @@ graph TD
 
 > **2026-08-16 梯队 13 更新（M7.2 build.zon 包基础 + pub 边界过滤）**：按「M7.2 包基础」范围落地——① **ArrayLit 尾逗号**（`parser.rs` 镜像 TupleLit 尾逗号处理，`[1, 2, ]` 合法——build.zon 的 `files`/`deps` 数组带尾逗号）；② **AST pub 字段**（`Decl::{Global,Const,Fn,Class,Enum,Interface,Namespace}` 与 `FieldDecl` 加 `pub`；`Decl::is_pub()`；类方法默认公开、类字段默认私有不变）；③ **解析器保留 pub**（顶层 `pub` 声明 + 类体 `pub` 字段/方法；`script` 关键字名可解析）；④ **语义侧依赖收集**（`check_with_extern_deps`：同包兄弟 `collect` 全可见 + 依赖包 `collect_dep` 以包名前缀登记、`collect_decl_prefixed_filter` 的 `skip_flat` 抑制扁平名 + `pub_only` 过滤非 pub 项；`hc::check_semantics_extern_deps`）；⑤ **运行时依赖装载**（`Interp::load_dep`：`dep_programs` + `register_type/fn_decl_prefixed_filter` pub+前缀 + `exec_decl_top_filter` pub 全局/常量；不注入 ExitType/不 apply_usings/不 record_error_locs——错误集包隔离）；⑥ **build.zon 解析**（`hc-tools/src/buildzon.rs`：`Manifest`/`Kind`/`Dep`，`parse`/`load_from_dir`，十六进制 fingerprint 复用 `hc_rt::parse_int_text`）；⑦ **CLI 接线**（`hc check/run/test` 经 `load_manifest_deps_into`/`load_deps_into` 递归装载带 `path` 的本地依赖、visited 防环，无 path 注册中心依赖告警跳过；`hc build` 打印包/文件/依赖信息——LLVM 仍归 M3.3）。**测试**：新增 `hc-rt/tests/dep.rs` 3（跨包限定/using 平铺/非 pub 不可见/namespace 前缀）+ `hc-tools` buildzon 5；示例 `tag1/examples/02-packages/`（app 依赖 ../jsonlib，`using jsonlib;` 跨包调用 + `fn secret` 私有不可见）。**基线**：示例回归 **120/134 不变**——14 失败中 12 属 E1/E2/接口错误契约，另 **25/26 为跨文件泛型 `load_config` 重载碰撞**（同目录两文件同名泛型函数经兄弟加载双登记 → 「ambiguous call」CompileError，b538e4a 起既存，非本轮回归）。
 
+> **2026-08-16 梯队 14 更新（M3.3 LLVM 原生后端）**：`hc build` 从字节码镜像占位升级为**原生编译**——emit-.ll 文本 + `zig cc` 驱动（`hc/src/llvm.rs` 纯字符串发射，零外部依赖；LLVM 18 缺 llvm-config 故弃 inkwell，用户裁定 zig cc）。**值表示**：统一带标签盒 `%Value = { i32 tag, i64 data }`（tag ∈ {void/null/int/float/bool/str/err}，float 载荷 bitcast、str 载荷 i8*、err 载荷错误码），正确性优先对齐 `exec_func` 动态语义；**动态运算**集中到导言 helper（`@hc_add/sub/mul/div/mod/eucmod/bitand/bitor/bitxor/shl/shr/eq/lt/truthy/is_err/is_null/neg/not/bitnot`，溢出经 `llvm.s{add,sub,mul}.with.overflow.i64` 检查；`@hc_eq`/`@hc_lt` 用 select 守卫 strcmp 避免解引用非串指针）；**错误值通道**（`error.Name` = tag 6 值）与硬错误（Overflow/DivisionByZero/NoFunction/TypeError/AssertFailed/未处理错误 → 写 `@hc_fail_msg` + `@hc_abort` = puts + exit(1)）分离；**函数符号**规范化 `hc_fn{idx}`（避免 namespace 双注册同名冲突）；`main` 包装 `i32 @main` 查 tag==6 → `@hc_abort_unhandled`。**CLI**：`hc build` 解析 → 语义检查（新增）→ `lower` → `codegen` → `zig cc file.ll -o file.exe`（成功清理 .ll；失败保留 .ll 供调试）；`zig` 缺失回退原 .hbc + 启动器。**测试**：`hc/src/llvm.rs` 纯文本发射 6 测试 + `hc-tools/tests/native.rs` 端到端 5（zig 缺失自动 SKIP）；hc 前端 34 / hc-tools 13+5 全绿；示例回归 120/134 不变（`ex46_recursion` 栈溢出仍为已知红项）。**已知简化**：i64 载荷（非 i128）、NUL 结尾字符串字面量、无优化 pass、硬错误消息依赖 libc puts/exit；M3.2 字节码 VM 仍归后续。
+
 ### 未实现（登记后续迭代）
 
 | 模块 | 功能 | 归口 |
@@ -298,7 +300,7 @@ graph TD
 | M2.6 | 错误码表（包 ID + 包内码）——**2026-08-16 已落地**（见已实现表） | M2.6 |
 | M2 完整 | 期望类型传播（返回类型参与重载选择）——**2026-08-16 已落地**（静态 match_overloads ret_matches + 运行时 expected_ret，双端一致） | M2 |
 | M3.2 | 字节码 VM（tag1 为 tree-walking 解释器 + IR 参考解释器过渡形态，字节码 VM 归后续） | M3 |
-| M3.3 | LLVM 原生后端（`hc build` 占位——LLVM 依赖外部系统库） | M3 |
+| M3.3 | LLVM 原生后端（emit-.ll + `zig cc`）——**2026-08-16 已落地**（见已实现表） | M3 |
 | M4.2 | 错误码运行时表示、`@panic`、`ExitType` 退出映射——**2026-08-16 已落地**（见已实现表） | M4.2 |
 | M4.3 | @ 内建全集——**基础集已落地**（2026-08-16，余下见已实现表） | M4.3 |
 | M5.4 | 真实 io（fs/net/env/args/exit）——**2026-08-16 已落地**（见已实现表） | M5.4 |
@@ -309,4 +311,4 @@ graph TD
 
 **示例验收说明（2026-08-16）**：剩余 14 个失败示例分属——E1 元编程（35-comptime、34-generics、63-template）、E2 并发（37–39/76–80）、接口错误契约（24-interface-errors 引用未实现 json/csv 库）、**跨文件泛型重载碰撞（25-error-context、26-error-set-union——同目录两文件同名泛型 `load_config` 经兄弟加载双登记 → 重载歧义 CompileError）**——前者均为第三块（第二部分）特性或未实现库，属已知失败；25/26 为 M1.4 跨文件兄弟加载 + M2.3 重载歧义检测的组合，已登记后续处理（跨文件重载去重）。
 
-**已知取舍**：tree-walking 解释器替代字节码 VM；`hc build` 占位（LLVM 依赖外部系统库，留 M3.3）；u64 移位按 64 位截断（xorshift 语义）；闭包捕获整个作用域链（自由变量精确分析留后续）；`ex46_recursion` 递归示例栈溢出（tree-walking 递归深度，测试套件已知红项）。
+**已知取舍**：tree-walking 解释器替代字节码 VM；`hc build` 原生编译为 emit-.ll + `zig cc`（LLVM 依赖外部 zig；i64 载荷/字符串字面量子集/无优化/硬错误消息依赖 libc）；u64 移位按 64 位截断（xorshift 语义）；闭包捕获整个作用域链（自由变量精确分析留后续）；`ex46_recursion` 递归示例栈溢出（tree-walking 递归深度，测试套件已知红项）。

@@ -8,6 +8,7 @@ pub mod diag;
 pub mod errorcodes;
 pub mod ir;
 pub mod lexer;
+pub mod llvm;
 pub mod parser;
 pub mod semantic;
 pub mod token;

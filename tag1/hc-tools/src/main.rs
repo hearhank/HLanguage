@@ -3,7 +3,7 @@
 //! - `hc run <file.hc>`：脚本模式（tree-walking 解释器）
 //! - `hc run --ir <file.hc>`：IR 参考解释器过渡模式（M3.2 字节码 VM 的过渡形态，标量子集）
 //! - `hc test [file.hc|dir]`：收集并运行 `test fn`，输出 [PASS]/[FAIL]/[SKIP] + 汇总
-//! - `hc build <file.hc>`：tag1 占位（LLVM 原生后端归 M3.3）
+//! - `hc build <file.hc>`：原生编译（M3.3 LLVM 后端，emit-.ll + `zig cc`）
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
 
 use std::collections::HashSet;
@@ -25,7 +25,7 @@ USAGE:
     hc test [file.hc|dir]      运行 test fn（默认当前目录全部 .hc）
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
-    hc build <file.hc>         编译（tag1 占位：LLVM 后端归 M3.3）
+    hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
     hc --version
     hc --help
 ";
@@ -151,22 +151,40 @@ fn read_program(path: &Path) -> Result<String, ExitCode> {
     }
 }
 
-/// `hc build file.hc`：语法验证 → 生成字节码镜像 .hbc + 平台启动器
-/// （tag1 过渡产物：M3.3 LLVM 原生后端前的可分发形态；镜像由解释器加载）
+/// `zig cc` 是否可用（M3.3 原生后端驱动；缺失则回退字节码镜像）
+fn zig_cc_available() -> bool {
+    std::process::Command::new("zig")
+        .arg("cc")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// 源码 → LLVM IR 文本（解析 → 语义检查 → `lower` → `codegen`）。
+/// 失败返回可直接打印的诊断文本（渲染后的诊断 / 错误）。
+fn source_to_ll(source: &str) -> Result<String, String> {
+    let program = hc::parse_source(source).map_err(|d| diag::render(&d, source))?;
+    let errs = hc::check_semantics(&program);
+    if errs.iter().any(|d| d.is_error()) {
+        return Err(diag::render(&errs, source));
+    }
+    let module = hc::ir::lower(&program);
+    let table = hc::error_code_table(&program);
+    Ok(hc::llvm::codegen(&module, &table))
+}
+
+/// `hc build file.hc`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
+/// `zig cc` 缺失时回退字节码镜像 .hbc + 平台启动器（M3.2 前过渡形态）。
 fn build_file(path: &Path) -> ExitCode {
     let source = match read_program(path) {
         Ok(s) => s,
         Err(c) => return c,
     };
-    // 1) 编译期检查：词法/语法/装载
-    if let Err(diags) = hc::parse_source(&source) {
-        eprint!("{}", diag::render(&diags, &source));
-        return ExitCode::FAILURE;
-    }
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
 
-    // M7.2：build.zon 包清单（LLVM 原生后端仍归 M3.3，此处仅报告清单信息）
+    // M7.2：build.zon 包清单报告（原生后端首轮单文件；跨包链接归后续）
     match buildzon::load_from_dir(dir) {
         Ok(Some(m)) => {
             println!("包：{} {}（{:?}）", m.name, m.version, m.kind);
@@ -182,7 +200,55 @@ fn build_file(path: &Path) -> ExitCode {
         Err(e) => eprintln!("[warn] build.zon 解析失败: {e}"),
     }
 
-    // 2) 字节码镜像：HBC1 + u64 源码长度 + 源码
+    // M3.3 原生路径：zig cc 可用 → 生成 .ll → 编译链接为可执行文件
+    if zig_cc_available() {
+        let ll = match source_to_ll(&source) {
+            Ok(ll) => ll,
+            Err(msg) => {
+                eprint!("{msg}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let ll_path = dir.join(format!("{stem}.ll"));
+        if let Err(e) = std::fs::write(&ll_path, &ll) {
+            eprintln!("error: 写入 {} 失败: {e}", ll_path.display());
+            return ExitCode::FAILURE;
+        }
+        let exe_name = if cfg!(windows) {
+            format!("{stem}.exe")
+        } else {
+            stem.to_string()
+        };
+        let exe_path = dir.join(&exe_name);
+        let out = std::process::Command::new("zig")
+            .arg("cc")
+            .arg(&ll_path)
+            .arg("-o")
+            .arg(&exe_path)
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                // 编译成功：清理中间 .ll，保留可执行文件
+                let _ = std::fs::remove_file(&ll_path);
+                println!("原生产物: {}", exe_path.display());
+                return ExitCode::SUCCESS;
+            }
+            Ok(o) => {
+                eprintln!("[FAIL] zig cc 编译失败：");
+                eprint!("{}", String::from_utf8_lossy(&o.stderr));
+                eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
+                return ExitCode::FAILURE;
+            }
+            Err(e) => {
+                eprintln!("[FAIL] 调用 zig cc 失败: {e}");
+                eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    // 回退：字节码镜像 + 平台启动器（zig cc 缺失）
+    eprintln!("[warn] 未检测到 zig cc——回退字节码镜像（M3.3 原生后端需要 zig）");
     let src_bytes = source.as_bytes();
     let mut image = Vec::new();
     image.extend_from_slice(HBC_MAGIC);
@@ -194,7 +260,6 @@ fn build_file(path: &Path) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // 3) 平台启动器（直接执行字节码镜像）
     let runner = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("hc-tools"));
     let launcher = if cfg!(windows) {
         let l = dir.join(format!("{stem}.cmd"));
