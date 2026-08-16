@@ -25,7 +25,8 @@ pub struct RtError {
     pub code: Option<u32>,
     /// 内部控制流信号（跨 eval 边界传播 return/break/continue——
     /// `catch return x` / `orelse continue` / switch 臂内 return 等）
-    pub signal: Option<Flow>,
+    /// 仅模块内使用（不暴露于公共 API，故非 `pub`）
+    signal: Option<Flow>,
 }
 
 impl RtError {
