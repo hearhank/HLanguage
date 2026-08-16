@@ -1,0 +1,153 @@
+# H 语言工具链 · tag1（第一部分「最小功能集」）
+
+> **状态**：第一部分（最小功能集）已实现 —— 第一块语言系统（M0–M4）+ 第二块最小外围（M5–M7），**不自举**。
+> 实现状态详见 [`docs/SPEC/07-bootstrap-plan.md`](../docs/SPEC/07-bootstrap-plan.md) 第八节。
+
+## 这是什么
+
+H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**的编程语言（源码后缀 `.hc`）。核心哲学：语言的职责是「**定义数据、修改数据、传输数据、保存数据**」。同一份源码既可编译为原生二进制，也可作为脚本解释执行，**两种模式语义一致**。
+
+`tag1/` 是 H 语言的第一阶段**垂直切片实现** —— 用 Rust 实现「源码 → 解析 → 语义检查 → 双后端（解释执行 / 原生编译）」的最小闭环，对应 `07-bootstrap-plan.md` 的**第一部分最小功能集**（`hc build` / `hc run` / `hc test` 完整可用）。
+
+## 仓库结构
+
+```
+tag1/
+├── hc/        # 编译器前端：lexer / parser / AST / 诊断 / 语义检查 / IR / LLVM 发射
+├── hc-rt/     # 运行时：值模型 + tree-walking 解释器 + 标准库内建
+├── hc-tools/  # 工具链 CLI：hc run / hc test / hc build / hc check / hc errors
+└── examples/  # tag1 演示用例（hello / 错误集 / struct / 02-packages 跨包）
+```
+
+| crate | 说明 |
+|---|---|
+| `hc` | 编译器前端：词法、语法、AST、诊断、语义检查、共享 IR（`ir.rs`）、字节码（`bytecode.rs`）、LLVM 发射（`llvm.rs`） |
+| `hc-rt` | 运行时：`Value` 值模型、tree-walking 解释器（脚本模式）、语言内建与最小标准库 |
+| `hc-tools` | CLI：`hc run`（脚本 / 字节码 VM / IR 参考解释器）、`hc test`（含 `--mode=compile` 原生交叉验证）、`hc build`（原生编译）、`hc check`、`hc errors` |
+
+## 构建
+
+依赖：
+
+- **Rust**（`cargo`）—— 编译工具链本体
+- **zig**（可选，仅原生编译模式需要）—— `hc build` / `hc test --mode=compile` 用 `zig cc` 链接发射的 LLVM IR；缺失时 `hc build` 回退字节码产物、`hc test --mode=compile` 报错不静默降级
+
+```bash
+cd tag1
+cargo build                    # 构建全部 crate
+cargo build --release          # Release 构建
+cargo test --workspace         # 运行全部测试
+```
+
+## 快速开始
+
+```hc
+// hello.hc
+fn main(io: Io) !void {
+    io.print("hello, world\n");
+}
+```
+
+```bash
+# 脚本模式（tree-walking 解释器，全语言）
+cargo run -p hc-tools -- run examples/hello.hc
+
+# 原生编译（LLVM IR + zig cc，标量子集）
+cargo run -p hc-tools -- build examples/hello.hc
+```
+
+## CLI 命令
+
+```
+hc run <file.hc>           运行脚本模式（解释执行）
+hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；标量子集）
+hc run --ir <file.hc>      用 IR 参考解释器运行（标量子集）
+hc test [--mode=interpret|compile] [file.hc|dir]
+                          运行 test fn（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
+hc check <file.hc>         仅检查（词法/语法/装载）
+hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
+hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
+hc --version
+hc --help
+```
+
+## 已实现功能（第一部分最小功能集）
+
+按 `07-bootstrap-plan.md` 里程碑组织，**均已落地**（`✅`）：
+
+| 里程碑 | 内容 |
+|---|---|
+| M0 地基 | cargo 三 crate 工作区（零外部依赖） |
+| M1 前端 | 关键字/运算符/字符串/数字全集；Parser + AST；多错误诊断；跨文件模块（namespace / using / 兄弟文件符号登记、目录 = 包） |
+| M2 语义 | 名称解析（重载池）；完整类型检查（表达式级 + 期望类型传播 + 字段/索引校验）；推断（泛型 T / 指针形态 / 多路径返回 / 重载歧义）；所有权（分配来源 + move 合法性 + 引用逃逸）；错误集（显式 / `!T` 推断收集 / anyerror + 错误码表）；函数（重载 / 可选参数 / 闭包 move 捕获） |
+| M3 双后端 | 共享 IR（`ir.rs`，唯一语义源）；字节码 VM（HBC2）；LLVM 原生后端（`llvm.rs`，emit-.ll + zig cc）；双模式一致性套件（CI 硬门槛） |
+| M4 内建 | 内存运行时（作用域 LIFO 销毁 + Arena）；错误/终止（错误码 + `@panic` + `ExitType`）；`@` 内建基础集（sizeOf/alignOf/offsetOf/typeOf/intCast/ptrCast/compileError/addWithOverflow 等）；序列化内建（to_bytes/from_bytes/to_json/from_json/box）；标量接口族（ICompare/INumber/IInt/IUint/IFloat + 运算符绑定）；迭代内建（IIterable 三态 + iter()）；Debug 悬垂标记 |
+| M5 标准库最小 | mem（Allocator/Arena）；collections（Vec/String/Map/Deque）；序列化封装；io 最小（print / fs / net TCP / 程序环境）；时间/调试 |
+| M6 测试 | `test fn` 体系；断言五件套；`[PASS]/[FAIL]/[SKIP]` + 汇总；失败非零退出码 |
+| M7 工具链 | `hc build`（目录 = 包，多文件合并静态链接）/ `hc run` / `hc test`（含 `--mode=compile` 交叉验证）；build.zon 包基础（清单解析 + pub 边界 + 本地依赖装载） |
+
+### 双后端
+
+| 后端 | 入口 | 覆盖 |
+|---|---|---|
+| tree-walking 解释器 | `hc run <file.hc>`（默认） | **全语言** |
+| IR 参考解释器 | `hc run --ir <file.hc>` | 标量子集（M3.1 切片） |
+| 字节码 VM | `hc run <file.hbc>`（HBC2） | 标量子集，复用 IR 语义 |
+| LLVM 原生 | `hc build <file.hc>` | 标量子集（emit-.ll + zig cc） |
+
+四个后端共享同一语义源（`IrModule` + `run_ir`，ADR-0004），禁止后端私语义 —— 这是「双模式一致」承诺的根基。
+
+## 测试
+
+`cargo test --workspace` 共 **238 项单元/集成测试 + 41 项示例回归**，全部通过，唯一样例外是示例回归中的 `ex46_recursion`（tree-walking 递归深度致**栈溢出**，已知红项，非本轮回归）。逐测试文件明细：
+
+| crate | 测试文件 | 通过 |
+|---|---|---|
+| hc | `src` 单元测试（bytecode 7 + llvm 6） | 13 |
+| hc | `tests/bytecode.rs`（VM == 参考解释器一致性） | 12 |
+| hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
+| hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
+| hc | `tests/ir.rs`（共享 IR） | 22 |
+| hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
+| hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致） | 14 |
+| hc-rt | `tests/inference.rs`（类型推断） | 11 |
+| hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 7 |
+| hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
+| hc-rt | `tests/closures.rs`（闭包） | 4 |
+| hc-rt | `tests/deque.rs`（Deque） | 4 |
+| hc-rt | `tests/iter.rs`（迭代内建） | 4 |
+| hc-rt | `tests/serialize.rs`（序列化内建） | 4 |
+| hc-rt | `tests/dep.rs`（M7.2 跨包/pub 边界） | 3 |
+| hc-rt | `tests/scalar.rs`（标量接口族） | 2 |
+| hc-rt | `tests/examples.rs`（41 示例回归） | 40 ✅ + 1 ❌（`ex46_recursion` 栈溢出） |
+| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules） | 19 |
+| hc-tools | `tests/native.rs`（M3.3 原生端到端，zig 缺失自动 SKIP） | 7 |
+
+补充：
+
+- **示例回归**（CLI `hc test examples/`）：**122/134 通过**；12 项失败属第三块（第二部分）特性或未实现库 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80）、接口错误契约（24 引用未实现的 json/csv 库），均非本阶段范围。
+- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 62 项 mismatch —— 均为原生标量子集外特性（io/arena/切片/闭包/errdefer/并发），按文件粒度正确标记。
+
+## 已知取舍
+
+- **原生后端为标量子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片（标量/短路/if/while/return/try/catch/orelse/error/限定名调用/断言内建），io/集合/class 方法/闭包/指针/for/switch/defer 等走 `error.NoFunction` 或编译失败。
+- **i64 载荷**（非 i128）：LLVM 值盒 `{ tag, data }` 的 `data` 为 i64，i128/f64 有截断或位型转换（f64 已修正为十进制位型发射）。
+- **原生交叉验证为文件粒度**：全绿 vs 有失败，非逐测试 PASS/FAIL 清单（断言失败在测试函数 ret 路径直接 abort）。
+- **字节码 VM 复用 `run_ir`**：未做紧凑运行时 dispatch / 寄存器式 VM（性能优化留后续，须一致性套件证明等价）。
+- **跨包静态链接（M7.2 后续）**：`build.zon` 的 `deps` 已支持本地依赖装载（解释/检查路径），但原生编译目前仅同目录包内合并，跨包链接归后续。
+- **`ex46_recursion` 栈溢出**：tree-walking 递归深度限制，测试套件已知红项。
+
+## 本阶段明确不实现（第三块 / 第二部分）
+
+脚本生成（`script` 块元编程）、comptime 完整（类型即值）、并发/异步/线程、标准库扩展（UDP/HTTP/ipc/FFI 等）、系统编程（K1–K11）、工具链扩展（LSP/format/lint/注册中心）、**自举**（stage1 → stage2）—— 详见 `07-bootstrap-plan.md` 第四节。
+
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/SPEC/README.md`](../docs/SPEC/README.md) | 1.0 实现计划总纲 |
+| [`docs/SPEC/07-bootstrap-plan.md`](../docs/SPEC/07-bootstrap-plan.md) | 三块实现计划 + 实现状态表 |
+| [`docs/SPEC/06-language-spec.md`](../docs/SPEC/06-language-spec.md) | 语言规范总纲 |
+| [`CONTEXT.md`](../CONTEXT.md) | 术语表与项目背景 |
+| [`examples/README.md`](../examples/README.md) | 示例套件说明 |
