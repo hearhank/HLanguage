@@ -21,7 +21,7 @@ use hc::ir::{lower, run_ir, IrValue};
 use hc::parse_source;
 use hc_rt::Interp;
 
-/// 双模式一致性：两模式全部 test fn 的 PASS/FAIL 必须一致。
+/// 双模式一致性：两模式全部 [test] fn 的 PASS/FAIL 必须一致。
 /// 返回 (tree-walk 通过数, IR 通过数) 供调用方断言。
 /// 在 32MB 栈线程中运行（tree-walking 递归栈深，镜像 CLI 64MB 做法）。
 fn assert_consistent(src: &str) -> (usize, usize) {
@@ -63,7 +63,7 @@ fn check(src: &str) -> (usize, usize) {
     for (name, passed_tw) in &tw {
         let r = run_ir(&module, name, &[]);
         let passed_ir = match &r {
-            Ok(IrValue::Err(_)) => false, // 未处理错误值到根 → FAIL（M2.6）
+            Ok(IrValue::Err { .. }) => false, // 未处理错误值到根 → FAIL（M2.6）
             Ok(_) => true,
             Err(_) => false,
         };
@@ -102,7 +102,7 @@ fn assert_all_pass(src: &str) {
 fn arith_and_compare() {
     assert_all_pass(
         r#"
-test fn arith() void {
+[test] fn arith() void {
     expect_eq(2 + 3 * 4, 14);
     expect_eq(17 %% 5, 2);
     expect_eq(20 / 3, 6);
@@ -124,12 +124,12 @@ fn expect_bad() bool {
     expect(false);
     return true;
 }
-test fn and_short_circuits() void {
+[test] fn and_short_circuits() void {
     if (false and expect_bad()) {
         expect(false);
     }
 }
-test fn or_short_circuits() void {
+[test] fn or_short_circuits() void {
     if (true or expect_bad()) {
         expect(true);
     }
@@ -142,12 +142,12 @@ fn expect_bad() bool {
     expect(false);
     return true;
 }
-test fn and_short_circuits() void {
+[test] fn and_short_circuits() void {
     if (false and expect_bad()) {
         expect(false);
     }
 }
-test fn and_eager_fails() void {
+[test] fn and_eager_fails() void {
     if (true and expect_bad()) {
         expect(false);
     }
@@ -166,7 +166,7 @@ fn grade(x: i32) i32 {
     else if (x >= 60) { return 2; }
     else { return 3; }
 }
-test fn grades() void {
+[test] fn grades() void {
     expect_eq(grade(95), 1);
     expect_eq(grade(70), 2);
     expect_eq(grade(30), 3);
@@ -187,7 +187,7 @@ fn pick(x: ?i32) i32 {
         return 0;
     }
 }
-test fn if_expr() void {
+[test] fn if_expr() void {
     expect_eq_slices(label(7), "big");
     expect_eq_slices(label(3), "small");
     expect_eq(pick(null), 0);
@@ -209,7 +209,7 @@ fn sum_to(n: i32) i32 {
     }
     return sum;
 }
-test fn sum() void {
+[test] fn sum() void {
     expect_eq(sum_to(5), 10);
 }
 "#,
@@ -224,7 +224,7 @@ fn fib(n: i32) i32 {
     if (n <= 1) { return n; }
     return fib(n - 1) + fib(n - 2);
 }
-test fn fib10() void {
+[test] fn fib10() void {
     expect_eq(fib(10), 55);
 }
 "#,
@@ -239,7 +239,7 @@ fn fail() !i32 { return error.NotFound; }
 fn catch_default() i32 { return fail() catch 42; }
 fn catch_bind() i32 { return fail() catch |e| { 40 + 2; }; }
 fn catch_block_value() i32 { return fail() catch |e| { var x: i32 = 40; x + 2; }; }
-test fn catch_variants() void {
+[test] fn catch_variants() void {
     expect_eq(catch_default(), 42);
     expect_eq(catch_bind(), 42);
     expect_eq(catch_block_value(), 42);
@@ -253,7 +253,7 @@ fn try_propagates_to_root() {
     // try 传播未处理错误到测试根：两模式都必须 FAIL
     let src = r#"
 fn fail() !i32 { return error.NotFound; }
-test fn try_bubbles() void {
+[test] fn try_bubbles() void {
     var x = try fail();
     expect_eq(x, 1);
 }
@@ -267,7 +267,7 @@ fn orelse() {
     assert_all_pass(
         r#"
 fn d(x: ?i32) i32 { return x orelse 5; }
-test fn orelse_null() void {
+[test] fn orelse_null() void {
     expect_eq(d(null), 5);
     expect_eq(d(7), 7);
 }
@@ -288,7 +288,7 @@ namespace io {
         fn double(x: i32) i32 { return x * 2; }
     }
 }
-test fn qualified() void {
+[test] fn qualified() void {
     expect_eq(Math.square(4), 16);
     expect_eq(io.net.double(21), 42);
 }
@@ -305,7 +305,7 @@ fn f() i32 {
     { var x: i32 = 2; }
     return x;
 }
-test fn shadow_restores() void {
+[test] fn shadow_restores() void {
     expect_eq(f(), 1);
 }
 "#,
@@ -317,7 +317,7 @@ fn expect_error_and_unhandled_root() {
     assert_all_pass(
         r#"
 fn fail() !i32 { return error.NotFound; }
-test fn err_literal() void {
+[test] fn err_literal() void {
     expect_error(fail(), error.NotFound);
 }
 "#,
@@ -325,7 +325,7 @@ test fn err_literal() void {
     // 未处理错误值返回测试根：两模式都 FAIL（M2.6 根作用域 panic 式失败）
     let src = r#"
 fn fail() !i32 { return error.NotFound; }
-test fn unhandled() !void {
+[test] fn unhandled() !void {
     return error.NotFound;
 }
 "#;
@@ -337,10 +337,10 @@ test fn unhandled() !void {
 fn div_zero_and_overflow_both_error() {
     // 除零/整数溢出：两模式都报错 → 测试 FAIL（对齐 tree-walking arith）
     let src = r#"
-test fn div_zero() void {
+[test] fn div_zero() void {
     expect_eq(10 / 0, 0);
 }
-test fn overflow() void {
+[test] fn overflow() void {
     var x = 170141183460469231731687303715884105727;
     expect_eq(x + 1, x);
 }
@@ -359,9 +359,268 @@ fn f() i32 {
     x *= 2;
     return x;
 }
-test fn comp() void {
+[test] fn comp() void {
     expect_eq(f(), 16);
 }
 "#,
     );
+}
+
+#[test]
+fn pointer_write_through_alias() {
+    // Phase 1 指针（M3 语义源 + oracle 双模式）：`&mut` 写穿 + 跨函数别名 + `p.*` 取值
+    assert_all_pass(
+        r#"
+fn bump(p: *mut i32) void {
+    p.* += 1;
+}
+[test] fn pointer_alias() void {
+    var mut x: i32 = 41;
+    var p = &mut x;
+    p.* = 42;
+    expect_eq(x, 42);
+    bump(&mut x);
+    expect_eq(x, 43);
+}
+[test] fn pointer_deref_value() void {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    p.* += 1;
+    expect_eq(p.*, 6);
+}
+[test] fn pointer_identity_eq() void {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    var q = &mut x;
+    expect(p == q);
+    expect_eq(p.*, x);
+}
+"#,
+    );
+}
+
+// ---------- Phase 2：聚合（字段/索引/切片/字面量/解构/move/unwrap/enum） ----------
+
+#[test]
+fn agg_struct_literal_and_field() {
+    // MakeClass/Field/StoreField：struct 字面量 + 字段读写 + 类深比较
+    assert_all_pass(
+        r#"
+class Point {
+    x: i32,
+    y: i32,
+}
+[test] fn struct_literal_field() void {
+    var p = Point{ x = 1, y = 2 };
+    expect_eq(p.x, 1);
+    expect_eq(p.y, 2);
+    p.y = 5;
+    expect_eq(p.y, 5);
+    expect_eq(p, Point{ x = 1, y = 5 });
+    expect_neq(p, Point{ x = 2, y = 5 });
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_array_index_and_store() {
+    // MakeArr/Index/StoreIndex：数组字面量 + 单索引读写
+    assert_all_pass(
+        r#"
+[test] fn arr_index() void {
+    var a = [10, 20, 30];
+    expect_eq(a[0], 10);
+    expect_eq(a[2], 30);
+    a[1] = 99;
+    expect_eq(a[1], 99);
+    expect_neq(a, [10, 20, 30]);
+    expect_eq(a, [10, 99, 30]);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_len_fields() {
+    // `.len`：Str / Arr / Slice 三形态字段（Field 指令）
+    assert_all_pass(
+        r#"
+[test] fn len_str_arr_slice() void {
+    var s = "abc";
+    expect_eq(s.len, 3);
+    var arr = [10, 20, 30, 40];
+    expect_eq(arr.len, 4);
+    var sub = arr[1..3];
+    expect_eq(sub.len, 2);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_slice_view_and_alias() {
+    // SliceOf：切片为共享视图——切片索引与源数组元素 cell 别名（写穿）
+    assert_all_pass(
+        r#"
+[test] fn slice_view() void {
+    var arr = [1, 2, 3, 4, 5];
+    var sub = arr[1..4];
+    expect_eq(sub.len, 3);
+    expect_eq(sub[0], 2);
+    expect_eq(sub[2], 4);
+    arr[1] = 99;
+    expect_eq(sub[0], 99);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_slice_store_write_through() {
+    // StoreSlice：`arr[lo..hi] = v` 写回源数组元素（源须为 Arr）
+    assert_all_pass(
+        r#"
+[test] fn slice_store() void {
+    var arr = [1, 2, 3, 4, 5];
+    arr[1..3] = [20, 30];
+    expect_eq(arr[1], 20);
+    expect_eq(arr[2], 30);
+    expect_eq(arr.len, 5);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_tuple_destructure() {
+    // Destructure：元组（多值返回）解构绑定
+    assert_all_pass(
+        r#"
+fn divmod(a: i32, b: i32) (i32, i32) {
+    return (a / b, a % b);
+}
+[test] fn tuple_destructure() void {
+    var (q, r) = divmod(10, 3);
+    expect_eq(q, 3);
+    expect_eq(r, 1);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_move_expr() {
+    // Move：所有权转移标记（tag1 值语义——`move x` ≡ 值拷贝，原绑定仍可访问）
+    assert_all_pass(
+        r#"
+[test] fn move_is_value_copy() void {
+    var a = [1, 2, 3];
+    var b = move a;
+    expect_eq(b.len, 3);
+    expect_eq(b[1], 2);
+    expect_eq(a.len, 3);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_unwrap_opt() {
+    // Unwrap：`x.?` 解包 Opt(Some) → 值；Opt(None) → NullUnwrap 硬错误
+    assert_all_pass(
+        r#"
+fn boxed(x: ?i32) ?i32 { return x; }
+[test] fn unwrap_some() void {
+    var v = boxed(7).?;
+    expect_eq(v, 7);
+}
+[test] fn unwrap_other_identity() void {
+    var v = boxed(7);
+    var w = v.?;
+    expect_eq(w, 7);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_enum_literal_and_eq() {
+    // MakeEnum：类型名限定枚举常量 + 值比较（name+variant+payload）
+    assert_all_pass(
+        r#"
+enum Color { red, green, blue }
+[test] fn enum_literal() void {
+    var c = Color.green;
+    expect_eq(c, Color.green);
+    expect_neq(c, Color.red);
+    var d = Color.blue;
+    expect_neq(c, d);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_array_deep_eq() {
+    // value_eq：数组深比较（元素按值、递归）
+    assert_all_pass(
+        r#"
+[test] fn arr_deep_eq() void {
+    var a = [1, 2, 3];
+    var b = [1, 2, 3];
+    expect_eq(a, b);
+    expect_neq(a, [1, 2, 4]);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_class_with_array_field() {
+    // 嵌套聚合：class 字段为数组，字段索引写穿
+    assert_all_pass(
+        r#"
+class Box {
+    items: [3]i32,
+    tag: i32,
+}
+[test] fn class_nested_array() void {
+    var b = Box{ items = [1, 2, 3], tag = 7 };
+    expect_eq(b.items.len, 3);
+    expect_eq(b.items[0], 1);
+    b.items[1] = 20;
+    expect_eq(b.items[1], 20);
+    b.tag = 8;
+    expect_eq(b.tag, 8);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_index_out_of_bounds_fails() {
+    // 越界索引：硬错误（不可 catch）→ 两模式测试均为 FAIL
+    let src = r#"
+[test] fn oob() void {
+    var arr = [1, 2, 3];
+    expect_eq(arr[5], 0);
+}
+"#;
+    let (tw, ir) = assert_consistent(src);
+    assert_eq!((tw, ir), (0, 0));
+}
+
+#[test]
+fn agg_unwrap_null_fails() {
+    // NullUnwrap：硬错误（不可 catch）→ 两模式测试均为 FAIL
+    let src = r#"
+fn boxed(x: ?i32) ?i32 { return x; }
+[test] fn unwrap_null() void {
+    var v = boxed(null).?;
+    expect_eq(v, 1);
+}
+"#;
+    let (tw, ir) = assert_consistent(src);
+    assert_eq!((tw, ir), (0, 0));
 }

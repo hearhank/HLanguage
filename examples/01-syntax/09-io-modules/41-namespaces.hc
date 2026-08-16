@@ -12,7 +12,12 @@ fn main(io: Io) !void {
     io.print("{}\n", square(5));        // using 后直接使用
 }
 
-test fn namespace_access() !void {
+[test] fn namespace_access() !void {
     try expect_eq(Math.square(5), 25);   // 限定访问
     try expect_eq(square(5), 25);        // using 后直接使用（Q21）
+}
+
+[test] fn cross_package_dep() !void {
+    // 跨包依赖（Q26）：build.zon deps 带 path → pub 符号以包名 `jsonlib` 限定访问
+    try expect_eq(jsonlib.parse("{}"), 42);
 }

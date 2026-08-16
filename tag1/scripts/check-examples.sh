@@ -2,7 +2,7 @@
 # 完整示例套件回归门（CI 与本地共用）。
 #
 # 两部分（基线随功能扩增而更新，见 tag1/README.md）：
-#   1) interpret：`hc test examples/` 断言 >= 122 passed 且 <= 12 failed（122/134）
+#   1) interpret：`hc test examples/` 断言 >= 124 passed 且 <= 11 failed（124/135）
 #   2) compile：`hc test --mode=compile examples/` 断言 <= 80 mismatch
 #      （原生标量子集外特性；子集扩增时该数下降，属改进）
 #
@@ -23,8 +23,8 @@ if [ -z "$passed" ] || [ -z "$failed" ]; then
     echo "::error::无法解析 interpret 汇总（passed=$passed failed=$failed）"
     exit 1
 fi
-if [ "$passed" -lt 122 ] || [ "$failed" -gt 12 ]; then
-    echo "::error::示例套件回归：$passed passed / $failed failed（基线 >=122 / <=12）"
+if [ "$passed" -lt 124 ] || [ "$failed" -gt 11 ]; then
+    echo "::error::示例套件回归：$passed passed / $failed failed（基线 >=124 / <=11）"
     exit 1
 fi
 echo "interpret OK: $passed passed / $failed failed"

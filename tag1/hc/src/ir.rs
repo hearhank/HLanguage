@@ -7,11 +7,14 @@
 //! 垂直切片范围（tag1）：标量 + bool + 字符串 + 函数/参数/局部变量 +
 //! if（语句/表达式/else-if/optional 捕获）+ while（含续步）+ return +
 //! error 字面量 + try/catch + orelse + 全局函数调用（含多级限定名）+
-//! 断言内建。
+//! 断言内建 + **指针**（Phase 1：`&`/`&mut` 取址、`p.*` 解引用、写穿别名）+
+//! **聚合**（Phase 2：数组/元组字面量、struct/枚举字面量与常量、字段/索引/切片
+//! 读写、`.?` 断言解包、元组解构、`move`）。
 //! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、for/switch、break/continue、
-//! 闭包、集合/class 方法（原子内建调用）、指针操作。复杂库操作 = `CallBuiltin` 原子指令。
+//! 闭包、class 方法/动态调用（Phase 3/4 起）。复杂库操作 = `CallBuiltin` 原子指令。
 
 use crate::ast::*;
+use crate::errorcodes::ErrorCodeTable;
 use crate::token::Span;
 use std::collections::HashMap;
 
@@ -43,8 +46,10 @@ pub enum IrConst {
     Str(String),
     Void,
     Null,
-    /// error.Name（错误值 = 普通值，走值通道）
-    Err(String),
+    /// error.Name（错误值 = 普通值，走值通道；code = M2.6 编译期错误码）
+    Err { name: String, code: u32 },
+    /// 开区间切片 `arr[a..]` 的上界哨兵（Phase 2）
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,30 +150,205 @@ pub enum IrInst {
         temp: usize,
     },
     ReturnVoid,
+    /// temp = &slot（变量别名：指向该槽的共享 cell——写穿别名关键装置）
+    AddrSlot {
+        temp: usize,
+        slot: usize,
+    },
+    /// temp = &expr（非 lvalue 快照：求值到临时槽后复制进新 cell——对齐
+    /// tree-walking `AddrOf` 兜底分支 `Value::Ptr(Rc::new(RefCell::new(v)))`）
+    AddrValue {
+        temp: usize,
+        value: usize,
+    },
+    /// temp = *a（解引用：Ptr → pointee；非 Ptr → 恒等——对齐 `deref_value`）
+    Deref {
+        temp: usize,
+        a: usize,
+    },
+    /// *target = value（写穿 pointee cell；target 非 Ptr → BadAssign）
+    StorePtr {
+        target: usize,
+        value: usize,
+    },
+    // ---- Phase 2 聚合 ----
+    /// temp = base.field（Class 字段 / Str/Arr/Slice/Map .len 内建字段；无字段 → NoField）
+    Field {
+        temp: usize,
+        base: usize,
+        field: String,
+    },
+    /// base.field = value（写穿 class 字段 cell；base 非 Class → TypeError）
+    StoreField {
+        base: usize,
+        field: String,
+        value: usize,
+    },
+    /// temp = base[index]（Arr/Slice/Str；越界 → IndexOutOfBounds；非整 → BadIndex；非可索引 → NotIndexable）
+    Index {
+        temp: usize,
+        base: usize,
+        index: usize,
+    },
+    /// base[index] = value（写穿元素 cell——切片/别名共享底层；base 非 Arr → TypeError）
+    StoreIndex {
+        base: usize,
+        index: usize,
+        value: usize,
+    },
+    /// temp = base[lo..hi]（Arr → 共享视图；Str → 拷贝字节；Slice → 重切片；hi=End 哨兵 → 到末尾）
+    SliceOf {
+        temp: usize,
+        base: usize,
+        lo: usize,
+        hi: usize,
+    },
+    /// base[lo..hi] = value（切片写回：源 Arr 元素逐一复制到目标槽；base 非 Arr 静默无操作）
+    StoreSlice {
+        base: usize,
+        lo: usize,
+        hi: usize,
+        value: usize,
+    },
+    /// temp = 数组/元组字面量 [e1, e2, ...]（每元素独立共享 cell）
+    MakeArr {
+        temp: usize,
+        items: Vec<usize>,
+    },
+    /// temp = struct 字面量 Type{ f1 = v1, ... }
+    MakeClass {
+        temp: usize,
+        ty: String,
+        fields: Vec<(String, usize)>,
+    },
+    /// temp = 枚举值（Type.variant 常量 或 Type{variant = payload}）
+    MakeEnum {
+        temp: usize,
+        name: String,
+        variant: String,
+        payload: Option<usize>,
+    },
+    /// 元组解构 `var (a, b) = e`：源须为 Arr 且元素数与 slots 一致（_ 跳过）；
+    /// 逐元素克隆绑定。slots = (槽号 or None=_)
+    Destructure {
+        value: usize,
+        slots: Vec<Option<usize>>,
+    },
+    /// temp = move a（所有权转移标记；运行时恒等——对齐 tree-walking M2.4）
+    Move {
+        temp: usize,
+        a: usize,
+    },
+    /// temp = a.?（Opt(Some) → 内值；Opt(None) → NullUnwrap；非 Opt → 恒等）
+    Unwrap {
+        temp: usize,
+        a: usize,
+    },
+}
+
+// ---------- 类型元数据（Phase 2：class/enum/namespace 判型） ----------
+
+#[derive(Debug, Default, Clone)]
+pub struct TypeTable {
+    /// class 名（扁平 + 全限定）→ 元数据
+    pub classes: HashMap<String, ClassInfo>,
+    /// enum 名（扁平 + 全限定）→ 变体集
+    pub enums: HashMap<String, EnumInfo>,
+    /// namespace 名（扁平 + 全限定）
+    pub namespaces: std::collections::HashSet<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ClassInfo {
+    pub fields: Vec<String>,
+    pub methods: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct EnumInfo {
+    pub variants: std::collections::HashSet<String>,
+}
+
+/// 由 `program.decls` 构建类型表（lower 阶段判型用；运行时类型名内嵌于值）。
+fn build_type_table(program: &Program) -> TypeTable {
+    let mut tt = TypeTable::default();
+    collect_types(&program.decls, &mut tt, &[]);
+    tt
+}
+
+fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
+    for d in decls {
+        match d {
+            Decl::Class {
+                name,
+                fields,
+                methods,
+                ..
+            } => {
+                let ci = ClassInfo {
+                    fields: fields.iter().map(|f| f.name.clone()).collect(),
+                    methods: methods.iter().map(|m| m.name.clone()).collect(),
+                };
+                tt.classes.insert(name.clone(), ci);
+                if !path.is_empty() {
+                    let mut q = path.join(".");
+                    q.push('.');
+                    q.push_str(name);
+                    tt.classes.insert(q, tt.classes[name].clone());
+                }
+            }
+            Decl::Enum { name, variants, .. } => {
+                let ei = EnumInfo {
+                    variants: variants.iter().map(|v| v.name.clone()).collect(),
+                };
+                tt.enums.insert(name.clone(), ei);
+                if !path.is_empty() {
+                    let mut q = path.join(".");
+                    q.push('.');
+                    q.push_str(name);
+                    tt.enums.insert(q, tt.enums[name].clone());
+                }
+            }
+            Decl::Namespace { name, decls, .. } => {
+                tt.namespaces.insert(name.clone());
+                let mut p = path.to_vec();
+                p.push(name.clone());
+                collect_types(decls, tt, &p);
+            }
+            _ => {}
+        }
+    }
 }
 
 // ---------- AST → IR 降级 ----------
 
 pub fn lower(program: &Program) -> Result<IrModule, IrError> {
+    let errors = crate::errorcodes::collect(program, 0);
+    let types = build_type_table(program);
     let mut module = IrModule::default();
     for d in &program.decls {
-        lower_decl(d, &mut module)?;
+        lower_decl(d, &mut module, &errors, &types)?;
     }
     Ok(module)
 }
 
-/// 构造「原生/IR 后端不支持」的降级错误（子集外特性 → 硬错误而非静默丢弃）。
+/// 构造「原生/IR 后端暂不支持」的降级错误（阶段外特性 → 硬错误而非静默丢弃）。
 fn unsupported_ir_err(what: &str, span: &Span) -> IrError {
     IrError::msg(
         "Unsupported",
         format!(
-            "原生/IR 后端为标量子集，不支持{what}（第 {} 行第 {} 列）——请用默认 tree-walking 模式 `hc run <file>`",
+            "原生/IR 后端暂不支持{what}（第 {} 行第 {} 列）——请用默认 tree-walking 模式 `hc run <file>`",
             span.line, span.col
         ),
     )
 }
 
-fn lower_decl(d: &Decl, module: &mut IrModule) -> Result<(), IrError> {
+fn lower_decl(
+    d: &Decl,
+    module: &mut IrModule,
+    errors: &ErrorCodeTable,
+    types: &TypeTable,
+) -> Result<(), IrError> {
     match d {
         Decl::Fn {
             name,
@@ -177,14 +357,14 @@ fn lower_decl(d: &Decl, module: &mut IrModule) -> Result<(), IrError> {
             is_test,
             ..
         } => {
-            let func = lower_func(name, params, body, *is_test)?;
+            let func = lower_func(name, params, body, *is_test, errors, types)?;
             register_func(module, name, func);
         }
         Decl::Namespace { name, decls, .. } => {
             // namespace 内函数：扁平名 + 限定名双注册（与运行时/语义一致）；
             // 多级 namespace（io.net.connect）注册全限定名
             let mut inner: Vec<(String, String, IrFunc)> = Vec::new();
-            collect_ns_funcs(decls, &[name.clone()], &mut inner)?;
+            collect_ns_funcs(decls, &[name.clone()], &mut inner, errors, types)?;
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
                 module.funcs.push(func);
@@ -214,6 +394,8 @@ fn collect_ns_funcs(
     decls: &[Decl],
     path: &[String],
     out: &mut Vec<(String, String, IrFunc)>,
+    errors: &ErrorCodeTable,
+    types: &TypeTable,
 ) -> Result<(), IrError> {
     for d in decls {
         match d {
@@ -226,7 +408,7 @@ fn collect_ns_funcs(
             } if !*is_test => {
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
-                let func = lower_func(name, params, body, false)?;
+                let func = lower_func(name, params, body, false, errors, types)?;
                 out.push((name.clone(), qn.join("."), func));
             }
             Decl::Namespace {
@@ -236,7 +418,7 @@ fn collect_ns_funcs(
             } => {
                 let mut p = path.to_vec();
                 p.push(name.clone());
-                collect_ns_funcs(nested, &p, out)?;
+                collect_ns_funcs(nested, &p, out, errors, types)?;
             }
             // namespace 内 global/const：与顶层一致，拒绝（启动初始化语义缺失）
             Decl::Global { span, .. } | Decl::Const { span, .. } => {
@@ -255,8 +437,19 @@ fn register_func(module: &mut IrModule, name: &str, func: IrFunc) {
     module.func_index.insert(name.to_string(), idx);
 }
 
-fn lower_func(name: &str, params: &[Param], body: &Block, is_test: bool) -> Result<IrFunc, IrError> {
-    let mut ctx = LowerCtx::default();
+fn lower_func(
+    name: &str,
+    params: &[Param],
+    body: &Block,
+    is_test: bool,
+    errors: &ErrorCodeTable,
+    types: &TypeTable,
+) -> Result<IrFunc, IrError> {
+    let mut ctx = LowerCtx {
+        errors: errors.clone(),
+        types: types.clone(),
+        ..LowerCtx::default()
+    };
     ctx.push_scope();
     // 参数槽（声明序，从 0 开始）
     let param_slots: Vec<usize> = params.iter().map(|_| ctx.alloc_slot()).collect();
@@ -291,6 +484,10 @@ struct LowerCtx {
     next_slot: usize,
     insts: Vec<IrInst>,
     next_label: usize,
+    /// 编译期错误码表（error.Name → 码，M2.6；Err 常量携带码）
+    errors: ErrorCodeTable,
+    /// 类型元数据（Phase 2：NamedLit/Dot 判型 class vs enum vs namespace）
+    types: TypeTable,
     /// 首个子集外特性错误（降级失败信号；降级继续推进以收集更多槽号，但最终报错）
     err: Option<IrError>,
 }
@@ -400,9 +597,13 @@ impl LowerCtx {
                 });
             }
             Expr::ErrorLit(name, _) => {
+                let code = self.errors.code_of(name).unwrap_or(0);
                 self.push(IrInst::Const {
                     temp: t,
-                    val: IrConst::Err(name.clone()),
+                    val: IrConst::Err {
+                        name: name.clone(),
+                        code,
+                    },
                 });
             }
             Expr::Ident(name, span) => match self.resolve(name) {
@@ -699,41 +900,218 @@ impl LowerCtx {
                 // 目标不是局部变量（字段/索引/解构等）→ 子集外硬错误
                 None => self.fail_void(t, "字段/索引/解构赋值", span),
             },
-            // 子集外表达式：硬错误（而非静默 void 占位）
-            Expr::ArrayLit(_, span) => self.fail_void(t, "数组/集合字面量", span),
-            Expr::TupleLit(_, span) => self.fail_void(t, "元组字面量", span),
-            Expr::NamedLit { span, .. } => self.fail_void(t, "struct/enum 字面量构造", span),
-            Expr::Dot { span, .. } | Expr::Field { span, .. } => {
-                self.fail_void(t, "字段访问/方法调用", span)
+            // ---- Phase 2 聚合 ----
+            // 数组/元组字面量：运行时等价（Arr），逐元素求值 + 独立共享 cell
+            Expr::ArrayLit(items, _) | Expr::TupleLit(items, _) => {
+                let item_ts: Vec<usize> = items.iter().map(|e| self.lower_expr(e)).collect();
+                self.push(IrInst::MakeArr { temp: t, items: item_ts });
             }
-            Expr::Index { span, .. } => self.fail_void(t, "索引访问", span),
-            Expr::Deref(_, span) => self.fail_void(t, "指针解引用", span),
-            Expr::AddrOf(_, _, span) => self.fail_void(t, "取地址 `&`", span),
-            Expr::Unwrap(_, span) => self.fail_void(t, "`.?` 断言解包", span),
+            Expr::NamedLit { ty, fields, span } => {
+                // struct 字面量 → MakeClass；枚举字面量（恰一个变体）→ MakeEnum（对齐 oracle）
+                if self.types.classes.contains_key(ty) {
+                    let f: Vec<(String, usize)> = fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), self.lower_expr(v)))
+                        .collect();
+                    self.push(IrInst::MakeClass { temp: t, ty: ty.clone(), fields: f });
+                } else if self.types.enums.contains_key(ty) {
+                    if fields.len() != 1 {
+                        self.fail_void(t, "多字段枚举字面量（应为单变体）", span);
+                        return t;
+                    }
+                    let (variant, payload) = &fields[0];
+                    let pv = self.lower_expr(payload);
+                    self.push(IrInst::MakeEnum {
+                        temp: t,
+                        name: ty.clone(),
+                        variant: variant.clone(),
+                        payload: Some(pv),
+                    });
+                } else {
+                    self.fail_void(t, &format!("未知类型 `{ty}` 的字面量构造"), span);
+                }
+            }
+            Expr::Dot { base, field, span } => {
+                // 类型名（enum/class）限定 → 枚举常量（对齐 oracle：不做变体验证，全类型名同权）
+                if let Expr::Ident(bname, _) = base.as_ref() {
+                    // ExitType 内建枚举特判（对齐 oracle eval_dot）
+                    if bname == "ExitType" {
+                        self.push(IrInst::MakeEnum {
+                            temp: t,
+                            name: "ExitType".into(),
+                            variant: field.clone(),
+                            payload: None,
+                        });
+                        return t;
+                    }
+                    if self.types.enums.contains_key(bname) || self.types.classes.contains_key(bname)
+                    {
+                        self.push(IrInst::MakeEnum {
+                            temp: t,
+                            name: bname.clone(),
+                            variant: field.clone(),
+                            payload: None,
+                        });
+                        return t;
+                    }
+                    // namespace 限定的值位置（非调用位）：oracle 运行时 UndefinedName
+                    if self.types.namespaces.contains(bname) {
+                        self.fail_void(t, "namespace 限定的值（非调用位）", span);
+                        return t;
+                    }
+                }
+                // 推断枚举字面量 `.variant`（base=VoidLit）：L1 兜底名 __inferred__（对齐 oracle）
+                if matches!(base.as_ref(), Expr::VoidLit(_)) {
+                    self.push(IrInst::MakeEnum {
+                        temp: t,
+                        name: "__inferred__".into(),
+                        variant: field.clone(),
+                        payload: None,
+                    });
+                    return t;
+                }
+                let b = self.lower_expr(base);
+                self.push(IrInst::Field { temp: t, base: b, field: field.clone() });
+            }
+            Expr::Field { base, field, .. } => {
+                let b = self.lower_expr(base);
+                self.push(IrInst::Field { temp: t, base: b, field: field.clone() });
+            }
+            Expr::Index { base, indices, span } => {
+                let b = self.lower_expr(base);
+                if indices.len() == 1 {
+                    if let Expr::Binary(BinOp::Range, lo, hi, _) = &indices[0] {
+                        // 切片 `base[lo..hi]`（hi 可为 `__end__` 开区间哨兵）
+                        let lo_t = self.lower_expr(lo);
+                        let hi_t = self.lower_slice_end(hi);
+                        self.push(IrInst::SliceOf { temp: t, base: b, lo: lo_t, hi: hi_t });
+                        return t;
+                    }
+                    let idx = self.lower_expr(&indices[0]);
+                    self.push(IrInst::Index { temp: t, base: b, index: idx });
+                } else {
+                    self.fail_void(t, "多索引访问（Table 行/列）", span);
+                }
+            }
+            // 指针（Phase 1）：`p.*` 解引用
+            Expr::Deref(inner, _) => {
+                let a = self.lower_expr(inner);
+                self.push(IrInst::Deref { temp: t, a });
+            }
+            // `&x`/`&mut x` 取址：变量 → AddrSlot 别名（写穿共享 cell）；
+            // 非 lvalue → AddrValue 快照（对齐 tree-walking `&expr` 兜底分支）
+            Expr::AddrOf(target, _, span) => match target.as_ref() {
+                Expr::Ident(name, _) => match self.resolve(name) {
+                    Some(slot) => self.push(IrInst::AddrSlot { temp: t, slot }),
+                    None => self.fail_void(t, "全局变量/常量取址", span),
+                },
+                _ => {
+                    let v = self.lower_expr(target);
+                    self.push(IrInst::AddrValue { temp: t, value: v });
+                }
+            },
+            Expr::Unwrap(inner, _) => {
+                let a = self.lower_expr(inner);
+                self.push(IrInst::Unwrap { temp: t, a });
+            }
             Expr::SwitchExpr { span, .. } => self.fail_void(t, "switch 表达式", span),
-            Expr::Block(_, span) => self.fail_void(t, "块表达式", span),
+            // 块表达式：值 = 最后语句（若为 Expr）的值；否则 void（对齐 exec_block_inner）
+            Expr::Block(b, _) => {
+                self.push_scope();
+                let n = b.stmts.len();
+                let last_is_value = matches!(b.stmts.last(), Some(Stmt::Expr(_)));
+                let m = n - usize::from(last_is_value);
+                for stmt in &b.stmts[..m] {
+                    self.lower_stmt(stmt);
+                }
+                if last_is_value {
+                    if let Some(Stmt::Expr(e)) = b.stmts.last() {
+                        let v = self.lower_expr(e);
+                        self.push(IrInst::Load { temp: t, slot: v });
+                    }
+                } else {
+                    self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                }
+                self.pop_scope();
+            }
             Expr::FnRef(_, span) => self.fail_void(t, "函数引用", span),
-            Expr::TupleDestructure(_, _, span) => self.fail_void(t, "元组解构", span),
-            Expr::Move(_, span) => self.fail_void(t, "`move` 所有权转移", span),
+            // 元组解构：源求值 + Destructure（运行时 arity 检查 + 逐元素克隆绑定）
+            Expr::TupleDestructure(names, e, _) => {
+                let v = self.lower_expr(e);
+                let mut slots = Vec::with_capacity(names.len());
+                for n in names {
+                    if n == "_" {
+                        slots.push(None);
+                    } else {
+                        let slot = self.alloc_slot();
+                        self.bind(n, slot);
+                        slots.push(Some(slot));
+                    }
+                }
+                self.push(IrInst::Destructure { value: v, slots });
+                self.push(IrInst::Const { temp: t, val: IrConst::Void });
+            }
+            Expr::Move(inner, _) => {
+                let a = self.lower_expr(inner);
+                self.push(IrInst::Move { temp: t, a });
+            }
             Expr::Closure { span, .. } => self.fail_void(t, "闭包", span),
         }
         t
     }
 
+    /// 切片上界降级：`__end__` 哨兵 → End 常量；否则普通表达式（对齐 parser open-end 标记）。
+    fn lower_slice_end(&mut self, hi: &Expr) -> usize {
+        if let Expr::IntLit { text, .. } = hi {
+            if text == "__end__" {
+                let t = self.alloc_slot();
+                self.push(IrInst::Const { temp: t, val: IrConst::End });
+                return t;
+            }
+        }
+        self.lower_expr(hi)
+    }
+
     /// 赋值：返回写入目标槽的新值临时槽（目标不在 IR 范围 → None）
     /// 复合赋值 x op= v → x = x op v（对齐解释器 eval_assign）
     fn lower_assign(&mut self, op: AssignOp, target: &Expr, value: &Expr) -> Option<usize> {
-        if let Expr::Ident(name, _) = target {
-            if let Some(slot) = self.resolve(name) {
+        match target {
+            Expr::Ident(name, _) => {
+                if let Some(slot) = self.resolve(name) {
+                    let v = self.lower_expr(value);
+                    return Some(match op {
+                        AssignOp::Set => {
+                            self.push(IrInst::Store { slot, temp: v });
+                            v
+                        }
+                        _ => {
+                            let cur = self.alloc_slot();
+                            self.push(IrInst::Load { temp: cur, slot });
+                            let r = self.alloc_slot();
+                            self.push(IrInst::Bin {
+                                op: to_assign_binop(op),
+                                temp: r,
+                                a: cur,
+                                b: v,
+                            });
+                            self.push(IrInst::Store { slot, temp: r });
+                            r
+                        }
+                    });
+                }
+            }
+            // 指针写穿（Phase 1）：`p.* = v` / `p.* op= v`（对齐 eval_assign Deref 臂）
+            Expr::Deref(inner, _) => {
+                let p = self.lower_expr(inner);
                 let v = self.lower_expr(value);
                 return Some(match op {
                     AssignOp::Set => {
-                        self.push(IrInst::Store { slot, temp: v });
+                        self.push(IrInst::StorePtr { target: p, value: v });
                         v
                     }
                     _ => {
                         let cur = self.alloc_slot();
-                        self.push(IrInst::Load { temp: cur, slot });
+                        self.push(IrInst::Deref { temp: cur, a: p });
                         let r = self.alloc_slot();
                         self.push(IrInst::Bin {
                             op: to_assign_binop(op),
@@ -741,11 +1119,118 @@ impl LowerCtx {
                             a: cur,
                             b: v,
                         });
-                        self.push(IrInst::Store { slot, temp: r });
+                        self.push(IrInst::StorePtr { target: p, value: r });
                         r
                     }
                 });
             }
+            // 字段赋值：`p.x = v`（仅 Class 目标；非 Class → TypeError——对齐 eval_assign Field 臂）
+            Expr::Field { base, field, .. } => {
+                let b = self.lower_expr(base);
+                let v = self.lower_expr(value);
+                self.push(IrInst::StoreField {
+                    base: b,
+                    field: field.clone(),
+                    value: v,
+                });
+                return Some(v);
+            }
+            Expr::Dot { base, field, .. } => {
+                // `Type.x = v`：类型名限定的赋值 → 运行时 BadAssign（对齐 eval_assign Dot 臂；
+                // base 保证非 Class → StoreField 抛 TypeError，错误名差异不影响 PASS/FAIL）
+                if let Expr::Ident(bname, _) = base.as_ref() {
+                    if self.types.enums.contains_key(bname)
+                        || self.types.classes.contains_key(bname)
+                        || self.types.namespaces.contains(bname)
+                    {
+                        let base_t = self.alloc_slot();
+                        self.push(IrInst::Const {
+                            temp: base_t,
+                            val: IrConst::Void,
+                        });
+                        let v = self.lower_expr(value);
+                        self.push(IrInst::StoreField {
+                            base: base_t,
+                            field: field.clone(),
+                            value: v,
+                        });
+                        return Some(v);
+                    }
+                }
+                let b = self.lower_expr(base);
+                let v = self.lower_expr(value);
+                self.push(IrInst::StoreField {
+                    base: b,
+                    field: field.clone(),
+                    value: v,
+                });
+                return Some(v);
+            }
+            // 索引赋值：单索引 → StoreIndex（复合 = 读 cur + binop + 写回）；
+            // 区间 → StoreSlice（仅 Set；复合/开区间 → 运行时错误）
+            Expr::Index { base, indices, span } => {
+                if indices.len() != 1 {
+                    self.fail("多索引赋值（Table 行/列）", span);
+                    return None;
+                }
+                if let Expr::Binary(BinOp::Range, lo, hi, _) = &indices[0] {
+                    // 复合区间赋值：对齐 oracle 仅允许 Set → 运行时 BadAssign
+                    if op != AssignOp::Set {
+                        let base_t = self.alloc_slot();
+                        self.push(IrInst::Const {
+                            temp: base_t,
+                            val: IrConst::Void,
+                        });
+                        let v = self.lower_expr(value);
+                        self.push(IrInst::StoreField {
+                            base: base_t,
+                            field: "".to_string(),
+                            value: v,
+                        });
+                        return Some(v);
+                    }
+                    let b = self.lower_expr(base);
+                    let lo_t = self.lower_expr(lo);
+                    let hi_t = self.lower_slice_end(hi);
+                    let v = self.lower_expr(value);
+                    self.push(IrInst::StoreSlice {
+                        base: b,
+                        lo: lo_t,
+                        hi: hi_t,
+                        value: v,
+                    });
+                    return Some(v);
+                }
+                let b = self.lower_expr(base);
+                if op == AssignOp::Set {
+                    let idx = self.lower_expr(&indices[0]);
+                    let v = self.lower_expr(value);
+                    self.push(IrInst::StoreIndex {
+                        base: b,
+                        index: idx,
+                        value: v,
+                    });
+                    return Some(v);
+                }
+                // 复合：cur = base[idx]；r = cur op v；base[idx] = r（对齐 oracle 双求值 base）
+                let cur = self.lower_expr(target);
+                let v = self.lower_expr(value);
+                let r = self.alloc_slot();
+                self.push(IrInst::Bin {
+                    op: to_assign_binop(op),
+                    temp: r,
+                    a: cur,
+                    b: v,
+                });
+                let idx = self.lower_expr(&indices[0]);
+                self.push(IrInst::StoreIndex {
+                    base: b,
+                    index: idx,
+                    value: r,
+                });
+                return Some(r);
+            }
+            _ => {}
         }
         None
     }
@@ -938,9 +1423,333 @@ pub enum IrValue {
     Float(f64),
     Bool(bool),
     Str(Vec<u8>),
+    /// 可选值（`null` = `Opt(None)`，对齐 tree-walking `Value::Opt`）
+    Opt(Option<Box<IrValue>>),
+    /// 错误值（M4.2：码 + 名字；码 = M2.6 编译期错误码表，全局唯一）
+    Err { name: String, code: u32 },
+    /// 指针：共享堆 cell 索引（别名装置——对齐 tree-walking `Value::Ptr(Rc<RefCell>)`）
+    Ptr(usize),
+    /// 数组：`Cell::Elems` 的 cell 索引（元素为共享 cell——切片/写索引别名）
+    Arr(usize),
+    /// 切片视图：共享底层 `Cell::Elems` + 窗口；`data` 为数组 cell 索引
+    Slice {
+        data: usize,
+        start: usize,
+        len: usize,
+    },
+    /// 类实例：`Cell::Class` 的 cell 索引（字段为普通值——无字段级别名）
+    Class(usize),
+    /// 枚举值（`Type.variant` 常量 或 `Type{variant = payload}`）
+    Enum {
+        name: String,
+        variant: String,
+        payload: Option<Box<IrValue>>,
+    },
+    /// 开区间切片 `arr[a..]` 的上界哨兵
+    End,
     Void,
-    Null,
-    Err(String),
+}
+
+// ---------- 堆/单元模型（Phase 1：别名与 tree-walking `Rc<RefCell<Value>>` 对齐） ----------
+
+/// 堆单元（cell）：槽持有的共享可变数据。槽 → cell 索引（[`Frame`]），
+/// 指针 = `IrValue::Ptr(cell)`——多槽/多指针可共享同一 cell，写穿即别名。
+#[derive(Debug, Clone)]
+pub enum Cell {
+    /// 普通值单元
+    Value(IrValue),
+    /// 数组底层（Phase 2）：元素 cell 索引（共享——切片/写索引/别名共用底层）
+    Elems(Vec<usize>),
+    /// 类实例（Phase 2）：类型名 + 字段 → 字段 cell 索引（字段为普通值，无别名）
+    Class {
+        name: String,
+        fields: HashMap<String, usize>,
+    },
+    // Phase 3 起扩展：Bytes(Vec<u8>)、Closure{..}、Iter{..}
+}
+
+/// 运行时堆：跨帧共享的 cell 池（指针可跨帧存活——如传入函数后写穿调用方槽）。
+#[derive(Debug, Default)]
+pub struct Ctx {
+    pub cells: Vec<Cell>,
+}
+
+impl Ctx {
+    fn alloc(&mut self, cell: Cell) -> usize {
+        self.cells.push(cell);
+        self.cells.len() - 1
+    }
+    /// 读槽值（槽 → cell → value；槽/元素/字段 cell 恒为 `Cell::Value`——不变量）
+    fn get(&self, frame: &Frame, slot: usize) -> &IrValue {
+        match &self.cells[frame.cells[slot]] {
+            Cell::Value(v) => v,
+            _ => unreachable!("slot cell is not a value cell"),
+        }
+    }
+    /// 写槽值
+    fn set(&mut self, frame: &Frame, slot: usize, v: IrValue) {
+        self.cells[frame.cells[slot]] = Cell::Value(v);
+    }
+    /// 读 cell 值（指针目标/数组元素/类字段）
+    fn cell_value(&self, cell: usize) -> &IrValue {
+        match &self.cells[cell] {
+            Cell::Value(v) => v,
+            _ => unreachable!("cell is not a value cell"),
+        }
+    }
+    /// 写 cell 值（写穿）
+    fn set_cell(&mut self, cell: usize, v: IrValue) {
+        self.cells[cell] = Cell::Value(v);
+    }
+    /// 数组底层长度（Phase 2）
+    fn elems_len(&self, cell: usize) -> usize {
+        match &self.cells[cell] {
+            Cell::Elems(e) => e.len(),
+            _ => 0,
+        }
+    }
+}
+
+/// 解引用：Ptr → pointee（一层，对齐 tree-walking `deref_value`）；非 Ptr → 恒等
+fn deref_value<'a>(ctx: &'a Ctx, v: &'a IrValue) -> &'a IrValue {
+    match v {
+        IrValue::Ptr(c) => match &ctx.cells[*c] {
+            Cell::Value(v) => v,
+            _ => v,
+        },
+        other => other,
+    }
+}
+
+/// 索引值 → usize（负/非整 → BadIndex，对齐 tree-walking `as_index`）
+fn as_index(ctx: &Ctx, v: &IrValue) -> R<usize> {
+    match deref_value(ctx, v) {
+        IrValue::Int(i) if *i >= 0 => Ok(*i as usize),
+        _ => Err(IrError::msg("BadIndex", "bad index")),
+    }
+}
+
+// ---------- Phase 2 聚合运行时语义（对齐 tree-walking eval_field/eval_index/等） ----------
+
+/// 字段读取：Class 字段 / Str/Arr/Slice/Map `.len` 内建字段；无字段 → NoField
+fn field_value(ctx: &Ctx, b: &IrValue, field: &str) -> R<IrValue> {
+    match b {
+        IrValue::Class(c) => match &ctx.cells[*c] {
+            Cell::Class { name, fields } => {
+                // Map 内建字段：len
+                if name == "Map" && field == "len" {
+                    return Ok(IrValue::Int(fields.len() as i128));
+                }
+                match fields.get(field) {
+                    Some(fc) => Ok(ctx.cell_value(*fc).clone()),
+                    None => Err(IrError::msg("NoField", format!("no field `{field}`"))),
+                }
+            }
+            _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
+        },
+        IrValue::Str(s) => {
+            if field == "len" {
+                Ok(IrValue::Int(s.len() as i128))
+            } else {
+                Err(IrError::msg("NoField", format!("no field `{field}`")))
+            }
+        }
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => {
+                if field == "len" {
+                    Ok(IrValue::Int(e.len() as i128))
+                } else {
+                    Err(IrError::msg("NoField", format!("no field `{field}`")))
+                }
+            }
+            _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
+        },
+        IrValue::Slice { len, .. } => {
+            if field == "len" {
+                Ok(IrValue::Int(*len as i128))
+            } else {
+                Err(IrError::msg("NoField", format!("no field `{field}`")))
+            }
+        }
+        _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
+    }
+}
+
+/// 字段写入：仅 Class 目标（非 Class → TypeError）；字段为普通值——写入即替换
+fn store_field(ctx: &mut Ctx, b: &IrValue, field: &str, v: IrValue) -> R<()> {
+    let c = match b {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "store to non-class")),
+    };
+    // 先分配新字段 cell，避免在 cells 的可变借用内再次借用 ctx
+    let nc = ctx.alloc(Cell::Value(v));
+    match &mut ctx.cells[c] {
+        Cell::Class { fields, .. } => {
+            fields.insert(field.to_string(), nc);
+            Ok(())
+        }
+        _ => Err(IrError::msg("TypeError", "store to non-class")),
+    }
+}
+
+/// 索引读取：Arr/Slice 元素（克隆值）、Str 字节；越界 → IndexOutOfBounds；非可索引 → NotIndexable
+fn index_value(ctx: &Ctx, b: &IrValue, i: usize) -> R<IrValue> {
+    match b {
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => {
+                if i >= e.len() {
+                    return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+                }
+                Ok(ctx.cell_value(e[i]).clone())
+            }
+            _ => Err(IrError::msg("NotIndexable", "not indexable")),
+        },
+        IrValue::Str(s) => {
+            if i >= s.len() {
+                return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+            }
+            Ok(IrValue::Int(s[i] as i128))
+        }
+        IrValue::Slice { data, start, len } => {
+            if i >= *len {
+                return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+            }
+            match &ctx.cells[*data] {
+                Cell::Elems(e) => Ok(ctx.cell_value(e[*start + i]).clone()),
+                _ => Err(IrError::msg("NotIndexable", "not indexable")),
+            }
+        }
+        _ => Err(IrError::msg("NotIndexable", "not indexable")),
+    }
+}
+
+/// 索引写入：仅 Arr 目标（非 Arr → TypeError）；写穿元素 cell（切片/视图共享）
+fn store_index(ctx: &mut Ctx, b: &IrValue, i: usize, v: IrValue) -> R<()> {
+    let ec = match b {
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => {
+                if i >= e.len() {
+                    return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+                }
+                e[i]
+            }
+            _ => return Err(IrError::msg("TypeError", "store to non-array")),
+        },
+        _ => return Err(IrError::msg("TypeError", "store to non-array")),
+    };
+    ctx.set_cell(ec, v);
+    Ok(())
+}
+
+/// 切片：Arr → 共享视图；Str → 字节拷贝；Slice → 重切片；越界 → IndexOutOfBounds
+fn slice_of(ctx: &Ctx, b: &IrValue, lo: usize, hi: usize, open_end: bool) -> R<IrValue> {
+    match b {
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => {
+                let total = e.len();
+                let h = if open_end { total } else { hi };
+                if h > total || lo > total {
+                    return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
+                }
+                Ok(IrValue::Slice {
+                    data: *c,
+                    start: lo,
+                    len: h.saturating_sub(lo),
+                })
+            }
+            _ => Err(IrError::msg("NotIndexable", "not indexable")),
+        },
+        IrValue::Str(s) => {
+            let bytes = s.clone();
+            let h = if open_end { bytes.len() } else { hi };
+            if h > bytes.len() || lo > bytes.len() {
+                return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
+            }
+            Ok(IrValue::Str(bytes[lo..h].to_vec()))
+        }
+        IrValue::Slice { data, start, len } => {
+            let total = *len;
+            let h = if open_end { total } else { hi };
+            if h > total || lo > total {
+                return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
+            }
+            Ok(IrValue::Slice {
+                data: *data,
+                start: *start + lo,
+                len: h.saturating_sub(lo),
+            })
+        }
+        _ => Err(IrError::msg("NotIndexable", "not indexable")),
+    }
+}
+
+/// 切片写回：仅 Arr 目标且仅 Set（其余 → TypeError/BadAssign，由调用方判定）；
+/// 源元素从 lo 起写入目标，受目标长度约束（非 Arr 源静默无操作——对齐 oracle）。
+fn store_slice(ctx: &mut Ctx, b: &IrValue, lo: usize, hi: usize, v: &IrValue) -> R<()> {
+    let c = match b {
+        IrValue::Arr(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "store to non-array")),
+    };
+    let total = ctx.elems_len(c);
+    if hi > total || lo > total {
+        return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
+    }
+    // 源元素值快照（先克隆，避免可变借用冲突）
+    let src_vals: Vec<IrValue> = match v {
+        IrValue::Arr(sc) => match &ctx.cells[*sc] {
+            Cell::Elems(e) => e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let target_cells: Vec<usize> = match &ctx.cells[c] {
+        Cell::Elems(e) => e.clone(),
+        _ => return Err(IrError::msg("TypeError", "store to non-array")),
+    };
+    for (k, sv) in src_vals.iter().enumerate() {
+        if lo + k < total {
+            ctx.set_cell(target_cells[lo + k], sv.clone());
+        }
+    }
+    Ok(())
+}
+
+/// 数组深比较（元素按值比较，递归）
+fn arr_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
+    let (ae, be) = match (&ctx.cells[a], &ctx.cells[b]) {
+        (Cell::Elems(x), Cell::Elems(y)) => (x.clone(), y.clone()),
+        _ => return false,
+    };
+    ae.len() == be.len()
+        && ae
+            .iter()
+            .zip(be.iter())
+            .all(|(x, y)| ctx.cell_value(*x).value_eq(ctx, ctx.cell_value(*y)))
+}
+
+/// 类深比较：类型名相同 + 字段数相同 + 每字段按值相等
+fn class_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
+    let (an, af) = match &ctx.cells[a] {
+        Cell::Class { name, fields } => (name.clone(), fields.clone()),
+        _ => return false,
+    };
+    let (bn, bf) = match &ctx.cells[b] {
+        Cell::Class { name, fields } => (name.clone(), fields.clone()),
+        _ => return false,
+    };
+    if an != bn || af.len() != bf.len() {
+        return false;
+    }
+    af.iter().all(|(k, fc)| {
+        bf.get(k)
+            .map_or(false, |bc| ctx.cell_value(*fc).value_eq(ctx, ctx.cell_value(*bc)))
+    })
+}
+
+/// 帧：槽 → cell 索引（别名关键装置——`&x` 即 `Ptr(frame.cells[slot_of_x])`）。
+#[derive(Debug, Clone)]
+pub struct Frame {
+    pub cells: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -967,25 +1776,75 @@ impl IrValue {
             IrValue::Int(i) => *i != 0,
             IrValue::Float(f) => *f != 0.0,
             IrValue::Str(s) => !s.is_empty(),
-            IrValue::Null => false,
+            IrValue::Opt(Some(v)) => v.as_bool(),
+            // 指针恒真（对齐 tree-walking `Value::Ptr(_) => true`）
+            IrValue::Ptr(_) => true,
             _ => true,
         }
     }
     fn is_err(&self) -> bool {
-        matches!(self, IrValue::Err(_))
+        matches!(self, IrValue::Err { .. })
     }
-    fn display(&self) -> String {
+    fn display(&self, ctx: &Ctx) -> String {
         match self {
             IrValue::Int(i) => i.to_string(),
-            IrValue::Float(f) => f.to_string(),
+            IrValue::Float(f) => {
+                if f.fract() == 0.0 && f.is_finite() && f.abs() < 1e15 {
+                    format!("{f:.1}")
+                } else {
+                    f.to_string()
+                }
+            }
             IrValue::Bool(b) => b.to_string(),
             IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+            IrValue::Opt(Some(v)) => format!("?{}", v.display(ctx)),
+            IrValue::Opt(None) => "null".into(),
+            IrValue::Err { name, .. } => format!("error.{name}"),
+            // 指针显示 pointee（对齐 tree-walking `Value::Ptr(p) => p.borrow().display()`）
+            IrValue::Ptr(c) => ctx.cell_value(*c).display(ctx),
+            IrValue::Arr(c) => match &ctx.cells[*c] {
+                Cell::Elems(e) => {
+                    let items: Vec<String> =
+                        e.iter().map(|ec| ctx.cell_value(*ec).display(ctx)).collect();
+                    format!("[{}]", items.join(", "))
+                }
+                _ => "[]".into(),
+            },
+            IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
+                Cell::Elems(e) => {
+                    let items: Vec<String> = e[*start..*start + *len]
+                        .iter()
+                        .map(|ec| ctx.cell_value(*ec).display(ctx))
+                        .collect();
+                    format!("[{}]", items.join(", "))
+                }
+                _ => "[]".into(),
+            },
+            IrValue::Class(c) => match &ctx.cells[*c] {
+                Cell::Class { name, fields } => {
+                    let items: Vec<String> = fields
+                        .iter()
+                        .map(|(k, fc)| {
+                            format!("{k} = {}", ctx.cell_value(*fc).display(ctx))
+                        })
+                        .collect();
+                    format!("{name} {{ {} }}", items.join(", "))
+                }
+                _ => "void".into(),
+            },
+            IrValue::Enum {
+                name,
+                variant,
+                payload,
+            } => match payload {
+                Some(p) => format!("{name}.{variant} = {}", p.display(ctx)),
+                None => format!("{name}.{variant}"),
+            },
+            IrValue::End => "end".into(),
             IrValue::Void => "void".into(),
-            IrValue::Null => "null".into(),
-            IrValue::Err(n) => format!("error.{n}"),
         }
     }
-    fn value_eq(&self, other: &IrValue) -> bool {
+    fn value_eq(&self, ctx: &Ctx, other: &IrValue) -> bool {
         match (self, other) {
             (IrValue::Int(a), IrValue::Int(b)) => a == b,
             (IrValue::Int(a), IrValue::Float(b)) => *a as f64 == *b,
@@ -993,9 +1852,93 @@ impl IrValue {
             (IrValue::Float(a), IrValue::Float(b)) => a == b,
             (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
             (IrValue::Str(a), IrValue::Str(b)) => a == b,
-            (IrValue::Null, IrValue::Null) => true,
+            (IrValue::Opt(a), IrValue::Opt(b)) => match (a, b) {
+                (Some(x), Some(y)) => x.value_eq(ctx, y),
+                (None, None) => true,
+                _ => false,
+            },
+            // M4.2：错误按「码」比较（全局唯一），非名字
+            (IrValue::Err { code: a, .. }, IrValue::Err { code: b, .. }) => a == b,
+            // 指针：同 cell = 同一目标（身份——对齐 tree-walking `Rc::ptr_eq`）；
+            // Ptr 与普通值比较时解引用后比较（对齐 `(Ptr, b) => deref(a).value_eq(b)`）
+            (IrValue::Ptr(a), IrValue::Ptr(b)) => a == b,
+            (IrValue::Ptr(a), b) => ctx.cell_value(*a).value_eq(ctx, b),
+            (a, IrValue::Ptr(b)) => a.value_eq(ctx, ctx.cell_value(*b)),
+            // ---- Phase 2 聚合 ----
+            (IrValue::Arr(a), IrValue::Arr(b)) => arr_eq(ctx, *a, *b),
+            (
+                IrValue::Slice {
+                    data: da,
+                    start: sa,
+                    len: la,
+                },
+                IrValue::Slice {
+                    data: db,
+                    start: sb,
+                    len: lb,
+                },
+            ) => {
+                if la != lb {
+                    return false;
+                }
+                let (da_e, db_e) = match (&ctx.cells[*da], &ctx.cells[*db]) {
+                    (Cell::Elems(x), Cell::Elems(y)) => (x.clone(), y.clone()),
+                    _ => return false,
+                };
+                (0..*la).all(|i| {
+                    ctx.cell_value(da_e[*sa + i])
+                        .value_eq(ctx, ctx.cell_value(db_e[*sb + i]))
+                })
+            }
+            (IrValue::Slice { data, start, len }, IrValue::Arr(b)) => {
+                let d = match &ctx.cells[*data] {
+                    Cell::Elems(x) => x.clone(),
+                    _ => return false,
+                };
+                let (a_e, b_e) = (d, match &ctx.cells[*b] {
+                    Cell::Elems(x) => x.clone(),
+                    _ => return false,
+                });
+                *len == b_e.len()
+                    && (0..*len)
+                        .all(|i| ctx.cell_value(a_e[*start + i]).value_eq(ctx, ctx.cell_value(b_e[i])))
+            }
+            (IrValue::Arr(a), IrValue::Slice { data, start, len }) => {
+                let d = match &ctx.cells[*data] {
+                    Cell::Elems(x) => x.clone(),
+                    _ => return false,
+                };
+                let (a_e, d_e) = (match &ctx.cells[*a] {
+                    Cell::Elems(x) => x.clone(),
+                    _ => return false,
+                }, d);
+                a_e.len() == *len
+                    && (0..*len)
+                        .all(|i| ctx.cell_value(a_e[i]).value_eq(ctx, ctx.cell_value(d_e[*start + i])))
+            }
+            (IrValue::Class(a), IrValue::Class(b)) => class_eq(ctx, *a, *b),
+            (
+                IrValue::Enum {
+                    name: an,
+                    variant: av,
+                    payload: ap,
+                },
+                IrValue::Enum {
+                    name: bn,
+                    variant: bv,
+                    payload: bp,
+                },
+            ) => {
+                an == bn
+                    && av == bv
+                    && match (ap, bp) {
+                        (Some(x), Some(y)) => x.value_eq(ctx, y),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            (IrValue::End, IrValue::End) => true,
             (IrValue::Void, IrValue::Void) => true,
-            (IrValue::Err(a), IrValue::Err(b)) => a == b,
             _ => false,
         }
     }
@@ -1004,24 +1947,33 @@ impl IrValue {
 /// 递归深度上限（对齐 tree-walking `MAX_CALL_DEPTH`——双模式一致）
 pub const MAX_CALL_DEPTH: usize = 1000;
 
-/// 执行模块中名为 entry 的函数（测试/入口），参数按 IrModule 函数签名传入
+/// 执行模块中名为 entry 的函数（测试/入口），参数按 IrModule 函数签名传入。
+/// 每次调用建独立 [`Ctx`]（Phase 5 引入 IrRuntime 共享堆/全局）。
 pub fn run_ir(module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
     let idx = *module
         .func_index
         .get(entry)
         .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
-    exec_func(module, idx, args, 0)
+    let mut ctx = Ctx::default();
+    exec_func(&mut ctx, module, idx, args, 0)
 }
 
-fn exec_func(module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R<IrValue> {
+/// 执行一个函数：堆/单元模型（Phase 1）。每槽分配共享 cell，`&x` = `Ptr(cell)`
+/// 可跨帧存活（传入函数后写穿调用方槽——别名语义对齐 tree-walking `Rc<RefCell>`）。
+fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R<IrValue> {
     if depth >= MAX_CALL_DEPTH {
         return Err(IrError::msg("StackOverflow", "maximum call depth exceeded"));
     }
     let func = &module.funcs[idx];
-    let mut slots: Vec<IrValue> = vec![IrValue::Void; func.n_slots];
+    let mut frame = Frame {
+        cells: Vec::with_capacity(func.n_slots),
+    };
+    for _ in 0..func.n_slots {
+        frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
+    }
     for (i, ps) in func.params.iter().enumerate() {
         if i < args.len() {
-            slots[*ps] = args[i].clone();
+            ctx.set(&frame, *ps, args[i].clone());
         }
     }
     let mut pc = 0usize;
@@ -1035,29 +1987,36 @@ fn exec_func(module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R
         }
         match &func.body[pc] {
             IrInst::Const { temp, val } => {
-                slots[*temp] = match val {
+                ctx.set(&frame, *temp, match val {
                     IrConst::Int(i) => IrValue::Int(*i),
                     IrConst::Float(f) => IrValue::Float(*f),
                     IrConst::Bool(b) => IrValue::Bool(*b),
                     IrConst::Str(s) => IrValue::Str(s.clone().into_bytes()),
                     IrConst::Void => IrValue::Void,
-                    IrConst::Null => IrValue::Null,
-                    IrConst::Err(n) => IrValue::Err(n.clone()),
-                };
+                    IrConst::Null => IrValue::Opt(None),
+                    IrConst::Err { name, code } => IrValue::Err {
+                        name: name.clone(),
+                        code: *code,
+                    },
+                    IrConst::End => IrValue::End,
+                });
             }
             IrInst::Load { temp, slot } => {
-                slots[*temp] = slots[*slot].clone();
+                let v = ctx.get(&frame, *slot).clone();
+                ctx.set(&frame, *temp, v);
             }
             IrInst::Store { slot, temp } => {
-                slots[*slot] = slots[*temp].clone();
+                let v = ctx.get(&frame, *temp).clone();
+                ctx.set(&frame, *slot, v);
             }
             IrInst::Bin { op, temp, a, b } => {
-                let (av, bv) = (slots[*a].clone(), slots[*b].clone());
-                slots[*temp] = binop(*op, &av, &bv)?;
+                let (av, bv) = (ctx.get(&frame, *a).clone(), ctx.get(&frame, *b).clone());
+                let v = binop(*op, ctx, &av, &bv)?;
+                ctx.set(&frame, *temp, v);
             }
             IrInst::Un { op, temp, a } => {
-                let av = slots[*a].clone();
-                slots[*temp] = match op {
+                let av = ctx.get(&frame, *a).clone();
+                ctx.set(&frame, *temp, match op {
                     IrUnOp::Neg => match av {
                         IrValue::Int(i) => IrValue::Int(-i),
                         IrValue::Float(f) => IrValue::Float(-f),
@@ -1068,51 +2027,55 @@ fn exec_func(module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R
                         IrValue::Int(i) => IrValue::Int(!i),
                         _ => return Err(IrError::msg("TypeError", "~")),
                     },
-                };
+                });
             }
             IrInst::Jump { label } => {
                 pc = find_label(func, *label)?;
                 continue;
             }
             IrInst::JumpIf { temp, label } => {
-                if slots[*temp].as_bool() {
+                if ctx.get(&frame, *temp).as_bool() {
                     pc = find_label(func, *label)?;
                     continue;
                 }
             }
             IrInst::JumpIfNot { temp, label } => {
-                if !slots[*temp].as_bool() {
+                if !ctx.get(&frame, *temp).as_bool() {
                     pc = find_label(func, *label)?;
                     continue;
                 }
             }
             IrInst::JumpIfErr { temp, label } => {
-                if slots[*temp].is_err() {
+                if ctx.get(&frame, *temp).is_err() {
                     pc = find_label(func, *label)?;
                     continue;
                 }
             }
             IrInst::JumpIfNull { temp, label } => {
-                if slots[*temp] == IrValue::Null {
+                if matches!(ctx.get(&frame, *temp), IrValue::Opt(None)) {
                     pc = find_label(func, *label)?;
                     continue;
                 }
             }
             IrInst::Label { .. } => {}
             IrInst::Call { name, args, temp } => {
-                let arg_vals: Vec<IrValue> = args.iter().map(|a| slots[*a].clone()).collect();
+                let arg_vals: Vec<IrValue> =
+                    args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
                 let callee_idx = *module
                     .func_index
                     .get(name)
                     .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
-                slots[*temp] = exec_func(module, callee_idx, &arg_vals, depth + 1)?;
+                let v = exec_func(ctx, module, callee_idx, &arg_vals, depth + 1)?;
+                ctx.set(&frame, *temp, v);
             }
             IrInst::CallBuiltin { name, args, temp } => {
-                let arg_vals: Vec<IrValue> = args.iter().map(|a| slots[*a].clone()).collect();
-                slots[*temp] = call_assert_builtin(name, &arg_vals, &mut fail)?;
+                let arg_vals: Vec<IrValue> =
+                    args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
+                let v = call_assert_builtin(name, ctx, &arg_vals, &mut fail)?;
+                ctx.set(&frame, *temp, v);
             }
             IrInst::Return { temp } => {
-                let v = slots[*temp].clone();
+                let v = ctx.get(&frame, *temp).clone();
                 if let Some(f) = fail {
                     return Err(IrError::msg("AssertFailed", f));
                 }
@@ -1123,6 +2086,157 @@ fn exec_func(module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R
                     return Err(IrError::msg("AssertFailed", f));
                 }
                 return Ok(IrValue::Void);
+            }
+            // ---- Phase 1 指针 ----
+            IrInst::AddrSlot { temp, slot } => {
+                let cell = frame.cells[*slot];
+                ctx.set(&frame, *temp, IrValue::Ptr(cell));
+            }
+            IrInst::AddrValue { temp, value } => {
+                // 非 lvalue 取址快照：求值结果复制进新 cell（对齐 tree-walking `&expr` 兜底）
+                let v = ctx.get(&frame, *value).clone();
+                let cell = ctx.alloc(Cell::Value(v));
+                ctx.set(&frame, *temp, IrValue::Ptr(cell));
+            }
+            IrInst::Deref { temp, a } => {
+                // 解引用：Ptr → pointee；非 Ptr → 恒等（对齐 tree-walking `deref_value`）
+                let v = match ctx.get(&frame, *a) {
+                    IrValue::Ptr(cell) => ctx.cell_value(*cell).clone(),
+                    other => other.clone(),
+                };
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::StorePtr { target, value } => {
+                let t = ctx.get(&frame, *target).clone();
+                let v = ctx.get(&frame, *value).clone();
+                match t {
+                    IrValue::Ptr(cell) => ctx.set_cell(cell, v),
+                    _ => return Err(IrError::msg("BadAssign", "store to non-pointer")),
+                }
+            }
+            // ---- Phase 2 聚合 ----
+            IrInst::Field { temp, base, field } => {
+                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let v = field_value(ctx, &bv, field)?;
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::StoreField { base, field, value } => {
+                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let v = ctx.get(&frame, *value).clone();
+                store_field(ctx, &bv, field, v)?;
+            }
+            IrInst::Index { temp, base, index } => {
+                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
+                let i = as_index(ctx, &iv)?;
+                let v = index_value(ctx, &bv, i)?;
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::StoreIndex { base, index, value } => {
+                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
+                let i = as_index(ctx, &iv)?;
+                let v = ctx.get(&frame, *value).clone();
+                store_index(ctx, &bv, i, v)?;
+            }
+            IrInst::SliceOf { temp, base, lo, hi } => {
+                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
+                let lo_i = as_index(ctx, &lo_v)?;
+                let hi_v = ctx.get(&frame, *hi).clone();
+                let (hi_i, open) = match hi_v {
+                    IrValue::End => (0, true),
+                    other => {
+                        let d = deref_value(ctx, &other).clone();
+                        (as_index(ctx, &d)?, false)
+                    }
+                };
+                let v = slice_of(ctx, &bv, lo_i, hi_i, open)?;
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::StoreSlice { base, lo, hi, value } => {
+                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
+                let lo_i = as_index(ctx, &lo_v)?;
+                let hi_v = ctx.get(&frame, *hi).clone();
+                // 开区间 `arr[a..] = v`：对齐 oracle（eval(hi=`__end__`) 报错）→ BadIndex
+                if matches!(hi_v, IrValue::End) {
+                    return Err(IrError::msg("BadIndex", "open-end store slice"));
+                }
+                let hi_d = deref_value(ctx, &hi_v).clone();
+                let hi_i = as_index(ctx, &hi_d)?;
+                let v = ctx.get(&frame, *value).clone();
+                store_slice(ctx, &bv, lo_i, hi_i, &v)?;
+            }
+            IrInst::MakeArr { temp, items } => {
+                let mut cells = Vec::with_capacity(items.len());
+                for it in items {
+                    let v = ctx.get(&frame, *it).clone();
+                    cells.push(ctx.alloc(Cell::Value(v)));
+                }
+                let c = ctx.alloc(Cell::Elems(cells));
+                ctx.set(&frame, *temp, IrValue::Arr(c));
+            }
+            IrInst::MakeClass { temp, ty, fields } => {
+                let mut fs = HashMap::new();
+                for (k, vt) in fields {
+                    let v = ctx.get(&frame, *vt).clone();
+                    fs.insert(k.clone(), ctx.alloc(Cell::Value(v)));
+                }
+                let c = ctx.alloc(Cell::Class {
+                    name: ty.clone(),
+                    fields: fs,
+                });
+                ctx.set(&frame, *temp, IrValue::Class(c));
+            }
+            IrInst::MakeEnum { temp, name, variant, payload } => {
+                let p = match payload {
+                    Some(pt) => Some(Box::new(ctx.get(&frame, *pt).clone())),
+                    None => None,
+                };
+                ctx.set(
+                    &frame,
+                    *temp,
+                    IrValue::Enum {
+                        name: name.clone(),
+                        variant: variant.clone(),
+                        payload: p,
+                    },
+                );
+            }
+            IrInst::Destructure { value, slots } => {
+                let v = deref_value(ctx, ctx.get(&frame, *value)).clone();
+                let elems = match v {
+                    IrValue::Arr(c) => match &ctx.cells[c] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
+                    },
+                    _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
+                };
+                if elems.len() != slots.len() {
+                    return Err(IrError::msg("TupleArity", "destructure arity mismatch"));
+                }
+                for (slot, elem) in slots.iter().zip(elems.iter()) {
+                    if let Some(s) = slot {
+                        let v = ctx.cell_value(*elem).clone();
+                        ctx.set(&frame, *s, v);
+                    }
+                }
+            }
+            IrInst::Move { temp, a } => {
+                let v = ctx.get(&frame, *a).clone();
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::Unwrap { temp, a } => {
+                let v = deref_value(ctx, ctx.get(&frame, *a)).clone();
+                let r = match v {
+                    IrValue::Opt(Some(inner)) => *inner,
+                    IrValue::Opt(None) => {
+                        return Err(IrError::msg("NullUnwrap", "unwrap of null"));
+                    }
+                    other => other,
+                };
+                ctx.set(&frame, *temp, r);
             }
         }
         pc += 1;
@@ -1141,7 +2255,7 @@ fn find_label(func: &IrFunc, id: usize) -> R<usize> {
         })
 }
 
-fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> R<IrValue> {
+fn binop(op: IrBinOp, ctx: &Ctx, a: &IrValue, b: &IrValue) -> R<IrValue> {
     match op {
         IrBinOp::Add
         | IrBinOp::Sub
@@ -1230,11 +2344,11 @@ fn binop(op: IrBinOp, a: &IrValue, b: &IrValue) -> R<IrValue> {
         }
         IrBinOp::Eq | IrBinOp::Ne | IrBinOp::Lt | IrBinOp::Le | IrBinOp::Gt | IrBinOp::Ge => {
             let r = match op {
-                IrBinOp::Eq => a.value_eq(b),
-                IrBinOp::Ne => !a.value_eq(b),
+                IrBinOp::Eq => a.value_eq(ctx, b),
+                IrBinOp::Ne => !a.value_eq(ctx, b),
                 IrBinOp::Lt => value_lt(a, b),
-                IrBinOp::Le => value_lt(a, b) || a.value_eq(b),
-                IrBinOp::Gt => !value_lt(a, b) && !a.value_eq(b),
+                IrBinOp::Le => value_lt(a, b) || a.value_eq(ctx, b),
+                IrBinOp::Gt => !value_lt(a, b) && !a.value_eq(ctx, b),
                 IrBinOp::Ge => !value_lt(a, b),
                 _ => false,
             };
@@ -1251,12 +2365,19 @@ fn value_lt(a: &IrValue, b: &IrValue) -> bool {
         (IrValue::Float(x), IrValue::Float(y)) => x < y,
         (IrValue::Str(x), IrValue::Str(y)) => x < y,
         (IrValue::Bool(x), IrValue::Bool(y)) => x < y,
+        // 指针序：cell 索引序（稳定全序——对齐 tree-walking 按 Rc 地址序）
+        (IrValue::Ptr(x), IrValue::Ptr(y)) => x < y,
         _ => false,
     }
 }
 
 /// 断言内建（IR 参考语义：失败记 fail，返回时抛 AssertFailed）
-fn call_assert_builtin(name: &str, args: &[IrValue], fail: &mut Option<String>) -> R<IrValue> {
+fn call_assert_builtin(
+    name: &str,
+    ctx: &Ctx,
+    args: &[IrValue],
+    fail: &mut Option<String>,
+) -> R<IrValue> {
     match name {
         "expect" => {
             if args.first().map_or(false, |v| v.as_bool()) {
@@ -1267,17 +2388,17 @@ fn call_assert_builtin(name: &str, args: &[IrValue], fail: &mut Option<String>) 
             }
         }
         "expect_eq" => {
-            if args.len() >= 2 && args[0].value_eq(&args[1]) {
+            if args.len() >= 2 && args[0].value_eq(ctx, &args[1]) {
                 Ok(IrValue::Void)
             } else {
-                let got = args.first().map(|v| v.display()).unwrap_or_default();
-                let want = args.get(1).map(|v| v.display()).unwrap_or_default();
+                let got = args.first().map(|v| v.display(ctx)).unwrap_or_default();
+                let want = args.get(1).map(|v| v.display(ctx)).unwrap_or_default();
                 *fail = Some(format!("expect_eq failed: got {got}, want {want}"));
                 Ok(IrValue::Void)
             }
         }
         "expect_neq" => {
-            if args.len() >= 2 && !args[0].value_eq(&args[1]) {
+            if args.len() >= 2 && !args[0].value_eq(ctx, &args[1]) {
                 Ok(IrValue::Void)
             } else {
                 *fail = Some("expect_neq failed".into());
@@ -1285,7 +2406,11 @@ fn call_assert_builtin(name: &str, args: &[IrValue], fail: &mut Option<String>) 
             }
         }
         "expect_error" => {
-            if args.len() >= 2 && args[0].is_err() && args[1].is_err() && args[0] == args[1] {
+            if args.len() >= 2
+                && args[0].is_err()
+                && args[1].is_err()
+                && args[0].value_eq(ctx, &args[1])
+            {
                 Ok(IrValue::Void)
             } else {
                 *fail = Some("expect_error failed".into());
@@ -1293,7 +2418,7 @@ fn call_assert_builtin(name: &str, args: &[IrValue], fail: &mut Option<String>) 
             }
         }
         "expect_eq_slices" => {
-            if args.len() >= 2 && args[0].value_eq(&args[1]) {
+            if args.len() >= 2 && args[0].value_eq(ctx, &args[1]) {
                 Ok(IrValue::Void)
             } else {
                 *fail = Some("expect_eq_slices failed".into());

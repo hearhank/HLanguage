@@ -22,7 +22,7 @@ fn move_closure_captures_copy() {
     // move 捕获：闭包持有 a 的副本，原绑定后续变更不影响闭包
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var a = 10;
     var f = move |v| v + a;
     a = 100;
@@ -37,7 +37,7 @@ fn read_closure_shares_slot() {
     // 只读捕获：共享槽，原绑定后续变更对闭包可见（与 move 捕获对照）
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var a = 10;
     var f = |v| v + a;
     a = 100;
@@ -52,7 +52,7 @@ fn mut_closure_writes_captured() {
     // mut 捕获：闭包内写入被捕获变量，对原绑定可见
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var total = 0;
     var acc = mut |v| { total = total + v; return total; };
     try expect_eq(acc(3), 3);
@@ -72,7 +72,7 @@ fn make() Fn1(i32) i32 {
     var base = 10;
     return move |v| v + base;
 }
-test fn t() !void {
+[test] fn t() !void {
     var f = make();
     try expect_eq(f(5), 15);
     try expect_eq(f(100), 110);

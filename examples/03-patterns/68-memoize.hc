@@ -29,7 +29,7 @@ fn main(io: Io) !void {
     io.print("{} {} {}\n", r1, r2, r3);
 }
 
-test fn memoized_cache() !void {
+[test] fn memoized_cache() !void {
     var memo: o Memo = alloc.init(Memo);
     var r1 = memo.get_or_compute(5, slow_square);
     var r2 = memo.get_or_compute(5, slow_square);   // 命中缓存

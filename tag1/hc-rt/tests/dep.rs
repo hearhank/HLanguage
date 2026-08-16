@@ -20,7 +20,7 @@ fn hidden(x: i32) i32 { return x + 100; }
     let main = parse(
         r#"
 using jsonlib;
-test fn dep_pub_fn_accessible_via_qualified_and_using() !void {
+[test] fn dep_pub_fn_accessible_via_qualified_and_using() !void {
     var a = jsonlib.double(21);
     try expect_eq(a, 42);
     var b = double(10);
@@ -51,7 +51,7 @@ fn hidden(x: i32) i32 { return x + 100; }
     let main = parse(
         r#"
 using jsonlib;
-test fn dep_non_pub_fn_not_visible() !void {
+[test] fn dep_non_pub_fn_not_visible() !void {
     var x = jsonlib.hidden(1);
     try expect_eq(x, 101);
 }
@@ -79,7 +79,7 @@ pub namespace util {
     );
     let main = parse(
         r#"
-test fn dep_pub_fn_in_namespace_via_prefix() !void {
+[test] fn dep_pub_fn_in_namespace_via_prefix() !void {
     var a = jsonlib.util.triple(5);
     try expect_eq(a, 15);
 }

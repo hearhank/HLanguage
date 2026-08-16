@@ -4,19 +4,19 @@
 //   - 实现方返回具体错误；调用方 catch 按需匹配
 //   - 普通函数仍用显式错误集（12.15）；anyerror 仅用于接口方法契约
 
-interface Parser {
+interface IParse {
     fn parse(self: *Self, data: &[u8]) anyerror!Value;
 }
 
 [continuous]
-class JsonParser: Parser {   // 无字段（连续）；实现 Parser
+class JsonParser: IParse {   // 无字段（连续）；实现 IParse
     fn parse(self: *Self, data: &[u8]) anyerror!Value {
         return json.parse(data) catch return error.InvalidJson;
     }
 }
 
 [continuous]
-class CsvParser: Parser {   // 无字段（连续）；实现 Parser
+class CsvParser: IParse {   // 无字段（连续）；实现 IParse
     fn parse(self: *Self, data: &[u8]) anyerror!Value {
         return csv.parse(data) catch return error.BadRow;
     }
@@ -40,7 +40,7 @@ fn main(io: Io) !void {
     io.print("parsed2: {}\n", v2);
 }
 
-test fn interface_error_contract() !void {
+[test] fn interface_error_contract() !void {
     var json_p = JsonParser{};
     var v = json_p.parse("{\"a\":1}") catch |err| {
         try expect(false);   // 合法 JSON 不应失败

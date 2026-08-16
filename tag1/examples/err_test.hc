@@ -8,6 +8,6 @@ fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     defer f.close();
     return io.fs.read_all(f, alloc);
 }
-test fn t() !void {
+[test] fn t() !void {
     try expect_error(error.NotFound, read_config(test_io, "config_missing_42.txt"));
 }

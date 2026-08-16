@@ -57,12 +57,12 @@ const Name = 值;          // 常量/类型别名（Q12 定案：const 不可变
 ### 测试函数（Q8 定案；Q-R11 修订：测试 = 标记为测试的函数）
 
 ```hc
-test fn add_basic() !void {
+[test] fn add_basic() !void {
     try expect(add(1, 2) == 3);
 }
 ```
 
-- **`test fn 名称() !void`**：标记为测试的函数——`hc test` 收集运行；可被普通代码调用/复用
+- **`[test("名称")] fn 名称() !void`**：标记为测试的函数——`hc test` 收集运行；可被普通代码调用/复用；参数可省（`[test]` 省略显示名 / `[test("名称")]` 指定显示名），显示名 = 名称 ?? 函数名
 - **测试失败 = error**（`try expect(...)` 传播即失败，报告带位置）
 - **断言 API（Q-T1 定案，归 std.debug、测试函数内隐式可用）**：`expect(cond)` / `expect_eq(a, b)`（失败输出期望 vs 实际）/ `expect_neq(a, b)` / `expect_error(error.e, expr)` / `expect_eq_slices(a, b)`（失败输出长度 + 首个差异位置）；`expect_eq` 支持 `==` 可比较类型（含 String 内容比较）；全部返回 `anyerror!void`
 - **输出与统计（Q-T2 定案）**：`[PASS]/[FAIL]/[SKIP] 文件名::测试名`；FAIL 附错误类型 + 断言位置；汇总 `N passed, M failed, K skipped (总耗时)`；失败数 > 0 → 退出码非零；失败不中止

@@ -37,7 +37,7 @@ fn error_set_member_ok() {
 fn read() FileError!i32 {
     return error.NotFound;
 }
-test fn t() !void {
+[test] fn t() !void {
     try expect_error(error.NotFound, read());
 }
 ",
@@ -65,7 +65,7 @@ fn anyerror_not_checked() {
         "fn read() anyerror!i32 {
     return error.AnyThing;
 }
-test fn t() !void {
+[test] fn t() !void {
     try expect_error(error.AnyThing, read());
 }
 ",
@@ -120,7 +120,7 @@ fn zero_arg_main_runs() {
 fn exit_type_variants() {
     // ExitType 内建枚举：Exit / Error 两个变体
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     try expect_eq(@intFromEnum(ExitType.Exit), 0);
     try expect_eq(@intFromEnum(ExitType.Error), 1);
 }\n",
@@ -176,7 +176,7 @@ fn unmarked_error_return_rejected_void() {
 fn marked_error_propagates_to_catch() {
     // 标记错误联合：错误沿调用链传播（try/裸传递），直到 catch 处理
     run_ok(
-        "const FileError = error{ NotFound };\nfn level3() FileError!i32 { return error.NotFound; }\nfn level2() FileError!i32 { var x = try level3(); return x; }\nfn level1() FileError!i32 { return level2(); }\ntest fn t() !void {\n    var v = level1() catch 42;\n    try expect_eq(v, 42);\n}\n",
+        "const FileError = error{ NotFound };\nfn level3() FileError!i32 { return error.NotFound; }\nfn level2() FileError!i32 { var x = try level3(); return x; }\nfn level1() FileError!i32 { return level2(); }\n[test] fn t() !void {\n    var v = level1() catch 42;\n    try expect_eq(v, 42);\n}\n",
     );
 }
 
@@ -184,7 +184,7 @@ fn marked_error_propagates_to_catch() {
 fn marked_error_catch_binds_name() {
     // catch |err| 捕获错误名（沿链传播的原始错误）
     run_ok(
-        "const FileError = error{ NotFound };\nfn a() FileError!i32 { return error.NotFound; }\nfn b() FileError!i32 { return a(); }\nfn c() FileError!i32 { var x = try b(); return x; }\ntest fn t() !void {\n    var got: i32 = 0;\n    var v = c() catch |err| {\n        try expect_eq(err, error.NotFound);\n        got = 1;\n        0;\n    };\n    try expect_eq(got, 1);\n}\n",
+        "const FileError = error{ NotFound };\nfn a() FileError!i32 { return error.NotFound; }\nfn b() FileError!i32 { return a(); }\nfn c() FileError!i32 { var x = try b(); return x; }\n[test] fn t() !void {\n    var got: i32 = 0;\n    var v = c() catch |err| {\n        try expect_eq(err, error.NotFound);\n        got = 1;\n        0;\n    };\n    try expect_eq(got, 1);\n}\n",
     );
 }
 
@@ -192,7 +192,7 @@ fn marked_error_catch_binds_name() {
 fn marked_error_payload_ok_path() {
     // 成功路径：错误联合函数返回 payload 不被 catch 拦截
     run_ok(
-        "const FileError = error{ NotFound };\nfn f(x: i32) FileError!i32 {\n    if (x < 0) return error.NotFound;\n    return x;\n}\ntest fn t() !void {\n    var v = try f(5);\n    try expect_eq(v, 5);\n}\n",
+        "const FileError = error{ NotFound };\nfn f(x: i32) FileError!i32 {\n    if (x < 0) return error.NotFound;\n    return x;\n}\n[test] fn t() !void {\n    var v = try f(5);\n    try expect_eq(v, 5);\n}\n",
     );
 }
 
@@ -212,7 +212,7 @@ fn root_error_carries_code() {
 #[test]
 fn error_code_matches_compile_table() {
     // M4.2：运行时错误值与编译期错误码表一致（hc::error_code_table）
-    let src = "const FileError = error{ Alpha, Beta };\nfn f() FileError!i32 {\n    return error.Beta;\n}\ntest fn t() !void {\n    var got = 0;\n    var v = f() catch |err| {\n        try expect_eq(err, error.Beta);\n        got = 1;\n        0;\n    };\n    try expect_eq(got, 1);\n}\n";
+    let src = "const FileError = error{ Alpha, Beta };\nfn f() FileError!i32 {\n    return error.Beta;\n}\n[test] fn t() !void {\n    var got = 0;\n    var v = f() catch |err| {\n        try expect_eq(err, error.Beta);\n        got = 1;\n        0;\n    };\n    try expect_eq(got, 1);\n}\n";
     let program = hc::parse_source(src).expect("parse");
     let table = hc::error_code_table(&program);
     assert_eq!(table.code_of("Alpha"), Some(0));
@@ -228,6 +228,6 @@ fn error_code_matches_compile_table() {
 fn dynamic_error_name_allocated() {
     // M4.2：运行时未登记错误名（io 错误）→ 动态分配码（不崩、可 catch 处理）
     run_ok(
-        "test fn t() !void {\n    var f = io.fs.read_file(\"__no_such_hc_test_file__\", alloc) catch |err| {\n        try expect_eq(err, error.NotFound);\n        return;\n    };\n}\n",
+        "[test] fn t() !void {\n    var f = io.fs.read_file(\"__no_such_hc_test_file__\", alloc) catch |err| {\n        try expect_eq(err, error.NotFound);\n        return;\n    };\n}\n",
     );
 }

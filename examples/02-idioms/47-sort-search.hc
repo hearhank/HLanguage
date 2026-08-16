@@ -16,14 +16,14 @@ fn main(io: Io) !void {
     io.print("index of 8 = {}\n", idx orelse -1);
 }
 
-test fn inplace_sort() !void {
+[test] fn inplace_sort() !void {
     var mut arr = [5, 2, 8, 1, 9, 3];
     sort(&mut arr);
     try expect_eq(arr[0], 1);
     try expect_eq(arr[5], 9);
 }
 
-test fn binary_search_find() !void {
+[test] fn binary_search_find() !void {
     var sorted = [1, 3, 5, 7, 9, 11];
     try expect_eq(binary_search(&sorted, 7).?, 3);
     try expect_eq(binary_search(&sorted, 6) orelse 0, 0);   // 未命中 → null

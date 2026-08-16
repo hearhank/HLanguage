@@ -16,6 +16,6 @@ fn main(io: Io) !void {
     abc.print(&io);
 }
 
-test fn hello_smoke() !void {
+[test] fn hello_smoke() !void {
     try expect(true);
 }

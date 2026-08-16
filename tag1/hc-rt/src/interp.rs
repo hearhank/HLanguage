@@ -138,6 +138,8 @@ struct FnDef {
     ret: Option<Type>,
     body: Block,
     is_test: bool,
+    /// `[test("名称")]`：测试显示名（省略时显示函数名）
+    test_name: Option<String>,
     #[allow(dead_code)] // 类型方法标记（tag1：方法经注入 self 路径调用）
     method_of: Option<String>,
     span: Span,
@@ -526,6 +528,7 @@ impl Interp {
                         ret: m.ret.clone(),
                         body: m.body.clone(),
                         is_test: false,
+                        test_name: None,
                         method_of: Some(qname.clone()),
                         span: m.span.clone(),
                     });
@@ -572,7 +575,7 @@ impl Interp {
         self.register_fn_decl_prefixed(d, "")
     }
 
-    /// 兄弟文件函数注册：跳过 test fn 与 main（M1.4 包加载）
+    /// 兄弟文件函数注册：跳过 [test] fn 与 main（M1.4 包加载）
     fn register_fn_decl_skip_entry(&mut self, d: &Decl) -> Result<()> {
         self.register_fn_decl_prefixed_filter(d, "", true, false)
     }
@@ -601,6 +604,7 @@ impl Interp {
                 ret,
                 body,
                 is_test,
+                test_name,
                 span,
                 ..
             } => {
@@ -620,6 +624,7 @@ impl Interp {
                     ret: ret.clone(),
                     body: body.clone(),
                     is_test: *is_test,
+                    test_name: test_name.clone(),
                     method_of: None,
                     span: span.clone(),
                 };
@@ -2513,6 +2518,23 @@ impl Interp {
                             let text = String::from_utf8_lossy(&s.borrow()).to_string();
                             let obj = self.parse_json_obj(&text)?;
                             return Ok(Value::class("Map", obj));
+                        }
+                        return Err(RtError::new("TypeError", Some(span.clone())));
+                    }
+                    // csv.parse(data)（序列化辅助）：CSV 文本 → 二维数组（行 × 列字符串）
+                    if bname == "csv" && field == "parse" {
+                        let v = self.eval(&args[0])?;
+                        let v = self.deref_value(v);
+                        if let Value::Str(s) = v {
+                            let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                            let rows = text
+                                .split('\n')
+                                .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                                .filter(|line| !line.is_empty())
+                                .map(|line| line.split(',').map(Value::str).collect::<Vec<_>>())
+                                .map(Value::arr)
+                                .collect::<Vec<_>>();
+                            return Ok(Value::arr(rows));
                         }
                         return Err(RtError::new("TypeError", Some(span.clone())));
                     }
@@ -5633,26 +5655,31 @@ impl Interp {
             self.fail_info = None;
             let r = self.exec_fn_body(&t.body, &[]);
             let _ = self.pop_scope();
+            // 显示名：名称 ?? 函数名
+            let display = t
+                .test_name
+                .clone()
+                .unwrap_or_else(|| t.name.clone());
             match r {
                 Ok(Value::Err { name, .. }) => {
                     // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL（不中止其它测试，Q-T2）
                     self.test_out
-                        .push(format!("[FAIL] {} (error.{})", t.name, name));
+                        .push(format!("[FAIL] {} (error.{})", display, name));
                     failed += 1;
                 }
                 Ok(_) => {
-                    self.test_out.push(format!("[PASS] {}", t.name));
+                    self.test_out.push(format!("[PASS] {}", display));
                     passed += 1;
                 }
                 Err(e) if e.name == "SkipTest" => {
-                    self.test_out.push(format!("[SKIP] {}", t.name));
+                    self.test_out.push(format!("[SKIP] {}", display));
                     skipped += 1;
                 }
                 Err(e) => {
                     let extra = self.fail_info.clone().unwrap_or_default();
                     self.test_out.push(format!(
                         "[FAIL] {} (error.{}{})",
-                        t.name,
+                        display,
                         e.name,
                         if extra.is_empty() {
                             "".into()

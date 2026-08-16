@@ -50,14 +50,14 @@ fn main(io: Io) !void {
     io.print("result = {}\n", eval(node));
 }
 
-test fn recursive_parser() !void {
+[test] fn recursive_parser() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
     var node = try parse(&test_io, "(5)", &pos, &arena);
     try expect_eq(eval(node), 5);
 }
 
-test fn parse_error() !void {
+[test] fn parse_error() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
     try expect_error(error.UnexpectedToken, parse(&test_io, ")", &pos, &arena));

@@ -37,7 +37,7 @@ fn main(io: Io) !void {
     io.print("{} {}\n", s1, s3);     // s1 未变
 }
 
-test fn scalar_and_continuous_copy() !void {
+[test] fn scalar_and_continuous_copy() !void {
     var a: i32 = 5;
     var b = a;
     b = 10;
@@ -49,7 +49,7 @@ test fn scalar_and_continuous_copy() !void {
     try expect_eq(p1.x, 1.0);   // 复制互不影响
 }
 
-test fn collection_explicit_copy() !void {
+[test] fn collection_explicit_copy() !void {
     var v1 = Vec(i32).init(alloc);
     v1.append(1);
     var v2 = copy(&v1);   // 显式深拷贝（B3）
@@ -58,7 +58,7 @@ test fn collection_explicit_copy() !void {
     try expect_eq(v2.len, 2);
 }
 
-test fn string_copy_owns() !void {
+[test] fn string_copy_owns() !void {
     var s1 = String.from("hi", alloc);
     var s2 = copy(&s1);   // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");   // concat 返回新 String

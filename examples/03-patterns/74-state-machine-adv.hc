@@ -29,7 +29,7 @@ fn main(io: Io) !void {
     io.print("{}\n", describe(failed));
 }
 
-test fn state_machine_description() !void {
+[test] fn state_machine_description() !void {
     var state = HttpState{connecting = 3};
     try expect_eq_slices(describe(state), "connecting");
     var failed = HttpState{failed = "timeout"};

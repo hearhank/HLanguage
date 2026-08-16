@@ -40,14 +40,14 @@ fn main(io: Io) !void {
     io.print("{}\n", msg);
 }
 
-test fn read_only_slice_view() !void {
+[test] fn read_only_slice_view() !void {
     var arr = [1, 2, 3, 4, 5];
     var s: &[i32] = &arr[1..3];
     try expect_eq(s.len, 2);
     try expect_eq(sum_slice(s), 5);
 }
 
-test fn writable_slice() !void {
+[test] fn writable_slice() !void {
     var arr = [1, 2, 3, 4, 5];
     var s2: &mut [i32] = &mut arr[0..2];
     zero_out(s2);
@@ -56,7 +56,7 @@ test fn writable_slice() !void {
     try expect_eq(arr[2], 3);   // 切片外不受影响
 }
 
-test fn string_literal_slice() !void {
+[test] fn string_literal_slice() !void {
     var msg: &[u8] = "hello";
     try expect_eq(msg.len, 5);
     try expect_eq_slices(msg, "hello");

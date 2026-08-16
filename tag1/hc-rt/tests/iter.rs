@@ -22,7 +22,7 @@ fn str_iter_bytes() {
     // String = 字节串：iter() 按字节 Int 立即求值
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var s = "abc";
     var bs = s.iter();
     try expect_eq(bs.len, 3);
@@ -38,7 +38,7 @@ fn str_filter_map() {
     // String 方法链：map 变换 / filter 筛选（字节 Int）
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var s = "a1b2";
     var upper = s.map(|b| b - 32);
     try expect_eq(upper.len, 4);
@@ -56,7 +56,7 @@ fn map_iter_entries() {
     // Map.iter() → KV 条目数组（key/value 字段，与 for |kv| 捕获一致）
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var m = Map(&[u8], i32).init(alloc);
     m.put("a", 1);
     m.put("b", 2);
@@ -74,7 +74,7 @@ fn slice_filter_map() {
     // 切片（arr[lo..hi]）方法链：filter/map
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var arr = [1, 2, 3, 4, 5];
     var sub = arr[1..4];
     var doubled = sub.map(|x| x * 2);

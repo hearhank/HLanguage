@@ -11,7 +11,7 @@ fn main(io: Io) !void {
     io.print("jsonlib.parse = {}\n", n);
 }
 
-test fn cross_package_pub_call() !void {
+[test] fn cross_package_pub_call() !void {
     try expect_eq(jsonlib.parse("{}"), 42);
     try expect_eq(parse("{}"), 42);   // using 平铺后可直接调用
 }

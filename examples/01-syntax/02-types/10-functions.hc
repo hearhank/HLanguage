@@ -20,7 +20,7 @@ fn main(io: Io) !void {
     io.print("{}\n", f(4));               // 16
 }
 
-test fn function_as_value() !void {
+[test] fn function_as_value() !void {
     try expect_eq(apply(square, 5), 25);
     try expect_eq(apply(cube, 3), 27);
     var f: Fn1(i32) i32 = square;

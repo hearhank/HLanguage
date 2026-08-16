@@ -685,7 +685,7 @@ fn execute_ir(module: &hc::ir::IrModule) -> Result<IrRunOutcome, String> {
     // 提示，正常；零参 main 可完整运行）
     match hc::ir::run_ir(module, "main", &[]) {
         // 未处理错误值到达入口（值通道）：panic 式失败
-        Ok(hc::ir::IrValue::Err(name)) => Ok(IrRunOutcome::UnhandledError(name)),
+        Ok(hc::ir::IrValue::Err { name, .. }) => Ok(IrRunOutcome::UnhandledError(name)),
         Ok(_) => Ok(IrRunOutcome::Success),
         Err(e) => {
             let mut msg = format!("error.{}: {}", e.name, e.message);
@@ -1281,10 +1281,10 @@ fn main() i32 {
 
     #[test]
     fn strip_test_funcs_remaps_index() {
-        // 剔除 test fn 后：扁平/限定名保留且索引重映射到正确函数；test fn 名移除
+        // 剔除 [test] fn 后：扁平/限定名保留且索引重映射到正确函数；[test] fn 名移除
         let mut m = hc::ir::lower(
             &hc::parse_source(
-                "test fn a() !void {}\nfn helper() i32 { return 1; }\nnamespace N { fn f() i32 { return 2; } }\n",
+                "[test] fn a() !void {}\nfn helper() i32 { return 1; }\nnamespace N { fn f() i32 { return 2; } }\n",
             )
             .unwrap(),
         )
@@ -1300,10 +1300,10 @@ fn main() i32 {
 
     #[test]
     fn test_runner_runs_only_entry_tests() {
-        // 兄弟文件 test fn 文件私有：测试跑器只调用入口的 test fn
-        let entry_src = "test fn a() !void {}\nfn main() i32 { return 0; }\n";
+        // 兄弟文件 [test] fn 文件私有：测试跑器只调用入口的 test fn
+        let entry_src = "[test] fn a() !void {}\nfn main() i32 { return 0; }\n";
         let entry = hc::parse_source(entry_src).unwrap();
-        let sib = hc::parse_source("test fn b() !void {}\n").unwrap();
+        let sib = hc::parse_source("[test] fn b() !void {}\n").unwrap();
         let ll = programs_to_test_ll(&entry, entry_src, &[&sib]).expect("codegen_tests");
         assert!(ll.contains("[RUN] a"), "应含入口测试 a 的运行标记");
         assert!(!ll.contains("[RUN] b"), "不应含兄弟测试 b 的运行标记");

@@ -25,7 +25,7 @@ fn main(io: Io) !void {
     }
 }
 
-test fn custom_comparator_sort() !void {
+[test] fn custom_comparator_sort() !void {
     var people = Vec(Person).init(alloc);
     people.append(alloc.init(Person{name = String.from("alice", alloc), age = 30}));
     people.append(alloc.init(Person{name = String.from("bob", alloc), age = 25}));

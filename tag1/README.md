@@ -63,7 +63,7 @@ hc run <file.hc>           运行脚本模式（解释执行）
 hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；标量子集）
 hc run --ir <file.hc>      用 IR 参考解释器运行（标量子集）
 hc test [--mode=interpret|compile] [file.hc|dir]
-                          运行 test fn（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
+                          运行 `[test]` 测试函数（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
 hc check <file.hc>         仅检查（词法/语法/装载）
 hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
 hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
@@ -83,7 +83,7 @@ hc --help
 | M3 双后端 | 共享 IR（`ir.rs`，唯一语义源）；字节码 VM（HBC2）；LLVM 原生后端（`llvm.rs`，emit-.ll + zig cc）；双模式一致性套件（CI 硬门槛） |
 | M4 内建 | 内存运行时（作用域 LIFO 销毁 + Arena）；错误/终止（错误码 + `@panic` + `ExitType`）；`@` 内建基础集（sizeOf/alignOf/offsetOf/typeOf/intCast/ptrCast/compileError/addWithOverflow 等）；序列化内建（to_bytes/from_bytes/to_json/from_json/box）；标量接口族（ICompare/INumber/IInt/IUint/IFloat + 运算符绑定）；迭代内建（IIterable 三态 + iter()）；Debug 悬垂标记 |
 | M5 标准库最小 | mem（Allocator/Arena）；collections（Vec/String/Map/Deque）；序列化封装；io 最小（print / fs / net TCP / 程序环境）；时间/调试 |
-| M6 测试 | `test fn` 体系；断言五件套；`[PASS]/[FAIL]/[SKIP]` + 汇总；失败非零退出码 |
+| M6 测试 | `[test]` 测试标记；断言五件套；`[PASS]/[FAIL]/[SKIP]` + 汇总；失败非零退出码 |
 | M7 工具链 | `hc build`（目录 = 包，多文件合并静态链接）/ `hc run` / `hc test`（含 `--mode=compile` 交叉验证）；build.zon 包基础（清单解析 + pub 边界 + 本地依赖装载） |
 
 ### 双后端
@@ -99,7 +99,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **239 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **242 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -112,7 +112,7 @@ hc --help
 | hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
 | hc-rt | `tests/consistency.rs`（M3.4 双模式一致） | 14 |
 | hc-rt | `tests/inference.rs`（类型推断） | 11 |
-| hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 7 |
+| hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 10 |
 | hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
 | hc-rt | `tests/closures.rs`（闭包） | 4 |
 | hc-rt | `tests/deque.rs`（Deque） | 4 |
@@ -126,10 +126,10 @@ hc --help
 
 补充：
 
-- **示例回归**（CLI `hc test examples/`）：**122/134 通过**；12 项失败属第三块（第二部分）特性或未实现库 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80）、接口错误契约（24 引用未实现的 json/csv 库），均非本阶段范围。
+- **示例回归**（CLI `hc test examples/`）：**124/135 通过**；11 项失败属第三块（第二部分）特性 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80），均非本阶段范围。
 - **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生标量子集外特性（io/arena/切片/闭包/errdefer/并发/全局变量），按文件粒度正确标记。
 
-CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret 122/134 + compile ≤80 mismatch，低于基线即失败）。
+CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret 124/135 + compile ≤80 mismatch，低于基线即失败）。
 
 ## 已知取舍
 

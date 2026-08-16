@@ -11,7 +11,7 @@ fn secret() i32 {
     return 99;
 }
 
-test fn jsonlib_self() !void {
+[test] fn jsonlib_self() !void {
     try expect_eq(parse("{}"), 42);
     try expect_eq(secret(), 99);
 }

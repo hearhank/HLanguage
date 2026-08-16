@@ -68,25 +68,25 @@ fn main(io: Io) !void {
     io.print("{}\n", sum(&floats));         // 4.0（泛型实例化）
 }
 
-test fn overload_resolution() !void {
+[test] fn overload_resolution() !void {
     try expect_eq_slices(describe(42), "int");
     try expect_eq_slices(describe("hi"), "bytes");
     try expect_eq_slices(describe(1.5), "float");
 }
 
-test fn return_type_overload() !void {
+[test] fn return_type_overload() !void {
     var i: i32 = parse("42");
     var f: f64 = parse("3.14");
     try expect_eq(i, 42);
     try expect(f > 3.13 and f < 3.15);
 }
 
-test fn optional_args() !void {
+[test] fn optional_args() !void {
     try expect_eq_slices(greet("hi").as_slice(), "hi!");
     try expect_eq_slices(greet("hi", "?").as_slice(), "hi?");
 }
 
-test fn generic_vs_concrete_overload() !void {
+[test] fn generic_vs_concrete_overload() !void {
     var ints = [1, 2, 3];
     try expect_eq(sum(&ints), 6);
     var floats = [1.5, 2.5];

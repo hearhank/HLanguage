@@ -126,7 +126,6 @@ impl<'a> Lexer<'a> {
             "const" => TokenKind::KwConst,
             "fn" => TokenKind::KwFn,
             "global" => TokenKind::KwGlobal,
-            "test" => TokenKind::KwTest,
             "if" => TokenKind::KwIf,
             "else" => TokenKind::KwElse,
             "while" => TokenKind::KwWhile,

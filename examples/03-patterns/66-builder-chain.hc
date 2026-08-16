@@ -27,7 +27,7 @@ fn main(io: Io) !void {
     io.print("limit = {}\n", q.limit_n);
 }
 
-test fn builder_chaining() !void {
+[test] fn builder_chaining() !void {
     var mut q: o Query = alloc.init(Query);
     q.where("age > 18").limit(10);   // 链：*mut 资格延续（Q25）
     try expect_eq_slices(q.where_clause.as_slice(), "age > 18");

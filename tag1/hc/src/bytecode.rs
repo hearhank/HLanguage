@@ -2,7 +2,8 @@
 //!
 //! 字节码是共享 IR（ADR-0004 唯一语义源）的**序列化**——执行复用
 //! [`crate::ir::run_ir`]，不另写 dispatch 循环，禁止各后端私语义。
-//! 覆盖范围 = M3.1 切片（标量 / 控制流 / 函数调用 / 错误值通道）。
+//! 覆盖范围 = M3.1 切片（标量 / 控制流 / 函数调用 / 错误值通道）
+//! + Phase 1 指针（取址 / 解引用 / 写穿）。
 //!
 //! 格式（全小端）：
 //! ```text
@@ -28,6 +29,7 @@ const T_STR: u8 = 3;
 const T_VOID: u8 = 4;
 const T_NULL: u8 = 5;
 const T_ERR: u8 = 6;
+const T_END: u8 = 7;
 
 fn binop_tag(op: IrBinOp) -> u8 {
     use IrBinOp::*;
@@ -208,6 +210,121 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
         IrInst::ReturnVoid => {
             out.push(14);
         }
+        // Phase 1 指针：opcode 15-18
+        IrInst::AddrSlot { temp, slot } => {
+            out.push(15);
+            push_u32(out, *temp as u32);
+            push_u32(out, *slot as u32);
+        }
+        IrInst::AddrValue { temp, value } => {
+            out.push(16);
+            push_u32(out, *temp as u32);
+            push_u32(out, *value as u32);
+        }
+        IrInst::Deref { temp, a } => {
+            out.push(17);
+            push_u32(out, *temp as u32);
+            push_u32(out, *a as u32);
+        }
+        IrInst::StorePtr { target, value } => {
+            out.push(18);
+            push_u32(out, *target as u32);
+            push_u32(out, *value as u32);
+        }
+        // Phase 2 聚合：opcode 19-30
+        IrInst::Field { temp, base, field } => {
+            out.push(19);
+            push_u32(out, *temp as u32);
+            push_u32(out, *base as u32);
+            push_str(out, field);
+        }
+        IrInst::StoreField { base, field, value } => {
+            out.push(20);
+            push_u32(out, *base as u32);
+            push_str(out, field);
+            push_u32(out, *value as u32);
+        }
+        IrInst::Index { temp, base, index } => {
+            out.push(21);
+            push_u32(out, *temp as u32);
+            push_u32(out, *base as u32);
+            push_u32(out, *index as u32);
+        }
+        IrInst::StoreIndex { base, index, value } => {
+            out.push(22);
+            push_u32(out, *base as u32);
+            push_u32(out, *index as u32);
+            push_u32(out, *value as u32);
+        }
+        IrInst::SliceOf { temp, base, lo, hi } => {
+            out.push(23);
+            push_u32(out, *temp as u32);
+            push_u32(out, *base as u32);
+            push_u32(out, *lo as u32);
+            push_u32(out, *hi as u32);
+        }
+        IrInst::StoreSlice { base, lo, hi, value } => {
+            out.push(24);
+            push_u32(out, *base as u32);
+            push_u32(out, *lo as u32);
+            push_u32(out, *hi as u32);
+            push_u32(out, *value as u32);
+        }
+        IrInst::MakeArr { temp, items } => {
+            out.push(25);
+            push_u32(out, *temp as u32);
+            push_u32(out, items.len() as u32);
+            for it in items {
+                push_u32(out, *it as u32);
+            }
+        }
+        IrInst::MakeClass { temp, ty, fields } => {
+            out.push(26);
+            push_u32(out, *temp as u32);
+            push_str(out, ty);
+            push_u32(out, fields.len() as u32);
+            for (k, v) in fields {
+                push_str(out, k);
+                push_u32(out, *v as u32);
+            }
+        }
+        IrInst::MakeEnum { temp, name, variant, payload } => {
+            out.push(27);
+            push_u32(out, *temp as u32);
+            push_str(out, name);
+            push_str(out, variant);
+            match payload {
+                Some(p) => {
+                    out.push(1);
+                    push_u32(out, *p as u32);
+                }
+                None => out.push(0),
+            }
+        }
+        IrInst::Destructure { value, slots } => {
+            out.push(28);
+            push_u32(out, *value as u32);
+            push_u32(out, slots.len() as u32);
+            for s in slots {
+                match s {
+                    Some(s) => {
+                        out.push(1);
+                        push_u32(out, *s as u32);
+                    }
+                    None => out.push(0),
+                }
+            }
+        }
+        IrInst::Move { temp, a } => {
+            out.push(29);
+            push_u32(out, *temp as u32);
+            push_u32(out, *a as u32);
+        }
+        IrInst::Unwrap { temp, a } => {
+            out.push(30);
+            push_u32(out, *temp as u32);
+            push_u32(out, *a as u32);
+        }
     }
 }
 
@@ -231,10 +348,12 @@ fn encode_const(out: &mut Vec<u8>, val: &IrConst) {
         }
         IrConst::Void => out.push(T_VOID),
         IrConst::Null => out.push(T_NULL),
-        IrConst::Err(n) => {
+        IrConst::Err { name, code } => {
             out.push(T_ERR);
-            push_str(out, n);
+            push_str(out, name);
+            push_u32(out, *code);
         }
+        IrConst::End => out.push(T_END),
     }
 }
 
@@ -355,6 +474,107 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
             temp: r.u32()? as usize,
         },
         14 => IrInst::ReturnVoid,
+        // Phase 1 指针：opcode 15-18
+        15 => IrInst::AddrSlot {
+            temp: r.u32()? as usize,
+            slot: r.u32()? as usize,
+        },
+        16 => IrInst::AddrValue {
+            temp: r.u32()? as usize,
+            value: r.u32()? as usize,
+        },
+        17 => IrInst::Deref {
+            temp: r.u32()? as usize,
+            a: r.u32()? as usize,
+        },
+        18 => IrInst::StorePtr {
+            target: r.u32()? as usize,
+            value: r.u32()? as usize,
+        },
+        // Phase 2 聚合：opcode 19-30
+        19 => IrInst::Field {
+            temp: r.u32()? as usize,
+            base: r.u32()? as usize,
+            field: r.str()?,
+        },
+        20 => IrInst::StoreField {
+            base: r.u32()? as usize,
+            field: r.str()?,
+            value: r.u32()? as usize,
+        },
+        21 => IrInst::Index {
+            temp: r.u32()? as usize,
+            base: r.u32()? as usize,
+            index: r.u32()? as usize,
+        },
+        22 => IrInst::StoreIndex {
+            base: r.u32()? as usize,
+            index: r.u32()? as usize,
+            value: r.u32()? as usize,
+        },
+        23 => IrInst::SliceOf {
+            temp: r.u32()? as usize,
+            base: r.u32()? as usize,
+            lo: r.u32()? as usize,
+            hi: r.u32()? as usize,
+        },
+        24 => IrInst::StoreSlice {
+            base: r.u32()? as usize,
+            lo: r.u32()? as usize,
+            hi: r.u32()? as usize,
+            value: r.u32()? as usize,
+        },
+        25 => IrInst::MakeArr {
+            temp: r.u32()? as usize,
+            items: read_usize_vec(r)?,
+        },
+        26 => IrInst::MakeClass {
+            temp: r.u32()? as usize,
+            ty: r.str()?,
+            fields: {
+                let n = r.u32()? as usize;
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let k = r.str()?;
+                    let val = r.u32()? as usize;
+                    v.push((k, val));
+                }
+                v
+            },
+        },
+        27 => IrInst::MakeEnum {
+            temp: r.u32()? as usize,
+            name: r.str()?,
+            variant: r.str()?,
+            payload: if r.u8()? != 0 {
+                Some(r.u32()? as usize)
+            } else {
+                None
+            },
+        },
+        28 => IrInst::Destructure {
+            value: r.u32()? as usize,
+            slots: {
+                let n = r.u32()? as usize;
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    if r.u8()? != 0 {
+                        v.push(Some(r.u32()? as usize));
+                    } else {
+                        v.push(None);
+                    }
+                }
+                v
+            },
+        },
+        29 => IrInst::Move {
+            temp: r.u32()? as usize,
+            a: r.u32()? as usize,
+        },
+        30 => IrInst::Unwrap {
+            temp: r.u32()? as usize,
+            a: r.u32()? as usize,
+        },
         _ => return Err(format!("未知指令 opcode {op}")),
     })
 }
@@ -368,7 +588,11 @@ fn decode_const(r: &mut Reader) -> Result<IrConst, String> {
         T_STR => IrConst::Str(r.str()?),
         T_VOID => IrConst::Void,
         T_NULL => IrConst::Null,
-        T_ERR => IrConst::Err(r.str()?),
+        T_ERR => IrConst::Err {
+            name: r.str()?,
+            code: r.u32()?,
+        },
+        T_END => IrConst::End,
         _ => return Err(format!("未知常量标签 {tag}")),
     })
 }
@@ -444,7 +668,7 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
 
-    /// 手工构造覆盖全部 15 种指令 + 全部常量标签 + 全部 binop/unop 标签的模块
+    /// 手工构造覆盖全部 19 种指令 + 全部常量标签 + 全部 binop/unop 标签的模块
     fn exhaustive_module() -> IrModule {
         let mut func_index = HashMap::new();
         func_index.insert("main".to_string(), 0);
@@ -481,10 +705,22 @@ mod tests {
                 },
                 IrInst::Const {
                     temp: 6,
-                    val: IrConst::Err("NotFound".to_string()),
+                    val: IrConst::Err {
+                        name: "NotFound".to_string(),
+                        code: 0,
+                    },
+                },
+                IrInst::Const {
+                    temp: 7,
+                    val: IrConst::End,
                 },
                 IrInst::Load { temp: 7, slot: 0 },
                 IrInst::Store { slot: 0, temp: 7 },
+                // Phase 1 指针：AddrSlot/AddrValue/Deref/StorePtr
+                IrInst::AddrSlot { temp: 7, slot: 1 },
+                IrInst::AddrValue { temp: 7, value: 1 },
+                IrInst::Deref { temp: 7, a: 1 },
+                IrInst::StorePtr { target: 7, value: 1 },
                 IrInst::Bin {
                     op: IrBinOp::Add,
                     temp: 7,
@@ -518,6 +754,61 @@ mod tests {
                     args: vec![0, 1],
                     temp: 7,
                 },
+                // Phase 2 聚合：Field/StoreField/Index/StoreIndex/SliceOf/StoreSlice/
+                // MakeArr/MakeClass/MakeEnum/Destructure/Move/Unwrap
+                IrInst::Field {
+                    temp: 7,
+                    base: 0,
+                    field: "len".to_string(),
+                },
+                IrInst::StoreField {
+                    base: 0,
+                    field: "x".to_string(),
+                    value: 7,
+                },
+                IrInst::Index {
+                    temp: 7,
+                    base: 0,
+                    index: 1,
+                },
+                IrInst::StoreIndex {
+                    base: 0,
+                    index: 1,
+                    value: 7,
+                },
+                IrInst::SliceOf {
+                    temp: 7,
+                    base: 0,
+                    lo: 0,
+                    hi: 7,
+                },
+                IrInst::StoreSlice {
+                    base: 0,
+                    lo: 0,
+                    hi: 2,
+                    value: 7,
+                },
+                IrInst::MakeArr {
+                    temp: 7,
+                    items: vec![0, 1],
+                },
+                IrInst::MakeClass {
+                    temp: 7,
+                    ty: "Rect".to_string(),
+                    fields: vec![("w".to_string(), 0), ("h".to_string(), 1)],
+                },
+                IrInst::MakeEnum {
+                    temp: 7,
+                    name: "Color".to_string(),
+                    variant: "Red".to_string(),
+                    payload: Some(0),
+                },
+                IrInst::Destructure {
+                    value: 7,
+                    slots: vec![Some(0), None, Some(1)],
+                },
+                IrInst::Move { temp: 7, a: 0 },
+                IrInst::Unwrap { temp: 7, a: 0 },
                 IrInst::Return { temp: 7 },
                 IrInst::ReturnVoid,
             ],

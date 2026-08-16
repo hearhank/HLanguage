@@ -10,10 +10,15 @@ const build = Build{
     version = "0.1.0",
     kind = Kind.exe,                    // exe / lib / script（枚举常量，Q9 式）
     files = [                           // 包内文件（数组字面量，Q4 式）
-        "main.hc",
+        "40-io.hc",
+        "41-namespaces.hc",
+        "42-pricing.hc",
+        "43-orders.hc",
+        "44-multi-file-main.hc",
         "math.hc",
     ],
     deps = [
-        Pkg{ name = "json", version = "0.2.0", fingerprint = 0xa1b2 },
+        // 本地依赖（Q26）：jsonlib 的 pub 符号以包名 `jsonlib` 前缀登记
+        Pkg{ name = "jsonlib", version = "0.1.0", path = "../../../tag1/examples/02-packages/jsonlib" },
     ],
 };

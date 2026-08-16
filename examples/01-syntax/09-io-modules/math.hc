@@ -15,7 +15,7 @@ namespace Math {
     }
 }
 
-test fn math_square() !void {
+[test] fn math_square() !void {
     try expect_eq(Math.square(5), 25);
     try expect_eq(Math.square(-3), 9);
 }

@@ -26,7 +26,7 @@ fn main(io: Io) !void {
     io.print("{}\n", APP_NAME);
 }
 
-test fn variables_three_forms() !void {
+[test] fn variables_three_forms() !void {
     // 形态 1：标量（无所有权概念，Q15）
     var mut count: i32 = 0;
     count += 1;

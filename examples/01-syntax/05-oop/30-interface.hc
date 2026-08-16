@@ -1,16 +1,16 @@
 // 30-interface.hc — 接口（特性标）与实现
 //
 // Q14 定案（2026-08-13；2026-08-14 修订）：implements 标注 = 冒号后缀（已定案）
-//   - class Rect: Shape { ... }（存储形态由特性标注决定，H1）
+//   - class Rect: IShape { ... }（存储形态由特性标注决定，H1）
 //   - 接口内 self = 实现类型的实例（接收者）；Self = 实现类型
 //   - 接口方法签名：fn area(self: *Self) f32（首参即被处理的数据——函数 = 唯一处理逻辑）
 
-interface Shape {
+interface IShape {
     fn area(self: *Self) f32;
 }
 
 [continuous]
-class Rect: Shape {
+class Rect: IShape {
     w: f32,
     h: f32,
 
@@ -20,7 +20,7 @@ class Rect: Shape {
 }
 
 [continuous]
-class Circle: Shape {
+class Circle: IShape {
     r: f32,
 
     fn area(self: *Self) f32 {
@@ -37,7 +37,7 @@ fn main(io: Io) !void {
     io.print("circle area = {}\n", circ.area());
 }
 
-test fn interface_implementation() !void {
+[test] fn interface_implementation() !void {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
     try expect(rect.area() > 11.99 and rect.area() < 12.01);   // 12

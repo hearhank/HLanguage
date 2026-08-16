@@ -11,7 +11,7 @@ fn main(io: Io) !void {
     io.print("{} retries = {}\n", APP_NAME, MAX_RETRIES);
 }
 
-test fn global_constants() !void {
+[test] fn global_constants() !void {
     try expect_eq_slices(APP_NAME, "h");
     try expect_eq(MAX_RETRIES, 3);
 }

@@ -21,7 +21,7 @@ fn float_method_family() {
     // IFloat 完整方法族（INumber: ICompare + abs/pow）
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(1.5.add(2.5), 4.0);
     try expect_eq(2.0.sub(0.5), 1.5);
     try expect_eq(3.0.mul(2.0), 6.0);
@@ -49,7 +49,7 @@ fn sum_plus(items: &[T]) T where T: INumber {
     }
     return total;
 }
-test fn t() !void {
+[test] fn t() !void {
     var ints = [10, 20, 30];
     try expect_eq(sum_plus(&ints), 60);
     var floats = [1.5, 2.5, 3.0];

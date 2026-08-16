@@ -27,7 +27,7 @@ class Packed {
     a: i8,
     b: i32,
 }
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(@sizeOf(Packed), 5);
     try expect_eq(@offsetOf(Packed, "a"), 0);
     try expect_eq(@offsetOf(Packed, "b"), 1);
@@ -52,7 +52,7 @@ fn align_type_level_alignment() {
 class Aligned {
     a: i8,
 }
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(@alignOf(Aligned), 8);
     try expect_eq(@sizeOf(Aligned), 8);
     var a = Aligned{ a = 9 };
@@ -80,7 +80,7 @@ class Outer {
     a: i8,
     b: Inner,
 }
-test fn t() !void {
+[test] fn t() !void {
     var outer = Outer{ a = 1, b = Inner{ x = 10, y = 20 } };
     try expect_eq(@sizeOf(Outer), 12);
     try expect_eq(@offsetOf(Outer, "a"), 0);
@@ -109,7 +109,7 @@ class Doc {
     mut tag: Tag,
     mut nums: Vec(i32),
 }
-test fn t() !void {
+[test] fn t() !void {
     var mut tag: o Tag = alloc.init(Tag);
     tag.score = 5;
     var mut doc: o Doc = alloc.init(Doc);

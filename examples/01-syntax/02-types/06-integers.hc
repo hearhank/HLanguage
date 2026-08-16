@@ -24,7 +24,7 @@ fn main(io: Io) !void {
     io.print("{} {} {} {} {} {}\n", a, b, c, d, e, sum);
 }
 
-test fn literal_typing_and_suffix() !void {
+[test] fn literal_typing_and_suffix() !void {
     var a: i32 = 42;
     var d = 42i32;
     var sum = a + d;

@@ -32,7 +32,7 @@ fn main(io: Io) !void {
     // io.print("{}\n", d.*);  // Debug：悬垂访问抛错（携带位置）；Release：UB（用户负责）
 }
 
-test fn dangling_marked_not_accessed() !void {
+[test] fn dangling_marked_not_accessed() !void {
     // Debug：fill 返回后 temp 已销毁 → buf[0] 的引用被标记悬垂；
     // 解引用访问（d.*）会抛错带位置——本测试不触发访问（触发演示见主程序注释）
     var mut buf = Vec(*i32).init(alloc);

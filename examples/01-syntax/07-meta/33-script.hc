@@ -27,7 +27,7 @@ fn main(io: Io) !void {
     io.print("{}\n", json);
 }
 
-test fn script_generation_demo() !void {
+[test] fn script_generation_demo() !void {
     // S4 演示型（Q-T6）：person_to_json 由脚本生成（Q23 types 元数据），
     // 示例中未展开实现；生成物验证在 M3 脚本生成测试套件中覆盖
     try expect(true);

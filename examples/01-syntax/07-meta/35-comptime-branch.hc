@@ -21,12 +21,12 @@ fn main(io: Io) !void {
     io.print("max = {}\n", max_value(2.5, 1.5));
 }
 
-test fn comptime_type_function() !void {
+[test] fn comptime_type_function() !void {
     var arr: ArrayLen(i32, 3) = [1, 2, 3];
     try expect_eq(arr.len, 3);
 }
 
-test fn comptime_branch() !void {
+[test] fn comptime_branch() !void {
     try expect_eq(max_value(3, 7), 7);
     var m = max_value(2.5, 1.5);
     try expect(m > 2.49 and m < 2.51);

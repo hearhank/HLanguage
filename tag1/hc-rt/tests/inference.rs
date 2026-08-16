@@ -35,7 +35,7 @@ fn infer_return_single_path() {
     run_ok(
         r#"
 fn add_one(v: i32) { return v + 1; }
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(add_one(41), 42);
 }
 "#,
@@ -51,7 +51,7 @@ fn pick(flag: bool) {
     if (flag) { return 10; }
     return 20;
 }
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(pick(true), 10);
     try expect_eq(pick(false), 20);
 }
@@ -67,7 +67,7 @@ fn infer_return_multi_path_conflict() {
     if (flag) { return 10; }
     return \"str\";
 }
-test fn t() !void { var _ = pick(true); }\n",
+[test] fn t() !void { var _ = pick(true); }\n",
         "inferred return type mismatch",
     );
 }
@@ -80,7 +80,7 @@ fn infer_return_int_vs_float_conflict() {
     if (flag) { return 10; }
     return 3.5;
 }
-test fn t() !void { var _ = pick(true); }\n",
+[test] fn t() !void { var _ = pick(true); }\n",
         "inferred return type mismatch",
     );
 }
@@ -94,7 +94,7 @@ fn overload_disambiguated_by_expected_return() {
         r#"
 fn get() i32 { return 1; }
 fn get() f64 { return 1.5; }
-test fn t() !void {
+[test] fn t() !void {
     var x: f64 = get();
     try expect_eq(x, 1.5);
     var y: i32 = get();
@@ -111,7 +111,7 @@ fn overload_ambiguous_literal() {
     run_compile_error(
         "fn f(a: i32) i32 { return a; }
 fn f(a: i64) i64 { return a; }
-test fn t() !void { var x = f(1); var _ = x; }\n",
+[test] fn t() !void { var x = f(1); var _ = x; }\n",
         "ambiguous",
     );
 }
@@ -123,7 +123,7 @@ fn overload_int_literal_prefers_int_over_float() {
         r#"
 fn f(a: i32) i32 { return a; }
 fn f(a: f64) f64 { return a; }
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(f(1), 1);
 }
 "#,
@@ -137,7 +137,7 @@ fn overload_concrete_beats_generic() {
         r#"
 fn id(x: i32) i32 { return x + 100; }
 fn id(x: T) T where T: INumber { return x; }
-test fn t() !void {
+[test] fn t() !void {
     try expect_eq(id(5), 105);
 }
 "#,
@@ -150,7 +150,7 @@ test fn t() !void {
 fn pointer_write_read_only_rejected() {
     // var p = &x 推断 *i32（只读）：写只读指针 → 编译错误
     run_compile_error(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var x: i32 = 0;
     var p = &x;
     p.* = 42;
@@ -164,7 +164,7 @@ fn pointer_write_mut_ok() {
     // var p = &mut x 推断 *mut i32（可写）：写通过
     run_ok(
         r#"
-test fn t() !void {
+[test] fn t() !void {
     var x: i32 = 0;
     var p = &mut x;
     p.* = 42;
@@ -184,7 +184,7 @@ fn generic_t_through_pointer_param() {
 fn deref_id(p: *T) T where T: INumber {
     return p.*;
 }
-test fn t() !void {
+[test] fn t() !void {
     var x: i32 = 42;
     try expect_eq(deref_id(&x), 42);
 }

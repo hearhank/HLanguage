@@ -30,7 +30,7 @@ fn main(io: Io) !void {
     }
 }
 
-test fn field_optional_default() !void {
+[test] fn field_optional_default() !void {
     var cfg = alloc.init(Config{host = null, port = 8080});
     var port = cfg.port orelse 8080;
     try expect_eq(port, 8080);

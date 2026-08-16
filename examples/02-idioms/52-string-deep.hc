@@ -27,7 +27,7 @@ fn main(io: Io) !void {
     io.print("{}\n", replaced);
 }
 
-test fn split_join() !void {
+[test] fn split_join() !void {
     var csv = String.from("a,b,c,d", alloc);
     var parts = csv.split(',');
     try expect_eq(parts.len, 4);
@@ -35,7 +35,7 @@ test fn split_join() !void {
     try expect_eq_slices(joined.as_slice(), "a | b | c | d");
 }
 
-test fn find_substring_replace() !void {
+[test] fn find_substring_replace() !void {
     var text = String.from("hello world", alloc);
     try expect_eq(text.find("world").?, 6);
     var sub = text.substring(0, 5);

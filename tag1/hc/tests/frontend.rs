@@ -116,8 +116,8 @@ fn parse_class_enum_interface() {
 [continuous]
 class Point { x: f32, y: f32, fn dist(a: *Point, b: *Point) f32 { return 0; } }
 enum Kind { player, enemy }
-interface Shape { fn area(self: *Self) f32; }
-class Rect: Shape { w: f32, h: f32, fn area(self: *Self) f32 { return self.w * self.h; } }
+interface IShape { fn area(self: *Self) f32; }
+class Rect: IShape { w: f32, h: f32, fn area(self: *Self) f32 { return self.w * self.h; } }
 "#;
     let program = parse_source(src).expect("parse types");
     assert_eq!(program.decls.len(), 4);
@@ -127,7 +127,7 @@ class Rect: Shape { w: f32, h: f32, fn area(self: *Self) f32 { return self.w * s
 fn parse_test_fn_and_assertions() {
     let src = r#"
 fn add(a: i32, b: i32) i32 { return a + b; }
-test fn check() !void {
+[test] fn check() !void {
     try expect_eq(add(1, 2), 3);
     try expect(add(2, 3) == 5);
 }
@@ -208,7 +208,7 @@ fn f() FileError!i32 {
 fn g() FileError!i32 {
     return error.NotFound;
 }
-test fn t() !void {
+[test] fn t() !void {
     var x = error.NotFound;
 }
 "#;
@@ -359,7 +359,7 @@ fn check_clean(src: &str) {
 fn m24_move_arena_rejected() {
     // move Arena 分配对象 → 编译错误（所有权归 Arena）
     check_has_error(
-        "fn take(y: o String) void {}\ntest fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
+        "fn take(y: o String) void {}\n[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
         "allocated by Arena",
     );
 }
@@ -368,7 +368,7 @@ fn m24_move_arena_rejected() {
 fn m24_move_global_rejected() {
     // move global → 编译错误（所有权归根作用域）
     check_has_error(
-        "global g: String = String.from(\"x\", alloc);\ntest fn t() !void {\n    take(move g);\n}\nfn take(y: o String) void {}\n",
+        "global g: String = String.from(\"x\", alloc);\n[test] fn t() !void {\n    take(move g);\n}\nfn take(y: o String) void {}\n",
         "cannot move global",
     );
 }
@@ -377,7 +377,7 @@ fn m24_move_global_rejected() {
 fn m24_move_value_type_rejected() {
     // move 值类型（无所有权）→ 编译错误
     check_has_error(
-        "fn take(n: i32) void {}\ntest fn t() !void {\n    var n = 42;\n    take(move n);\n}\n",
+        "fn take(n: i32) void {}\n[test] fn t() !void {\n    var n = 42;\n    take(move n);\n}\n",
         "value type has no ownership",
     );
 }
@@ -386,7 +386,7 @@ fn m24_move_value_type_rejected() {
 fn m24_move_owned_ok() {
     // move 有所有权对象（非 Arena 分配）→ 合法
     check_clean(
-        "fn make() o String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\ntest fn t() !void {}\n",
+        "fn make() o String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
     );
 }
 
@@ -407,13 +407,13 @@ fn m24_return_owned_param_must_move() {
         "escapes function scope",
     );
     // move 返回所有权 → 合法
-    check_clean("fn f(y: o String) o String {\n    return move y;\n}\ntest fn t() !void {}\n");
+    check_clean("fn f(y: o String) o String {\n    return move y;\n}\n[test] fn t() !void {}\n");
 }
 
 #[test]
 fn m24_return_global_ref_ok() {
     // 返回 global 引用 → 合法（global 归根作用域，比函数长命）
-    check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\ntest fn t() !void {}\n");
+    check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\n[test] fn t() !void {}\n");
 }
 
 // ---------- M1.4 跨文件模块验收 ----------
@@ -425,7 +425,7 @@ fn m14_extern_symbols_enable_crossfile_check() {
         parse_source("namespace Orders {\n    pub struct Line { item: String, price: f64 }\n}\n")
             .expect("parse ext");
     let main = parse_source(
-        "using Orders;\ntest fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
+        "using Orders;\n[test] fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
     )
     .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
@@ -444,7 +444,7 @@ fn m14_using_imports_type() {
     let ext =
         parse_source("namespace Orders { pub struct Line { item: String } }\n").expect("parse ext");
     let main = parse_source(
-        "using Orders;\ntest fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
+        "using Orders;\n[test] fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
     )
     .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
@@ -460,7 +460,7 @@ fn m14_using_alias_qualified_call() {
     // using NS as M：M.member 限定调用（语义可解析）
     let ext = parse_source("namespace Math { pub fn square(x: i32) i32 { return x * x; } }\n")
         .expect("parse ext");
-    let main = parse_source("using Math as M;\ntest fn t() !void {\n    var r = M.square(5);\n}\n")
+    let main = parse_source("using Math as M;\n[test] fn t() !void {\n    var r = M.square(5);\n}\n")
         .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
     assert!(
@@ -473,7 +473,7 @@ fn m14_using_alias_qualified_call() {
 #[test]
 fn m14_single_file_unchanged() {
     // 无外部符号时行为不变（check_semantics 兼容）
-    check_clean("fn square(x: i32) i32 { return x * x; }\ntest fn t() !void {\n    try expect_eq(square(5), 25);\n}\n");
+    check_clean("fn square(x: i32) i32 { return x * x; }\n[test] fn t() !void {\n    try expect_eq(square(5), 25);\n}\n");
 }
 
 #[test]
@@ -481,7 +481,7 @@ fn m14_sibling_top_level_fn_is_file_private() {
     // 兄弟文件顶层函数文件私有：不污染主文件重载池（25/26 各自 load_config 不误报 ambiguous）
     let ext = parse_source("fn load_config(x: i32) i32 { return x * 2; }\n").expect("parse ext");
     let main = parse_source(
-        "fn load_config(x: i32) i32 { return x + 1; }\ntest fn t() !void {\n    try expect_eq(load_config(1), 2);\n}\n",
+        "fn load_config(x: i32) i32 { return x + 1; }\n[test] fn t() !void {\n    try expect_eq(load_config(1), 2);\n}\n",
     )
     .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);

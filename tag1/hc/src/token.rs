@@ -43,7 +43,6 @@ pub enum TokenKind {
     KwConst,
     KwFn,
     KwGlobal,
-    KwTest,
     KwIf,
     KwElse,
     KwWhile,

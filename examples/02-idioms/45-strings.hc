@@ -20,7 +20,7 @@ fn main(io: Io) !void {
     io.print("equal = {}\n", a == b);
 }
 
-test fn string_concat() !void {
+[test] fn string_concat() !void {
     var name = String.from("alice", alloc);
     var greeting = String.from("hello, ", alloc).concat(name);
     try expect_eq_slices(greeting.as_slice(), "hello, alice");
@@ -28,7 +28,7 @@ test fn string_concat() !void {
     try expect_eq_slices(g2.as_slice(), "hello, alice!");
 }
 
-test fn content_equals() !void {
+[test] fn content_equals() !void {
     var a = String.from("abc", alloc);
     var b = String.from("abc", alloc);
     try expect_eq(a == b, true);

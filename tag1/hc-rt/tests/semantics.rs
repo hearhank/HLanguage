@@ -40,20 +40,20 @@ fn width_check_u8_overflow() {
 
 #[test]
 fn width_check_i32_ok() {
-    run_ok("test fn t() !void { var a: i32 = 42; try expect_eq(a, 42); }\n");
+    run_ok("[test] fn t() !void { var a: i32 = 42; try expect_eq(a, 42); }\n");
 }
 
 #[test]
 fn width_check_hex_ok() {
     // 0xFF 在 u8 范围内
-    run_ok("test fn t() !void { var a: u8 = 0xFF; try expect_eq(a, 255); }\n");
+    run_ok("[test] fn t() !void { var a: u8 = 0xFF; try expect_eq(a, 255); }\n");
 }
 
 #[test]
 fn width_check_u64_ok() {
     // xorshift 种子（84-rng）
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var s: u64 = 0x1234_5678_9abc_def0;
     try expect_eq(s, 1311768467463790320);
 }\n",
@@ -79,7 +79,7 @@ fn continuous_assignment_allowed() {
     run_ok(
         "[continuous]
 class Point { x: f32, y: f32 }
-test fn t() !void {
+[test] fn t() !void {
     var p1 = Point{ x = 1.0, y = 2.0 };
     var p2 = p1;
     p2.x = 99.0;
@@ -92,7 +92,7 @@ test fn t() !void {
 fn table_construct_and_index() {
     // M8：Table(T).init(alloc, rows, cols, init) + t[i, j] 多参索引
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var tbl = Table(i32).init(alloc, 3, 4, 0);
     try expect_eq(tbl[1, 2], 0);
     var t2 = Table(i32).init(alloc, 2, 2, 7);
@@ -106,7 +106,7 @@ fn table_construct_and_index() {
 fn at_int_from_enum() {
     run_ok(
         "enum Kind { player, enemy, item }
-test fn t() !void {
+[test] fn t() !void {
     var k = Kind.enemy;
     try expect_eq(@intFromEnum(k), 1);
     var k2 = @enumFromInt(Kind, 2);
@@ -119,7 +119,7 @@ test fn t() !void {
 fn copy_shallow_mode() {
     // L1：copy(&x, .shallow) ≡ copy(&x, CopyMode.shallow)
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var v1 = Vec(i32).init(alloc);
     v1.append(1);
     var v2 = copy(&v1, .shallow);
@@ -131,7 +131,7 @@ fn copy_shallow_mode() {
 #[test]
 fn copy_deep_mode_default() {
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var v1 = Vec(i32).init(alloc);
     v1.append(1);
     var v2 = copy(&v1);
@@ -168,7 +168,7 @@ fn make() Order {
     ord.amount = 3.5;
     return ord;
 }
-test fn t() !void {
+[test] fn t() !void {
     var ord = make();
     try expect_eq(ord.id, 42);
 }\n",
@@ -181,7 +181,7 @@ fn definite_assignment_ignores_continuous() {
     run_ok(
         "[continuous]
 class Point { x: f32, y: f32 }
-test fn t() !void {
+[test] fn t() !void {
     var p = Point{ x = 1.0, y = 2.0 };
     try expect_eq(p.x, 1.0);
 }\n",
@@ -210,7 +210,7 @@ fn m22_return_type_mismatch() {
 
 #[test]
 fn m22_return_ok() {
-    run_ok("fn f() f64 { return 3.5; }\ntest fn t() !void { try expect_eq(f(), 3.5); }\n");
+    run_ok("fn f() f64 { return 3.5; }\n[test] fn t() !void { try expect_eq(f(), 3.5); }\n");
 }
 
 #[test]
@@ -219,7 +219,7 @@ fn m22_named_lit_unknown_field() {
     run_compile_error(
         "[continuous]
 class Point { x: f32, y: f32 }
-test fn t() !void {
+[test] fn t() !void {
     var p = Point{ x = 1.0, z = 2.0 };
 }\n",
         "unknown field",
@@ -232,7 +232,7 @@ fn m22_named_lit_missing_field() {
     run_compile_error(
         "[continuous]
 class Point { x: f32, y: f32 }
-test fn t() !void {
+[test] fn t() !void {
     var p = Point{ x = 1.0 };
 }\n",
         "missing field",
@@ -245,7 +245,7 @@ fn m22_named_lit_field_type_mismatch() {
     run_compile_error(
         "[continuous]
 class Point { x: f32, y: f32 }
-test fn t() !void {
+[test] fn t() !void {
     var p = Point{ x = \"s\", y = 2.0 };
 }\n",
         "type mismatch in field",
@@ -258,7 +258,7 @@ fn m22_field_access_unknown() {
     run_compile_error(
         "[continuous]
 class Point { x: f32, y: f32 }
-test fn t() !void {
+[test] fn t() !void {
     var p = Point{ x = 1.0, y = 2.0 };
     io.print(\"{}\n\", p.z);
 }\n",
@@ -270,7 +270,7 @@ test fn t() !void {
 fn m22_field_access_len() {
     // 内建字段：容器 .len
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var v = Vec(i32).init(alloc);
     v.append(1);
     v.append(2);
@@ -282,7 +282,7 @@ fn m22_field_access_len() {
 #[test]
 fn m22_table_double_index_ok() {
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var tbl = Table(i32).init(alloc, 2, 2, 0);
     try expect_eq(tbl[1, 0], 0);
 }\n",
@@ -295,7 +295,7 @@ fn m22_continuous_rejects_ref_field() {
     run_compile_error(
         "[continuous]
 class Bad { s: String }
-test fn t() !void {}\n",
+[test] fn t() !void {}\n",
         "non-value field",
     );
 }
@@ -304,7 +304,7 @@ test fn t() !void {}\n",
 fn m22_binary_numeric_required() {
     // 运算符检查：算术需数值
     run_compile_error(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var x = 1 + \"a\";
 }\n",
         "requires numeric",
@@ -315,7 +315,7 @@ fn m22_binary_numeric_required() {
 fn m22_binary_integer_required() {
     // 位运算需整数
     run_compile_error(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var x = 1.0 & 2.0;
 }\n",
         "requires integer",
@@ -325,7 +325,7 @@ fn m22_binary_integer_required() {
 #[test]
 fn m22_binary_ok() {
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     try expect_eq(1 + 2 * 3, 7);
     try expect_eq(10 >> 1, 5);
 }\n",
@@ -338,7 +338,7 @@ fn m22_condition_requires_bool() {
     run_compile_error(
         "[continuous]
 class Foo { a: i32 }
-test fn t() !void {
+[test] fn t() !void {
     var f = Foo{ a = 1 };
     if (f) { }
 }\n",
@@ -350,7 +350,7 @@ test fn t() !void {
 fn m22_for_not_iterable() {
     // 迭代契约：不可迭代类型 → 编译错误
     run_compile_error(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var n = 42;
     for (n) |x| { }
 }\n",
@@ -361,7 +361,7 @@ fn m22_for_not_iterable() {
 #[test]
 fn m22_for_iterable_ok() {
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var sum = 0;
     for ([1, 2, 3]) |x| { sum += x; }
     try expect_eq(sum, 6);
@@ -378,7 +378,7 @@ fn m22_where_constraint_satisfied() {
     for (items[1..]) |v| { total = total + v; }
     return total;
 }
-test fn t() !void {
+[test] fn t() !void {
     var ints = [10, 20, 30];
     try expect_eq(sum(&ints), 60);
 }\n",
@@ -394,7 +394,7 @@ class Point { x: f32 }
 fn sum(items: &[T]) T where T: INumber {
     return items[0];
 }
-test fn t() !void {
+[test] fn t() !void {
     var pts = [Point{ x = 1.0 }];
     var s = sum(&pts);
 }\n",
@@ -407,7 +407,7 @@ fn m22_enum_variant_rejected() {
     // 枚举变体校验
     run_compile_error(
         "enum Kind { player, enemy }
-test fn t() !void {
+[test] fn t() !void {
     var k = Kind.chest;
 }\n",
         "has no variant",
@@ -418,7 +418,7 @@ test fn t() !void {
 fn m22_orelse_requires_optional() {
     // orelse 需可选值
     run_compile_error(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var x = 1 orelse 2;
 }\n",
         "requires an optional",
@@ -430,7 +430,7 @@ fn m22_try_requires_error_union() {
     // try 需错误联合
     run_compile_error(
         "fn f() i32 { return 1; }
-test fn t() !void {
+[test] fn t() !void {
     var x = try f();
 }\n",
         "requires an error union",
@@ -442,7 +442,7 @@ fn m22_tuple_destructure_mismatch() {
     // 元组解构数量不匹配
     run_compile_error(
         "fn divmod(a: i32, b: i32) (i32, i32) { return (a / b, a % b); }
-test fn t() !void {
+[test] fn t() !void {
     var (q, r, s) = divmod(10, 3);
 }\n",
         "tuple destructure",
@@ -457,7 +457,7 @@ fn m22_assign_pointer_field() {
     mut count: i32,
     fn inc(self: *mut Self) void { self.count += 1; }
 }
-test fn t() !void {
+[test] fn t() !void {
     var c = alloc.init(Counter);
     c.count = 0;
     c.inc();
@@ -470,7 +470,7 @@ test fn t() !void {
 fn m22_slice_range_index() {
     // 范围索引 arr[1..] → 切片
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var arr = [1, 2, 3, 4];
     var s: &[i32] = &arr[1..];
     try expect_eq(s.len, 3);
@@ -480,7 +480,7 @@ fn m22_slice_range_index() {
 
 // ---------- M2.5 Debug 悬垂标记验收 ----------
 
-const DANGLING_SRC: &str = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\ntest fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
+const DANGLING_SRC: &str = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
 
 #[test]
 fn m25_dangling_access_rejected_debug() {
@@ -502,7 +502,7 @@ fn m25_dangling_access_rejected_debug() {
 #[test]
 fn m25_dangling_hold_not_accessed_ok() {
     // 取出/持有悬垂引用不抛错；只有解引用访问才触发（Q18：取指针不抛错）
-    let src = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\ntest fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
+    let src = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
     run_ok(src);
 }
 
@@ -524,7 +524,7 @@ fn m25_dangling_release_bare_read() {
 fn m43_sizeof_scalars_and_continuous() {
     // @sizeOf：标量宽度 + 连续类型（与 to_bytes 布局一致）
     run_ok(
-        "[continuous]\nclass Point { x: f32, y: f64 }\ntest fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
+        "[continuous]\nclass Point { x: f32, y: f64 }\n[test] fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
     );
 }
 
@@ -532,7 +532,7 @@ fn m43_sizeof_scalars_and_continuous() {
 fn m43_alignof_and_offsetof() {
     // @alignOf / @offsetOf：自然对齐 + 字段偏移（含填充）
     run_ok(
-        "[continuous]\nclass Point { x: f32, y: f64 }\ntest fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
+        "[continuous]\nclass Point { x: f32, y: f64 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
     );
 }
 
@@ -540,7 +540,7 @@ fn m43_alignof_and_offsetof() {
 fn m43_intcast_ok_and_overflow() {
     // @intCast：范围检查（Debug 溢出抛错）
     run_ok(
-        "test fn t() !void {\n    try expect_eq(@intCast(u8, 255), 255);\n    try expect_eq(@intCast(i16, -32768), -32768);\n}\n",
+        "[test] fn t() !void {\n    try expect_eq(@intCast(u8, 255), 255);\n    try expect_eq(@intCast(i16, -32768), -32768);\n}\n",
     );
     // 溢出 → 运行时错误
     let src = "fn main(io: Io) !void {\n    var x = @intCast(u8, 256);\n}\n";
@@ -554,7 +554,7 @@ fn m43_intcast_ok_and_overflow() {
 #[test]
 fn m43_typeof_returns_type_name() {
     run_ok(
-        "test fn t() !void {\n    var x: f64 = 1.0;\n    try expect_eq_slices(@typeOf(x), \"f64\");\n    try expect_eq_slices(@typeOf(42), \"i128\");\n}\n",
+        "[test] fn t() !void {\n    var x: f64 = 1.0;\n    try expect_eq_slices(@typeOf(x), \"f64\");\n    try expect_eq_slices(@typeOf(42), \"i128\");\n}\n",
     );
 }
 
@@ -562,7 +562,7 @@ fn m43_typeof_returns_type_name() {
 fn m43_add_with_overflow_tuple() {
     // @addWithOverflow → (T, bool) 元组
     run_ok(
-        "test fn t() !void {\n    var ov = @addWithOverflow(100, 200);\n    try expect_eq(ov[0], 300);\n    try expect_eq(ov[1], false);\n    var sv = @subWithOverflow(10, 3);\n    try expect_eq(sv[0], 7);\n}\n",
+        "[test] fn t() !void {\n    var ov = @addWithOverflow(100, 200);\n    try expect_eq(ov[0], 300);\n    try expect_eq(ov[1], false);\n    var sv = @subWithOverflow(10, 3);\n    try expect_eq(sv[0], 7);\n}\n",
     );
 }
 
@@ -570,7 +570,7 @@ fn m43_add_with_overflow_tuple() {
 fn m43_ptrcast_passthrough() {
     // @ptrCast：tag1 指针无类型化——透传，可解引用
     run_ok(
-        "test fn t() !void {\n    var x: i32 = 42;\n    var p = @ptrCast(i32, &x);\n    try expect_eq(p.*, 42);\n}\n",
+        "[test] fn t() !void {\n    var x: i32 = 42;\n    var p = @ptrCast(i32, &x);\n    try expect_eq(p.*, 42);\n}\n",
     );
 }
 
@@ -578,7 +578,7 @@ fn m43_ptrcast_passthrough() {
 fn m43_compile_error_rejected() {
     // @compileError = 编译期错误（强制编译失败）
     run_compile_error(
-        "test fn t() !void {\n    @compileError(\"boom\");\n}\n",
+        "[test] fn t() !void {\n    @compileError(\"boom\");\n}\n",
         "compileError",
     );
 }

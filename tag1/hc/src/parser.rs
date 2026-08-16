@@ -82,7 +82,6 @@ impl Parser {
             if matches!(
                 self.peek(),
                 TokenKind::KwFn
-                    | TokenKind::KwTest
                     | TokenKind::KwClass
                     | TokenKind::KwEnum
                     | TokenKind::KwInterface
@@ -127,6 +126,13 @@ impl Parser {
             TokenKind::KwFn => {
                 self.advance();
                 let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
+                let (is_test, test_name) = traits
+                    .iter()
+                    .find_map(|t| match t {
+                        Trait::Test { name } => Some((true, name.clone())),
+                        _ => None,
+                    })
+                    .unwrap_or((false, None));
                 Ok(Decl::Fn {
                     name,
                     params,
@@ -134,22 +140,8 @@ impl Parser {
                     where_clause,
                     body,
                     span,
-                    is_test: false,
-                    pub_: is_pub,
-                })
-            }
-            TokenKind::KwTest => {
-                self.advance();
-                self.expect(&TokenKind::KwFn, "`fn` after `test`")?;
-                let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
-                Ok(Decl::Fn {
-                    name,
-                    params,
-                    ret,
-                    where_clause,
-                    body,
-                    span,
-                    is_test: true,
+                    is_test,
+                    test_name,
                     pub_: is_pub,
                 })
             }
@@ -238,6 +230,19 @@ impl Parser {
                     Type::Named(n, _) => n.clone(),
                     other => format!("{:?}", other),
                 })
+            }
+            "test" => {
+                // [test("名称")]：单参 = 测试显示名（可省，省略时显示函数名）
+                let mut name = None;
+                if self.at(&TokenKind::LParen) {
+                    self.advance();
+                    if let TokenKind::Str(first) = self.peek().clone() {
+                        self.advance();
+                        name = Some(first);
+                    }
+                    self.expect(&TokenKind::RParen, "`)`")?;
+                }
+                Trait::Test { name }
             }
             _ => {
                 return Err(Diagnostic::error(
@@ -836,20 +841,6 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         let start = self.span();
-        // 嵌套 test fn（演示标注，Q-T6 S4）：跳过声明体
-        if self.at(&TokenKind::KwTest) && self.peek_n(1) == &TokenKind::KwFn {
-            self.advance(); // test
-            self.advance(); // fn
-            let _ = self.expect_ident()?;
-            self.expect(&TokenKind::LParen, "`(`")?;
-            let _ = self.parse_params()?;
-            self.expect(&TokenKind::RParen, "`)`")?;
-            if !self.at(&TokenKind::LBrace) {
-                let _ = self.parse_type()?;
-            }
-            let _ = self.parse_block()?;
-            return Ok(Stmt::Empty);
-        }
         match self.peek().clone() {
             TokenKind::LBrace => Ok(Stmt::Block(self.parse_block()?)),
             TokenKind::Semi => {
@@ -1992,6 +1983,15 @@ impl Parser {
                 }
                 if self.at(&TokenKind::Dot) {
                     self.advance();
+                    // `x.?` 链式解包（对齐 parse_postfix 形态）：裸标识符解包
+                    if self.at(&TokenKind::Question) {
+                        self.advance();
+                        let end = self.span();
+                        return Ok(Expr::Unwrap(
+                            Box::new(Expr::Ident(name, start.clone())),
+                            start.merge(&end),
+                        ));
+                    }
                     let field = self.expect_name_or_keyword()?;
                     let end = self.span();
                     // M1.4 限定名类型字面量：Orders.Line{ ... }

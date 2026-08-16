@@ -38,13 +38,13 @@ fn main(io: Io) !void {
     io.print("total = {}\n", total);
 }
 
-test fn thread_interface() !void {
+[test] fn thread_interface() !void {
     var t: o Thread(i32) = spawn(worker, 9);
     var r = try t.join();
     try expect_eq(r, 81);
 }
 
-test fn four_mode_types() !void {
+[test] fn four_mode_types() !void {
     var s1 = OneToOne(i32).init(alloc);
     s1.write(2);
     try expect_eq(s1.read(), 2);
@@ -53,7 +53,7 @@ test fn four_mode_types() !void {
     try expect_eq(s4.read(), 1);
 }
 
-test fn async_scope_binding() !void {
+[test] fn async_scope_binding() !void {
     var base = 5;
     var fut: Future(i32) = async_add(&base, 10);
     var total = await fut;   // 冻结窗口：await 前 base 不可写（Q19）

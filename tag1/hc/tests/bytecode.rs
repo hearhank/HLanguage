@@ -105,7 +105,7 @@ fn d(x: ?i32) i32 { return x orelse 5; }
 "#;
     assert_consistent(src, "f", &[]);
     assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(12));
-    assert_consistent(src, "d", &[IrValue::Null]);
+    assert_consistent(src, "d", &[IrValue::Opt(None)]);
     assert_consistent(src, "d", &[IrValue::Int(7)]);
 }
 
@@ -113,7 +113,7 @@ fn d(x: ?i32) i32 { return x orelse 5; }
 fn error_value_and_assert_builtins() {
     let src = r#"
 fn fail() !i32 { return error.NotFound; }
-test fn t() void {
+[test] fn t() void {
     expect_eq(1 + 1, 2);
     expect_neq(1, 2);
     expect(true);
@@ -121,7 +121,7 @@ test fn t() void {
 }
 "#;
     assert_consistent(src, "fail", &[]);
-    assert_eq!(run_bc(src, "fail", &[]).unwrap(), IrValue::Err("NotFound".into()));
+    assert_eq!(run_bc(src, "fail", &[]).unwrap(), IrValue::Err { name: "NotFound".into(), code: 0 });
     assert_consistent(src, "t", &[]);
     // 断言失败路径（AssertFailed 错误名一致）
     let bad = "fn f() void { expect_eq(1, 2); }";
@@ -190,6 +190,53 @@ fn missing_entry_and_unknown_call() {
     let src2 = "fn f() i32 { return nope(); }";
     assert_consistent(src2, "f", &[]);
     assert_eq!(run_bc(src2, "f", &[]).unwrap_err().name, "NoFunction");
+}
+
+#[test]
+fn pointer_write_through_bytecode() {
+    // Phase 1 指针：取址/解引用/写穿经 encode/decode 后与参考解释器一致
+    let src = r#"
+fn f() i32 {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    p.* = 7;
+    p.* += 1;
+    return x;
+}
+fn bump(p: *mut i32) void {
+    p.* *= 2;
+}
+fn g() i32 {
+    var mut x: i32 = 21;
+    bump(&mut x);
+    return x;
+}
+"#;
+    assert_consistent(src, "f", &[]);
+    assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(8));
+    assert_consistent(src, "g", &[]);
+    assert_eq!(run_bc(src, "g", &[]).unwrap(), IrValue::Int(42));
+}
+
+#[test]
+fn pointer_eq_and_deref_bytecode() {
+    let src = r#"
+fn same() bool {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    var q = &mut x;
+    return p == q;
+}
+fn deref_eq() bool {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    return p.* == 5;
+}
+"#;
+    assert_consistent(src, "same", &[]);
+    assert_consistent(src, "deref_eq", &[]);
+    assert_eq!(run_bc(src, "same", &[]).unwrap(), IrValue::Bool(true));
+    assert_eq!(run_bc(src, "deref_eq", &[]).unwrap(), IrValue::Bool(true));
 }
 
 #[test]

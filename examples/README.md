@@ -78,13 +78,13 @@ examples/
 
 ## 测试
 
-所有示例均附带 `test fn` 测试函数（Q8/Q-R11/Q-T1~T6 定案，2026-08-13）：
+所有示例均附带 `[test]` 测试函数（Q8/Q-R11/Q-T1~T6 定案，2026-08-13）：
 
-- **语法**：`test fn 名称() !void { ... }`——标记为测试的函数，可被普通代码调用/复用（Q-R11）
+- **语法**：`[test("名称")] fn 名称() !void { ... }`——标记为测试的函数，可被普通代码调用/复用（Q-R11）；参数可省，显示名 = 名称 ?? 函数名
 - **运行**：`hc test`（默认脚本模式；`hc test --mode=compile` 在编译模式交叉验证，Q-T5）
 - **断言 API**（Q-T1）：`expect` / `expect_eq` / `expect_neq` / `expect_error` / `expect_eq_slices`（测试函数内隐式可用）
 - **输出统计**（Q-T2）：逐项 `[PASS]/[FAIL]/[SKIP] 文件::测试` + 汇总 `N passed, M failed, K skipped`；失败非零退出码
 - **隔离/跳过**（Q-T3）：独立函数作用域、默认串行；`return error.SkipTest;` 标记跳过
 - **环境**（Q-T4）：测试函数内隐式 `test_io` + `alloc`
 - **形态**（Q-T6）：S1 纯逻辑断言 / S2 main smoke / S3 局部逻辑 / S4 演示标注（依赖外部环境，断言留 1.x）
-- **覆盖**：85 个示例 + math.hc 全部具备至少 1 个 `test fn`（23-tests 为断言 API 全家福示例）
+- **覆盖**：85 个示例 + math.hc 全部具备至少 1 个 `[test]` 测试函数（23-tests 为断言 API 全家福示例）

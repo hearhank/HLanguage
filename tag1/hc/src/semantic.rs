@@ -436,8 +436,16 @@ impl Checker {
                 name,
                 supers,
                 methods,
+                span,
                 ..
             } => {
+                // 接口命名约定：必须以 I 开头（如 `IShape` / `IParse`）
+                if !name.starts_with('I') {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("interface `{name}` 必须以 I 开头（如 `I{name}`）"),
+                    ));
+                }
                 let info = TypeInfo {
                     kind: TypeKind::Interface {
                         supers: supers.clone(),
@@ -465,7 +473,7 @@ impl Checker {
                 ..
             } => {
                 let sig = self.make_sig(params.clone(), ret.clone(), where_clause.clone());
-                // test fn 不进重载池（运行时按 test 名收集）
+                // [test] fn 不进重载池（运行时按 test 名收集）
                 if !is_test {
                     // 兄弟文件（skip_entry）：跳过 main 与顶层函数（文件私有——对齐运行时
                     // register_fn_decl_prefixed_filter 的 skip_entry 规则）；命名空间函数
@@ -2931,7 +2939,12 @@ impl Checker {
             SType::Optional(inner) => match at {
                 SType::Optional(a) => self.param_rank(inner, a, map),
                 SType::Unknown | SType::Infer | SType::Generic(_) => 1,
-                _ => 0,
+                // 可选自动包装（对齐 compatible）：T → ?T 兼容——但弱于直接 Optional
+                // 精确匹配（重载下 `f(x: i32)` 仍胜 `f(x: ?i32)`）
+                other => match self.param_rank(inner, other, map) {
+                    0 => 0,
+                    _ => 1,
+                },
             },
             SType::ErrorUnion(_, inner) => match at {
                 SType::ErrorUnion(_, a) => self.param_rank(inner, a, map),

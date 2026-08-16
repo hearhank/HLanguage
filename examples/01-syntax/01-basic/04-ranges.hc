@@ -24,7 +24,7 @@ fn main(io: Io) !void {
     }
 }
 
-test fn for_range_sum() !void {
+[test] fn for_range_sum() !void {
     var sum = 0;
     for (0..10) |i| {
         sum += i;
@@ -32,7 +32,7 @@ test fn for_range_sum() !void {
     try expect_eq(sum, 45);
 }
 
-test fn index_iteration() !void {
+[test] fn index_iteration() !void {
     var arr = [10, 20, 30];
     var total = 0;
     for (0..arr.len) |idx| {

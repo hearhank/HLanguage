@@ -34,7 +34,7 @@ fn main(io: Io) !void {
     io.print("handled {} events\n", count);
 }
 
-test fn event_callback() !void {
+[test] fn event_callback() !void {
     var bus: o EventBus = alloc.init(EventBus);
     var mut count = 0;
     bus.on(mut |event| { count += 1; });   // 可写捕获（Q26：双向登记）

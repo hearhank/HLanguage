@@ -20,7 +20,7 @@ fn run_ok(src: &str) {
 fn deque_push_pop_order() {
     run_ok(
         r#"
-test fn deque_push_pop_order() !void {
+[test] fn deque_push_pop_order() !void {
     var dq = Deque(i32).init(alloc);
     dq.push_back(1);
     dq.push_back(2);
@@ -43,7 +43,7 @@ test fn deque_push_pop_order() !void {
 fn deque_get_put_remove() {
     run_ok(
         r#"
-test fn deque_get_put_remove() !void {
+[test] fn deque_get_put_remove() !void {
     var dq = Deque(i32).init(alloc);
     dq.append(10);
     dq.append(20);
@@ -63,7 +63,7 @@ test fn deque_get_put_remove() !void {
 fn deque_empty_returns_null() {
     run_ok(
         r#"
-test fn deque_empty_returns_null() !void {
+[test] fn deque_empty_returns_null() !void {
     var dq = Deque(i32).init(alloc);
     try expect_eq(dq.pop_front(), null);
     try expect_eq(dq.pop_back(), null);
@@ -79,7 +79,7 @@ test fn deque_empty_returns_null() !void {
 fn deque_len_iter() {
     run_ok(
         r#"
-test fn deque_len_iter() !void {
+[test] fn deque_len_iter() !void {
     var dq = Deque(i32).init(alloc);
     dq.append(1);
     dq.append(2);

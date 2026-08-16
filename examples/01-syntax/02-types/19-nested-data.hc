@@ -47,7 +47,7 @@ fn main(io: Io) !void {
     io.print("{}\n", desc);
 }
 
-test fn nested_struct_and_switch() !void {
+[test] fn nested_struct_and_switch() !void {
     var e = Entity.new(
         alloc,
         Kind.enemy,

@@ -17,7 +17,7 @@ fn run_ok(src: &str) {
 fn io_net_tcp_echo() {
     // TCP 回环 echo：listen(0 端口) → connect → accept → write → shutdown → read_all
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var listener = try io.net.listen(\"127.0.0.1\", 0, alloc);
     var port = try listener.local_port();
     var conn = try io.net.connect(\"127.0.0.1\", port, alloc);
@@ -37,7 +37,7 @@ fn io_net_tcp_echo() {
 fn io_net_frame_u32() {
     // 帧读写：u32 LE
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var listener = try io.net.listen(\"127.0.0.1\", 0, alloc);
     var port = try listener.local_port();
     var conn = try io.net.connect(\"127.0.0.1\", port, alloc);
@@ -56,7 +56,7 @@ fn io_net_frame_u32() {
 fn io_fs_seek_pos_read_at_write_at() {
     // 文件定位：create → write_all → seek/pos → read_at/write_at → read_all
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var f = try io.fs.create(\"hc_io_test.tmp\");
     defer f.close();
     try f.write_all(\"0123456789\");
@@ -76,7 +76,7 @@ fn io_fs_seek_pos_read_at_write_at() {
 fn io_time_now_and_sleep() {
     // 时间：now() 毫秒时间戳 > 0；sleep 返回 void
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var now = io.time.now();
     try expect(now > 0);
     io.time.sleep(1);
@@ -88,7 +88,7 @@ fn io_time_now_and_sleep() {
 fn io_env_and_args() {
     // 程序环境：env(name) ?&[u8]（PATH 存在）；args() 可迭代
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var path = io.env(\"PATH\") orelse io.env(\"Path\") orelse \"\";
     try expect(path.len > 0);
 }\n",
@@ -99,7 +99,7 @@ fn io_env_and_args() {
 fn io_net_connect_refused() {
     // 连接失败 → 错误值（可 catch 处理）
     run_ok(
-        "test fn t() !void {
+        "[test] fn t() !void {
     var c = io.net.connect(\"127.0.0.1\", 1, alloc) catch |err| {
         try expect_error(error.Io, error.Io);
         return;

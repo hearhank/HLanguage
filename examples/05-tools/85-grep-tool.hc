@@ -33,7 +33,7 @@ fn main(io: Io) !void {
     io.print("{} matches\n", total);
 }
 
-test fn grep_tool_demo() !void {
+[test] fn grep_tool_demo() !void {
     // S4 演示型（Q-T6）：遍历当前目录 .hc 文件（外部文件系统依赖），不在测试中执行；
     // 行搜索逻辑等价断言见 52-string-deep / 56-csv-parse
     try expect(true);

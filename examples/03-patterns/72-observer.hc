@@ -26,7 +26,7 @@ fn main(io: Io) !void {
     subject.publish("user.logout", "alice");
 }
 
-test fn publish_subscribe() !void {
+[test] fn publish_subscribe() !void {
     var subject: o Subject = alloc.init(Subject);
     var mut received = 0;
     subject.subscribe(|event, payload| { received += 1; });   // 可写捕获

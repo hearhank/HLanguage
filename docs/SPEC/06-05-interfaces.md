@@ -7,19 +7,19 @@
 接口 = 类型的**特性标**（评审 A1）：声明类型必须实现的方法契约。
 
 ```hc
-interface Shape {
+interface IShape {
     fn area(self: *Self) f32;   // self = 实现类型的实例；Self = 实现类型（Q14）
 }
 
-class Rect: Shape { ... }   // implements 标注 = 冒号后缀（Q14 正式定案，2026-08-14）
-class Foo: Shape, Drawable { ... }
+class Rect: IShape { ... }   // implements 标注 = 冒号后缀（Q14 正式定案，2026-08-14）
+class Foo: IShape, IDrawable { ... }
 ```
 
 - **显式声明实现**（冒号后缀，2026-08-14 正式定案——接口列表逗号分隔）；可描述复杂类型、标量、内建类型、用户定义类型（class/元组）；**存储形态（连续/堆上）由特性标注决定**，不参与接口标注；**接口实例化标注（C4 定案）**：泛型接口在 implements 标注中可实例化——`class Fib: IIterable(i32)`（接口名 + 圆括号类型参数，与 `Vec(i32)` 一致）
-- **三用途（Q-R9 定案）**：① 标记 class 功能（implements 标注）；② 标记参数类型（`where T: Shape` 约束）；③ 类型参数编译可验证
+- **三用途（Q-R9 定案）**：① 标记 class 功能（implements 标注）；② 标记参数类型（`where T: IShape` 约束）；③ 类型参数编译可验证
 - 不提供运算符重载；闭包「调用契约」= 内置调用接口类型 `FnN(参数) 返回`（Q13）
-- **接口指针（Q17 定案；M5 修订）**：`*Shape` = **胖指针**（**三字宽 = data + 虚表 + alloc 引用**——M5 定案：装箱时携带分配器，销毁 `o *I` 时用携带的 alloc 释放 data）；`box(rect, alloc)`（`o *mut Rect`）赋给接口指针时**编译期自动收窄**（接口实现检查通过即合法）；data 部分参与 Debug 悬垂标记，虚表指针不参与（编译期静态）；**接口 = 类型标注**——`*INumber` = 只读引用、`*mut INumber` = 可写引用（标量可 `box` 装箱）
-- **接口参数（Q22/Q22b 定案）**：接口类型传参 = **带约束的虚拟类型 T**，约束放签名末尾 **where 子句**：`fn add(a: *T) void where T: INumber`；形态映射 `&T`→`*T`（只读）/ `&mut T`→`*mut T`（可写）/ `move T`→`o T`（拥有）；调用点显式：`add(&a)` / `add(&mut a)` / `add(move a)`；**静态分发**（单态化、无虚表）为主路径；动态分发（`*Shape` 胖指针装箱）保留给异构集合
+- **接口指针（Q17 定案；M5 修订）**：`*IShape` = **胖指针**（**三字宽 = data + 虚表 + alloc 引用**——M5 定案：装箱时携带分配器，销毁 `o *I` 时用携带的 alloc 释放 data）；`box(rect, alloc)`（`o *mut Rect`）赋给接口指针时**编译期自动收窄**（接口实现检查通过即合法）；data 部分参与 Debug 悬垂标记，虚表指针不参与（编译期静态）；**接口 = 类型标注**——`*INumber` = 只读引用、`*mut INumber` = 可写引用（标量可 `box` 装箱）
+- **接口参数（Q22/Q22b 定案）**：接口类型传参 = **带约束的虚拟类型 T**，约束放签名末尾 **where 子句**：`fn add(a: *T) void where T: INumber`；形态映射 `&T`→`*T`（只读）/ `&mut T`→`*mut T`（可写）/ `move T`→`o T`（拥有）；调用点显式：`add(&a)` / `add(&mut a)` / `add(move a)`；**静态分发**（单态化、无虚表）为主路径；动态分发（`*IShape` 胖指针装箱）保留给异构集合
 - **接口工厂返回具体实现类型（R-4 定案）**：`Io.threaded() -> ThreadedIo`、`Io.evented() -> EventedIo`——返回具体实现类型（实现 Io），可参与 `T: Io` 单态化；入口 `fn main(io: Io)` 编译器注入并自动收窄为接口句柄；具体类型值传给接口句柄参数时自动装箱
 - 接口方法（如 INumber 的 `add`）为**成员契约**，不参与全局重载解析（2026-08-14）
 

@@ -34,6 +34,8 @@ pub enum Decl {
         body: Block,
         span: Span,
         is_test: bool,
+        /// `[test("名称")]` 特性：测试显示名（可省，省略时显示函数名）
+        test_name: Option<String>,
         /// 跨包导出（默认私有；`pub` 管包边界）
         pub_: bool,
     },
@@ -96,6 +98,9 @@ pub enum Trait {
     Continuous,
     Pad,
     Align(String),
+    Test {
+        name: Option<String>,
+    },
 }
 
 impl std::fmt::Debug for Trait {
@@ -104,6 +109,10 @@ impl std::fmt::Debug for Trait {
             Trait::Continuous => write!(f, "[continuous]"),
             Trait::Pad => write!(f, "[pad]"),
             Trait::Align(s) => write!(f, "[align({s})]"),
+            Trait::Test { name } => match name {
+                Some(n) => write!(f, "[test({n:?})]"),
+                None => write!(f, "[test]"),
+            },
         }
     }
 }
@@ -114,6 +123,9 @@ impl Clone for Trait {
             Trait::Continuous => Trait::Continuous,
             Trait::Pad => Trait::Pad,
             Trait::Align(s) => Trait::Align(s.clone()),
+            Trait::Test { name } => Trait::Test {
+                name: name.clone(),
+            },
         }
     }
 }

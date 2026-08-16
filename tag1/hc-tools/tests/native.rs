@@ -112,7 +112,7 @@ fn test_runner_green_exits_zero() {
         eprintln!("SKIP: zig cc 不可用");
         return;
     }
-    let src = "test fn a() !void { try expect_eq(1 + 1, 2); }\ntest fn b() !void { try expect(true); }\n";
+    let src = "[test] fn a() !void { try expect_eq(1 + 1, 2); }\n[test] fn b() !void { try expect(true); }\n";
     let st = compile_tests_and_run(src);
     assert!(st.success(), "exit: {st}");
 }
@@ -123,7 +123,7 @@ fn test_runner_red_exits_nonzero() {
         eprintln!("SKIP: zig cc 不可用");
         return;
     }
-    let src = "test fn a() !void { try expect_eq(1 + 1, 3); }\n";
+    let src = "[test] fn a() !void { try expect_eq(1 + 1, 3); }\n";
     let st = compile_tests_and_run(src);
     assert!(!st.success(), "预期非零退出，实际: {st}");
 }
@@ -204,4 +204,250 @@ fn main() i32 {
 "#;
     let st = compile_and_run(src);
     assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn pointer_write_through_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // Phase 1 指针：`&mut` 取址 + `p.*` 写穿 + 跨函数别名 → 原生可执行一致结果
+    let src = r#"
+fn bump(p: *mut i32) void {
+    p.* += 1;
+}
+fn main() i32 {
+    var mut x: i32 = 41;
+    var p = &mut x;
+    p.* = 42;
+    bump(&mut x);
+    var y = p.*;
+    if (y == 43) { return 0; }
+    return 1;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+// ---------- Phase 2 聚合原生端到端（源码 → LLVM → zig cc → 可执行） ----------
+
+#[test]
+fn aggregate_struct_literal_and_field_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // MakeClass/Field/StoreField + 类深比较（hc_eq_agg）
+    let src = r#"
+class Point {
+    x: i32,
+    y: i32,
+}
+fn main() i32 {
+    var p = Point{ x = 1, y = 2 };
+    if (p.x != 1 or p.y != 2) { return 1; }
+    p.y = 5;
+    if (p.y != 5) { return 2; }
+    if (p != Point{ x = 1, y = 5 }) { return 3; }
+    if (p == Point{ x = 2, y = 5 }) { return 4; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_array_index_and_store_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // MakeArr/Index/StoreIndex + 数组深比较
+    let src = r#"
+fn main() i32 {
+    var a = [10, 20, 30];
+    if (a[0] != 10 or a[2] != 30) { return 1; }
+    a[1] = 99;
+    if (a[1] != 99) { return 2; }
+    if (a == [10, 20, 30]) { return 3; }
+    if (a != [10, 99, 30]) { return 4; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_len_fields_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // `.len`：Str / Arr / Slice 三形态（hc_field 的 `.len` 分支）
+    let src = r#"
+fn main() i32 {
+    var s = "abc";
+    if (s.len != 3) { return 1; }
+    var arr = [10, 20, 30, 40];
+    if (arr.len != 4) { return 2; }
+    var sub = arr[1..3];
+    if (sub.len != 2) { return 3; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_slice_view_and_alias_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // SliceOf：切片为共享视图——源数组元素写穿（元素 cell 别名）
+    let src = r#"
+fn main() i32 {
+    var arr = [1, 2, 3, 4, 5];
+    var sub = arr[1..4];
+    if (sub.len != 3 or sub[0] != 2 or sub[2] != 4) { return 1; }
+    arr[1] = 99;
+    if (sub[0] != 99) { return 2; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_slice_store_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // StoreSlice：`arr[lo..hi] = v` 写回源数组元素
+    let src = r#"
+fn main() i32 {
+    var arr = [1, 2, 3, 4, 5];
+    arr[1..3] = [20, 30];
+    if (arr[1] != 20 or arr[2] != 30 or arr.len != 5) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_tuple_destructure_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // Destructure：元组（多值返回）解构绑定
+    let src = r#"
+fn divmod(a: i32, b: i32) (i32, i32) {
+    return (a / b, a % b);
+}
+fn main() i32 {
+    var (q, r) = divmod(10, 3);
+    if (q != 3 or r != 1) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_move_expr_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // Move：值语义拷贝（`move x` ≡ 值拷贝，原绑定仍可访问）
+    let src = r#"
+fn main() i32 {
+    var a = [1, 2, 3];
+    var b = move a;
+    if (b.len != 3 or b[1] != 2 or a.len != 3) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_unwrap_opt_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // Unwrap：`x.?` 解包 Opt(Some) → 值（native 恒等表示：Opt(Some)=载荷）
+    let src = r#"
+fn boxed(x: ?i32) ?i32 { return x; }
+fn main() i32 {
+    var v = boxed(7).?;
+    if (v != 7) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_enum_literal_and_eq_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // MakeEnum：类型名限定枚举常量 + 值比较（name+variant+payload）
+    let src = r#"
+enum Color { red, green, blue }
+fn main() i32 {
+    var c = Color.green;
+    if (c != Color.green) { return 1; }
+    if (c == Color.red) { return 2; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn aggregate_index_oob_is_failure() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 越界索引：运行时硬错误（hc_abort）→ 非零退出
+    let src = "fn main() i32 { var a = [1, 2, 3]; return a[5]; }";
+    let st = compile_and_run(src);
+    assert!(!st.success(), "预期非零退出，实际: {st}");
+}
+
+#[test]
+fn aggregate_unwrap_null_is_failure() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // NullUnwrap：运行时硬错误（hc_abort_nullunwrap）→ 非零退出
+    let src = r#"
+fn boxed(x: ?i32) ?i32 { return x; }
+fn main() i32 {
+    var v = boxed(null).?;
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(!st.success(), "预期非零退出，实际: {st}");
 }
