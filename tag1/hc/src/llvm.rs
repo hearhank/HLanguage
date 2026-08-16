@@ -40,6 +40,23 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
     out
 }
 
+/// 生成「测试驱动」`.ll` 模块文本（导言 + 每个 `IrFunc` + `test fn` 跑器 main，Q-T5）。
+/// 与 [`codegen`] 同导言与函数发射，仅入口包装从 `main` 换成 [`emit_test_runner`]。
+pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
+    let strings = collect_strings(module);
+    let mut canon: HashMap<String, String> = HashMap::new();
+    for (name, &idx) in &module.func_index {
+        canon.insert(name.clone(), format!("hc_fn{idx}"));
+    }
+    let mut out = String::new();
+    emit_preamble(&mut out, &strings);
+    for (idx, f) in module.funcs.iter().enumerate() {
+        emit_func(&mut out, f, idx, &strings, errors, &canon);
+    }
+    emit_test_runner(&mut out, module);
+    out
+}
+
 /// 收集全部字符串常量（去重、保序）。
 fn collect_strings(module: &IrModule) -> Vec<String> {
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -742,6 +759,66 @@ fn emit_main_wrapper(out: &mut String, module: &IrModule) {
     out.push_str("}\n");
 }
 
+/// 原生测试跑器（Q-T5）：按声明序调用每个 `test fn`，全部通过 `ret 0`。
+/// 断言失败在测试函数 ret 路径 abort(exit 1)；`return error.X` 由跑器检测 error tag 后
+/// abort(exit 1)。因断言失败即 abort，逐测试续跑需重做 assert→返回码通路——故
+/// `hc test --mode=compile` 为文件粒度交叉验证（全绿 vs 有失败）。
+fn emit_test_runner(out: &mut String, module: &IrModule) {
+    let tests: Vec<(usize, &IrFunc)> = module
+        .funcs
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.is_test)
+        .collect();
+
+    // 每个 test fn 的运行/通过标记字符串（模块级全局）
+    for (idx, f) in &tests {
+        let run = format!("[RUN] {}", f.name);
+        let pass = format!("[PASS] {}", f.name);
+        let _ = writeln!(
+            out,
+            "@.test.{idx}.run = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+            run.len() + 1,
+            llvm_escape(run.as_bytes())
+        );
+        let _ = writeln!(
+            out,
+            "@.test.{idx}.pass = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+            pass.len() + 1,
+            llvm_escape(pass.as_bytes())
+        );
+    }
+
+    out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
+    out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
+    for (idx, f) in &tests {
+        let run = format!("[RUN] {}", f.name);
+        let rn = run.len() + 1;
+        let _ = writeln!(
+            out,
+            "  call i32 @puts(i8* getelementptr inbounds ([{rn} x i8], [{rn} x i8]* @.test.{idx}.run, i64 0, i64 0))"
+        );
+        let arglist = (0..f.params.len())
+            .map(|_| "%Value %argvoid")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "  %r_{idx} = call %Value @\"hc_fn{idx}\"({arglist})");
+        let _ = writeln!(out, "  %tag_{idx} = extractvalue %Value %r_{idx}, 0");
+        let _ = writeln!(out, "  %is_err_{idx} = icmp eq i32 %tag_{idx}, 6");
+        let _ = writeln!(out, "  br i1 %is_err_{idx}, label %fail_{idx}, label %ok_{idx}");
+        let _ = writeln!(out, "fail_{idx}:");
+        out.push_str("  call void @hc_abort_unhandled()\n  unreachable\n");
+        let pass = format!("[PASS] {}", f.name);
+        let pn = pass.len() + 1;
+        let _ = writeln!(out, "ok_{idx}:");
+        let _ = writeln!(
+            out,
+            "  call i32 @puts(i8* getelementptr inbounds ([{pn} x i8], [{pn} x i8]* @.test.{idx}.pass, i64 0, i64 0))"
+        );
+    }
+    out.push_str("  ret i32 0\n}\n");
+}
+
 // ---------- 函数体发射（线性 IR → 基本块 CFG） ----------
 
 struct BodyEmitter {
@@ -840,7 +917,7 @@ impl BodyEmitter {
         }
         let (tag, data) = match val {
             IrConst::Int(i) => (T_INT, format!("{}", *i as i64)),
-            IrConst::Float(f) => (T_FLOAT, format!("0x{:016x}", f.to_bits())),
+            IrConst::Float(f) => (T_FLOAT, format!("{}", f.to_bits() as i64)),
             IrConst::Bool(b) => (T_BOOL, if *b { "1" } else { "0" }.to_string()),
             IrConst::Void => (T_VOID, "0".to_string()),
             IrConst::Null => (T_NULL, "0".to_string()),

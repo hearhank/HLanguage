@@ -475,3 +475,19 @@ fn m14_single_file_unchanged() {
     // 无外部符号时行为不变（check_semantics 兼容）
     check_clean("fn square(x: i32) i32 { return x * x; }\ntest fn t() !void {\n    try expect_eq(square(5), 25);\n}\n");
 }
+
+#[test]
+fn m14_sibling_top_level_fn_is_file_private() {
+    // 兄弟文件顶层函数文件私有：不污染主文件重载池（25/26 各自 load_config 不误报 ambiguous）
+    let ext = parse_source("fn load_config(x: i32) i32 { return x * 2; }\n").expect("parse ext");
+    let main = parse_source(
+        "fn load_config(x: i32) i32 { return x + 1; }\ntest fn t() !void {\n    try expect_eq(load_config(1), 2);\n}\n",
+    )
+    .expect("parse main");
+    let diags = hc::check_semantics_extern(&main, &[&ext]);
+    assert!(
+        !diags.iter().any(|d| d.is_error() && d.message.contains("ambiguous")),
+        "兄弟文件同名顶层函数不应误报歧义: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}

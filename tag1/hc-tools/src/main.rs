@@ -10,9 +10,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hc::diag;
 use hc_rt::Interp;
+
+/// Q-T5 编译模式交叉验证的临时产物目录序号（避免并行冲突）。
+static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 mod buildzon;
 
@@ -24,13 +28,33 @@ USAGE:
     hc run <file.hc>           运行脚本模式（解释执行）
     hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；标量子集）
     hc run --ir <file.hc>      用 IR 参考解释器运行（标量子集）
-    hc test [file.hc|dir]      运行 test fn（默认当前目录全部 .hc）
+    hc test [--mode=interpret|compile] [file.hc|dir]
+                              运行 test fn（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
     hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
     hc --version
     hc --help
 ";
+
+/// `hc test` 运行模式：解释器（默认）或原生编译（Q-T5 交叉验证）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TestMode {
+    Interpret,
+    Compile,
+}
+
+/// 解析 `--mode` 取值，非法值报错退出。
+fn parse_test_mode(v: &str) -> Result<TestMode, ExitCode> {
+    match v {
+        "interpret" => Ok(TestMode::Interpret),
+        "compile" => Ok(TestMode::Compile),
+        other => {
+            eprintln!("error: 未知 --mode `{other}`（可选 interpret|compile）");
+            Err(ExitCode::from(2))
+        }
+    }
+}
 
 fn main() -> ExitCode {
     // 递归/深层 AST 求值需要更大栈（Windows 主线程默认 1MB；测试线程 8MB+）
@@ -77,11 +101,33 @@ fn run_cli() -> ExitCode {
             }
         }
         "test" => {
-            let target = args
-                .get(2)
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."));
-            test_dir(&target)
+            // 解析可选 --mode=interpret|compile（默认 interpret）与目标路径
+            let mut mode = TestMode::Interpret;
+            let mut target = PathBuf::from(".");
+            let mut i = 2;
+            while i < args.len() {
+                let a = &args[i];
+                if let Some(v) = a.strip_prefix("--mode=") {
+                    mode = match parse_test_mode(v) {
+                        Ok(m) => m,
+                        Err(c) => return c,
+                    };
+                } else if a == "--mode" {
+                    i += 1;
+                    let Some(v) = args.get(i) else {
+                        eprintln!("error: `--mode` 需要取值（interpret|compile）");
+                        return ExitCode::from(2);
+                    };
+                    mode = match parse_test_mode(v) {
+                        Ok(m) => m,
+                        Err(c) => return c,
+                    };
+                } else {
+                    target = PathBuf::from(a);
+                }
+                i += 1;
+            }
+            test_dir(&target, mode)
         }
         "check" => {
             let Some(path) = args.get(2) else {
@@ -187,21 +233,8 @@ fn zig_cc_available() -> bool {
         .unwrap_or(false)
 }
 
-/// 源码 → LLVM IR 文本（解析 → 语义检查 → `lower` → `codegen`）。
-/// 失败返回可直接打印的诊断文本（渲染后的诊断 / 错误）。
-fn source_to_ll(source: &str) -> Result<String, String> {
-    let program = hc::parse_source(source).map_err(|d| diag::render(&d, source))?;
-    let errs = hc::check_semantics(&program);
-    if errs.iter().any(|d| d.is_error()) {
-        return Err(diag::render(&errs, source));
-    }
-    let module = hc::ir::lower(&program);
-    let table = hc::error_code_table(&program);
-    Ok(hc::llvm::codegen(&module, &table))
-}
-
 /// 源码 → HBC2 字节码（解析 → 语义检查 → `lower` → `encode`）。
-/// 失败返回可直接打印的诊断文本（与 `source_to_ll` 同前置检查）。
+/// 失败返回可直接打印的诊断文本（与 `programs_to_ll` 同前置检查）。
 fn source_to_bytecode(source: &str) -> Result<Vec<u8>, String> {
     let program = hc::parse_source(source).map_err(|d| diag::render(&d, source))?;
     let errs = hc::check_semantics(&program);
@@ -220,15 +253,178 @@ fn write_bytecode_artifact(dir: &Path, stem: &str, bytes: &[u8]) -> Result<PathB
     Ok(hbc_path)
 }
 
+/// M7.1：解析入口文件 + 同目录全部兄弟 `.hc`（目录 = 包）。
+/// 返回（入口源码, 入口程序, 兄弟程序）。入口解析失败渲染诊断；兄弟解析失败报错退出。
+fn package_programs(path: &Path) -> Result<(String, hc::Program, Vec<hc::Program>), ExitCode> {
+    let source = read_program(path)?;
+    let entry = hc::parse_source(&source).map_err(|d| {
+        eprint!("{}", diag::render(&d, &source));
+        ExitCode::FAILURE
+    })?;
+    let mut siblings = Vec::new();
+    for s in sibling_files(path) {
+        let src = std::fs::read_to_string(&s).map_err(|e| {
+            eprintln!("error: 读取 {} 失败: {e}", s.display());
+            ExitCode::FAILURE
+        })?;
+        let p = hc::parse_source(&src).map_err(|d| {
+            eprintln!("[FAIL] 兄弟文件解析失败 {}:", s.display());
+            for dg in &d {
+                eprintln!("  {}", dg.message);
+            }
+            ExitCode::FAILURE
+        })?;
+        siblings.push(p);
+    }
+    Ok((source, entry, siblings))
+}
+
+/// M7.1：合并多文件 IR 模块——入口在前（索引不变），兄弟函数依次追加。
+/// 兄弟文件顶层函数扁平名（含 `main`）文件私有不导出；命名空间函数/类型方法
+/// 以限定名（含 `.`）导出，索引 `+offset`（对齐运行时文件私有规则）。
+fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc::ir::IrModule {
+    let mut funcs = entry.funcs;
+    let mut func_index = entry.func_index;
+    for m in siblings {
+        let offset = funcs.len();
+        for f in m.funcs {
+            funcs.push(f);
+        }
+        for (name, idx) in m.func_index {
+            if name.contains('.') {
+                func_index.entry(name).or_insert(idx + offset);
+            }
+        }
+    }
+    hc::ir::IrModule { funcs, func_index }
+}
+
+/// Q-T5：从 IR 模块剔除 test fn——兄弟文件测试函数文件私有，不参与入口文件测试跑器
+/// （对齐解释器 `load_siblings` 跳过 test/main）。同步重映射 `func_index` 到剔除后索引。
+fn strip_test_funcs_in_place(module: &mut hc::ir::IrModule) {
+    let mut remap = vec![usize::MAX; module.funcs.len()];
+    let mut kept = Vec::with_capacity(module.funcs.len());
+    for (i, f) in module.funcs.drain(..).enumerate() {
+        if !f.is_test {
+            remap[i] = kept.len();
+            kept.push(f);
+        }
+    }
+    module.funcs = kept;
+    let mut new_index = std::collections::HashMap::new();
+    for (name, idx) in module.func_index.drain() {
+        if remap[idx] != usize::MAX {
+            new_index.insert(name, remap[idx]);
+        }
+    }
+    module.func_index = new_index;
+}
+
+/// M7.1：合并错误码表（包 ID 0 单包；`register` 同名复用码 → 码一致）。
+fn merge_error_tables(tables: &[&hc::ErrorCodeTable]) -> hc::ErrorCodeTable {
+    let mut merged = hc::ErrorCodeTable::new(0);
+    for t in tables {
+        for e in t.entries() {
+            merged.register(&e.name, &e.span);
+        }
+    }
+    merged
+}
+
+/// M7.1：联合语义检查 + 各自 `lower` + 合并为单模块与错误码表
+/// （`programs_to_ll` / `programs_to_test_ll` 共用）。失败返回可直接打印的诊断文本（诊断归属入口文件）。
+/// `strip_sibling_tests`：测试跑器路径剔除兄弟文件 test fn（文件私有，对齐解释器）。
+fn check_and_merge(
+    entry: &hc::Program,
+    entry_source: &str,
+    siblings: &[&hc::Program],
+    strip_sibling_tests: bool,
+) -> Result<(hc::ir::IrModule, hc::ErrorCodeTable), String> {
+    let errs = hc::check_semantics_extern_deps(entry, siblings, &[]);
+    if errs.iter().any(|d| d.is_error()) {
+        return Err(diag::render(&errs, entry_source));
+    }
+    let entry_module = hc::ir::lower(entry);
+    let mut sibling_modules: Vec<hc::ir::IrModule> =
+        siblings.iter().map(|p| hc::ir::lower(p)).collect();
+    if strip_sibling_tests {
+        for m in &mut sibling_modules {
+            strip_test_funcs_in_place(m);
+        }
+    }
+    let merged = merge_modules(entry_module, sibling_modules);
+    let mut tables = vec![hc::error_code_table(entry)];
+    for s in siblings {
+        tables.push(hc::error_code_table(s));
+    }
+    let table = merge_error_tables(&tables.iter().collect::<Vec<_>>());
+    Ok((merged, table))
+}
+
+/// M7.1：入口 + 同包兄弟 → LLVM IR 文本（`main` 入口）。
+fn programs_to_ll(
+    entry: &hc::Program,
+    entry_source: &str,
+    siblings: &[&hc::Program],
+) -> Result<String, String> {
+    let (merged, table) = check_and_merge(entry, entry_source, siblings, false)?;
+    Ok(hc::llvm::codegen(&merged, &table))
+}
+
+/// Q-T5：入口 + 同包兄弟 → 「测试驱动」LLVM IR 文本（`test fn` 跑器入口）。
+fn programs_to_test_ll(
+    entry: &hc::Program,
+    entry_source: &str,
+    siblings: &[&hc::Program],
+) -> Result<String, String> {
+    let (merged, table) = check_and_merge(entry, entry_source, siblings, true)?;
+    Ok(hc::llvm::codegen_tests(&merged, &table))
+}
+
+/// `zig cc <ll> -o <exe>`（M3.3 原生链接）。返回 Ok 或带诊断的 Err。
+fn link_exe(ll_path: &Path, exe_path: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("zig")
+        .arg("cc")
+        .arg(ll_path)
+        .arg("-o")
+        .arg(exe_path)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!(
+            "zig cc 编译失败：\n{}",
+            String::from_utf8_lossy(&o.stderr)
+        )),
+        Err(e) => Err(format!("调用 zig cc 失败: {e}")),
+    }
+}
+
 /// `hc build file.hc`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
 /// `zig cc` 缺失时回退字节码镜像 .hbc + 平台启动器（M3.2 前过渡形态）。
 fn build_file(path: &Path) -> ExitCode {
-    let source = match read_program(path) {
-        Ok(s) => s,
+    // 目录参数：取目录内 main.hc（否则首个 .hc）作为入口
+    let entry_path = if path.is_dir() {
+        let files = dir_hc_files(path);
+        let main = files
+            .iter()
+            .find(|f| f.file_stem().map_or(false, |s| s == "main"));
+        match main.or_else(|| files.first()) {
+            Some(f) => f.clone(),
+            None => {
+                eprintln!("error: 目录 {} 无 .hc 文件", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        path.to_path_buf()
+    };
+
+    let (source, entry, siblings) = match package_programs(&entry_path) {
+        Ok(t) => t,
         Err(c) => return c,
     };
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = entry_path.file_stem().unwrap_or_default().to_string_lossy();
+    let dir = entry_path.parent().unwrap_or_else(|| Path::new("."));
 
     // M7.2：build.zon 包清单报告（原生后端首轮单文件；跨包链接归后续）
     match buildzon::load_from_dir(dir) {
@@ -248,7 +444,8 @@ fn build_file(path: &Path) -> ExitCode {
 
     // M3.3 原生路径：zig cc 可用 → 生成 .ll → 编译链接为可执行文件
     if zig_cc_available() {
-        let ll = match source_to_ll(&source) {
+        let sib_refs: Vec<&hc::Program> = siblings.iter().collect();
+        let ll = match programs_to_ll(&entry, &source, &sib_refs) {
             Ok(ll) => ll,
             Err(msg) => {
                 eprint!("{msg}");
@@ -266,35 +463,25 @@ fn build_file(path: &Path) -> ExitCode {
             stem.to_string()
         };
         let exe_path = dir.join(&exe_name);
-        let out = std::process::Command::new("zig")
-            .arg("cc")
-            .arg(&ll_path)
-            .arg("-o")
-            .arg(&exe_path)
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {
-                // 编译成功：清理中间 .ll，保留可执行文件
-                let _ = std::fs::remove_file(&ll_path);
-                println!("原生产物: {}", exe_path.display());
-                return ExitCode::SUCCESS;
-            }
-            Ok(o) => {
-                eprintln!("[FAIL] zig cc 编译失败：");
-                eprint!("{}", String::from_utf8_lossy(&o.stderr));
-                eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
-                return ExitCode::FAILURE;
-            }
-            Err(e) => {
-                eprintln!("[FAIL] 调用 zig cc 失败: {e}");
-                eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
-                return ExitCode::FAILURE;
-            }
+        if let Err(msg) = link_exe(&ll_path, &exe_path) {
+            eprintln!("[FAIL] {msg}");
+            eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
+            return ExitCode::FAILURE;
         }
+        // 编译成功：清理中间 .ll，保留可执行文件
+        let _ = std::fs::remove_file(&ll_path);
+        println!("原生产物: {}", exe_path.display());
+        return ExitCode::SUCCESS;
     }
 
     // 回退：真实 HBC2 字节码 + 平台启动器（zig cc 缺失；M3.2 字节码 VM）
     eprintln!("[warn] 未检测到 zig cc——回退字节码 VM（M3.2 标量子集；原生后端需要 zig）");
+    if !siblings.is_empty() {
+        eprintln!(
+            "[warn] 检测到 {} 个同包兄弟文件——字节码回退仅编译入口文件，多文件需 zig 原生后端",
+            siblings.len()
+        );
+    }
     let bytecode = match source_to_bytecode(&source) {
         Ok(b) => b,
         Err(msg) => {
@@ -699,7 +886,66 @@ fn load_deps_into(
 
 type ParsedFile = (PathBuf, String, hc::Program);
 
-fn test_dir(target: &Path) -> ExitCode {
+/// Q-T5：编译模式交叉验证——原生 runner 退出码 vs 解释器该文件聚合结果。
+/// 「解释器该文件有失败」⟺「原生退出码非 0」一致返回 Ok；不一致返回 Err（含诊断）。
+/// 中间产物（.ll/.exe/.pdb）写到系统临时目录，运行后清理——不污染源码目录。
+fn cross_validate_native(
+    source: &str,
+    entry: &hc::Program,
+    siblings: &[&hc::Program],
+    interp_fail: usize,
+) -> Result<(), String> {
+    let ll = programs_to_test_ll(entry, source, siblings)?;
+    let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let work = std::env::temp_dir().join(format!("hc_test_{}_{}", std::process::id(), n));
+    std::fs::create_dir_all(&work).map_err(|e| format!("创建临时目录失败: {e}"))?;
+    let ll_path = work.join("prog.ll");
+    std::fs::write(&ll_path, &ll).map_err(|e| format!("写入 {} 失败: {e}", ll_path.display()))?;
+    let exe_name = if cfg!(windows) { "prog.exe" } else { "prog" };
+    let exe_path = work.join(exe_name);
+    if let Err(e) = link_exe(&ll_path, &exe_path) {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(e);
+    }
+    let out = match std::process::Command::new(&exe_path).output() {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(format!("运行 {} 失败: {e}", exe_path.display()));
+        }
+    };
+    let _ = std::fs::remove_dir_all(&work);
+
+    let native_green = out.status.success();
+    let interp_green = interp_fail == 0;
+    if interp_green == native_green {
+        return Ok(());
+    }
+    let mut detail = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.is_empty() {
+        if !detail.is_empty() {
+            detail.push('\n');
+        }
+        detail.push_str(&stderr);
+    }
+    Err(format!(
+        "解释器 {} 失败（{}）vs 原生退出 {}（{}）{}",
+        interp_fail,
+        if interp_green { "绿" } else { "红" },
+        out.status
+            .code()
+            .map_or_else(|| "异常".into(), |c| c.to_string()),
+        if native_green { "绿" } else { "红" },
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!("\n{detail}")
+        }
+    ))
+}
+
+fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
     let mut files: Vec<PathBuf> = Vec::new();
     if target.is_dir() {
         collect_hc_files(target, &mut files);
@@ -714,6 +960,11 @@ fn test_dir(target: &Path) -> ExitCode {
         eprintln!("error: 未找到 .hc 文件于 {}", target.display());
         return ExitCode::from(2);
     }
+    // Q-T5：编译模式需 zig cc（原生后端）；缺失不静默降级
+    if mode == TestMode::Compile && !zig_cc_available() {
+        eprintln!("error: --mode=compile 需 zig cc（原生后端）；未检测到 zig");
+        return ExitCode::FAILURE;
+    }
 
     // M1.4：按目录分组（同目录 = 同包；跨目录独立）
     let mut groups: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> =
@@ -726,6 +977,7 @@ fn test_dir(target: &Path) -> ExitCode {
     let mut total_p = 0usize;
     let mut total_f = 0usize;
     let mut total_s = 0usize;
+    let mut total_mismatch = 0usize;
     let mut all_ok = true;
 
     for group in groups.values() {
@@ -801,6 +1053,17 @@ fn test_dir(target: &Path) -> ExitCode {
             for line in &interp.test_out {
                 println!("{name}::{line}");
             }
+            // Q-T5：编译模式——原生 runner 退出码 vs 解释器该文件聚合结果交叉验证
+            if mode == TestMode::Compile {
+                match cross_validate_native(source, program, &siblings, fail) {
+                    Ok(()) => println!("[MATCH] {name}"),
+                    Err(msg) => {
+                        eprintln!("[MISMATCH] {name}: {msg}");
+                        total_mismatch += 1;
+                        all_ok = false;
+                    }
+                }
+            }
         }
     }
 
@@ -808,7 +1071,10 @@ fn test_dir(target: &Path) -> ExitCode {
         "{} passed, {} failed, {} skipped",
         total_p, total_f, total_s
     );
-    if all_ok && total_f == 0 {
+    if mode == TestMode::Compile && total_mismatch > 0 {
+        println!("{} mismatch", total_mismatch);
+    }
+    if all_ok && total_f == 0 && total_mismatch == 0 {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -831,7 +1097,10 @@ fn collect_hc_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_ir_source, source_to_bytecode, write_bytecode_artifact, IrRunOutcome};
+    use super::{
+        merge_modules, programs_to_ll, programs_to_test_ll, run_ir_source, source_to_bytecode,
+        strip_test_funcs_in_place, write_bytecode_artifact, IrRunOutcome,
+    };
 
     /// 断言切片内程序运行成功
     fn expect_success(src: &str) {
@@ -951,5 +1220,76 @@ fn main() i32 {
         let read = std::fs::read(&p).expect("read");
         assert!(hc::bytecode::decode(&read).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_modules_exports_qualified_only() {
+        // 入口 + 兄弟：兄弟顶层函数扁平名文件私有；命名空间函数限定名导出、索引偏移正确
+        let entry =
+            hc::ir::lower(&hc::parse_source("fn main() i32 { return Math.square(4); }\n").unwrap());
+        let sib = hc::ir::lower(
+            &hc::parse_source(
+                "fn load_config(x: i32) i32 { return x; }\nnamespace Math { fn square(x: i32) i32 { return x * x; } }\n",
+            )
+            .unwrap(),
+        );
+        let merged = merge_modules(entry, vec![sib]);
+        assert!(merged.func_index.contains_key("main"));
+        assert!(merged.func_index.contains_key("Math.square"));
+        // 兄弟顶层函数扁平名不导出（文件私有）
+        assert!(!merged.func_index.contains_key("load_config"));
+        // 限定名索引落在追加段（入口在前，偏移后合法）
+        assert!((merged.func_index["Math.square"] as usize) < merged.funcs.len());
+        assert!(merged.funcs.len() >= 2);
+    }
+
+    #[test]
+    fn programs_to_ll_multi_file_and_private_sibling() {
+        // 入口调用兄弟命名空间函数 + 兄弟同名顶层函数（不误报 ambiguous）：联合检查 + 合并 codegen
+        let entry = hc::parse_source(
+            "fn load_config(x: i32) i32 { return x + 1; }\nfn main() i32 { return load_config(1) + Math.square(4); }\n",
+        )
+        .unwrap();
+        let sib = hc::parse_source(
+            "fn load_config(x: i32) i32 { return x * 2; }\nnamespace Math { fn square(x: i32) i32 { return x * x; } }\n",
+        )
+        .unwrap();
+        let ll = programs_to_ll(
+            &entry,
+            "fn load_config(x: i32) i32 { return x + 1; }\nfn main() i32 { return load_config(1) + Math.square(4); }\n",
+            &[&sib],
+        )
+        .expect("codegen");
+        assert!(ll.contains("define"), "应生成函数定义");
+        assert!(ll.contains("@main"), "应生成入口 wrapper");
+    }
+
+    #[test]
+    fn strip_test_funcs_remaps_index() {
+        // 剔除 test fn 后：扁平/限定名保留且索引重映射到正确函数；test fn 名移除
+        let mut m = hc::ir::lower(
+            &hc::parse_source(
+                "test fn a() !void {}\nfn helper() i32 { return 1; }\nnamespace N { fn f() i32 { return 2; } }\n",
+            )
+            .unwrap(),
+        );
+        strip_test_funcs_in_place(&mut m);
+        assert!(m.funcs.iter().all(|f| !f.is_test));
+        assert!(m.func_index.contains_key("helper"));
+        assert!(m.func_index.contains_key("N.f"));
+        assert!(!m.func_index.contains_key("a"));
+        assert_eq!(m.funcs[m.func_index["helper"]].name, "helper");
+        assert_eq!(m.funcs[m.func_index["N.f"]].name, "f");
+    }
+
+    #[test]
+    fn test_runner_runs_only_entry_tests() {
+        // 兄弟文件 test fn 文件私有：测试跑器只调用入口的 test fn
+        let entry_src = "test fn a() !void {}\nfn main() i32 { return 0; }\n";
+        let entry = hc::parse_source(entry_src).unwrap();
+        let sib = hc::parse_source("test fn b() !void {}\n").unwrap();
+        let ll = programs_to_test_ll(&entry, entry_src, &[&sib]).expect("codegen_tests");
+        assert!(ll.contains("[RUN] a"), "应含入口测试 a 的运行标记");
+        assert!(!ll.contains("[RUN] b"), "不应含兄弟测试 b 的运行标记");
     }
 }

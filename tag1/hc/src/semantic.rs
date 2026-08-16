@@ -206,9 +206,9 @@ pub fn check_with_extern_deps(
         infer_ret_conflict: false,
         diags: Vec::new(),
     };
-    // 先收集外部符号（只登记不检查——诊断归属主文件）
+    // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
     for ext in externs {
-        checker.collect(ext);
+        checker.collect_sibling(ext);
     }
     // 依赖包：包名前缀 + pub 过滤
     for (name, dep) in deps {
@@ -338,27 +338,39 @@ impl Checker {
         }
     }
 
+    /// M1.4：兄弟文件声明收集——对齐运行时 `load_siblings` 的文件私有规则：
+    /// 类型/全局/错误集扁平+限定双登记（共享）；顶层函数文件私有不登记（避免跨文件
+    /// 污染同名重载池，如 25/26 各自 load_config）；命名空间函数只登记限定名（扁平名
+    /// 由目标文件 `using NS;` 导入）。
+    fn collect_sibling(&mut self, program: &Program) {
+        for d in &program.decls {
+            self.collect_decl_prefixed_filter(d, "", false, false, true);
+        }
+    }
+
     /// M1.4：声明收集（Q21 命名空间）——扁平名 + 限定名双登记
     /// （`square` 供包内直接引用 / using 导入；`Math.square` 供限定访问）
     fn collect_decl_prefixed(&mut self, d: &Decl, prefix: &str) {
-        self.collect_decl_prefixed_filter(d, prefix, false, false);
+        self.collect_decl_prefixed_filter(d, prefix, false, false, false);
     }
 
     /// M7.2：依赖包收集——包名前缀 + 仅 `pub` + 不登记扁平名
     fn collect_dep(&mut self, program: &Program, prefix: &str) {
         let p = format!("{prefix}.");
         for d in &program.decls {
-            self.collect_decl_prefixed_filter(d, &p, true, true);
+            self.collect_decl_prefixed_filter(d, &p, true, true, true);
         }
     }
 
-    /// 声明收集核心：`skip_flat` 抑制扁平名（依赖包）；`pub_only` 只登记 `pub` 项（跨包边界）
+    /// 声明收集核心：`skip_flat` 抑制扁平名（依赖包类型/全局/错误集）；`pub_only` 只登记 `pub` 项（跨包边界）；
+    /// `skip_entry` 对齐运行时文件私有规则（函数）：跳过 main 与顶层函数，命名空间函数只登记限定名。
     fn collect_decl_prefixed_filter(
         &mut self,
         d: &Decl,
         prefix: &str,
         skip_flat: bool,
         pub_only: bool,
+        skip_entry: bool,
     ) {
         // 跨包边界：非 pub 顶层声明（含非 pub namespace 整体）不可见
         if pub_only && !d.is_pub() {
@@ -455,17 +467,22 @@ impl Checker {
                 let sig = self.make_sig(params.clone(), ret.clone(), where_clause.clone());
                 // test fn 不进重载池（运行时按 test 名收集）
                 if !is_test {
-                    if !skip_flat {
-                        self.funcs
-                            .entry(name.clone())
-                            .or_default()
-                            .push(sig.clone());
-                    }
-                    if !prefix.is_empty() {
-                        self.funcs
-                            .entry(format!("{prefix}{name}"))
-                            .or_default()
-                            .push(sig);
+                    // 兄弟文件（skip_entry）：跳过 main 与顶层函数（文件私有——对齐运行时
+                    // register_fn_decl_prefixed_filter 的 skip_entry 规则）；命名空间函数
+                    // 只登记限定名（扁平名由 `using` 导入）。
+                    if !(skip_entry && (name == "main" || prefix.is_empty())) {
+                        if !skip_entry {
+                            self.funcs
+                                .entry(name.clone())
+                                .or_default()
+                                .push(sig.clone());
+                        }
+                        if !prefix.is_empty() {
+                            self.funcs
+                                .entry(format!("{prefix}{name}"))
+                                .or_default()
+                                .push(sig);
+                        }
                     }
                 }
             }
@@ -504,7 +521,7 @@ impl Checker {
                 }
                 let np = format!("{prefix}{name}.");
                 for inner in decls {
-                    self.collect_decl_prefixed_filter(inner, &np, skip_flat, pub_only);
+                    self.collect_decl_prefixed_filter(inner, &np, skip_flat, pub_only, skip_entry);
                 }
             }
             _ => {}
