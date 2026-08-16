@@ -25,6 +25,6 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace
 
-      # 完整示例套件回归：interpret 122/134 + compile 交叉验证（<=80 mismatch）
+      # 完整示例套件回归：interpret 125/136 + compile 交叉验证（<=80 mismatch）
       - name: 示例套件回归
         run: bash tag1/scripts/check-examples.sh

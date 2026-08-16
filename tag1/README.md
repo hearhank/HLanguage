@@ -99,18 +99,18 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **242 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **371 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
-| hc | `src` 单元测试（bytecode 7 + llvm 6） | 13 |
-| hc | `tests/bytecode.rs`（VM == 参考解释器一致性） | 12 |
+| hc | `src` 单元测试（bytecode 7 + llvm 24） | 31 |
+| hc | `tests/bytecode.rs`（VM == 参考解释器一致性） | 20 |
 | hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
-| hc | `tests/ir.rs`（共享 IR） | 23 |
+| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for） | 38 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致） | 14 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–3） | 41 |
 | hc-rt | `tests/inference.rs`（类型推断） | 11 |
 | hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 10 |
 | hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
@@ -122,19 +122,20 @@ hc --help
 | hc-rt | `tests/scalar.rs`（标量接口族） | 2 |
 | hc-rt | `tests/examples.rs`（41 示例回归） | 41 ✅ |
 | hc-tools | `src` 单元测试（CLI/buildzon/merge_modules） | 19 |
-| hc-tools | `tests/native.rs`（M3.3 原生端到端，zig 缺失自动 SKIP） | 7 |
+| hc-tools | `tests/native.rs`（M3.3 原生端到端，zig 缺失自动 SKIP） | 27 |
 
 补充：
 
-- **示例回归**（CLI `hc test examples/`）：**124/135 通过**；11 项失败属第三块（第二部分）特性 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80），均非本阶段范围。
-- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生标量子集外特性（io/arena/切片/闭包/errdefer/并发/全局变量），按文件粒度正确标记。
+- **示例回归**（CLI `hc test examples/`）：**125/136 通过**；11 项失败属第三块（第二部分）特性 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80），均非本阶段范围。
+- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生/IR 子集外特性（global/const、defer、闭包/实例方法、io/并发等），按文件粒度正确标记。
 
-CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret 124/135 + compile ≤80 mismatch，低于基线即失败）。
+CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥124 passed / ≤11 failed + compile ≤80 mismatch，低于基线即失败）。
 
 ## 已知取舍
 
-- **原生后端为标量子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片（标量/短路/if/while/return/try/catch/orelse/error/限定名调用/断言内建），io/集合/class 方法/闭包/指针/for/switch/defer 等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式。
-- **i64 载荷**（非 i128）：LLVM 值盒 `{ tag, data }` 的 `data` 为 i64，i128/f64 有截断或位型转换（f64 已修正为十进制位型发射）。
+- **原生/IR 后端为标量 + 指针 + 聚合 + switch/for 子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片 + Phase 1 指针 + Phase 2 聚合 + Phase 3 switch/for（字段/索引/切片/数组/class/enum/元组解构/move/unwrap/switch 全模式/for 迭代含 mut 写回），global/const、defer/errdefer、带标签 break/continue、闭包/实例方法、Table 多索引等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式。
+- **LLVM 值盒全精度载荷**：`%Value = { i32, i128 }`（i128 修复 i64 截断；浮点位模式存低 64 位）；`hc build` 依赖外部 `zig cc`，无优化 pass，硬错误消息依赖 libc。
+- **LLVM Mut/Move for 捕获 = copy-in/copy-out 写回**：迭代体内中读源容器在 LLVM 见旧值（`run_ir` 槽 cell == 源 cell 无此问题），接受近似。
 - **原生交叉验证为文件粒度**：全绿 vs 有失败，非逐测试 PASS/FAIL 清单（断言失败在测试函数 ret 路径直接 abort）。
 - **字节码 VM 复用 `run_ir`**：未做紧凑运行时 dispatch / 寄存器式 VM（性能优化留后续，须一致性套件证明等价）。
 - **跨包静态链接（M7.2 后续）**：`build.zon` 的 `deps` 已支持本地依赖装载（解释/检查路径），但原生编译目前仅同目录包内合并，跨包链接归后续。

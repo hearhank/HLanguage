@@ -240,6 +240,109 @@ fn deref_eq() bool {
 }
 
 #[test]
+fn phase3_switch_round_trip() {
+    // MatchTest（opcode 31）+ 模式描述符 encode/decode：int/else
+    let src = r#"
+fn pick(x: i32) i32 {
+    switch (x) {
+        1 => return 10,
+        2 => return 20,
+        else => return 99,
+    }
+}
+"#;
+    assert_consistent(src, "pick", &[IrValue::Int(1)]);
+    assert_consistent(src, "pick", &[IrValue::Int(2)]);
+    assert_consistent(src, "pick", &[IrValue::Int(9)]);
+    assert_eq!(run_bc(src, "pick", &[IrValue::Int(2)]).unwrap(), IrValue::Int(20));
+}
+
+#[test]
+fn phase3_switch_pattern_kinds_round_trip() {
+    // 错误名 / 字符串 / bool / null 模式经 encode/decode 后一致
+    let src = r#"
+fn fail(x: i32) !i32 {
+    if (x == 1) { return error.NotFound; }
+    return error.Io;
+}
+fn pick(s: String) i32 {
+    switch (s) {
+        "a" => return 1,
+        else => return 0,
+    }
+}
+fn pb(b: bool) i32 {
+    switch (b) { true => return 1, false => return 0, }
+}
+"#;
+    assert_consistent(src, "fail", &[IrValue::Int(1)]);
+    assert_consistent(src, "pick", &[IrValue::Str(b"a".to_vec())]);
+    assert_consistent(src, "pick", &[IrValue::Str(b"z".to_vec())]);
+    assert_consistent(src, "pb", &[IrValue::Bool(true)]);
+    assert_consistent(src, "pb", &[IrValue::Bool(false)]);
+}
+
+#[test]
+fn phase3_make_range_round_trip() {
+    // MakeRange（opcode 32）：区间糖 → Arr
+    let src = r#"
+fn f() i32 {
+    var mut s: i32 = 0;
+    for (0..5) |i| { s += i; }
+    return s;
+}
+"#;
+    assert_consistent(src, "f", &[]);
+    assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(10));
+}
+
+#[test]
+fn phase3_enum_payload_round_trip() {
+    // EnumPayload（opcode 33）：switch 捕获枚举负载
+    let src = r#"
+enum Maybe { some: i32, none }
+[test] fn t() void {
+    var v: Maybe = Maybe{some = 7};
+    var label = switch (v) {
+        some => |i| i,
+        none => -1,
+        else => -2,
+    };
+    expect_eq(label, 7);
+}
+"#;
+    assert_consistent(src, "t", &[]);
+}
+
+#[test]
+fn phase3_iter_make_next_writeback_round_trip() {
+    // IterMake/IterNext/IterWriteBack（opcode 34-36）：数组 mut 写回
+    let src = r#"
+fn f() i32 {
+    var a = [1, 2, 3];
+    for (a) |mut x| { x += 1; }
+    return a[0] + a[1] + a[2];
+}
+"#;
+    assert_consistent(src, "f", &[]);
+    assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(9));
+}
+
+#[test]
+fn phase3_iter_str_bytes_round_trip() {
+    // 字符串迭代：字节 Int（is_ref=false 新单元，无写回）
+    let src = r#"
+fn f() i32 {
+    var mut sum: i32 = 0;
+    for ("abc") |b| { sum += b; }
+    return sum;
+}
+"#;
+    assert_consistent(src, "f", &[]);
+    assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(294));
+}
+
+#[test]
 fn func_index_round_trips_flat_and_qualified() {
     // namespace 内函数扁平名 + 限定名双注册，经 encode/decode 后仍完整
     let src = r#"

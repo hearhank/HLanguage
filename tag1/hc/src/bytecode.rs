@@ -3,7 +3,9 @@
 //! 字节码是共享 IR（ADR-0004 唯一语义源）的**序列化**——执行复用
 //! [`crate::ir::run_ir`]，不另写 dispatch 循环，禁止各后端私语义。
 //! 覆盖范围 = M3.1 切片（标量 / 控制流 / 函数调用 / 错误值通道）
-//! + Phase 1 指针（取址 / 解引用 / 写穿）。
+//! + Phase 1 指针（取址 / 解引用 / 写穿）+ Phase 2 聚合（字段/索引/字面量/
+//! 解构/move/unwrap）+ Phase 3 switch + range + for（opcode 31–36 + 模式描述符）。
+//! 子集外特性同 `ir::lower` 以 `error.Unsupported` 硬错误拒绝。
 //!
 //! 格式（全小端）：
 //! ```text
@@ -14,7 +16,7 @@
 //! ```
 //! 常量载荷保留全精度：`i128` 16 字节、`f64` 8 字节、字符串长度前缀。
 
-use crate::ir::{run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrUnOp, IrValue};
+use crate::ir::{run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrPattern, IrUnOp, IrValue};
 use std::collections::HashMap;
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
@@ -325,6 +327,80 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
             push_u32(out, *temp as u32);
             push_u32(out, *a as u32);
         }
+        // Phase 3 switch / 区间 / for：opcode 31-36
+        IrInst::MatchTest {
+            temp,
+            subject,
+            pattern,
+        } => {
+            out.push(31);
+            push_u32(out, *temp as u32);
+            push_u32(out, *subject as u32);
+            encode_pattern(out, pattern);
+        }
+        IrInst::MakeRange { temp, lo, hi } => {
+            out.push(32);
+            push_u32(out, *temp as u32);
+            push_u32(out, *lo as u32);
+            push_u32(out, *hi as u32);
+        }
+        IrInst::EnumPayload { temp, a } => {
+            out.push(33);
+            push_u32(out, *temp as u32);
+            push_u32(out, *a as u32);
+        }
+        IrInst::IterMake { temp, base } => {
+            out.push(34);
+            push_u32(out, *temp as u32);
+            push_u32(out, *base as u32);
+        }
+        IrInst::IterNext {
+            has,
+            iter,
+            slot,
+            read_only,
+        } => {
+            out.push(35);
+            push_u32(out, *has as u32);
+            push_u32(out, *iter as u32);
+            push_u32(out, *slot as u32);
+            out.push(*read_only as u8);
+        }
+        IrInst::IterWriteBack { iter, slot } => {
+            out.push(36);
+            push_u32(out, *iter as u32);
+            push_u32(out, *slot as u32);
+        }
+    }
+}
+
+/// switch 模式编码（对齐 `decode_pattern`；tag 0-5）
+fn encode_pattern(out: &mut Vec<u8>, pat: &IrPattern) {
+    match pat {
+        IrPattern::Error(s) => {
+            out.push(0);
+            push_str(out, s);
+        }
+        IrPattern::Ident(s) => {
+            out.push(1);
+            push_str(out, s);
+        }
+        IrPattern::Int(i) => {
+            out.push(2);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        IrPattern::Float(f) => {
+            out.push(3);
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        IrPattern::Str(s) => {
+            out.push(4);
+            push_str(out, s);
+        }
+        IrPattern::Char(c) => {
+            out.push(5);
+            out.push(*c);
+        }
     }
 }
 
@@ -575,7 +651,50 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
             temp: r.u32()? as usize,
             a: r.u32()? as usize,
         },
+        // Phase 3 switch / 区间 / for：opcode 31-36
+        31 => IrInst::MatchTest {
+            temp: r.u32()? as usize,
+            subject: r.u32()? as usize,
+            pattern: decode_pattern(r)?,
+        },
+        32 => IrInst::MakeRange {
+            temp: r.u32()? as usize,
+            lo: r.u32()? as usize,
+            hi: r.u32()? as usize,
+        },
+        33 => IrInst::EnumPayload {
+            temp: r.u32()? as usize,
+            a: r.u32()? as usize,
+        },
+        34 => IrInst::IterMake {
+            temp: r.u32()? as usize,
+            base: r.u32()? as usize,
+        },
+        35 => IrInst::IterNext {
+            has: r.u32()? as usize,
+            iter: r.u32()? as usize,
+            slot: r.u32()? as usize,
+            read_only: r.u8()? != 0,
+        },
+        36 => IrInst::IterWriteBack {
+            iter: r.u32()? as usize,
+            slot: r.u32()? as usize,
+        },
         _ => return Err(format!("未知指令 opcode {op}")),
+    })
+}
+
+/// switch 模式解码（对齐 `encode_pattern`；tag 0-5）
+fn decode_pattern(r: &mut Reader) -> Result<IrPattern, String> {
+    let tag = r.u8()?;
+    Ok(match tag {
+        0 => IrPattern::Error(r.str()?),
+        1 => IrPattern::Ident(r.str()?),
+        2 => IrPattern::Int(r.i128()?),
+        3 => IrPattern::Float(r.f64()?),
+        4 => IrPattern::Str(r.str()?),
+        5 => IrPattern::Char(r.u8()?),
+        _ => return Err(format!("未知 switch 模式 tag {tag}")),
     })
 }
 

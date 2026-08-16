@@ -2,9 +2,9 @@
 # 完整示例套件回归门（CI 与本地共用）。
 #
 # 两部分（基线随功能扩增而更新，见 tag1/README.md）：
-#   1) interpret：`hc test examples/` 断言 >= 124 passed 且 <= 11 failed（124/135）
+#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（125/136）
 #   2) compile：`hc test --mode=compile examples/` 断言 <= 80 mismatch
-#      （原生标量子集外特性；子集扩增时该数下降，属改进）
+#      （原生/IR 子集外特性；子集扩增时该数下降，属改进）
 #
 # 用法：bash tag1/scripts/check-examples.sh（工作目录不限，脚本自定位到 tag1/）
 set -euo pipefail
@@ -23,8 +23,8 @@ if [ -z "$passed" ] || [ -z "$failed" ]; then
     echo "::error::无法解析 interpret 汇总（passed=$passed failed=$failed）"
     exit 1
 fi
-if [ "$passed" -lt 124 ] || [ "$failed" -gt 11 ]; then
-    echo "::error::示例套件回归：$passed passed / $failed failed（基线 >=124 / <=11）"
+if [ "$passed" -lt 125 ] || [ "$failed" -gt 11 ]; then
+    echo "::error::示例套件回归：$passed passed / $failed failed（基线 >=125 / <=11）"
     exit 1
 fi
 echo "interpret OK: $passed passed / $failed failed"

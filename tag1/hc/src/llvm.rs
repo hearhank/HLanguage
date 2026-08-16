@@ -9,11 +9,15 @@
 //! + Phase 1 指针（`&`/`&mut` 取址 → `%Value` tag 7 载荷 = 槽地址；`p.*` 解引用；
 //! 写穿经 `hc_store_ptr`）。指针比较：同指针身份相等（`hc_eq`），
 //! Ptr 与普通值比较时先解引用（对齐 `IrValue::value_eq`）；`<` 仅 Ptr/Ptr 按地址序。
+//! + Phase 2 聚合（数组/切片/class/enum 堆对象 + 16 helper：字段/索引/切片读写、
+//! 字面量构造、解构、move、unwrap、深比较）+
+//! Phase 3 switch + range + for（`hc_match_test` 模式描述符分发、`hc_make_range`、
+//! `%IterObj/%IterItemObj` + `hc_iter_*`；Mut/Move 捕获 = copy-in/copy-out 写回）。
 //! 已知简化见 07-bootstrap-plan.md：NUL 结尾字符串字面量、
 //! 无优化 pass、硬错误消息依赖 libc `puts`/`exit`。
 
 use crate::errorcodes::ErrorCodeTable;
-use crate::ir::{IrBinOp, IrConst, IrFunc, IrInst, IrModule, IrUnOp};
+use crate::ir::{IrBinOp, IrConst, IrFunc, IrInst, IrModule, IrPattern, IrUnOp};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -33,6 +37,7 @@ const T_SLICE: i32 = 9;
 const T_CLASS: i32 = 10;
 const T_ENUM: i32 = 11;
 const T_END: i32 = 12;
+// ---- Phase 3 迭代器（tag 13 直接内联在 `hc_iter_make` 的 IR 文本中） ----
 
 /// 生成完整 `.ll` 模块文本（导言 + 每个 `IrFunc` + `main` 包装）。
 pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
@@ -88,6 +93,16 @@ fn collect_strings(module: &IrModule) -> Vec<String> {
                 IrInst::MakeEnum { name, variant, .. } => {
                     push_str(name, &mut seen, &mut out);
                     push_str(variant, &mut seen, &mut out);
+                }
+                IrInst::MatchTest { pattern, .. } => {
+                    // 模式描述符需字符串全局：Ident（bool/null/枚举变体）与 Str 模式。
+                    // Error 模式在 codegen 期解析为错误码，无需字符串。
+                    match pattern {
+                        IrPattern::Ident(s) | IrPattern::Str(s) => {
+                            push_str(s, &mut seen, &mut out)
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -147,6 +162,8 @@ const MSGS: &[Msg] = &[
     Msg { key: "unhandled", text: "error: unhandled error value reached entry point" },
     // Phase 2 聚合运行时硬错误（对齐 tree-walking RtError 名称）
     Msg { key: "oom", text: "error.OutOfMemory" },
+    // Phase 3 迭代/switch 硬错误
+    Msg { key: "notiter", text: "error.NotIterable" },
     Msg { key: "indexoob", text: "error.IndexOutOfBounds" },
     Msg { key: "badindex", text: "error.BadIndex" },
     Msg { key: "notindexable", text: "error.NotIndexable" },
@@ -167,10 +184,14 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     out.push_str("%ClassObj = type { i8*, i64, %Field* }\n");
     out.push_str("%EnumObj = type { i8*, i8*, %Value* }\n");
     out.push_str("%SeqInfo = type { %Value*, i64, i64 }\n");
-    out.push_str("%FindRes = type { i1, %Value }\n\n");
+    out.push_str("%FindRes = type { i1, %Value }\n");
+    // Phase 3 迭代器（`for` 展开：源指针 + 写回目标）
+    out.push_str("%IterItemObj = type { %Value*, i1 }\n");
+    out.push_str("%IterObj = type { %IterItemObj*, i64, i64, i64 }\n\n");
 
     // 外部符号（libc + 溢出内建）
     out.push_str("declare i32 @strcmp(i8*, i8*)\n");
+    out.push_str("declare i32 @memcmp(i8*, i8*, i64)\n");
     out.push_str("declare i32 @puts(i8*)\n");
     out.push_str("declare void @exit(i32) noreturn\n");
     out.push_str("declare i64 @strlen(i8*)\n");
@@ -186,7 +207,15 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     out.push_str("@.void_value = private unnamed_addr constant %Value { i32 0, i128 0 }\n");
     out.push_str("@.empty_str_s = private unnamed_addr constant [1 x i8] c\"\\00\"\n");
     // `.len` 内建字段名字符串（`hc_field` 对 Str/Arr/Slice 判定用）
-    out.push_str("@.hc_len = private unnamed_addr constant [4 x i8] c\"len\\00\"\n\n");
+    out.push_str("@.hc_len = private unnamed_addr constant [4 x i8] c\"len\\00\"\n");
+    // Phase 3 switch 模式 / 迭代器判型字符串
+    out.push_str("@.hc_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
+    out.push_str("@.hc_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
+    out.push_str("@.hc_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n");
+    out.push_str("@.hc_map = private unnamed_addr constant [4 x i8] c\"Map\\00\"\n");
+    out.push_str("@.hc_kv = private unnamed_addr constant [3 x i8] c\"KV\\00\"\n");
+    out.push_str("@.hc_key = private unnamed_addr constant [4 x i8] c\"key\\00\"\n");
+    out.push_str("@.hc_value = private unnamed_addr constant [6 x i8] c\"value\\00\"\n\n");
 
     // 硬错误消息全局
     for m in MSGS {
@@ -223,6 +252,8 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     emit_assert_helpers(out);
     emit_pointer_helpers(out);
     emit_aggregate_helpers(out);
+    emit_switch_helpers(out);
+    emit_iter_helpers(out);
 }
 
 // ---------- 算术 helper（加/减/乘/除/模/欧几里得模） ----------
@@ -1587,6 +1618,424 @@ fn emit_aggregate_helpers(out: &mut String) {
     }
 }
 
+// ---------- Phase 3 switch helper（模式匹配 / 枚举负载捕获） ----------
+
+const HC_MATCH_TEST: &str = r#"define %Value @hc_match_test(%Value %subj, i8 %tag, i128 %data, i8* %str, i64 %len) {
+entry:
+  %slot = alloca %Value, align 8
+  %f0 = insertvalue %Value { i32 0, i128 0 }, i32 4, 0
+  store %Value %f0, %Value* %slot
+  %b = call %Value @hc_deref(%Value %subj)
+  %t = extractvalue %Value %b, 0
+  %d = extractvalue %Value %b, 1
+  switch i8 %tag, label %done [
+    i8 0, label %t_err
+    i8 1, label %t_ident
+    i8 2, label %t_int
+    i8 3, label %t_float
+    i8 4, label %t_str
+    i8 5, label %t_char
+  ]
+t_err:
+  %is_err = icmp eq i32 %t, 6
+  br i1 %is_err, label %err_cmp, label %done
+err_cmp:
+  %eqc = icmp eq i128 %d, %data
+  br label %store_res
+t_ident:
+  %is_bool = icmp eq i32 %t, 4
+  br i1 %is_bool, label %ident_bool, label %chk_null
+ident_bool:
+  %truep = getelementptr inbounds [5 x i8], ptr @.hc_true, i64 0, i64 0
+  %c1 = call i32 @strcmp(i8* %str, i8* %truep)
+  %is_true = icmp eq i32 %c1, 0
+  br i1 %is_true, label %bool_true, label %chk_false
+bool_true:
+  %eqt = icmp eq i128 %d, 1
+  br label %store_res
+chk_false:
+  %falsep = getelementptr inbounds [6 x i8], ptr @.hc_false, i64 0, i64 0
+  %c2 = call i32 @strcmp(i8* %str, i8* %falsep)
+  %is_false = icmp eq i32 %c2, 0
+  br i1 %is_false, label %bool_false, label %chk_null
+bool_false:
+  %eqf = icmp eq i128 %d, 0
+  br label %store_res
+chk_null:
+  %is_null = icmp eq i32 %t, 1
+  br i1 %is_null, label %null_cmp, label %chk_enum
+null_cmp:
+  %nullp = getelementptr inbounds [5 x i8], ptr @.hc_null, i64 0, i64 0
+  %c3 = call i32 @strcmp(i8* %str, i8* %nullp)
+  %eqn = icmp eq i32 %c3, 0
+  br label %store_res
+chk_enum:
+  %is_enum = icmp eq i32 %t, 11
+  br i1 %is_enum, label %enum_cmp, label %done
+enum_cmp:
+  %d2 = extractvalue %Value %b, 1
+  %op = inttoptr i128 %d2 to %EnumObj*
+  %eo = load %EnumObj, %EnumObj* %op
+  %vn = extractvalue %EnumObj %eo, 1
+  %c4 = call i32 @strcmp(i8* %vn, i8* %str)
+  %eqv = icmp eq i32 %c4, 0
+  br label %store_res
+t_int:
+  %is_int = icmp eq i32 %t, 2
+  br i1 %is_int, label %int_cmp, label %done
+int_cmp:
+  %eqi = icmp eq i128 %d, %data
+  br label %store_res
+t_float:
+  %is_float = icmp eq i32 %t, 3
+  br i1 %is_float, label %float_cmp, label %done
+float_cmp:
+  %eqf2 = icmp eq i128 %d, %data
+  br label %store_res
+t_str:
+  %is_str = icmp eq i32 %t, 5
+  br i1 %is_str, label %str_cmp, label %done
+str_cmp:
+  %sp = inttoptr i128 %d to i8*
+  %mc = call i32 @memcmp(i8* %str, i8* %sp, i64 %len)
+  %eqs = icmp eq i32 %mc, 0
+  br label %store_res
+t_char:
+  %is_int2 = icmp eq i32 %t, 2
+  br i1 %is_int2, label %char_cmp, label %done
+char_cmp:
+  %eqc2 = icmp eq i128 %d, %data
+  br label %store_res
+store_res:
+  %res = phi i1 [ %eqc, %err_cmp ], [ %eqt, %bool_true ], [ %eqf, %bool_false ], [ %eqn, %null_cmp ], [ %eqv, %enum_cmp ], [ %eqi, %int_cmp ], [ %eqf2, %float_cmp ], [ %eqs, %str_cmp ], [ %eqc2, %char_cmp ]
+  %d3 = zext i1 %res to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 4, 0
+  %v1 = insertvalue %Value %v0, i128 %d3, 1
+  store %Value %v1, %Value* %slot
+  br label %done
+done:
+  %rv = load %Value, %Value* %slot
+  ret %Value %rv
+}
+"#;
+
+const HC_ENUM_PAYLOAD: &str = r#"define %Value @hc_enum_payload(%Value %v) {
+entry:
+  %b = call %Value @hc_deref(%Value %v)
+  %t = extractvalue %Value %b, 0
+  %is_enum = icmp eq i32 %t, 11
+  br i1 %is_enum, label %enum_, label %identity
+enum_:
+  %d = extractvalue %Value %b, 1
+  %op = inttoptr i128 %d to %EnumObj*
+  %eo = load %EnumObj, %EnumObj* %op
+  %pp = extractvalue %EnumObj %eo, 2
+  %isnull = icmp eq %Value* %pp, null
+  br i1 %isnull, label %identity, label %payload
+payload:
+  %pv = load %Value, %Value* %pp
+  ret %Value %pv
+identity:
+  ret %Value %b
+}
+"#;
+
+/// `lo..hi` → Arr（[lo, hi) 元素，对齐 run_ir `MakeRange`；lo ≥ hi → 空数组）。
+const HC_MAKE_RANGE: &str = r#"define %Value @hc_make_range(%Value %lo, %Value %hi) {
+entry:
+  %l = call %Value @hc_deref(%Value %lo)
+  %lt = extractvalue %Value %l, 0
+  %lt2 = icmp eq i32 %lt, 2
+  br i1 %lt2, label %l_ok, label %typeerr
+l_ok:
+  %h = call %Value @hc_deref(%Value %hi)
+  %ht = extractvalue %Value %h, 0
+  %ht2 = icmp eq i32 %ht, 2
+  br i1 %ht2, label %h_ok, label %typeerr
+h_ok:
+  %lv = extractvalue %Value %l, 1
+  %hv = extractvalue %Value %h, 1
+  %sub = sub i128 %hv, %lv
+  %neg = icmp slt i128 %sub, 0
+  %cnt = select i1 %neg, i128 0, i128 %sub
+  %cnt64 = trunc i128 %cnt to i64
+  %arr = call %Value @hc_make_arr(i64 %cnt64)
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %h_ok ], [ %i2, %next ]
+  %done = icmp uge i64 %i, %cnt64
+  br i1 %done, label %fin, label %body
+body:
+  %vi = zext i64 %i to i128
+  %lv2 = add i128 %lv, %vi
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v1 = insertvalue %Value %v0, i128 %lv2, 1
+  call void @hc_arr_set(%Value %arr, i64 %i, %Value %v1)
+  br label %next
+next:
+  %i2 = add i64 %i, 1
+  br label %loop
+typeerr:
+  call void @hc_abort_typeerr()
+  unreachable
+fin:
+  ret %Value %arr
+}
+"#;
+
+fn emit_switch_helpers(out: &mut String) {
+    out.push_str(HC_MATCH_TEST);
+    out.push('\n');
+    out.push_str(HC_ENUM_PAYLOAD);
+    out.push('\n');
+    out.push_str(HC_MAKE_RANGE);
+    out.push('\n');
+}
+
+// ---------- Phase 3 for 迭代器 helper（Arr/Slice 共享源指针写回；Str/Map 新单元） ----------
+
+const HC_ITER_ALLOC: &str = r#"define %IterObj* @hc_iter_alloc(i64 %n) {
+entry:
+  %osz = ptrtoint %IterObj* getelementptr (%IterObj, %IterObj* null, i32 1) to i64
+  %oraw = call i8* @hc_alloc(i64 %osz)
+  %op = bitcast i8* %oraw to %IterObj*
+  %isz = ptrtoint %IterItemObj* getelementptr (%IterItemObj, %IterItemObj* null, i32 1) to i64
+  %is = mul i64 %isz, %n
+  %iraw = call i8* @hc_alloc(i64 %is)
+  %ip = bitcast i8* %iraw to %IterItemObj*
+  %o0 = insertvalue %IterObj undef, %IterItemObj* %ip, 0
+  %o1 = insertvalue %IterObj %o0, i64 %n, 1
+  %o2 = insertvalue %IterObj %o1, i64 0, 2
+  %o3 = insertvalue %IterObj %o2, i64 -1, 3
+  store %IterObj %o3, %IterObj* %op
+  ret %IterObj* %op
+}
+"#;
+
+const HC_ITER_SET: &str = r#"define void @hc_iter_set(%IterObj* %iter, i64 %i, %Value* %src, i1 %is_ref) {
+entry:
+  %it = load %IterObj, %IterObj* %iter
+  %items = extractvalue %IterObj %it, 0
+  %ip = getelementptr %IterItemObj, %IterItemObj* %items, i64 %i
+  %it0 = insertvalue %IterItemObj undef, %Value* %src, 0
+  %it1 = insertvalue %IterItemObj %it0, i1 %is_ref, 1
+  store %IterItemObj %it1, %IterItemObj* %ip
+  ret void
+}
+"#;
+
+/// 取下一项：`has`（Bool）写入迭代器当前项值副本到捕获槽；无下一项 → false。
+/// Mut/Move 捕获由 `hc_iter_write_back` 在循环体末尾写回（拷贝进出——LLVM 槽模型无
+/// 单元间接层；run_ir 侧槽 cell 即源 cell，写回为无操作）。
+const HC_ITER_NEXT: &str = r#"define %Value @hc_iter_next(%IterObj* %iter, %Value* %slot) {
+entry:
+  %it = load %IterObj, %IterObj* %iter
+  %count = extractvalue %IterObj %it, 1
+  %next = extractvalue %IterObj %it, 2
+  %done = icmp uge i64 %next, %count
+  br i1 %done, label %ret_false, label %got
+got:
+  %items = extractvalue %IterObj %it, 0
+  %ip = getelementptr %IterItemObj, %IterItemObj* %items, i64 %next
+  %item = load %IterItemObj, %IterItemObj* %ip
+  %src = extractvalue %IterItemObj %item, 0
+  %val = load %Value, %Value* %src
+  store %Value %val, %Value* %slot
+  %i0 = insertvalue %IterObj %it, i64 %next, 3
+  %next2 = add i64 %next, 1
+  %i1 = insertvalue %IterObj %i0, i64 %next2, 2
+  store %IterObj %i1, %IterObj* %iter
+  ret %Value { i32 4, i128 1 }
+ret_false:
+  ret %Value { i32 4, i128 0 }
+}
+"#;
+
+const HC_ITER_WRITE_BACK: &str = r#"define void @hc_iter_write_back(%IterObj* %iter, %Value* %slot) {
+entry:
+  %it = load %IterObj, %IterObj* %iter
+  %wb = extractvalue %IterObj %it, 3
+  %none = icmp eq i64 %wb, -1
+  br i1 %none, label %done, label %wb2
+wb2:
+  %items = extractvalue %IterObj %it, 0
+  %ip = getelementptr %IterItemObj, %IterItemObj* %items, i64 %wb
+  %item = load %IterItemObj, %IterItemObj* %ip
+  %src = extractvalue %IterItemObj %item, 0
+  %val = load %Value, %Value* %slot
+  store %Value %val, %Value* %src
+  br label %done
+done:
+  ret void
+}
+"#;
+
+/// 展开可迭代值（对齐 run_ir `make_iter`）：Arr/Slice 元素源指针 `is_ref=true`（写穿）；
+/// Str → 字节新单元；Map → KV 类新单元（key 字段 + value 字段副本，`is_ref=false`——
+/// 原生 Map 写回为 KV 副本，收敛于 Phase 7 标准库）；其它 Class（用户 IIterable）→
+/// NotIterable 硬错误（方法动态分派属 Phase 4）。
+const HC_ITER_MAKE: &str = r#"define %Value @hc_iter_make(%Value %base) {
+entry:
+  %b = call %Value @hc_deref(%Value %base)
+  %t = extractvalue %Value %b, 0
+  %is_arr = icmp eq i32 %t, 8
+  br i1 %is_arr, label %arr, label %chk_slice
+arr:
+  %d = extractvalue %Value %b, 1
+  %op = inttoptr i128 %d to %ArrObj*
+  %ao = load %ArrObj, %ArrObj* %op
+  %cnt = extractvalue %ArrObj %ao, 0
+  %items = extractvalue %ArrObj %ao, 1
+  %iter = call %IterObj* @hc_iter_alloc(i64 %cnt)
+  br label %arr_loop
+arr_loop:
+  %i = phi i64 [ 0, %arr ], [ %i2, %arr_next ]
+  %adone = icmp uge i64 %i, %cnt
+  br i1 %adone, label %fin_arr, label %arr_body
+arr_body:
+  %asrc = getelementptr %Value, %Value* %items, i64 %i
+  call void @hc_iter_set(%IterObj* %iter, i64 %i, %Value* %asrc, i1 true)
+  br label %arr_next
+arr_next:
+  %i2 = add i64 %i, 1
+  br label %arr_loop
+fin_arr:
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 13, 0
+  %ip0 = ptrtoint %IterObj* %iter to i128
+  %v1 = insertvalue %Value %v0, i128 %ip0, 1
+  ret %Value %v1
+chk_slice:
+  %is_slc = icmp eq i32 %t, 9
+  br i1 %is_slc, label %slc, label %chk_str
+slc:
+  %d3 = extractvalue %Value %b, 1
+  %sop = inttoptr i128 %d3 to %SliceObj*
+  %so = load %SliceObj, %SliceObj* %sop
+  %sdata = extractvalue %SliceObj %so, 0
+  %sstart = extractvalue %SliceObj %so, 1
+  %slen = extractvalue %SliceObj %so, 2
+  %iter3 = call %IterObj* @hc_iter_alloc(i64 %slen)
+  br label %slc_loop
+slc_loop:
+  %k = phi i64 [ 0, %slc ], [ %k2, %slc_next ]
+  %sdone = icmp uge i64 %k, %slen
+  br i1 %sdone, label %fin_slc, label %slc_body
+slc_body:
+  %sidx = add i64 %sstart, %k
+  %ssrc = getelementptr %Value, %Value* %sdata, i64 %sidx
+  call void @hc_iter_set(%IterObj* %iter3, i64 %k, %Value* %ssrc, i1 true)
+  br label %slc_next
+slc_next:
+  %k2 = add i64 %k, 1
+  br label %slc_loop
+fin_slc:
+  %u0 = insertvalue %Value { i32 0, i128 0 }, i32 13, 0
+  %uip = ptrtoint %IterObj* %iter3 to i128
+  %u1 = insertvalue %Value %u0, i128 %uip, 1
+  ret %Value %u1
+chk_str:
+  %is_str = icmp eq i32 %t, 5
+  br i1 %is_str, label %str_, label %chk_class
+str_:
+  %d2 = extractvalue %Value %b, 1
+  %sp2 = inttoptr i128 %d2 to i8*
+  %blen = call i64 @strlen(i8* %sp2)
+  %iter2 = call %IterObj* @hc_iter_alloc(i64 %blen)
+  br label %str_loop
+str_loop:
+  %j = phi i64 [ 0, %str_ ], [ %j2, %str_next ]
+  %bdone = icmp uge i64 %j, %blen
+  br i1 %bdone, label %fin_str, label %str_body
+str_body:
+  %cp = getelementptr i8, i8* %sp2, i64 %j
+  %c = load i8, i8* %cp
+  %ci = zext i8 %c to i128
+  %bv0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %bv1 = insertvalue %Value %bv0, i128 %ci, 1
+  %vsz = ptrtoint %Value* getelementptr (%Value, %Value* null, i32 1) to i64
+  %craw = call i8* @hc_alloc(i64 %vsz)
+  %cell = bitcast i8* %craw to %Value*
+  store %Value %bv1, %Value* %cell
+  call void @hc_iter_set(%IterObj* %iter2, i64 %j, %Value* %cell, i1 false)
+  br label %str_next
+str_next:
+  %j2 = add i64 %j, 1
+  br label %str_loop
+fin_str:
+  %w0 = insertvalue %Value { i32 0, i128 0 }, i32 13, 0
+  %wip = ptrtoint %IterObj* %iter2 to i128
+  %w1 = insertvalue %Value %w0, i128 %wip, 1
+  ret %Value %w1
+chk_class:
+  %is_cls = icmp eq i32 %t, 10
+  br i1 %is_cls, label %cls, label %notiter
+cls:
+  %d4 = extractvalue %Value %b, 1
+  %cop = inttoptr i128 %d4 to %ClassObj*
+  %co = load %ClassObj, %ClassObj* %cop
+  %tyn = extractvalue %ClassObj %co, 0
+  %mapp = getelementptr inbounds [4 x i8], ptr @.hc_map, i64 0, i64 0
+  %mcmp = call i32 @strcmp(i8* %tyn, i8* %mapp)
+  %is_map = icmp eq i32 %mcmp, 0
+  br i1 %is_map, label %map_, label %notiter
+map_:
+  %mcnt = extractvalue %ClassObj %co, 1
+  %mfields = extractvalue %ClassObj %co, 2
+  %iter4 = call %IterObj* @hc_iter_alloc(i64 %mcnt)
+  br label %map_loop
+map_loop:
+  %m = phi i64 [ 0, %map_ ], [ %m2, %map_next ]
+  %mdone = icmp uge i64 %m, %mcnt
+  br i1 %mdone, label %fin_map, label %map_body
+map_body:
+  %mfp = getelementptr %Field, %Field* %mfields, i64 %m
+  %mf = load %Field, %Field* %mfp
+  %mfn = extractvalue %Field %mf, 0
+  %mfv = extractvalue %Field %mf, 1
+  ; KV 类：key = 字段名 Str，value = 字段值副本（is_ref=false）
+  %kvp = getelementptr inbounds [3 x i8], ptr @.hc_kv, i64 0, i64 0
+  %kv = call %Value @hc_make_class(i8* %kvp, i64 2)
+  %keyp = getelementptr inbounds [4 x i8], ptr @.hc_key, i64 0, i64 0
+  %mfnptr = ptrtoint i8* %mfn to i128
+  %ks0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %ks1 = insertvalue %Value %ks0, i128 %mfnptr, 1
+  call void @hc_class_set(%Value %kv, i64 0, i8* %keyp, %Value %ks1)
+  %valp = getelementptr inbounds [6 x i8], ptr @.hc_value, i64 0, i64 0
+  call void @hc_class_set(%Value %kv, i64 1, i8* %valp, %Value %mfv)
+  ; 每项独立 cell 持有 KV 副本（写回不传播到源 Map——与 oracle KV 新 cell 一致）
+  %vsz2 = ptrtoint %Value* getelementptr (%Value, %Value* null, i32 1) to i64
+  %kraw = call i8* @hc_alloc(i64 %vsz2)
+  %kcell = bitcast i8* %kraw to %Value*
+  store %Value %kv, %Value* %kcell
+  call void @hc_iter_set(%IterObj* %iter4, i64 %m, %Value* %kcell, i1 false)
+  br label %map_next
+map_next:
+  %m2 = add i64 %m, 1
+  br label %map_loop
+fin_map:
+  %x0 = insertvalue %Value { i32 0, i128 0 }, i32 13, 0
+  %xip = ptrtoint %IterObj* %iter4 to i128
+  %x1 = insertvalue %Value %x0, i128 %xip, 1
+  ret %Value %x1
+notiter:
+  call void @hc_abort_notiter()
+  unreachable
+}
+"#;
+
+fn emit_iter_helpers(out: &mut String) {
+    for h in [
+        HC_ITER_ALLOC,
+        HC_ITER_SET,
+        HC_ITER_NEXT,
+        HC_ITER_WRITE_BACK,
+        HC_ITER_MAKE,
+    ] {
+        out.push_str(h);
+        out.push('\n');
+    }
+}
+
 // ---------- 断言内建 helper（失败写全局 @hc_fail_msg） ----------
 
 fn emit_assert_helpers(out: &mut String) {
@@ -2300,6 +2749,84 @@ impl BodyEmitter {
                 self.emit(format!("{res} = call %Value @hc_unwrap(%Value {v})"));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
+            // ---- Phase 3 switch / 区间 / for ----
+            IrInst::MatchTest { temp, subject, pattern } => {
+                let sv = self.r();
+                self.emit(format!("{sv} = load %Value, %Value* %sp.{subject}"));
+                // 模式描述符：0=Error(code) 1=Ident(str) 2=Int(data) 3=Float(bits) 4=Str(str,len) 5=Char(data)
+                let (ptag, pdata, pstr, plen) = match pattern {
+                    IrPattern::Error(name) => {
+                        let code = errors.code_of(name).unwrap_or(0);
+                        (0u8, code as u128, "null".to_string(), 0i64)
+                    }
+                    IrPattern::Ident(s) => {
+                        let (si, sn) = str_idx(strings, s);
+                        let pg = self.r();
+                        self.emit(format!("{pg} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"));
+                        (1u8, 0u128, pg, 0i64)
+                    }
+                    IrPattern::Int(i) => (2u8, *i as u128, "null".to_string(), 0i64),
+                    IrPattern::Float(f) => (3u8, f.to_bits() as u128, "null".to_string(), 0i64),
+                    IrPattern::Str(s) => {
+                        let (si, sn) = str_idx(strings, s);
+                        let pg = self.r();
+                        self.emit(format!("{pg} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"));
+                        (4u8, 0u128, pg, s.len() as i64)
+                    }
+                    IrPattern::Char(c) => (5u8, *c as u128, "null".to_string(), 0i64),
+                };
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_match_test(%Value {sv}, i8 {ptag}, i128 {pdata}, i8* {pstr}, i64 {plen})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            IrInst::MakeRange { temp, lo, hi } => {
+                let lv = self.r();
+                self.emit(format!("{lv} = load %Value, %Value* %sp.{lo}"));
+                let hv = self.r();
+                self.emit(format!("{hv} = load %Value, %Value* %sp.{hi}"));
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_make_range(%Value {lv}, %Value {hv})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            IrInst::EnumPayload { temp, a } => {
+                let av = self.r();
+                self.emit(format!("{av} = load %Value, %Value* %sp.{a}"));
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_enum_payload(%Value {av})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            IrInst::IterMake { temp, base } => {
+                let bv = self.r();
+                self.emit(format!("{bv} = load %Value, %Value* %sp.{base}"));
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_iter_make(%Value {bv})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            IrInst::IterNext { has, iter, slot, read_only } => {
+                // 捕获槽为按值 `%Value`：先拷贝项值入槽，循环体末尾由 IterWriteBack 写回。
+                // `read_only` 不影响 LLVM 布局（只读捕获槽无人写；Mut/Move 靠写回收敛）。
+                let _ = read_only;
+                let iv = self.r();
+                self.emit(format!("{iv} = load %Value, %Value* %sp.{iter}"));
+                let ip = self.r();
+                self.emit(format!("{ip} = extractvalue %Value {iv}, 1"));
+                let itp = self.r();
+                self.emit(format!("{itp} = inttoptr i128 {ip} to %IterObj*"));
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_iter_next(%IterObj* {itp}, %Value* %sp.{slot})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{has}"));
+            }
+            IrInst::IterWriteBack { iter, slot } => {
+                let iv = self.r();
+                self.emit(format!("{iv} = load %Value, %Value* %sp.{iter}"));
+                let ip = self.r();
+                self.emit(format!("{ip} = extractvalue %Value {iv}, 1"));
+                let itp = self.r();
+                self.emit(format!("{itp} = inttoptr i128 {ip} to %IterObj*"));
+                self.emit(format!("call void @hc_iter_write_back(%IterObj* {itp}, %Value* %sp.{slot})"));
+            }
             IrInst::Call { name, args, temp } => self.call(name, args, *temp, canon),
             IrInst::CallBuiltin { name, args, temp } => self.call_builtin(name, args, *temp),
             IrInst::Return { temp } => self.ret(*temp),
@@ -2516,5 +3043,73 @@ mod tests {
                 panic!("行内常量表达式 GEP 残留: {line}");
             }
         }
+    }
+
+    // ---- Phase 3 switch + range + for 发射 ----
+
+    #[test]
+    fn phase3_switch_emits_match_test_helper() {
+        // MatchTest 指令 → @hc_match_test（模式描述符：tag/data/str/len）
+        let ll = gen(
+            "fn f(x: i32) i32 { switch (x) { 1 => return 10, else => return 99, } }",
+        );
+        assert!(ll.contains("define %Value @hc_match_test"), "{ll}");
+        assert!(ll.contains("call %Value @hc_match_test"), "{ll}");
+        // switch 指令：i8 类型限定的 case 列表
+        assert!(ll.contains("switch i8 %tag, label %done"), "{ll}");
+        assert!(ll.contains("i8 0, label %t_err"), "{ll}");
+        assert!(ll.contains("i8 2, label %t_int"), "{ll}");
+    }
+
+    #[test]
+    fn phase3_switch_string_pattern_collected() {
+        // Str/Ident 模式字符串进入字符串表（@.str.N 全局）
+        let ll = gen(
+            r#"fn pick(s: String) i32 { switch (s) { "hi" => return 1, else => return 0, } }"#,
+        );
+        assert!(ll.contains("@hc_match_test"), "{ll}");
+        assert!(ll.contains("c\"hi\\00\""), "{ll}");
+    }
+
+    #[test]
+    fn phase3_enum_payload_emits_helper() {
+        // EnumPayload 指令 → @hc_enum_payload
+        let ll = gen(
+            r#"enum Maybe { some: i32, none } fn f(m: Maybe) i32 { switch (m) { some => |i| i, none => -1, } }"#,
+        );
+        assert!(ll.contains("define %Value @hc_enum_payload"), "{ll}");
+        assert!(ll.contains("call %Value @hc_enum_payload"), "{ll}");
+    }
+
+    #[test]
+    fn phase3_make_range_emits_helper() {
+        // MakeRange 指令 → @hc_make_range（区间 [lo, hi) → Arr）
+        let ll = gen("fn f() i32 { var mut s: i32 = 0; for (0..4) |i| { s += i; } return s; }");
+        assert!(ll.contains("define %Value @hc_make_range"), "{ll}");
+        assert!(ll.contains("call %Value @hc_make_range"), "{ll}");
+    }
+
+    #[test]
+    fn phase3_iter_emits_iter_helpers() {
+        // IterMake/IterNext/IterWriteBack → @hc_iter_make/@hc_iter_next/@hc_iter_write_back
+        let ll = gen("fn f() i32 { var a = [1, 2]; for (a) |mut x| { x += 1; } return a[1]; }");
+        assert!(ll.contains("define %IterObj* @hc_iter_alloc"), "{ll}");
+        assert!(ll.contains("define void @hc_iter_set"), "{ll}");
+        assert!(ll.contains("define %Value @hc_iter_make"), "{ll}");
+        assert!(ll.contains("define %Value @hc_iter_next"), "{ll}");
+        assert!(ll.contains("define void @hc_iter_write_back"), "{ll}");
+        assert!(ll.contains("call %Value @hc_iter_make"), "{ll}");
+        assert!(ll.contains("call %Value @hc_iter_next"), "{ll}");
+        assert!(ll.contains("call void @hc_iter_write_back"), "{ll}");
+        assert!(ll.contains("%IterItemObj = type"), "{ll}");
+        assert!(ll.contains("%IterObj = type"), "{ll}");
+    }
+
+    #[test]
+    fn phase3_iter_notiter_message_present() {
+        // NotIterable 硬错误消息：@.msg_notiter 全局 + hc_abort_notiter helper
+        let ll = gen("fn f() i32 { var a = [1]; var mut s: i32 = 0; for (a) |x| { s += x; } return s; }");
+        assert!(ll.contains("@.msg_notiter"), "{ll}");
+        assert!(ll.contains("define void @hc_abort_notiter"), "{ll}");
     }
 }

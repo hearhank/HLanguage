@@ -428,15 +428,12 @@ fn deref_eq() bool {
 #[test]
 fn out_of_slice_constructs_are_hard_errors() {
     // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
+    // Phase 3 已将 for/switch 纳入 IR 支持面（见下方正例测试）；此处仅保留仍未实现者。
     let cases: &[&str] = &[
-        // for 循环（含区间糖）
-        "fn f() i32 { for (0..3) |i| { return i; } return 0; }",
-        // 全局常量声明（程序启动初始化）
+        // 全局常量声明（Phase 5 程序启动初始化）
         "const X: i32 = 1;\nfn f() i32 { return X; }",
-        // 闭包
+        // 闭包（Phase 4）
         "fn f() i32 { var x = |v| v + 1; return 0; }",
-        // switch 语句
-        "fn f(x: i32) i32 { switch (x) { else => return 0; } }",
     ];
     for src in cases {
         let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
@@ -446,4 +443,102 @@ fn out_of_slice_constructs_are_hard_errors() {
             "预期 Unsupported 硬错误，src: {src}"
         );
     }
+}
+
+#[test]
+fn for_range_loop_lowers_and_runs() {
+    // Phase 3：`for (lo..hi)` 区间糖 → MakeRange + IterMake/IterNext；只读捕获。
+    let src = r#"
+fn f() i32 {
+    var mut s: i32 = 0;
+    for (0..4) |i| { s += i; }
+    return s;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(6));
+}
+
+#[test]
+fn for_arr_read_only_loop() {
+    // Phase 3：数组迭代只读捕获（元素值拷贝，不写回）。
+    let src = r#"
+fn f() i32 {
+    var a = [10, 20, 30];
+    var mut s: i32 = 0;
+    for (a) |x| { s += x; }
+    return s;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(60));
+}
+
+#[test]
+fn for_arr_mut_writeback() {
+    // Phase 3：`for (arr) |mut x|` 写回——每项自增后源数组同步（与 oracle 一致）。
+    let src = r#"
+fn f() i32 {
+    var a = [1, 2, 3];
+    for (a) |mut x| { x += 1; }
+    return a[0] + a[1] + a[2];
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(9));
+}
+
+#[test]
+fn switch_first_match_semantics() {
+    // Phase 3：switch 线性链 first-match；无匹配且无 else → 0。
+    let src = r#"
+fn f(x: i32) i32 {
+    switch (x) {
+        1 => return 10,
+        2 => return 20,
+        else => return 99,
+    }
+}
+"#;
+    assert_eq!(run(src, "f", &[IrValue::Int(1)]).unwrap(), IrValue::Int(10));
+    assert_eq!(run(src, "f", &[IrValue::Int(2)]).unwrap(), IrValue::Int(20));
+    assert_eq!(run(src, "f", &[IrValue::Int(9)]).unwrap(), IrValue::Int(99));
+}
+
+#[test]
+fn switch_no_else_falls_to_void() {
+    // 无匹配 + 无 else → 语句降级为 Void（对齐 oracle Flow::None）。
+    let src = r#"
+fn f(x: i32) i32 {
+    var mut y: i32 = 0;
+    switch (x) { 1 => { y = 5; } }
+    return y;
+}
+"#;
+    assert_eq!(run(src, "f", &[IrValue::Int(1)]).unwrap(), IrValue::Int(5));
+    assert_eq!(run(src, "f", &[IrValue::Int(7)]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn switch_enum_and_string_patterns() {
+    // 枚举变体（Ident 模式）与字符串字面量模式匹配。
+    let src = r#"
+enum Color { red, green, blue }
+fn name(c: Color) i32 {
+    switch (c) {
+        Color.red => return 1,
+        Color.green => return 2,
+        else => return 3,
+    }
+}
+fn pick(s: String) i32 {
+    switch (s) {
+        "a" => return 1,
+        "b" => return 2,
+        else => return 0,
+    }
+}
+"#;
+    assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "red".into(), payload: None }]).unwrap(), IrValue::Int(1));
+    assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "green".into(), payload: None }]).unwrap(), IrValue::Int(2));
+    assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "blue".into(), payload: None }]).unwrap(), IrValue::Int(3));
+    assert_eq!(run(src, "pick", &[IrValue::Str("a".into())]).unwrap(), IrValue::Int(1));
+    assert_eq!(run(src, "pick", &[IrValue::Str("z".into())]).unwrap(), IrValue::Int(0));
 }

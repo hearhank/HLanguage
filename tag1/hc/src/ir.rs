@@ -9,9 +9,13 @@
 //! error 字面量 + try/catch + orelse + 全局函数调用（含多级限定名）+
 //! 断言内建 + **指针**（Phase 1：`&`/`&mut` 取址、`p.*` 解引用、写穿别名）+
 //! **聚合**（Phase 2：数组/元组字面量、struct/枚举字面量与常量、字段/索引/切片
-//! 读写、`.?` 断言解包、元组解构、`move`）。
-//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、for/switch、break/continue、
-//! 闭包、class 方法/动态调用（Phase 3/4 起）。复杂库操作 = `CallBuiltin` 原子指令。
+//! 读写、`.?` 断言解包、元组解构、`move`）+
+//! **switch + range + for**（Phase 3：`MatchTest`/`IrPattern` first-match 线性链、
+//! `0..n` 区间糖、`IterMake/IterNext/IterWriteBack` 迭代含 mut 写回、无标签
+//! break/continue）。
+//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、带标签 break/continue、
+//! 闭包、函数引用、class 方法/动态调用、global/const（Phase 4/5/6 起）。
+//! 复杂库操作 = `CallBuiltin` 原子指令。
 
 use crate::ast::*;
 use crate::errorcodes::ErrorCodeTable;
@@ -244,6 +248,61 @@ pub enum IrInst {
         temp: usize,
         a: usize,
     },
+    // ---- Phase 3：switch / 区间 / for ----
+    /// temp = 模式匹配（对齐 oracle `match_pattern`：subject 先 deref 一次）
+    MatchTest {
+        temp: usize,
+        subject: usize,
+        pattern: IrPattern,
+    },
+    /// temp = [lo, hi) 整数区间数组（对齐 oracle `BinOp::Range`；lo/hi 须为 Int，否则 TypeError）
+    MakeRange {
+        temp: usize,
+        lo: usize,
+        hi: usize,
+    },
+    /// temp = 枚举负载（subject 为 `Enum{payload:Some(p)}` → p；否则 → subject 本身）。
+    /// switch 臂捕获专用（对齐 oracle `exec_switch_arm` 的负载捕获分支）。
+    EnumPayload {
+        temp: usize,
+        a: usize,
+    },
+    /// temp = 迭代器（`iter_items` 语义：Arr/Slice 共享元素 cell `is_ref=true`；
+    /// Map→KV 新 cell；Str→字节 Int；用户 IIterable→`next()` 至 Opt(None)）
+    IterMake {
+        temp: usize,
+        base: usize,
+    },
+    /// 取下一项并绑定捕获槽：`has` = 是否还有下一项；有则
+    /// `read_only`（Read 捕获）→ 槽 cell 置为「该项值副本」；
+    /// 否则（Mut/Move 捕获）→ 槽 cell 绑定为「共享源 cell」（写穿；LLVM 侧为拷贝进出）。
+    /// 迭代器内部记录「当前项」供 [`IrInst::IterWriteBack`] 写回。
+    IterNext {
+        has: usize,
+        iter: usize,
+        slot: usize,
+        read_only: bool,
+    },
+    /// 把捕获槽的 cell 内容写回迭代器「当前项」的源 cell（Mut/Move 捕获循环体末尾发射；
+    /// run_ir 因槽 cell 即源 cell 而为无操作；LLVM 侧为拷贝进出写回）。
+    IterWriteBack {
+        iter: usize,
+        slot: usize,
+    },
+}
+
+/// switch 模式（对齐 AST [`crate::ast::SwitchPattern`]；`Else` 不发射 MatchTest——
+/// 在 lower 阶段识别为兜底臂，其余模式全部失败后落入）。
+#[derive(Debug, Clone)]
+pub enum IrPattern {
+    /// error.NotFound → 主题为 `Err{name}` 且 name 相等
+    Error(String),
+    /// 标识符 / 枚举变体 / true/false / null
+    Ident(String),
+    Int(i128),
+    Float(f64),
+    Str(String),
+    Char(u8),
 }
 
 // ---------- 类型元数据（Phase 2：class/enum/namespace 判型） ----------
@@ -378,10 +437,19 @@ fn lower_decl(
         Decl::Global { span, .. } | Decl::Const { span, .. } => {
             return Err(unsupported_ir_err("global/const 声明（程序启动初始化）", span));
         }
-        // 类型级声明（class/enum/interface/using/script）：无运行时代码，安全忽略；
-        // 其方法/字段被实际使用时在调用点报错（见 lower_expr 的 Call/Field 分支）
-        Decl::Class { .. }
-        | Decl::Enum { .. }
+        // 类型级声明（class/enum/interface/using/script）：无顶层运行时代码；
+        // class 方法登记为 `{Type}.{method}`（对齐 oracle interp.rs:522-535）——IIterable
+        // 用户类型的 `next()` 经此查找。方法体降级失败 → 跳过登记（调用点 NoFunction
+        // 硬错误，不使整个程序降级失败——方法与调用分属 Phase 3/4 边界）。
+        Decl::Class { name, methods, .. } => {
+            for m in methods {
+                let fname = format!("{name}.{}", m.name);
+                if let Ok(func) = lower_func(&fname, &m.params, &m.body, false, errors, types) {
+                    register_func(module, &fname, func);
+                }
+            }
+        }
+        Decl::Enum { .. }
         | Decl::Interface { .. }
         | Decl::Using { .. }
         | Decl::Script { .. } => {}
@@ -488,8 +556,16 @@ struct LowerCtx {
     errors: ErrorCodeTable,
     /// 类型元数据（Phase 2：NamedLit/Dot 判型 class vs enum vs namespace）
     types: TypeTable,
+    /// 循环栈（Phase 3）：无标签 break/continue 定位（对齐 oracle 单级跳出；标签 → Phase 6）
+    loops: Vec<LoopCtx>,
     /// 首个子集外特性错误（降级失败信号；降级继续推进以收集更多槽号，但最终报错）
     err: Option<IrError>,
+}
+
+/// 循环上下文（Phase 3）：break 目标 + continue 目标
+struct LoopCtx {
+    break_label: usize,
+    continue_label: usize,
 }
 
 impl LowerCtx {
@@ -611,7 +687,7 @@ impl LowerCtx {
                 // 全局变量/常量引用：原生/IR 后端无程序启动初始化语义 → 硬错误
                 None => self.fail_void(t, "全局变量/常量引用", span),
             },
-            Expr::Binary(op, l, r, span) => {
+            Expr::Binary(op, l, r, _span) => {
                 let a = self.lower_expr(l);
                 match op {
                     // 短路 and/or（与运行时 eval_binary 一致）
@@ -649,8 +725,15 @@ impl LowerCtx {
                         });
                         self.label(done);
                     }
-                    // 区间糖（[lo,hi) 数组/切片）不在 IR 标量范围 → 硬错误
-                    BinOp::Range => self.fail_void(t, "区间 `lo..hi`（数组/切片）", span),
+                    // 区间糖：`[lo, hi)` 整数区间数组（对齐 oracle `BinOp::Range`）
+                    BinOp::Range => {
+                        let b = self.lower_expr(r);
+                        self.push(IrInst::MakeRange {
+                            temp: t,
+                            lo: a,
+                            hi: b,
+                        });
+                    }
                     _ => {
                         let b = self.lower_expr(r);
                         self.push(IrInst::Bin {
@@ -1014,7 +1097,12 @@ impl LowerCtx {
                 let a = self.lower_expr(inner);
                 self.push(IrInst::Unwrap { temp: t, a });
             }
-            Expr::SwitchExpr { span, .. } => self.fail_void(t, "switch 表达式", span),
+            Expr::SwitchExpr { subject, arms, span } => {
+                let has_else = arms
+                    .iter()
+                    .any(|a| a.patterns.iter().any(|p| matches!(p, SwitchPattern::Else)));
+                self.lower_switch_inner(subject, arms, has_else, span, Some(t));
+            }
             // 块表达式：值 = 最后语句（若为 Expr）的值；否则 void（对齐 exec_block_inner）
             Expr::Block(b, _) => {
                 self.push_scope();
@@ -1313,6 +1401,8 @@ impl LowerCtx {
             }
             Stmt::While(w) => {
                 let l_top = self.new_label();
+                // continue 目标：步进（如有）→ 重测条件（对齐 oracle exec_while）
+                let l_cont = self.new_label();
                 let l_end = self.new_label();
                 self.label(l_top);
                 let c = self.lower_expr(&w.cond);
@@ -1320,7 +1410,13 @@ impl LowerCtx {
                     temp: c,
                     label: l_end,
                 });
+                self.loops.push(LoopCtx {
+                    break_label: l_end,
+                    continue_label: l_cont,
+                });
                 self.lower_block(&w.body);
+                self.loops.pop();
+                self.label(l_cont);
                 if let Some(step) = &w.step {
                     let _ = self.lower_expr(step);
                 }
@@ -1335,15 +1431,227 @@ impl LowerCtx {
                 None => self.push(IrInst::ReturnVoid),
             },
             Stmt::Block(b) => self.lower_block(b),
-            // for/switch/break/continue/defer/errdefer：不在 IR 范围 → 硬错误
-            Stmt::For(f) => self.fail("`for` 循环", &f.span),
-            Stmt::Switch(s) => self.fail("`switch` 语句", &s.span),
-            Stmt::Break(_, span) => self.fail("`break`", span),
-            Stmt::Continue(_, span) => self.fail("`continue`", span),
+            Stmt::For(f) => self.lower_for(f),
+            Stmt::Switch(s) => self.lower_switch(s),
+            Stmt::Break(l, span) => {
+                if l.is_some() {
+                    // 带标签 break：Phase 6（当前标签被忽略 → 硬错误避免静默单级跳出）
+                    self.fail("带标签 `break`", span);
+                } else {
+                    self.lower_break(span);
+                }
+            }
+            Stmt::Continue(l, span) => {
+                if l.is_some() {
+                    self.fail("带标签 `continue`", span);
+                } else {
+                    self.lower_continue(span);
+                }
+            }
+            // defer/errdefer：Phase 6
             Stmt::Defer(_, span) => self.fail("`defer`", span),
             Stmt::Errdefer(_, span) => self.fail("`errdefer`", span),
             Stmt::Empty => {}
         }
+    }
+
+    /// `for` 循环（对齐 oracle `exec_for`/`iter_items`）：
+    /// IterMake 展开迭代项 → 每项 IterNext 重绑定捕获槽 → 循环体 →（Mut/Move）写回。
+    /// continue → l_next（重新取下一项）；break → l_end。
+    fn lower_for(&mut self, f: &ForStmt) {
+        let base = self.lower_expr(&f.iter);
+        let iter = self.alloc_slot();
+        self.push(IrInst::IterMake { temp: iter, base });
+        // 捕获槽：每个迭代由 IterNext 重绑定（Read → 值副本；Mut/Move → 共享源 cell）
+        let slot = self.alloc_slot();
+        let read_only = matches!(f.capture, CaptureMode::Read);
+
+        // 捕获名作用域（循环结束后弹出，防泄漏）
+        self.push_scope();
+        self.bind(&f.capture_name, slot);
+
+        let l_next = self.new_label();
+        let l_body = self.new_label();
+        let l_end = self.new_label();
+
+        self.label(l_next);
+        let has = self.alloc_slot();
+        self.push(IrInst::IterNext {
+            has,
+            iter,
+            slot,
+            read_only,
+        });
+        self.push(IrInst::JumpIfNot {
+            temp: has,
+            label: l_end,
+        });
+        self.label(l_body);
+
+        self.loops.push(LoopCtx {
+            break_label: l_end,
+            continue_label: l_next,
+        });
+        self.lower_block(&f.body);
+        self.loops.pop();
+
+        // Mut/Move 捕获写回（LLVM 拷贝进出；run_ir 槽 cell 即源 cell → 无操作）
+        if !read_only {
+            self.push(IrInst::IterWriteBack { iter, slot });
+        }
+        self.push(IrInst::Jump { label: l_next });
+        self.label(l_end);
+
+        self.pop_scope();
+    }
+
+    /// 无标签 break：跳到最近循环的结束标签（对齐 oracle 单级跳出）。
+    fn lower_break(&mut self, span: &Span) {
+        match self.loops.last() {
+            Some(l) => self.push(IrInst::Jump { label: l.break_label }),
+            None => self.fail("`break` 在循环外", span),
+        }
+    }
+
+    /// 无标签 continue：跳到最近循环的 continue 标签。
+    fn lower_continue(&mut self, span: &Span) {
+        match self.loops.last() {
+            Some(l) => self.push(IrInst::Jump { label: l.continue_label }),
+            None => self.fail("`continue` 在循环外", span),
+        }
+    }
+
+    /// `switch` 语句：降级为 first-match 线性链（不穷举检查，对齐 oracle `exec_switch`）。
+    fn lower_switch(&mut self, s: &SwitchStmt) {
+        self.lower_switch_inner(&s.subject, &s.arms, s.has_else, &s.span, None);
+    }
+
+    /// switch 通用降级（语句 `value_slot=None`；表达式 `value_slot=Some(t)`）。
+    /// 模式链：每个非 Else 模式 MatchTest → JumpIfNot 下一模式；命中 → 臂体 → 跳 l_done。
+    /// 全部失败 → 兜底（has_else → else 臂；否则表达式为 Void / 语句无事发生）。
+    fn lower_switch_inner(
+        &mut self,
+        subject: &Expr,
+        arms: &[SwitchArm],
+        has_else: bool,
+        span: &Span,
+        value_slot: Option<usize>,
+    ) {
+        let _ = span;
+        let s = self.lower_expr(subject);
+        let l_done = self.new_label();
+        let l_fb = self.new_label();
+
+        // 平坦化非 Else 模式链（顺序 = 臂序 × 臂内模式序）
+        let mut flat: Vec<(&SwitchArm, IrPattern)> = Vec::new();
+        for arm in arms {
+            for p in &arm.patterns {
+                if let Some(p) = to_ir_pattern(p) {
+                    flat.push((arm, p));
+                }
+            }
+        }
+        let n = flat.len();
+        for (i, (arm, p)) in flat.iter().enumerate() {
+            let t_pat = self.alloc_slot();
+            self.push(IrInst::MatchTest {
+                temp: t_pat,
+                subject: s,
+                pattern: p.clone(),
+            });
+            let l_next = if i + 1 < n {
+                self.new_label()
+            } else {
+                l_fb
+            };
+            self.push(IrInst::JumpIfNot {
+                temp: t_pat,
+                label: l_next,
+            });
+            self.emit_switch_arm_body(arm, s, value_slot);
+            self.push(IrInst::Jump { label: l_done });
+            if i + 1 < n {
+                self.label(l_next);
+            }
+        }
+
+        // 兜底：else 臂（无论其是否还带非 Else 模式——与 oracle 一致，臂体可能被发射两次）
+        self.label(l_fb);
+        if has_else {
+            if let Some(arm) = arms
+                .iter()
+                .find(|a| a.patterns.iter().any(|p| matches!(p, SwitchPattern::Else)))
+            {
+                self.emit_switch_arm_body(arm, s, value_slot);
+                self.push(IrInst::Jump { label: l_done });
+            }
+        }
+        // 无匹配（oracle `Flow::None`）→ 表达式 Void；语句无事发生
+        if let Some(t) = value_slot {
+            self.push(IrInst::Const {
+                temp: t,
+                val: IrConst::Void,
+            });
+        }
+        self.label(l_done);
+    }
+
+    /// 发射单臂体：捕获绑定（EnumPayload 负载或 subject 本身）+ 臂体。
+    fn emit_switch_arm_body(
+        &mut self,
+        arm: &SwitchArm,
+        subject: usize,
+        value_slot: Option<usize>,
+    ) {
+        // 对齐 oracle `exec_switch_arm`：push_scope → bind capture → exec body → pop_scope
+        self.push_scope();
+        if let Some((_, name)) = &arm.capture {
+            let cap = self.alloc_slot();
+            self.push(IrInst::EnumPayload { temp: cap, a: subject });
+            self.bind(name, cap);
+        }
+        match value_slot {
+            Some(t) => self.lower_block_value(&arm.body, t),
+            None => self.lower_block(&arm.body),
+        }
+        self.pop_scope();
+    }
+
+    /// 块求值（值 = 最后语句若为表达式，否则 Void；对齐 oracle `exec_block_inner`）。
+    /// switch 表达式臂体专用。
+    fn lower_block_value(&mut self, b: &Block, t: usize) {
+        self.push_scope();
+        let n = b.stmts.len();
+        let last_is_value = matches!(b.stmts.last(), Some(Stmt::Expr(_)));
+        let m = n - usize::from(last_is_value);
+        for stmt in &b.stmts[..m] {
+            self.lower_stmt(stmt);
+        }
+        if last_is_value {
+            if let Some(Stmt::Expr(e)) = b.stmts.last() {
+                let v = self.lower_expr(e);
+                self.push(IrInst::Load { temp: t, slot: v });
+            }
+        } else {
+            self.push(IrInst::Const {
+                temp: t,
+                val: IrConst::Void,
+            });
+        }
+        self.pop_scope();
+    }
+}
+
+/// switch 模式 → IR 模式（`Else` → None：不发射 MatchTest，由兜底臂处理）。
+fn to_ir_pattern(p: &SwitchPattern) -> Option<IrPattern> {
+    match p {
+        SwitchPattern::Error(s) => Some(IrPattern::Error(s.clone())),
+        SwitchPattern::Ident(s) => Some(IrPattern::Ident(s.clone())),
+        SwitchPattern::Int(s) => Some(IrPattern::Int(parse_int_lit(s))),
+        SwitchPattern::Float(s) => Some(IrPattern::Float(s.parse().unwrap_or(0.0))),
+        SwitchPattern::Str(s) => Some(IrPattern::Str(s.clone())),
+        SwitchPattern::Char(c) => Some(IrPattern::Char(*c)),
+        SwitchPattern::Else => None,
     }
 }
 
@@ -1447,6 +1755,8 @@ pub enum IrValue {
     },
     /// 开区间切片 `arr[a..]` 的上界哨兵
     End,
+    /// 迭代器值（Phase 3）：指向 `Cell::Iter` 的 cell 索引
+    Iter(usize),
     Void,
 }
 
@@ -1465,7 +1775,20 @@ pub enum Cell {
         name: String,
         fields: HashMap<String, usize>,
     },
-    // Phase 3 起扩展：Bytes(Vec<u8>)、Closure{..}、Iter{..}
+    /// 迭代器（Phase 3）：`iter_items` 展开结果 + 前进游标。
+    /// `items[i].cell` 为第 i 项的共享源 cell（Arr/Slice）或新 cell（Map/Str/用户迭代）；
+    /// `is_ref` 表示是否与源容器共享（Mut/Move 捕获可写穿）。
+    Iter {
+        items: Vec<IterItem>,
+        next: usize,
+    },
+}
+
+/// 迭代项：共享源 cell（或新 cell）+ 是否源容器引用（对齐 oracle `iter_items` 的 `(cell, is_ref)`）。
+#[derive(Debug, Clone)]
+pub struct IterItem {
+    pub cell: usize,
+    pub is_ref: bool,
 }
 
 /// 运行时堆：跨帧共享的 cell 池（指针可跨帧存活——如传入函数后写穿调用方槽）。
@@ -1526,6 +1849,153 @@ fn as_index(ctx: &Ctx, v: &IrValue) -> R<usize> {
     match deref_value(ctx, v) {
         IrValue::Int(i) if *i >= 0 => Ok(*i as usize),
         _ => Err(IrError::msg("BadIndex", "bad index")),
+    }
+}
+
+/// 值形态描述（`NotIterable` 错误消息；对齐 tree-walking `type_name` 的通俗面）
+fn type_descr(v: &IrValue) -> String {
+    match v {
+        IrValue::Int(_) => "i32".into(),
+        IrValue::Float(_) => "f64".into(),
+        IrValue::Bool(_) => "bool".into(),
+        IrValue::Str(_) => "&[u8]".into(),
+        IrValue::Opt(_) => "?T".into(),
+        IrValue::Err { name, .. } => format!("error.{name}"),
+        IrValue::Ptr(_) => "*T".into(),
+        IrValue::Arr(_) => "[]T".into(),
+        IrValue::Slice { .. } => "[]T".into(),
+        IrValue::Class(_) => "class".into(),
+        IrValue::Enum { name, .. } => name.clone(),
+        IrValue::End => "end".into(),
+        IrValue::Iter(_) => "<iter>".into(),
+        IrValue::Void => "void".into(),
+    }
+}
+
+// ---------- Phase 3 运行时语义（switch 模式匹配 / 迭代器；对齐 oracle） ----------
+
+/// 模式匹配（对齐 oracle `match_pattern`，`interp.rs:1342-1361`）：
+/// subject 已 deref 一次；`Else` 不在此处理（lower 阶段识别为兜底臂）。
+fn match_pattern(subject: &IrValue, pat: &IrPattern) -> bool {
+    match (subject, pat) {
+        (IrValue::Enum { variant, .. }, IrPattern::Ident(s)) => variant == s,
+        (IrValue::Int(i), IrPattern::Int(s)) => *i == *s,
+        (IrValue::Float(f), IrPattern::Float(s)) => *f == *s,
+        (IrValue::Str(st), IrPattern::Str(s)) => *st == s.as_bytes(),
+        (IrValue::Int(c), IrPattern::Char(pc)) => *c == *pc as i128,
+        (IrValue::Err { name, .. }, IrPattern::Error(pe)) => name == pe,
+        (IrValue::Bool(b), IrPattern::Ident(s)) => {
+            (*b && s == "true") || (!*b && s == "false")
+        }
+        (IrValue::Opt(None), IrPattern::Ident(s)) => s == "null",
+        _ => false,
+    }
+}
+
+/// 枚举负载捕获：subject 为 `Enum{payload:Some(p)}` → p；否则 → subject 本身
+/// （对齐 oracle `exec_switch_arm` 的负载捕获分支，`interp.rs:1318-1323`）。
+fn enum_payload(ctx: &Ctx, v: &IrValue) -> R<IrValue> {
+    let v = deref_value(ctx, v).clone();
+    match v {
+        IrValue::Enum {
+            payload: Some(p), ..
+        } => Ok(*p),
+        other => Ok(other),
+    }
+}
+
+/// 展开可迭代对象为迭代项列表（对齐 oracle `iter_items`，`interp.rs:1162-1217`）：
+/// - Arr/Slice：共享元素 cell，`is_ref=true`（写穿别名）
+/// - Class "Map"：KV 条目新 cell（`key` 为新建 Str cell、`value` 共享源字段 cell），`is_ref=false`
+/// - 其它 Class：用户 IIterable——循环调用 `{Type}.next(self)` 至 `Opt(None)`/`Void`
+/// - Str：字节 Int 新 cell，`is_ref=false`
+/// - 其余 → NotIterable
+fn make_iter(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    v: &IrValue,
+    depth: usize,
+) -> R<Vec<IterItem>> {
+    let v = deref_value(ctx, v).clone();
+    match v {
+        IrValue::Arr(c) => match &ctx.cells[c] {
+            Cell::Elems(e) => Ok(e
+                .iter()
+                .map(|ec| IterItem { cell: *ec, is_ref: true })
+                .collect()),
+            _ => Err(IrError::msg("NotIterable", "array cell is not an element list")),
+        },
+        IrValue::Slice { data, start, len } => match &ctx.cells[data] {
+            Cell::Elems(e) => Ok(e[start..start + len]
+                .iter()
+                .map(|ec| IterItem { cell: *ec, is_ref: true })
+                .collect()),
+            _ => Err(IrError::msg("NotIterable", "slice data is not an element list")),
+        },
+        IrValue::Class(c) => {
+            // 先克隆字段表，释放 `ctx.cells` 借用（Map 分支内需可变借用 ctx.alloc）
+            let (name, fields) = match &ctx.cells[c] {
+                Cell::Class { name, fields } => (name.clone(), fields.clone()),
+                _ => return Err(IrError::msg("NotIterable", "class cell is corrupt")),
+            };
+            if name == "Map" {
+                // Map 遍历：KV 条目（key/value 字段，value 共享源字段 cell——与 for |kv| 一致）
+                let items: Vec<IterItem> = fields
+                    .iter()
+                    .map(|(k, vc)| {
+                        let mut fs = HashMap::new();
+                        fs.insert(
+                            "key".into(),
+                            ctx.alloc(Cell::Value(IrValue::Str(k.clone().into_bytes()))),
+                        );
+                        fs.insert("value".into(), *vc);
+                        let kv = ctx.alloc(Cell::Class {
+                            name: "KV".into(),
+                            fields: fs,
+                        });
+                        IterItem { cell: kv, is_ref: false }
+                    })
+                    .collect();
+                Ok(items)
+            } else {
+                // 用户 IIterable：next() 直到 Opt(None)/Void（tag1：next → ?T）
+                let fname = format!("{name}.next");
+                let idx = *module.func_index.get(&fname).ok_or_else(|| {
+                    IrError::msg(
+                        "NotIterable",
+                        format!("type `{name}` has no `next` method (IIterable)"),
+                    )
+                })?;
+                let self_v = v.clone();
+                let mut items = Vec::new();
+                loop {
+                    let nv = exec_func(ctx, module, idx, &[self_v.clone()], depth + 1)?;
+                    match nv {
+                        IrValue::Opt(Some(inner)) => items.push(IterItem {
+                            cell: ctx.alloc(Cell::Value(*inner)),
+                            is_ref: false,
+                        }),
+                        IrValue::Opt(None) | IrValue::Void => break,
+                        other => items.push(IterItem {
+                            cell: ctx.alloc(Cell::Value(other)),
+                            is_ref: false,
+                        }),
+                    }
+                }
+                Ok(items)
+            }
+        },
+        IrValue::Str(s) => Ok(s
+            .iter()
+            .map(|b| IterItem {
+                cell: ctx.alloc(Cell::Value(IrValue::Int(*b as i128))),
+                is_ref: false,
+            })
+            .collect()),
+        other => Err(IrError::msg(
+            "NotIterable",
+            format!("value of type `{}` is not iterable", type_descr(&other)),
+        )),
     }
 }
 
@@ -1841,6 +2311,7 @@ impl IrValue {
                 None => format!("{name}.{variant}"),
             },
             IrValue::End => "end".into(),
+            IrValue::Iter(_) => "<iter>".into(),
             IrValue::Void => "void".into(),
         }
     }
@@ -2238,6 +2709,82 @@ fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], dep
                 };
                 ctx.set(&frame, *temp, r);
             }
+            // ---- Phase 3 switch / 区间 / for ----
+            IrInst::MatchTest { temp, subject, pattern } => {
+                let sv = deref_value(ctx, ctx.get(&frame, *subject)).clone();
+                ctx.set(&frame, *temp, IrValue::Bool(match_pattern(&sv, pattern)));
+            }
+            IrInst::MakeRange { temp, lo, hi } => {
+                let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
+                let hi_v = deref_value(ctx, ctx.get(&frame, *hi)).clone();
+                let (lo_i, hi_i) = match (lo_v, hi_v) {
+                    (IrValue::Int(a), IrValue::Int(b)) => (a, b),
+                    _ => {
+                        return Err(IrError::msg(
+                            "TypeError",
+                            "range bounds must be integers",
+                        ))
+                    }
+                };
+                let mut cells = Vec::new();
+                let mut i = lo_i;
+                while i < hi_i {
+                    cells.push(ctx.alloc(Cell::Value(IrValue::Int(i))));
+                    i += 1;
+                }
+                let c = ctx.alloc(Cell::Elems(cells));
+                ctx.set(&frame, *temp, IrValue::Arr(c));
+            }
+            IrInst::EnumPayload { temp, a } => {
+                let av = ctx.get(&frame, *a).clone();
+                let v = enum_payload(ctx, &av)?;
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::IterMake { temp, base } => {
+                let bv = ctx.get(&frame, *base).clone();
+                let items = make_iter(ctx, module, &bv, depth)?;
+                let c = ctx.alloc(Cell::Iter { items, next: 0 });
+                ctx.set(&frame, *temp, IrValue::Iter(c));
+            }
+            IrInst::IterNext { has, iter, slot, read_only } => {
+                let iter_c = match ctx.get(&frame, *iter) {
+                    IrValue::Iter(c) => *c,
+                    _ => return Err(IrError::msg("NotIterable", "expected iterator")),
+                };
+                let item = {
+                    let c = &mut ctx.cells[iter_c];
+                    match c {
+                        Cell::Iter { items, next } => {
+                            if *next < items.len() {
+                                let it = items[*next].clone();
+                                *next += 1;
+                                Some(it)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => return Err(IrError::msg("NotIterable", "corrupt iterator cell")),
+                    }
+                };
+                match item {
+                    Some(it) => {
+                        if *read_only {
+                            // Read 捕获：槽 cell 置为该项值副本（与容器无别名）
+                            let v = ctx.cell_value(it.cell).clone();
+                            ctx.set_cell(frame.cells[*slot], v);
+                        } else {
+                            // Mut/Move 捕获：槽 cell 绑定共享源 cell（写穿）；
+                            // [IrInst::IterWriteBack] 在 run_ir 为无操作（槽 cell 即源 cell）。
+                            frame.cells[*slot] = it.cell;
+                        }
+                        ctx.set(&frame, *has, IrValue::Bool(true));
+                    }
+                    None => {
+                        ctx.set(&frame, *has, IrValue::Bool(false));
+                    }
+                }
+            }
+            IrInst::IterWriteBack { .. } => {}
         }
         pc += 1;
     }

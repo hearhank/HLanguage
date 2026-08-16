@@ -624,3 +624,246 @@ fn boxed(x: ?i32) ?i32 { return x; }
     let (tw, ir) = assert_consistent(src);
     assert_eq!((tw, ir), (0, 0));
 }
+
+// ---------- Phase 3 switch + range + for 双模式一致 ----------
+
+#[test]
+fn switch_int_and_else() {
+    // 整数模式 first-match 线性链 + else 兜底
+    let src = r#"
+fn pick(x: i32) i32 {
+    switch (x) {
+        1 => return 10,
+        2 => return 20,
+        else => return 99,
+    }
+}
+[test] fn t() void {
+    expect_eq(pick(1), 10);
+    expect_eq(pick(2), 20);
+    expect_eq(pick(9), 99);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_no_else_falls_through() {
+    // 无匹配 + 无 else → 语句降级为 Void（不崩溃）
+    let src = r#"
+fn f(x: i32) i32 {
+    var mut y: i32 = 0;
+    switch (x) { 1 => { y = 5; } }
+    return y;
+}
+[test] fn t() void {
+    expect_eq(f(1), 5);
+    expect_eq(f(7), 0);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_enum_variant_and_capture() {
+    // 枚举变体（Ident 模式）+ 负载捕获（|payload|）——表达式形态（对齐 14-enum.hc）
+    let src = r#"
+enum Maybe { some: i32, none }
+[test] fn t() void {
+    var v: Maybe = Maybe{some = 7};
+    var label = switch (v) {
+        some => |i| i,
+        none => -1,
+        else => -2,
+    };
+    expect_eq(label, 7);
+    var n: Maybe = Maybe.none;
+    var label2 = switch (n) {
+        some => |i| i,
+        none => -1,
+        else => -2,
+    };
+    expect_eq(label2, -1);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_error_pattern() {
+    // 错误名模式（err_test.hc 的 switch 错误模式子集）：catch |err| switch (err)
+    let src = r#"
+fn fail(name: i32) !i32 {
+    if (name == 1) { return error.NotFound; }
+    if (name == 2) { return error.PermissionDenied; }
+    return error.Io;
+}
+[test] fn t() void {
+    var r1 = fail(1) catch |err| switch (err) {
+        error.NotFound => 10,
+        error.PermissionDenied => 20,
+        else => 30,
+    };
+    expect_eq(r1, 10);
+    var r2 = fail(2) catch |err| switch (err) {
+        error.NotFound => 10,
+        error.PermissionDenied => 20,
+        else => 30,
+    };
+    expect_eq(r2, 20);
+    var r3 = fail(3) catch |err| switch (err) {
+        error.NotFound => 10,
+        error.PermissionDenied => 20,
+        else => 30,
+    };
+    expect_eq(r3, 30);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_string_pattern() {
+    // 字符串字面量模式 + else
+    let src = r#"
+fn pick(s: String) i32 {
+    switch (s) {
+        "a" => return 1,
+        "b" => return 2,
+        else => return 0,
+    }
+}
+[test] fn t() void {
+    expect_eq(pick("a"), 1);
+    expect_eq(pick("b"), 2);
+    expect_eq(pick("z"), 0);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_bool_and_null_patterns() {
+    // bool true/false 与 null（Ident 模式）
+    let src = r#"
+fn pick(b: bool) i32 {
+    switch (b) {
+        true => return 1,
+        false => return 0,
+    }
+}
+fn pickn(x: ?i32) i32 {
+    switch (x) {
+        null => return -1,
+        else => return 1,
+    }
+}
+[test] fn t() void {
+    expect_eq(pick(true), 1);
+    expect_eq(pick(false), 0);
+    expect_eq(pickn(null), -1);
+    expect_eq(pickn(5), 1);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_range_sugar() {
+    // `for (lo..hi)` 区间糖：MakeRange + 只读捕获
+    let src = r#"
+[test] fn t() void {
+    var mut s: i32 = 0;
+    for (0..5) |i| { s += i; }
+    expect_eq(s, 10);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_arr_read_only() {
+    // 数组只读捕获：元素值拷贝，写回不传播
+    let src = r#"
+[test] fn t() void {
+    var a = [1, 2, 3];
+    var mut s: i32 = 0;
+    for (a) |x| { s += x; }
+    expect_eq(s, 6);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_arr_mut_writeback() {
+    // `for (arr) |mut x|` 写回：循环体末尾把捕获槽写回源数组元素
+    let src = r#"
+[test] fn t() void {
+    var a = [1, 2, 3];
+    for (a) |mut x| { x += 1; }
+    expect_eq(a[0], 2);
+    expect_eq(a[1], 3);
+    expect_eq(a[2], 4);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_slice_view_write_through() {
+    // 切片迭代：元素共享源数组 cell（Mut 写回透传到源）
+    let src = r#"
+[test] fn t() void {
+    var arr = [10, 20, 30, 40];
+    var sub = arr[1..3];
+    for (sub) |mut x| { x = x + 1; }
+    expect_eq(arr[1], 21);
+    expect_eq(arr[2], 31);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_str_bytes() {
+    // 字符串迭代：字节 Int 值（is_ref=false 新单元）
+    let src = r#"
+[test] fn t() void {
+    var mut sum: i32 = 0;
+    for ("abc") |b| { sum += b; }
+    expect_eq(sum, 97 + 98 + 99);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_empty_range_is_empty() {
+    // lo ≥ hi → 空数组（区间糖的负向边界）
+    let src = r#"
+[test] fn t() void {
+    var mut s: i32 = 0;
+    for (5..2) |i| { s += i; }
+    expect_eq(s, 0);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn for_break_and_continue() {
+    // break 提前退出；continue 跳过（两模式一致）
+    let src = r#"
+[test] fn t() void {
+    var mut s: i32 = 0;
+    for (0..10) |i| {
+        if (i == 3) { continue; }
+        if (i == 6) { break; }
+        s += i;
+    }
+    expect_eq(s, 0 + 1 + 2 + 4 + 5);
+}
+"#;
+    assert_all_pass(src);
+}

@@ -451,3 +451,190 @@ fn main() i32 {
     let st = compile_and_run(src);
     assert!(!st.success(), "预期非零退出，实际: {st}");
 }
+
+// ---------- Phase 3 switch + range + for 原生端到端（源码 → LLVM → zig cc → 可执行） ----------
+
+#[test]
+fn phase3_switch_int_and_else_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // MatchTest 模式描述符 + first-match 线性链 + else 兜底
+    let src = r#"
+fn pick(x: i32) i32 {
+    switch (x) {
+        1 => return 10,
+        2 => return 20,
+        else => return 99,
+    }
+}
+fn main() i32 {
+    if (pick(1) != 10) { return 1; }
+    if (pick(2) != 20) { return 2; }
+    if (pick(9) != 99) { return 3; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_switch_error_pattern_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 错误码模式：hc_match_test tag 0 = data(code) 比较
+    let src = r#"
+fn fail(x: i32) !i32 {
+    if (x == 1) { return error.NotFound; }
+    return error.Io;
+}
+fn main() i32 {
+    var r = fail(1) catch |err| switch (err) {
+        error.NotFound => 10,
+        else => 20,
+    };
+    if (r != 10) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_for_range_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // MakeRange → Arr（[lo, hi)）+ 只读捕获
+    let src = r#"
+fn main() i32 {
+    var mut s: i32 = 0;
+    for (0..5) |i| { s += i; }
+    if (s != 10) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_for_arr_mut_writeback_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // IterMake（Arr → 源元素指针 is_ref=true）+ IterNext + IterWriteBack 写回
+    let src = r#"
+fn main() i32 {
+    var a = [1, 2, 3];
+    for (a) |mut x| { x += 1; }
+    if (a[0] != 2 or a[1] != 3 or a[2] != 4) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_for_slice_write_through_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 切片迭代：源数组元素共享，Mut 写回透传
+    let src = r#"
+fn main() i32 {
+    var arr = [10, 20, 30, 40];
+    var sub = arr[1..3];
+    for (sub) |mut x| { x = x + 1; }
+    if (arr[1] != 21 or arr[2] != 31) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_for_break_continue_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // for 内 break 提前退出 / continue 跳过（JumpIfNot + Jump 到 l_end/l_next）
+    let src = r#"
+fn main() i32 {
+    var mut s: i32 = 0;
+    for (0..10) |i| {
+        if (i == 3) { continue; }
+        if (i == 6) { break; }
+        s += i;
+    }
+    if (s != 12) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_switch_enum_capture_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 枚举变体（Ident 模式）+ 负载捕获（hc_enum_payload）
+    let src = r#"
+enum Maybe { some: i32, none }
+fn main() i32 {
+    var v: Maybe = Maybe{some = 7};
+    var label = switch (v) {
+        some => |i| i,
+        none => -1,
+        else => -2,
+    };
+    if (label != 7) { return 1; }
+    var n: Maybe = Maybe.none;
+    var label2 = switch (n) {
+        some => |i| i,
+        none => -1,
+        else => -2,
+    };
+    if (label2 != -1) { return 2; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase3_for_str_bytes_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 字符串迭代：字节 Int（is_ref=false 新单元）
+    let src = r#"
+fn main() i32 {
+    var mut sum: i32 = 0;
+    for ("abc") |b| { sum += b; }
+    if (sum != 97 + 98 + 99) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+// （NotIterable 运行时路径为语义检查后的防御性兜底：`for (n) |x|` 在 check_semantics
+//  即被拒绝，无法到达运行时代码——故不设端到端失败用例。）
