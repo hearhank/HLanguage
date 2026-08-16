@@ -428,21 +428,147 @@ fn deref_eq() bool {
 #[test]
 fn out_of_slice_constructs_are_hard_errors() {
     // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
-    // Phase 3 已将 for/switch 纳入 IR 支持面（见下方正例测试）；此处仅保留仍未实现者。
-    let cases: &[&str] = &[
-        // 全局常量声明（Phase 5 程序启动初始化）
-        "const X: i32 = 1;\nfn f() i32 { return X; }",
-        // 闭包（Phase 4）
-        "fn f() i32 { var x = |v| v + 1; return 0; }",
-    ];
-    for src in cases {
-        let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
-        let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
-        assert_eq!(
-            e.name, "Unsupported",
-            "预期 Unsupported 硬错误，src: {src}"
-        );
-    }
+    // Phase 3 已将 for/switch、Phase 4 已把闭包纳入 IR 支持面（见下方正例测试）；
+    // 此处仅保留仍未实现者。
+    let src = "const X: i32 = 1;\nfn f() i32 { return X; }"; // 全局常量（Phase 5 程序启动初始化）
+    let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
+    let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
+    assert_eq!(e.name, "Unsupported", "预期 Unsupported 硬错误，src: {src}");
+}
+
+// ---------- Phase 4：闭包 / 函数引用 / 方法 / 动态调用 / 重载 ----------
+
+#[test]
+fn closure_read_capture_shares_slot() {
+    // 只读捕获：共享源 cell，原绑定后续变更对闭包可见（对照 move 捕获）
+    let src = r#"
+fn f() i32 {
+    var a = 10;
+    var g = |v| v + a;
+    a = 100;
+    return g(5);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(105));
+}
+
+#[test]
+fn closure_move_capture_copies() {
+    // move 捕获：深拷贝独立副本，原绑定后续变更不影响闭包
+    let src = r#"
+fn f() i32 {
+    var a = 10;
+    var g = move |v| v + a;
+    a = 100;
+    return g(5);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(15));
+}
+
+#[test]
+fn closure_mut_capture_writes_through() {
+    // mut 捕获：闭包内写入被捕获变量，对原绑定可见
+    let src = r#"
+fn f() i32 {
+    var total = 0;
+    var acc = mut |v| { total = total + v; return total; };
+    var a = acc(3);
+    var b = acc(4);
+    return a * 100 + b * 10 + total;
+}
+"#;
+    // a=3, b=7, total=7 → 3*100 + 7*10 + 7 = 377
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(377));
+}
+
+#[test]
+fn closure_returned_from_function() {
+    // 闭包脱离 make 作用域后仍可用（cell 永不释放，捕获副本随返回值转移）
+    let src = r#"
+fn make() i32 {
+    var base = 10;
+    var f = move |v| v + base;
+    return f(5);
+}
+"#;
+    assert_eq!(run(src, "make", &[]).unwrap(), IrValue::Int(15));
+}
+
+#[test]
+fn fnref_and_indirect_call() {
+    // FnRef：函数名作为值绑定到变量；CallIndirect 经 Fn 值动态调用
+    let src = r#"
+fn inc(v: i32) i32 { return v + 1; }
+fn call_it() i32 {
+    var f = inc;
+    return f(41);
+}
+"#;
+    assert_eq!(run(src, "call_it", &[]).unwrap(), IrValue::Int(42));
+}
+
+#[test]
+fn method_instance_dispatch() {
+    // CallMethod：r.area() 动态分派——运行时由类型名解析 `Rect.area` 并注入 self
+    let src = r#"
+class Rect {
+    w: i32,
+    h: i32,
+    fn area(self: *Self) i32 { return self.w * self.h; }
+}
+fn f() i32 {
+    var r = Rect{ w = 3, h = 4 };
+    return r.area();
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(12));
+}
+
+#[test]
+fn method_static_call_passes_self() {
+    // 静态形式 `Rect.area(&r)`：self 显式传参，不注入
+    let src = r#"
+class Rect {
+    w: i32,
+    h: i32,
+    fn area(self: *Self) i32 { return self.w * self.h; }
+}
+fn f() i32 {
+    var r = Rect{ w = 3, h = 4 };
+    return Rect.area(&r);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(12));
+}
+
+#[test]
+fn overload_dispatch_by_arity() {
+    // func_index 一名多候选：按实参数量精确分派
+    let src = r#"
+fn sq(x: i32) i32 { return x * x; }
+fn sq(x: i32, y: i32) i32 { return x * y; }
+fn f() i32 {
+    return sq(3) * 10 + sq(2, 4);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(98));
+}
+
+#[test]
+fn method_takes_extra_args() {
+    // 实例方法带额外实参：注入 self 为首参后按 arity 分派
+    let src = r#"
+class Point {
+    x: i32,
+    fn offset(self: *Self, dx: i32) i32 { return self.x + dx; }
+}
+fn f() i32 {
+    var p = Point{ x = 10 };
+    return p.offset(5);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(15));
 }
 
 #[test]

@@ -362,3 +362,74 @@ fn top(x: i32) i32 { return x; }
     assert!(decoded.func_index.contains_key("double"));
     assert!(decoded.func_index.contains_key("io.net.double"));
 }
+
+// ---------- Phase 4：闭包 / 函数引用 / 方法 / 动态调用 / 重载 ----------
+
+#[test]
+fn phase4_closure_round_trip() {
+    // MakeClosure（opcode 37）+ 闭包表：读捕获共享 + move 捕获拷贝，经 encode/decode 一致
+    let src = r#"
+fn read_cap() i32 {
+    var a = 10;
+    var g = |v| v + a;
+    a = 100;
+    return g(5);
+}
+fn move_cap() i32 {
+    var a = 10;
+    var g = move |v| v + a;
+    a = 100;
+    return g(5);
+}
+"#;
+    assert_consistent(src, "read_cap", &[]);
+    assert_consistent(src, "move_cap", &[]);
+    assert_eq!(run_bc(src, "read_cap", &[]).unwrap(), IrValue::Int(105));
+    assert_eq!(run_bc(src, "move_cap", &[]).unwrap(), IrValue::Int(15));
+}
+
+#[test]
+fn phase4_fnref_and_indirect_round_trip() {
+    // FnRef（opcode 38）+ CallIndirect（opcode 39）
+    let src = r#"
+fn inc(v: i32) i32 { return v + 1; }
+fn call_it() i32 {
+    var f = inc;
+    return f(41);
+}
+"#;
+    assert_consistent(src, "call_it", &[]);
+    assert_eq!(run_bc(src, "call_it", &[]).unwrap(), IrValue::Int(42));
+}
+
+#[test]
+fn phase4_method_round_trip() {
+    // CallMethod（opcode 40）：实例方法动态分派
+    let src = r#"
+class Rect {
+    w: i32,
+    h: i32,
+    fn area(self: *Self) i32 { return self.w * self.h; }
+}
+fn f() i32 {
+    var r = Rect{ w = 3, h = 4 };
+    return r.area();
+}
+"#;
+    assert_consistent(src, "f", &[]);
+    assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(12));
+}
+
+#[test]
+fn phase4_overload_round_trip() {
+    // func_index 一名多候选（重载）经 encode/decode 后按 arity 分派一致
+    let src = r#"
+fn sq(x: i32) i32 { return x * x; }
+fn sq(x: i32, y: i32) i32 { return x * y; }
+fn f() i32 {
+    return sq(3) * 10 + sq(2, 4);
+}
+"#;
+    assert_consistent(src, "f", &[]);
+    assert_eq!(run_bc(src, "f", &[]).unwrap(), IrValue::Int(98));
+}

@@ -38,18 +38,24 @@ const T_CLASS: i32 = 10;
 const T_ENUM: i32 = 11;
 const T_END: i32 = 12;
 // ---- Phase 3 迭代器（tag 13 直接内联在 `hc_iter_make` 的 IR 文本中） ----
+// ---- Phase 4 函数引用 / 闭包（tag 14/15；原生 ABI 工作留待 Phase 7，当前经 hc_abort 拒绝） ----
+#[allow(dead_code)] // Phase 7 原生 ABI 落地时启用
+const T_FN: i32 = 14;
+#[allow(dead_code)] // Phase 7 原生 ABI 落地时启用
+const T_CLOSURE: i32 = 15;
 
 /// 生成完整 `.ll` 模块文本（导言 + 每个 `IrFunc` + `main` 包装）。
 pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
     let strings = collect_strings(module);
-    let mut canon: HashMap<String, String> = HashMap::new();
-    for (name, &idx) in &module.func_index {
-        canon.insert(name.clone(), format!("hc_fn{idx}"));
-    }
+    let canon: HashMap<String, Vec<usize>> = module
+        .func_index
+        .iter()
+        .map(|(name, idxs)| (name.clone(), idxs.clone()))
+        .collect();
     let mut out = String::new();
     emit_preamble(&mut out, &strings);
     for (idx, f) in module.funcs.iter().enumerate() {
-        emit_func(&mut out, f, idx, &strings, errors, &canon);
+        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs);
     }
     emit_main_wrapper(&mut out, module);
     out
@@ -59,14 +65,15 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
 /// 与 [`codegen`] 同导言与函数发射，仅入口包装从 `main` 换成 [`emit_test_runner`]。
 pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
     let strings = collect_strings(module);
-    let mut canon: HashMap<String, String> = HashMap::new();
-    for (name, &idx) in &module.func_index {
-        canon.insert(name.clone(), format!("hc_fn{idx}"));
-    }
+    let canon: HashMap<String, Vec<usize>> = module
+        .func_index
+        .iter()
+        .map(|(name, idxs)| (name.clone(), idxs.clone()))
+        .collect();
     let mut out = String::new();
     emit_preamble(&mut out, &strings);
     for (idx, f) in module.funcs.iter().enumerate() {
-        emit_func(&mut out, f, idx, &strings, errors, &canon);
+        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs);
     }
     emit_test_runner(&mut out, module);
     out
@@ -170,6 +177,10 @@ const MSGS: &[Msg] = &[
     Msg { key: "nullunwrap", text: "error.NullUnwrap" },
     Msg { key: "nofield", text: "error.NoField" },
     Msg { key: "tuplearity", text: "error.TupleArity" },
+    // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用/方法需原生 ABI 改造（Phase 7），
+    // 当前响亮拒绝（error.NotCallable / error.NoMethod），禁止静默误编译
+    Msg { key: "notcallable", text: "error.NotCallable: closures/indirect calls not yet in native mode (Phase 7)" },
+    Msg { key: "nomethod", text: "error.NoMethod: method calls not yet in native mode (Phase 7)" },
 ];
 
 // ---------- 导言 ----------
@@ -2093,7 +2104,8 @@ fn emit_func(
     idx: usize,
     strings: &[String],
     errors: &ErrorCodeTable,
-    canon: &HashMap<String, String>,
+    canon: &HashMap<String, Vec<usize>>,
+    funcs: &[IrFunc],
 ) {
     let _ = writeln!(out, "; hc_fn{idx} = {}", f.name);
     let params = (0..f.params.len())
@@ -2114,7 +2126,7 @@ fn emit_func(
         be.emit(format!("store %Value %p{i}, %Value* %sp.{ps}"));
     }
     for inst in &f.body {
-        be.inst(inst, strings, errors, canon);
+        be.inst(inst, strings, errors, canon, funcs);
     }
     out.push_str(&be.finish());
     out.push_str("}\n\n");
@@ -2124,7 +2136,13 @@ fn emit_func(
 
 fn emit_main_wrapper(out: &mut String, module: &IrModule) {
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
-    if let Some(&idx) = module.func_index.get("main") {
+    if let Some(idxs) = module.func_index.get("main") {
+        // main 入口按 arity 精确取（无则首个——重载 main 不存在，安全兜底）
+        let idx = idxs
+            .iter()
+            .copied()
+            .find(|&i| module.funcs[i].params.is_empty())
+            .unwrap_or(idxs[0]);
         let nparams = module.funcs[idx].params.len();
         if nparams > 0 {
             out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
@@ -2280,6 +2298,16 @@ impl BodyEmitter {
         self.terminated = false;
     }
 
+    /// 特性未支持硬中止：当前块 br 到错误块（hc_abort_{key} + unreachable），
+    /// 后续指令落到不可达续块（LLVM 允许；运行即 abort，杜绝静默误编译）。
+    fn abort_feature(&mut self, key: &str) {
+        let l = self.fb();
+        self.term(format!("br label %{l}"));
+        self.blocks.push(format!("{l}:\n  call void @hc_abort_{key}()\n  unreachable\n"));
+        self.cur = format!("{l}.cont:\n");
+        self.terminated = false;
+    }
+
     fn finish(mut self) -> String {
         if !self.cur.is_empty() {
             self.close_block();
@@ -2296,6 +2324,12 @@ impl BodyEmitter {
     }
 
     fn const_(&mut self, temp: usize, val: &IrConst, strings: &[String], errors: &ErrorCodeTable) {
+        let v = self.const_value(val, strings, errors);
+        self.emit(format!("store %Value {v}, %Value* %sp.{temp}"));
+    }
+
+    /// 常量 → `%Value` SSA 值（Str 取全局字符串地址；余下 tag+data 直接 insertvalue）
+    fn const_value(&mut self, val: &IrConst, strings: &[String], errors: &ErrorCodeTable) -> String {
         if let IrConst::Str(s) = val {
             let idx = strings.iter().position(|x| x == s).unwrap_or(0);
             let n = s.len() + 1;
@@ -2303,8 +2337,12 @@ impl BodyEmitter {
             self.emit(format!("{p} = getelementptr inbounds [{n} x i8], ptr @.str.{idx}, i64 0, i64 0"));
             let pi = self.r();
             self.emit(format!("{pi} = ptrtoint i8* {p} to i128"));
-            self.build_store(temp, T_STR, pi);
-            return;
+            // SSA 链：每个 insertvalue 用新名（同寄存器二次定义非法）
+            let v0 = self.r();
+            self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_STR}, 0"));
+            let v1 = self.r();
+            self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {pi}, 1"));
+            return v1;
         }
         let (tag, data) = match val {
             IrConst::Int(i) => (T_INT, format!("{i}")),
@@ -2316,7 +2354,11 @@ impl BodyEmitter {
             IrConst::End => (T_END, "0".to_string()),
             IrConst::Str(_) => unreachable!(),
         };
-        self.build_store(temp, tag, data);
+        let v0 = self.r();
+        self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {tag}, 0"));
+        let v1 = self.r();
+        self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {data}, 1"));
+        v1
     }
 
     fn emit_bool_store(&mut self, temp: usize, cond: &str) {
@@ -2417,7 +2459,35 @@ impl BodyEmitter {
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
-    fn call(&mut self, name: &str, args: &[usize], temp: usize, canon: &HashMap<String, String>) {
+    fn call(
+        &mut self,
+        name: &str,
+        args: &[usize],
+        temp: usize,
+        canon: &HashMap<String, Vec<usize>>,
+        funcs: &[IrFunc],
+        strings: &[String],
+        errors: &ErrorCodeTable,
+    ) {
+        let Some(candidates) = canon.get(name) else {
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @hc_no_function()"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        };
+        // 重载静态分派（对齐 `pick_func` ①③）：先精确参数数，无则全池（尾参默认回退）
+        let exact: Vec<usize> = candidates
+            .iter()
+            .copied()
+            .filter(|&i| funcs[i].params.len() == args.len())
+            .collect();
+        let pool: Vec<usize> = if exact.is_empty() {
+            candidates.clone()
+        } else {
+            exact
+        };
+        let target = pool[0]; // 同 arity 多候选 → 首个（类型分派留待 Phase 7）
+        let fdef = &funcs[target];
         let mut arglist = String::new();
         for a in args {
             let v = self.r();
@@ -2427,11 +2497,18 @@ impl BodyEmitter {
             }
             arglist.push_str(&format!("%Value {v}"));
         }
-        let res = self.r();
-        match canon.get(name) {
-            Some(sym) => self.emit(format!("{res} = call %Value @\"{sym}\"({arglist})")),
-            None => self.emit(format!("{res} = call %Value @hc_no_function()")),
+        // 尾参默认值（编译期常量）补齐
+        for d in fdef.defaults.iter().skip(args.len()) {
+            if let Some(c) = d {
+                let v = self.const_value(c, strings, errors);
+                if !arglist.is_empty() {
+                    arglist.push_str(", ");
+                }
+                arglist.push_str(&format!("%Value {v}"));
+            }
         }
+        let res = self.r();
+        self.emit(format!("{res} = call %Value @\"hc_fn{target}\"({arglist})"));
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
@@ -2498,7 +2575,8 @@ impl BodyEmitter {
         inst: &IrInst,
         strings: &[String],
         errors: &ErrorCodeTable,
-        canon: &HashMap<String, String>,
+        canon: &HashMap<String, Vec<usize>>,
+        funcs: &[IrFunc],
     ) {
         match inst {
             IrInst::Const { temp, val } => self.const_(*temp, val, strings, errors),
@@ -2827,8 +2905,16 @@ impl BodyEmitter {
                 self.emit(format!("{itp} = inttoptr i128 {ip} to %IterObj*"));
                 self.emit(format!("call void @hc_iter_write_back(%IterObj* {itp}, %Value* %sp.{slot})"));
             }
-            IrInst::Call { name, args, temp } => self.call(name, args, *temp, canon),
+            IrInst::Call { name, args, temp } => {
+                self.call(name, args, *temp, canon, funcs, strings, errors);
+            }
             IrInst::CallBuiltin { name, args, temp } => self.call_builtin(name, args, *temp),
+            // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用/方法需原生 ABI 改造（Phase 7），
+            // 当前响亮拒绝（error.NotCallable / error.NoMethod），禁止静默误编译
+            IrInst::MakeClosure { .. } => self.abort_feature("notcallable"),
+            IrInst::FnRef { .. } => self.abort_feature("notcallable"),
+            IrInst::CallIndirect { .. } => self.abort_feature("notcallable"),
+            IrInst::CallMethod { .. } => self.abort_feature("nomethod"),
             IrInst::Return { temp } => self.ret(*temp),
             IrInst::ReturnVoid => self.ret_void(),
         }

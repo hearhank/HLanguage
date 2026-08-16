@@ -20,15 +20,19 @@
 use crate::ast::*;
 use crate::errorcodes::ErrorCodeTable;
 use crate::token::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------- IR 结构 ----------
 
 #[derive(Debug, Clone, Default)]
 pub struct IrModule {
     pub funcs: Vec<IrFunc>,
-    /// 函数名（扁平 + 限定）→ 索引
-    pub func_index: HashMap<String, usize>,
+    /// 闭包函数表（Phase 4）：`IrValue::Closure.func` / `MakeClosure.func` 索引。
+    /// 与 funcs 同构（body/params/n_slots），但绝不参与 `func_index` 按名分派。
+    pub closures: Vec<IrFunc>,
+    /// 函数名（扁平 + 限定）→ 索引表（声明序，支持重载/可选参数多候选；
+    /// 对齐 oracle `pick_fn` interp.rs:2665-2796 的候选池）
+    pub func_index: HashMap<String, Vec<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +40,12 @@ pub struct IrFunc {
     pub name: String,
     /// 参数槽号（声明序）
     pub params: Vec<usize>,
+    /// 参数类型（声明序，重载按实参值类型分派用；与 params 等长）
+    pub param_ty: Vec<Type>,
+    /// 参数是否有默认值（声明序；可选参数 = 尾部默认，对齐 ADR-0009）
+    pub param_defaults: Vec<bool>,
+    /// 参数默认常量值（编译期常量默认值；缺失尾参时调用点补齐）
+    pub defaults: Vec<Option<IrConst>>,
     /// 槽总数（参数 + 局部变量 + 临时）
     pub n_slots: usize,
     pub body: Vec<IrInst>,
@@ -289,6 +299,36 @@ pub enum IrInst {
         iter: usize,
         slot: usize,
     },
+    // ---- Phase 4 闭包 / 函数引用 / 方法 / 动态调用 ----
+    /// temp = 闭包值（捕获当前作用域链各变量的 cell；`is_move` → 深拷贝独立 cell，
+    /// 对齐 oracle `capture_env` interp.rs:1419-1425 + M2.7 move 语义）
+    MakeClosure {
+        temp: usize,
+        /// 索引 [`IrModule::closures`]（与 captures 长度一致的闭包函数）
+        func: usize,
+        /// (变量名, 封闭帧槽号)：闭包函数的前导捕获参数与之逐位对齐
+        captures: Vec<(String, usize)>,
+        is_move: bool,
+    },
+    /// temp = 调用 callee（`Fn` 名 → 按名分派；`Closure` → 绑定捕获 cell + 显式参数）
+    CallIndirect {
+        temp: usize,
+        callee: usize,
+        args: Vec<usize>,
+    },
+    /// temp = base.method(args...)（运行时按 base 实际类型名分派 `{Type}.{method}` +
+    /// self 注入首参；对齐 oracle eval_call Field 臂 interp.rs:2350-2421）
+    CallMethod {
+        temp: usize,
+        base: usize,
+        method: String,
+        args: Vec<usize>,
+    },
+    /// temp = 函数引用（name → `Fn(name)`；未注册 → 运行时 UndefinedName）
+    FnRef {
+        temp: usize,
+        name: String,
+    },
 }
 
 /// switch 模式（对齐 AST [`crate::ast::SwitchPattern`]；`Else` 不发射 MatchTest——
@@ -384,11 +424,55 @@ fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
 pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     let errors = crate::errorcodes::collect(program, 0);
     let types = build_type_table(program);
+    let funcs = collect_func_names(program);
     let mut module = IrModule::default();
     for d in &program.decls {
-        lower_decl(d, &mut module, &errors, &types)?;
+        lower_decl(d, &mut module, &errors, &types, &funcs)?;
     }
     Ok(module)
+}
+
+/// 预收集全部函数名（扁平 + 限定 + `{Type}.{method}`），供未解析 Ident → FnRef、
+/// 静态方法/namespace 调用 vs 实例方法调用的降级期判定（对齐 oracle 的
+/// `funcs: HashMap<String, Vec<FnDef>>` 预建表）。
+fn collect_func_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    collect_fn_names(&program.decls, &mut names, &[]);
+    names
+}
+
+fn collect_fn_names(decls: &[Decl], names: &mut HashSet<String>, path: &[String]) {
+    for d in decls {
+        match d {
+            Decl::Fn { name, .. } => {
+                names.insert(name.clone());
+                if !path.is_empty() {
+                    let mut q = path.join(".");
+                    q.push('.');
+                    q.push_str(name);
+                    names.insert(q);
+                }
+            }
+            Decl::Namespace { name, decls: nested, .. } => {
+                let mut p = path.to_vec();
+                p.push(name.clone());
+                collect_fn_names(nested, names, &p);
+            }
+            Decl::Class { name, methods, .. } => {
+                for m in methods {
+                    let bare = format!("{name}.{}", m.name);
+                    names.insert(bare.clone());
+                    if !path.is_empty() {
+                        let mut q = path.join(".");
+                        q.push('.');
+                        q.push_str(&bare);
+                        names.insert(q);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// 构造「原生/IR 后端暂不支持」的降级错误（阶段外特性 → 硬错误而非静默丢弃）。
@@ -407,6 +491,7 @@ fn lower_decl(
     module: &mut IrModule,
     errors: &ErrorCodeTable,
     types: &TypeTable,
+    funcs: &HashSet<String>,
 ) -> Result<(), IrError> {
     match d {
         Decl::Fn {
@@ -416,21 +501,21 @@ fn lower_decl(
             is_test,
             ..
         } => {
-            let func = lower_func(name, params, body, *is_test, errors, types)?;
+            let func = lower_func(name, params, body, *is_test, errors, types, funcs, &mut module.closures)?;
             register_func(module, name, func);
         }
         Decl::Namespace { name, decls, .. } => {
             // namespace 内函数：扁平名 + 限定名双注册（与运行时/语义一致）；
             // 多级 namespace（io.net.connect）注册全限定名
             let mut inner: Vec<(String, String, IrFunc)> = Vec::new();
-            collect_ns_funcs(decls, &[name.clone()], &mut inner, errors, types)?;
+            collect_ns_funcs(decls, &[name.clone()], &mut inner, errors, types, funcs, &mut module.closures)?;
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
                 module.funcs.push(func);
                 // 扁平名（using 导入后直接调用）：先到先得
-                module.func_index.entry(flat).or_insert(idx);
+                module.func_index.entry(flat).or_default().push(idx);
                 // 限定名（Math.square / io.net.connect）
-                module.func_index.insert(qn, idx);
+                module.func_index.entry(qn).or_default().push(idx);
             }
         }
         // 全局/常量声明：程序启动即需执行初始化，原生/IR 后端无此语义 → 拒绝而非静默丢弃
@@ -444,7 +529,7 @@ fn lower_decl(
         Decl::Class { name, methods, .. } => {
             for m in methods {
                 let fname = format!("{name}.{}", m.name);
-                if let Ok(func) = lower_func(&fname, &m.params, &m.body, false, errors, types) {
+                if let Ok(func) = lower_func(&fname, &m.params, &m.body, false, errors, types, funcs, &mut module.closures) {
                     register_func(module, &fname, func);
                 }
             }
@@ -464,6 +549,8 @@ fn collect_ns_funcs(
     out: &mut Vec<(String, String, IrFunc)>,
     errors: &ErrorCodeTable,
     types: &TypeTable,
+    funcs: &HashSet<String>,
+    closures: &mut Vec<IrFunc>,
 ) -> Result<(), IrError> {
     for d in decls {
         match d {
@@ -476,7 +563,7 @@ fn collect_ns_funcs(
             } if !*is_test => {
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
-                let func = lower_func(name, params, body, false, errors, types)?;
+                let func = lower_func(name, params, body, false, errors, types, funcs, closures)?;
                 out.push((name.clone(), qn.join("."), func));
             }
             Decl::Namespace {
@@ -486,7 +573,7 @@ fn collect_ns_funcs(
             } => {
                 let mut p = path.to_vec();
                 p.push(name.clone());
-                collect_ns_funcs(nested, &p, out, errors, types)?;
+                collect_ns_funcs(nested, &p, out, errors, types, funcs, closures)?;
             }
             // namespace 内 global/const：与顶层一致，拒绝（启动初始化语义缺失）
             Decl::Global { span, .. } | Decl::Const { span, .. } => {
@@ -502,7 +589,8 @@ fn collect_ns_funcs(
 fn register_func(module: &mut IrModule, name: &str, func: IrFunc) {
     let idx = module.funcs.len();
     module.funcs.push(func);
-    module.func_index.insert(name.to_string(), idx);
+    // 重载/可选参数：同名多候选按声明序追加（对齐 oracle funcs: HashMap<String, Vec<FnDef>>）
+    module.func_index.entry(name.to_string()).or_default().push(idx);
 }
 
 fn lower_func(
@@ -512,12 +600,10 @@ fn lower_func(
     is_test: bool,
     errors: &ErrorCodeTable,
     types: &TypeTable,
+    funcs: &HashSet<String>,
+    closures: &mut Vec<IrFunc>,
 ) -> Result<IrFunc, IrError> {
-    let mut ctx = LowerCtx {
-        errors: errors.clone(),
-        types: types.clone(),
-        ..LowerCtx::default()
-    };
+    let mut ctx = LowerCtx::new(errors.clone(), types.clone(), funcs, closures);
     ctx.push_scope();
     // 参数槽（声明序，从 0 开始）
     let param_slots: Vec<usize> = params.iter().map(|_| ctx.alloc_slot()).collect();
@@ -536,17 +622,46 @@ fn lower_func(
     // 隐式末尾 return void
     ctx.insts.push(IrInst::ReturnVoid);
     let n_slots = ctx.next_slot;
+    // 重载/可选参数元数据（Phase 4）：类型 + 尾部默认常量（ADR-0009）
+    let param_ty: Vec<Type> = params.iter().map(|p| p.ty.clone()).collect();
+    let param_defaults: Vec<bool> = params.iter().map(|p| p.default.is_some()).collect();
+    let defaults: Vec<Option<IrConst>> = params
+        .iter()
+        .map(|p| p.default.as_ref().and_then(|d| lower_default_const(d, errors)))
+        .collect();
     Ok(IrFunc {
         name: name.to_string(),
         params: param_slots,
+        param_ty,
+        param_defaults,
+        defaults,
         n_slots,
         body: ctx.insts,
         is_test,
     })
 }
 
-#[derive(Default)]
-struct LowerCtx {
+/// 可选参数默认值折叠为编译期常量（ADR-0009：可选参数 = 尾部 + 编译期常量默认值）。
+/// 字面量/枚举常量/错误字面量 → `IrConst`；其余（依赖参数/非常量表达式）→ None
+/// （运行时按「未提供」处理——pick_func 默认回退依赖 param_defaults，padding 依赖此常量）。
+fn lower_default_const(e: &Expr, errors: &ErrorCodeTable) -> Option<IrConst> {
+    match e {
+        Expr::IntLit { text, .. } => Some(IrConst::Int(parse_int_lit(text))),
+        Expr::FloatLit { text, .. } => Some(IrConst::Float(text.parse().unwrap_or(0.0))),
+        Expr::BoolLit(b, _) => Some(IrConst::Bool(*b)),
+        Expr::StrLit { value, .. } => Some(IrConst::Str(value.clone())),
+        Expr::CharLit(c, _) => Some(IrConst::Int(*c as i128)),
+        Expr::NullLit(_) => Some(IrConst::Null),
+        Expr::VoidLit(_) => Some(IrConst::Void),
+        Expr::ErrorLit(name, _) => Some(IrConst::Err {
+            name: name.clone(),
+            code: errors.code_of(name).unwrap_or(0),
+        }),
+        _ => None,
+    }
+}
+
+struct LowerCtx<'a> {
     /// 作用域栈：名字 → 槽（词法作用域，块退出恢复外层绑定——对齐解释器作用域）
     scopes: Vec<HashMap<String, usize>>,
     next_slot: usize,
@@ -556,10 +671,37 @@ struct LowerCtx {
     errors: ErrorCodeTable,
     /// 类型元数据（Phase 2：NamedLit/Dot 判型 class vs enum vs namespace）
     types: TypeTable,
+    /// 已知函数名集合（Phase 4）：未解析 Ident → 函数引用（FnRef）/ 静态方法调用判定
+    funcs: &'a HashSet<String>,
     /// 循环栈（Phase 3）：无标签 break/continue 定位（对齐 oracle 单级跳出；标签 → Phase 6）
     loops: Vec<LoopCtx>,
     /// 首个子集外特性错误（降级失败信号；降级继续推进以收集更多槽号，但最终报错）
     err: Option<IrError>,
+    /// 闭包函数共享缓冲（Phase 4，模块级）：`MakeClosure.func` = 追加前长度
+    /// （同一 LowerCtx 内嵌套闭包也追加至此 → 全局索引稳定，无需事后重定位）
+    closures: &'a mut Vec<IrFunc>,
+}
+
+impl<'a> LowerCtx<'a> {
+    fn new(
+        errors: ErrorCodeTable,
+        types: TypeTable,
+        funcs: &'a HashSet<String>,
+        closures: &'a mut Vec<IrFunc>,
+    ) -> Self {
+        LowerCtx {
+            scopes: Vec::new(),
+            next_slot: 0,
+            insts: Vec::new(),
+            next_label: 0,
+            errors,
+            types,
+            funcs,
+            loops: Vec::new(),
+            err: None,
+            closures,
+        }
+    }
 }
 
 /// 循环上下文（Phase 3）：break 目标 + continue 目标
@@ -568,7 +710,7 @@ struct LoopCtx {
     continue_label: usize,
 }
 
-impl LowerCtx {
+impl<'a> LowerCtx<'a> {
     fn alloc_slot(&mut self) -> usize {
         let s = self.next_slot;
         self.next_slot += 1;
@@ -684,7 +826,11 @@ impl LowerCtx {
             }
             Expr::Ident(name, span) => match self.resolve(name) {
                 Some(slot) => self.push(IrInst::Load { temp: t, slot }),
-                // 全局变量/常量引用：原生/IR 后端无程序启动初始化语义 → 硬错误
+                // 函数名作为值（FnRef：apply(square, 5) / var f = square）——对齐 oracle
+                // interp.rs:1530-1535；未解析且非函数 → 全局变量/常量引用硬错误
+                None if self.funcs.contains(name) => {
+                    self.push(IrInst::FnRef { temp: t, name: name.clone() });
+                }
                 None => self.fail_void(t, "全局变量/常量引用", span),
             },
             Expr::Binary(op, l, r, _span) => {
@@ -836,7 +982,7 @@ impl LowerCtx {
                     slot: res_slot,
                 });
             }
-            Expr::Call { callee, args, span } => {
+            Expr::Call { callee, args, span: _ } => {
                 let arg_ts: Vec<usize> = args.iter().map(|a| self.lower_expr(a)).collect();
                 match callee.as_ref() {
                     Expr::Ident(name, _) => {
@@ -846,7 +992,16 @@ impl LowerCtx {
                                 args: arg_ts,
                                 temp: t,
                             });
+                        } else if let Some(_slot) = self.resolve(name) {
+                            // 局部变量作为调用目标（存函数/闭包值）→ 间接调用
+                            let cal = self.lower_expr(callee);
+                            self.push(IrInst::CallIndirect {
+                                temp: t,
+                                callee: cal,
+                                args: arg_ts,
+                            });
                         } else {
+                            // 全局/namespace 函数静态调用（含重载，按名分派）
                             self.push(IrInst::Call {
                                 name: name.clone(),
                                 args: arg_ts,
@@ -876,19 +1031,48 @@ impl LowerCtx {
                         if let Expr::Ident(ns, _) = b {
                             parts.push(ns.clone());
                             parts.reverse();
-                            self.push(IrInst::Call {
-                                name: parts.join("."),
-                                args: arg_ts,
-                                temp: t,
-                            });
-                        } else {
-                            // 实例方法调用（p.dist(q) 等）：子集外 → 硬错误
-                            self.fail_void(t, "实例方法调用（class 方法）", span);
+                            let qn = parts.join(".");
+                            // 已知静态函数（namespace 函数 / `Type.method` 静态调用）→ 直接调用；
+                            // `Rect.area(&rect)` 静态调用显式传 self，无注入（对齐 oracle eval_call）
+                            if self.funcs.contains(&qn) {
+                                self.push(IrInst::Call {
+                                    name: qn,
+                                    args: arg_ts,
+                                    temp: t,
+                                });
+                                return t;
+                            }
+                            // 根标识符不解析为局部变量 → 未注册限定名（io.print 等内建/未声明
+                            // 函数）：静态名调用 → 运行时 NoFunction（含切片外提示）。保持
+                            // Phase 4 前行为；解析为局部时才是实例方法接收者。
+                            if self.resolve(ns).is_none() {
+                                self.push(IrInst::Call {
+                                    name: qn,
+                                    args: arg_ts,
+                                    temp: t,
+                                });
+                                return t;
+                            }
                         }
+                        // 实例方法调用：base 求值 + 运行时按类型名分派 `{Type}.{method}`，
+                        // self 注入首参（对齐 oracle interp.rs:2405-2421）
+                        let base_t = self.lower_expr(base);
+                        self.push(IrInst::CallMethod {
+                            temp: t,
+                            base: base_t,
+                            method: field.clone(),
+                            args: arg_ts,
+                        });
                     }
                     _ => {
-                        // 其它调用形态（闭包/函数指针/内建原子调用等）：子集外 → 硬错误
-                        self.fail_void(t, "此类调用形态", span);
+                        // 其它调用形态（闭包字面量立即调用 `(|v| v+a)(5)` / 复合目标）：
+                        // 求值 callee → 运行时 Fn/Closure 分派（对齐 oracle eval_call `_` 臂）
+                        let cal = self.lower_expr(callee);
+                        self.push(IrInst::CallIndirect {
+                            temp: t,
+                            callee: cal,
+                            args: arg_ts,
+                        });
                     }
                 }
             }
@@ -1122,7 +1306,9 @@ impl LowerCtx {
                 }
                 self.pop_scope();
             }
-            Expr::FnRef(_, span) => self.fail_void(t, "函数引用", span),
+            Expr::FnRef(name, _span) => {
+                self.push(IrInst::FnRef { temp: t, name: name.clone() });
+            }
             // 元组解构：源求值 + Destructure（运行时 arity 检查 + 逐元素克隆绑定）
             Expr::TupleDestructure(names, e, _) => {
                 let v = self.lower_expr(e);
@@ -1143,9 +1329,112 @@ impl LowerCtx {
                 let a = self.lower_expr(inner);
                 self.push(IrInst::Move { temp: t, a });
             }
-            Expr::Closure { span, .. } => self.fail_void(t, "闭包", span),
+            Expr::Closure {
+                params,
+                body,
+                is_move,
+                span,
+                ..
+            } => {
+                let ct = self.lower_closure(params, body, *is_move, span);
+                self.push(IrInst::Load { temp: t, slot: ct });
+            }
         }
         t
+    }
+
+    /// 闭包降级（对齐 oracle `Expr::Closure` interp.rs:1931-1963 + `capture_env`）：
+    /// 捕获当前作用域链全部绑定（`(名字, 槽号)`，最近作用域优先——遮蔽解析正确），
+    /// 生成独立闭包函数（前 n_caps 个参数 = 捕获参数，之后 = 显式参数），
+    /// 返回闭包值临时槽（MakeClosure 结果）。move → 运行时深拷贝捕获 cell。
+    /// 块值语义（对齐 `exec_block_inner`）：末语句为表达式 → 作为返回值（单表达式
+    /// 闭包 `|v| v+a` 即此形态）；否则末尾 ReturnVoid。
+    fn lower_closure(
+        &mut self,
+        params: &[String],
+        body: &Block,
+        is_move: bool,
+        _span: &Span,
+    ) -> usize {
+        // 捕获集合：当前作用域链全部绑定（名字, 槽号），最近作用域优先（遮蔽正确）
+        let mut captures: Vec<(String, usize)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for scope in self.scopes.iter().rev() {
+            for (name, slot) in scope {
+                if seen.insert(name.clone()) {
+                    captures.push((name.clone(), *slot));
+                }
+            }
+        }
+        let n_caps = captures.len();
+        let func_idx = self.closures.len();
+        let temp = self.alloc_slot();
+        // 闭包体用独立 LowerCtx（共享闭包缓冲、错误码表、类型表、函数名集合）
+        let errors = self.errors.clone();
+        let types = self.types.clone();
+        let funcs = self.funcs;
+        let closures = &mut *self.closures;
+        let mut ctx = LowerCtx::new(errors, types, funcs, closures);
+        ctx.push_scope();
+        // 捕获参数槽（0..n_caps）与显式参数槽（n_caps..）
+        for _ in 0..n_caps {
+            ctx.alloc_slot();
+        }
+        for (i, (name, _)) in captures.iter().enumerate() {
+            ctx.bind(name, i);
+        }
+        let param_slots: Vec<usize> = params.iter().map(|_| ctx.alloc_slot()).collect();
+        for (p, slot) in params.iter().zip(param_slots.iter()) {
+            ctx.bind(p, *slot);
+        }
+        // 块值语义：末语句为表达式 → 返回值
+        let n = body.stmts.len();
+        let last_is_value = matches!(body.stmts.last(), Some(Stmt::Expr(_)));
+        let m = n - usize::from(last_is_value);
+        for stmt in &body.stmts[..m] {
+            ctx.lower_stmt(stmt);
+        }
+        if last_is_value {
+            if let Some(Stmt::Expr(e)) = body.stmts.last() {
+                let v = ctx.lower_expr(e);
+                ctx.insts.push(IrInst::Return { temp: v });
+            }
+        } else {
+            if let Some(last) = body.stmts.last() {
+                ctx.lower_stmt(last);
+            }
+            ctx.insts.push(IrInst::ReturnVoid);
+        }
+        ctx.pop_scope();
+        // 提取闭包体结果后释放 ctx（结束对 self.closures 的重借），再操作 self
+        let cerr = ctx.err.take();
+        let body_insts = ctx.insts;
+        let n_slots = ctx.next_slot;
+        // 子集外特性传播到外层（首个生效）
+        if let Some(e) = cerr {
+            if self.err.is_none() {
+                self.err = Some(e);
+            }
+        }
+        let mut fparams: Vec<usize> = (0..n_caps).collect();
+        fparams.extend(param_slots.iter().copied());
+        self.closures.push(IrFunc {
+            name: format!("<closure#{func_idx}>"),
+            params: fparams,
+            param_ty: Vec::new(),
+            param_defaults: Vec::new(),
+            defaults: Vec::new(),
+            n_slots,
+            body: body_insts,
+            is_test: false,
+        });
+        self.push(IrInst::MakeClosure {
+            temp,
+            func: func_idx,
+            captures,
+            is_move,
+        });
+        temp
     }
 
     /// 切片上界降级：`__end__` 哨兵 → End 常量；否则普通表达式（对齐 parser open-end 标记）。
@@ -1757,6 +2046,16 @@ pub enum IrValue {
     End,
     /// 迭代器值（Phase 3）：指向 `Cell::Iter` 的 cell 索引
     Iter(usize),
+    /// 函数引用（Phase 4）：名字在调用点经 `pick_func` 按 arity/类型分派
+    Fn(String),
+    /// 闭包值（Phase 4）：func = [`IrModule::closures`] 索引；
+    /// captures = 捕获变量 cell 索引（共享读/mut → 原 cell；move → 深拷贝新 cell）。
+    /// 别名语义：闭包帧捕获参数槽直接绑定 captures[i] cell → 写穿对齐 oracle Rc<RefCell>。
+    Closure {
+        func: usize,
+        captures: Vec<usize>,
+        is_mut: bool,
+    },
     Void,
 }
 
@@ -1868,6 +2167,8 @@ fn type_descr(v: &IrValue) -> String {
         IrValue::Enum { name, .. } => name.clone(),
         IrValue::End => "end".into(),
         IrValue::Iter(_) => "<iter>".into(),
+        IrValue::Fn(_) => "fn".into(),
+        IrValue::Closure { .. } => "closure".into(),
         IrValue::Void => "void".into(),
     }
 }
@@ -1960,7 +2261,7 @@ fn make_iter(
             } else {
                 // 用户 IIterable：next() 直到 Opt(None)/Void（tag1：next → ?T）
                 let fname = format!("{name}.next");
-                let idx = *module.func_index.get(&fname).ok_or_else(|| {
+                let idx = pick_func(ctx, module, &fname, &[v.clone()]).ok_or_else(|| {
                     IrError::msg(
                         "NotIterable",
                         format!("type `{name}` has no `next` method (IIterable)"),
@@ -2312,6 +2613,8 @@ impl IrValue {
             },
             IrValue::End => "end".into(),
             IrValue::Iter(_) => "<iter>".into(),
+            IrValue::Fn(name) => name.clone(),
+            IrValue::Closure { .. } => "<closure>".into(),
             IrValue::Void => "void".into(),
         }
     }
@@ -2408,6 +2711,8 @@ impl IrValue {
                         _ => false,
                     }
             }
+            (IrValue::Fn(a), IrValue::Fn(b)) => a == b,
+            (IrValue::Closure { .. }, _) | (_, IrValue::Closure { .. }) => false,
             (IrValue::End, IrValue::End) => true,
             (IrValue::Void, IrValue::Void) => true,
             _ => false,
@@ -2421,12 +2726,253 @@ pub const MAX_CALL_DEPTH: usize = 1000;
 /// 执行模块中名为 entry 的函数（测试/入口），参数按 IrModule 函数签名传入。
 /// 每次调用建独立 [`Ctx`]（Phase 5 引入 IrRuntime 共享堆/全局）。
 pub fn run_ir(module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
-    let idx = *module
-        .func_index
-        .get(entry)
-        .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
     let mut ctx = Ctx::default();
+    let idx = pick_func(&ctx, module, entry, args)
+        .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
     exec_func(&mut ctx, module, idx, args, 0)
+}
+
+/// 重载/可选参数分派（对齐 oracle `pick_fn` `interp.rs:2665-2796`）：
+/// ① 精确参数数（非空则用；空则全池）→ ② 按实参值类型匹配（具体优先泛型）→ ③ 尾参默认回退。
+/// 返回类型匹配（`expected_ret`）IR 未跟踪，留待 Phase 7 期望类型传播补齐。
+fn pick_func(ctx: &Ctx, module: &IrModule, name: &str, arg_vals: &[IrValue]) -> Option<usize> {
+    let candidates = module.func_index.get(name)?;
+    // ① 精确参数数量匹配
+    let exact: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&i| module.funcs[i].params.len() == arg_vals.len())
+        .collect();
+    let pool: Vec<usize> = if exact.is_empty() {
+        candidates.clone()
+    } else {
+        exact
+    };
+    if pool.len() == 1 {
+        return Some(pool[0]);
+    }
+    // ② 按实参值类型匹配（具体优先于泛型；返回类型匹配留待 Phase 7）
+    let mut best: Option<usize> = None;
+    for &fi in &pool {
+        let f = &module.funcs[fi];
+        let mut ok = true;
+        let mut is_generic = false;
+        for (p, a) in f.param_ty.iter().zip(arg_vals.iter()) {
+            let pt = p.strip();
+            // 指针实参解引用后匹配
+            let a = match a {
+                IrValue::Ptr(c) => ctx.cell_value(*c),
+                other => other,
+            };
+            match pt {
+                Type::Named(n, _) => {
+                    let want_float = matches!(n.as_str(), "f32" | "f64" | "f16" | "f128");
+                    let want_int = matches!(
+                        n.as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "isize"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                    );
+                    let want_bool = n == "bool";
+                    match a {
+                        IrValue::Int(_) if want_float => ok = false,
+                        IrValue::Float(_) if want_int => ok = false,
+                        IrValue::Str(_) if want_int || want_float || want_bool => ok = false,
+                        IrValue::Bool(_) if !want_bool => ok = false,
+                        IrValue::Class(c) if n != "String" && class_name(ctx, *c) != *n => {
+                            ok = false;
+                        }
+                        // 泛型 T（where T: INumber 等）：不排除（编译时验证归 M2）
+                        _ if n.chars().next().map_or(false, |c| c.is_uppercase())
+                            && !n.starts_with("String")
+                            && !n.starts_with("Vec")
+                            && !n.starts_with("Map")
+                            && !n.starts_with("Deque") =>
+                        {
+                            is_generic = true;
+                        }
+                        _ => {}
+                    }
+                }
+                Type::Slice(inner, _) => {
+                    // &[u8] / &[T]：Str 或数组；泛型元素 T 标记为泛型
+                    match a {
+                        IrValue::Str(_) => {}
+                        IrValue::Arr(_) | IrValue::Slice { .. } => {}
+                        _ => ok = false,
+                    }
+                    if let Type::Named(n, _) = inner.strip() {
+                        if n.chars().next().map_or(false, |c| c.is_uppercase())
+                            && !n.starts_with("String")
+                            && !n.starts_with("Vec")
+                            && !n.starts_with("Map")
+                            && !n.starts_with("Deque")
+                        {
+                            is_generic = true;
+                        }
+                    }
+                }
+                Type::Infer => {}
+                _ => {}
+            }
+        }
+        if ok {
+            match &best {
+                None => best = Some(fi),
+                Some(b) => {
+                    let b_generic = module.funcs[*b].param_ty.iter().any(type_has_generic);
+                    if !is_generic && b_generic {
+                        // 具体优先于泛型
+                        best = Some(fi);
+                    } else if is_generic && !b_generic {
+                        // 保留 best（泛型不替换具体）
+                    }
+                    // 同具体度：保留首个注册（稳定）
+                }
+            }
+        }
+    }
+    if let Some(b) = best {
+        return Some(b);
+    }
+    // ③ 带默认参数的回退（参数数 <= 声明数且尾部默认）
+    for &fi in candidates {
+        let f = &module.funcs[fi];
+        if f.params.len() > arg_vals.len() {
+            let missing = f.params.len() - arg_vals.len();
+            let tail_has_default = f.param_defaults[f.params.len() - missing..]
+                .iter()
+                .all(|d| *d);
+            if tail_has_default {
+                return Some(fi);
+            }
+        }
+    }
+    None
+}
+
+/// 类型是否含泛型参数（重载分派：具体优先泛型；对齐 oracle `type_has_generic`）
+fn type_has_generic(t: &Type) -> bool {
+    match t.strip() {
+        Type::Named(n, args) => {
+            let n = n.as_str();
+            (n.chars().next().map_or(false, |c| c.is_uppercase())
+                && !n.starts_with("String")
+                && !n.starts_with("Vec")
+                && !n.starts_with("Map")
+                && !n.starts_with("Deque"))
+                || args.iter().any(type_has_generic)
+        }
+        Type::Ptr(inner, _)
+        | Type::Slice(inner, _)
+        | Type::Optional(inner)
+        | Type::ErrorUnion(_, inner) => type_has_generic(inner),
+        Type::Tuple(items) => items.iter().any(type_has_generic),
+        Type::Array(_, inner) => type_has_generic(inner),
+        _ => false,
+    }
+}
+
+/// Class 单元的类名（pick_func 按类名匹配；oracle 用 `Value::Class(c).borrow().name`）
+fn class_name(ctx: &Ctx, cell: usize) -> String {
+    match &ctx.cells[cell] {
+        Cell::Class { name, .. } => name.clone(),
+        _ => "<not-a-class>".into(),
+    }
+}
+
+/// 深拷贝（move 捕获；对齐 oracle `deep_copy` `interp.rs:5539-5562`）：
+/// Arr/Class/Ptr/Opt(Some) 递归拷贝，其余按值克隆（Str 本身是不可变字节串）。
+fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
+    match v {
+        IrValue::Arr(c) => {
+            let elems = match &ctx.cells[c] {
+                Cell::Elems(e) => e.clone(),
+                _ => return IrValue::Arr(c),
+            };
+            let new_elems: Vec<usize> = elems
+                .iter()
+                .map(|ec| {
+                    let cv = ctx.cell_value(*ec).clone();
+                    let copied = deep_copy(ctx, cv);
+                    ctx.alloc(Cell::Value(copied))
+                })
+                .collect();
+            IrValue::Arr(ctx.alloc(Cell::Elems(new_elems)))
+        }
+        IrValue::Class(c) => {
+            let (name, fields) = match &ctx.cells[c] {
+                Cell::Class { name, fields } => (name.clone(), fields.clone()),
+                _ => return IrValue::Class(c),
+            };
+            let new_fields: HashMap<String, usize> = fields
+                .iter()
+                .map(|(k, vc)| {
+                    let cv = ctx.cell_value(*vc).clone();
+                    let copied = deep_copy(ctx, cv);
+                    (k.clone(), ctx.alloc(Cell::Value(copied)))
+                })
+                .collect();
+            IrValue::Class(ctx.alloc(Cell::Class {
+                name,
+                fields: new_fields,
+            }))
+        }
+        IrValue::Ptr(c) => {
+            let cv = ctx.cell_value(c).clone();
+            let copied = deep_copy(ctx, cv);
+            IrValue::Ptr(ctx.alloc(Cell::Value(copied)))
+        }
+        IrValue::Opt(Some(b)) => IrValue::Opt(Some(Box::new(deep_copy(ctx, *b)))),
+        other => other,
+    }
+}
+
+/// 值类型名（方法分派 key：`"{type}.{method}"`；对齐 oracle `Value::type_name`）
+fn ir_type_name(ctx: &Ctx, v: &IrValue) -> String {
+    match v {
+        IrValue::Int(_) => "i128".into(),
+        IrValue::Float(_) => "f64".into(),
+        IrValue::Bool(_) => "bool".into(),
+        IrValue::Str(_) => "&[u8]".into(),
+        IrValue::Arr(_) => "array".into(),
+        IrValue::Slice { .. } => "slice".into(),
+        IrValue::Class(c) => class_name(ctx, *c),
+        IrValue::Enum { name, .. } => name.clone(),
+        IrValue::Opt(_) => "optional".into(),
+        IrValue::Err { .. } => "error".into(),
+        IrValue::Ptr(_) => "pointer".into(),
+        IrValue::Fn(_) => "fn".into(),
+        IrValue::Closure { .. } => "closure".into(),
+        IrValue::End => "end".into(),
+        IrValue::Iter(_) => "<iter>".into(),
+        IrValue::Void => "void".into(),
+    }
+}
+
+/// IrConst → IrValue（默认参数常量值；与 `IrInst::Const` 执行一致）
+fn const_val(c: &IrConst) -> IrValue {
+    match c {
+        IrConst::Int(i) => IrValue::Int(*i),
+        IrConst::Float(f) => IrValue::Float(*f),
+        IrConst::Bool(b) => IrValue::Bool(*b),
+        IrConst::Str(s) => IrValue::Str(s.clone().into_bytes()),
+        IrConst::Void => IrValue::Void,
+        IrConst::Null => IrValue::Opt(None),
+        IrConst::Err { name, code } => IrValue::Err {
+            name: name.clone(),
+            code: *code,
+        },
+        IrConst::End => IrValue::End,
+    }
 }
 
 /// 执行一个函数：堆/单元模型（Phase 1）。每槽分配共享 cell，`&x` = `Ptr(cell)`
@@ -2442,11 +2988,60 @@ fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], dep
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
     }
+    // 绑定实参；缺失尾参用编译期常量默认值补齐（ADR-0009 / 对齐 oracle `call_fn`）
     for (i, ps) in func.params.iter().enumerate() {
         if i < args.len() {
             ctx.set(&frame, *ps, args[i].clone());
+        } else if i < func.defaults.len() {
+            if let Some(d) = &func.defaults[i] {
+                ctx.set(&frame, *ps, const_val(d));
+            }
         }
     }
+    exec_body(ctx, module, func, frame, depth)
+}
+
+/// 调用闭包（对齐 oracle `call_closure` `interp.rs:1444-1494`）：
+/// 捕获参数槽直接绑定捕获 cell（写穿 = 共享读/mut 语义）；显式参数绑新值。
+/// 单表达式闭包体 `|v| v+a` 已在 lower 阶段降级为 `Return { temp }`。
+fn call_closure_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    func_idx: usize,
+    captures: &[usize],
+    args: &[IrValue],
+    depth: usize,
+) -> R<IrValue> {
+    if depth >= MAX_CALL_DEPTH {
+        return Err(IrError::msg("StackOverflow", "maximum call depth exceeded"));
+    }
+    let func = &module.closures[func_idx];
+    let mut frame = Frame {
+        cells: Vec::with_capacity(func.n_slots),
+    };
+    for _ in 0..func.n_slots {
+        frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
+    }
+    // 捕获参数（前 n_caps 个槽）→ 直接绑定捕获 cell（写穿调用方槽）
+    for (i, cap_cell) in captures.iter().enumerate() {
+        if i < func.params.len() {
+            frame.cells[func.params[i]] = *cap_cell;
+        }
+    }
+    // 显式参数（捕获参数之后）
+    let n_caps = captures.len();
+    for (i, ps) in func.params.iter().enumerate().skip(n_caps) {
+        let ai = i - n_caps;
+        if ai < args.len() {
+            ctx.set(&frame, *ps, args[ai].clone());
+        }
+    }
+    exec_body(ctx, module, func, frame, depth)
+}
+
+/// 执行函数/闭包体（共享循环；当前函数体在 `func`，模块其余函数在 `module.funcs`）
+fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, depth: usize) -> R<IrValue> {
+    let mut frame = frame;
     let mut pc = 0usize;
     let mut fail: Option<String> = None;
     loop {
@@ -2532,10 +3127,9 @@ fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], dep
             IrInst::Call { name, args, temp } => {
                 let arg_vals: Vec<IrValue> =
                     args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
-                let callee_idx = *module
-                    .func_index
-                    .get(name)
-                    .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
+                let callee_idx = pick_func(ctx, module, name, &arg_vals).ok_or_else(|| {
+                    IrError::msg("NoFunction", format!("no function `{name}`"))
+                })?;
                 let v = exec_func(ctx, module, callee_idx, &arg_vals, depth + 1)?;
                 ctx.set(&frame, *temp, v);
             }
@@ -2785,9 +3379,153 @@ fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], dep
                 }
             }
             IrInst::IterWriteBack { .. } => {}
+            // ---- Phase 4 闭包 / 函数引用 / 方法 / 动态调用 ----
+            IrInst::MakeClosure {
+                temp,
+                func,
+                captures,
+                is_move,
+            } => {
+                let mut cap_cells = Vec::with_capacity(captures.len());
+                for (_, slot) in captures {
+                    let cell = frame.cells[*slot];
+                    if *is_move {
+                        // move 捕获：深拷贝到新 cell（闭包脱离原作用域生命周期）
+                        let v = ctx.cell_value(cell).clone();
+                        let dv = deep_copy(ctx, v);
+                        let ncell = ctx.alloc(Cell::Value(dv));
+                        cap_cells.push(ncell);
+                    } else {
+                        // 读/mut 捕获：共享源 cell（写穿）
+                        cap_cells.push(cell);
+                    }
+                }
+                ctx.set(
+                    &frame,
+                    *temp,
+                    IrValue::Closure {
+                        func: *func,
+                        captures: cap_cells,
+                        is_mut: *is_move,
+                    },
+                );
+            }
+            IrInst::FnRef { temp, name } => {
+                ctx.set(&frame, *temp, IrValue::Fn(name.clone()));
+            }
+            IrInst::CallIndirect { temp, callee, args } => {
+                let callee_v = ctx.get(&frame, *callee).clone();
+                let arg_vals: Vec<IrValue> =
+                    args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
+                let v = match callee_v {
+                    IrValue::Fn(fname) => {
+                        let idx = pick_func(ctx, module, &fname, &arg_vals).ok_or_else(|| {
+                            IrError::msg("NoFunction", format!("no function `{fname}`"))
+                        })?;
+                        exec_func(ctx, module, idx, &arg_vals, depth + 1)?
+                    }
+                    IrValue::Closure { func, captures, .. } => {
+                        call_closure_ir(ctx, module, func, &captures, &arg_vals, depth + 1)?
+                    }
+                    other => {
+                        return Err(IrError::msg(
+                            "NotCallable",
+                            format!("`{}` is not callable", type_descr(&other)),
+                        ))
+                    }
+                };
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::CallMethod {
+                temp,
+                base,
+                method,
+                args,
+            } => {
+                let self_v = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let mut arg_vals = vec![self_v.clone()];
+                for a in args {
+                    arg_vals.push(ctx.get(&frame, *a).clone());
+                }
+                let v = call_method_ir(ctx, module, &self_v, method, &arg_vals)?;
+                ctx.set(&frame, *temp, v);
+            }
         }
         pc += 1;
     }
+}
+
+/// 方法调用（对齐 oracle `interp.rs:2405-2421`）：先试内建方法 shim（标量/Str/Arr），
+/// 再 `"{type}.{method}"` 静态方法表分派（self 已注入为首参）。
+fn call_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    method: &str,
+    arg_vals: &[IrValue],
+) -> R<IrValue> {
+    if let Some(v) = call_builtin_method_shim(ctx, self_v, method, &arg_vals[1..])? {
+        return Ok(v);
+    }
+    let fname = format!("{}.{}", ir_type_name(ctx, self_v), method);
+    let idx = pick_func(ctx, module, &fname, arg_vals)
+        .ok_or_else(|| IrError::msg("NoMethod", format!("no method `{fname}`")))?;
+    exec_func(ctx, module, idx, arg_vals, 0)
+}
+
+/// 内建方法 shim（对齐 oracle `call_builtin_method`/`call_scalar_method` 的子集，
+/// 支撑泛型方法体（sum 的 `.add`）与常见聚合方法；Phase 7 扩为全量）。
+fn call_builtin_method_shim(
+    ctx: &mut Ctx,
+    self_v: &IrValue,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let self_v = deref_value(ctx, self_v);
+    let r = match (self_v, method) {
+        (IrValue::Int(a), "add") => {
+            let b = match deref_value(ctx, args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "add"))?) {
+                IrValue::Int(b) => *b,
+                _ => return Err(IrError::msg("TypeError", "add expects int")),
+            };
+            IrValue::Int(*a + b)
+        }
+        (IrValue::Float(a), "add") => {
+            let b = match deref_value(ctx, args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "add"))?) {
+                IrValue::Float(b) => *b,
+                _ => return Err(IrError::msg("TypeError", "add expects float")),
+            };
+            IrValue::Float(*a + b)
+        }
+        (IrValue::Str(s), "concat") => {
+            let mut out = s.clone();
+            for a in args {
+                match deref_value(ctx, a) {
+                    IrValue::Str(bs) => out.extend_from_slice(bs),
+                    other => out.extend_from_slice(other.display(ctx).as_bytes()),
+                }
+            }
+            IrValue::Str(out)
+        }
+        (IrValue::Str(s), "len") => IrValue::Int(s.len() as i128),
+        (IrValue::Str(s), "as_slice") => {
+            let bytes = s.clone();
+            let elems: Vec<usize> = bytes
+                .iter()
+                .map(|b| ctx.alloc(Cell::Value(IrValue::Int(*b as i128))))
+                .collect();
+            let data = ctx.alloc(Cell::Elems(elems));
+            IrValue::Slice {
+                data,
+                start: 0,
+                len: bytes.len(),
+            }
+        }
+        (IrValue::Arr(c), "len") => IrValue::Int(ctx.elems_len(*c) as i128),
+        (IrValue::Slice { len, .. }, "len") => IrValue::Int(*len as i128),
+        _ => return Ok(None),
+    };
+    Ok(Some(r))
 }
 
 fn find_label(func: &IrFunc, id: usize) -> R<usize> {

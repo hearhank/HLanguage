@@ -287,25 +287,52 @@ fn package_programs(path: &Path) -> Result<(String, hc::Program, Vec<hc::Program
 /// M7.1：合并多文件 IR 模块——入口在前（索引不变），兄弟函数依次追加。
 /// 兄弟文件顶层函数扁平名（含 `main`）文件私有不导出；命名空间函数/类型方法
 /// 以限定名（含 `.`）导出，索引 `+offset`（对齐运行时文件私有规则）。
+/// 闭包表同步追加：兄弟模块的 `MakeClosure.func`（闭包表索引）整体平移 `closure_offset`。
 fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc::ir::IrModule {
     let mut funcs = entry.funcs;
     let mut func_index = entry.func_index;
+    let mut closures = entry.closures;
     for m in siblings {
         let offset = funcs.len();
-        for f in m.funcs {
+        let coffset = closures.len();
+        // 函数表：追加前重映射其体内 MakeClosure.func（指向本模块闭包表）
+        for mut f in m.funcs {
+            for inst in &mut f.body {
+                if let hc::ir::IrInst::MakeClosure { func, .. } = inst {
+                    *func += coffset;
+                }
+            }
             funcs.push(f);
         }
-        for (name, idx) in m.func_index {
+        // 闭包表：追加前重映射其体内嵌套 MakeClosure.func
+        for mut c in m.closures {
+            for inst in &mut c.body {
+                if let hc::ir::IrInst::MakeClosure { func, .. } = inst {
+                    *func += coffset;
+                }
+            }
+            closures.push(c);
+        }
+        // func_index 一名多候选（重载/可选参数）：逐索引平移
+        for (name, idxs) in m.func_index {
             if name.contains('.') {
-                func_index.entry(name).or_insert(idx + offset);
+                let e = func_index.entry(name).or_default();
+                for i in idxs {
+                    e.push(i + offset);
+                }
             }
         }
     }
-    hc::ir::IrModule { funcs, func_index }
+    hc::ir::IrModule {
+        funcs,
+        closures,
+        func_index,
+    }
 }
 
 /// Q-T5：从 IR 模块剔除 test fn——兄弟文件测试函数文件私有，不参与入口文件测试跑器
 /// （对齐解释器 `load_siblings` 跳过 test/main）。同步重映射 `func_index` 到剔除后索引。
+/// 闭包表不动（test fn 被剔除后其闭包成为孤儿，无害；普通函数引用的闭包索引不变）。
 fn strip_test_funcs_in_place(module: &mut hc::ir::IrModule) {
     let mut remap = vec![usize::MAX; module.funcs.len()];
     let mut kept = Vec::with_capacity(module.funcs.len());
@@ -317,9 +344,15 @@ fn strip_test_funcs_in_place(module: &mut hc::ir::IrModule) {
     }
     module.funcs = kept;
     let mut new_index = std::collections::HashMap::new();
-    for (name, idx) in module.func_index.drain() {
-        if remap[idx] != usize::MAX {
-            new_index.insert(name, remap[idx]);
+    for (name, idxs) in module.func_index.drain() {
+        let mut remapped = Vec::with_capacity(idxs.len());
+        for idx in idxs {
+            if remap[idx] != usize::MAX {
+                remapped.push(remap[idx]);
+            }
+        }
+        if !remapped.is_empty() {
+            new_index.insert(name, remapped);
         }
     }
     module.func_index = new_index;
@@ -1254,7 +1287,7 @@ fn main() i32 {
         // 兄弟顶层函数扁平名不导出（文件私有）
         assert!(!merged.func_index.contains_key("load_config"));
         // 限定名索引落在追加段（入口在前，偏移后合法）
-        assert!((merged.func_index["Math.square"] as usize) < merged.funcs.len());
+        assert!(merged.func_index["Math.square"][0] < merged.funcs.len());
         assert!(merged.funcs.len() >= 2);
     }
 
@@ -1294,8 +1327,8 @@ fn main() i32 {
         assert!(m.func_index.contains_key("helper"));
         assert!(m.func_index.contains_key("N.f"));
         assert!(!m.func_index.contains_key("a"));
-        assert_eq!(m.funcs[m.func_index["helper"]].name, "helper");
-        assert_eq!(m.funcs[m.func_index["N.f"]].name, "f");
+        assert_eq!(m.funcs[m.func_index["helper"][0]].name, "helper");
+        assert_eq!(m.funcs[m.func_index["N.f"][0]].name, "f");
     }
 
     #[test]

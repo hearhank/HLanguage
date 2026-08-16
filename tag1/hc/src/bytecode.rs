@@ -10,17 +10,20 @@
 //! 格式（全小端）：
 //! ```text
 //! magic "HBC2" · u32 version · u32 n_funcs
-//! 函数索引表（还原 IrModule.func_index）: u32 n_entries · { name · u32 idx }*
-//! 函数 × n_funcs: name · u32 n_params · {u32 param}* · u32 n_slots · u8 is_test
-//!               · u32 n_insts · { opcode u8 · 操作数 }*
+//! 函数索引表（还原 IrModule.func_index）: u32 n_entries · { name · u32 n_idx · {u32 idx}* }*
+//! 函数 × n_funcs: name · u32 n_params · {u32 param}* · Type×n_param_ty
+//!   · u8×n_param_defaults · (present? Const)* × n_defaults · u32 n_slots · u8 is_test
+//!   · u32 n_insts · { opcode u8 · 操作数 }*
+//! 闭包表（Phase 4）: u32 n_closures · 函数 × n_closures（同上格式）
 //! ```
 //! 常量载荷保留全精度：`i128` 16 字节、`f64` 8 字节、字符串长度前缀。
 
+use crate::ast::Type;
 use crate::ir::{run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrPattern, IrUnOp, IrValue};
 use std::collections::HashMap;
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 // ---------- 常量 / 运算符 / 指令 标签 ----------
 
@@ -105,28 +108,115 @@ pub fn encode(module: &IrModule) -> Vec<u8> {
     out.extend_from_slice(&MAGIC);
     push_u32(&mut out, VERSION);
     push_u32(&mut out, module.funcs.len() as u32);
-    // 函数索引表：按名排序，保证编码确定性（HashMap 迭代顺序随机）
-    let mut entries: Vec<(&String, &usize)> = module.func_index.iter().collect();
+    // 函数索引表：按名排序，保证编码确定性（HashMap 迭代顺序随机）。
+    // 一名多候选（重载/可选参数）→ 索引数组。
+    let mut entries: Vec<(&String, &Vec<usize>)> = module.func_index.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
     push_u32(&mut out, entries.len() as u32);
-    for (name, &idx) in entries {
+    for (name, idxs) in entries {
         push_str(&mut out, name);
-        push_u32(&mut out, idx as u32);
+        push_u32(&mut out, idxs.len() as u32);
+        for idx in idxs {
+            push_u32(&mut out, *idx as u32);
+        }
     }
     for f in &module.funcs {
-        push_str(&mut out, &f.name);
-        push_u32(&mut out, f.params.len() as u32);
-        for p in &f.params {
-            push_u32(&mut out, *p as u32);
-        }
-        push_u32(&mut out, f.n_slots as u32);
-        out.push(f.is_test as u8);
-        push_u32(&mut out, f.body.len() as u32);
-        for inst in &f.body {
-            encode_inst(&mut out, inst);
-        }
+        encode_func(&mut out, f);
+    }
+    // 闭包函数表（Phase 4）：与 funcs 同构，绝不进入 func_index
+    push_u32(&mut out, module.closures.len() as u32);
+    for f in &module.closures {
+        encode_func(&mut out, f);
     }
     out
+}
+
+fn encode_func(out: &mut Vec<u8>, f: &IrFunc) {
+    push_str(out, &f.name);
+    push_u32(out, f.params.len() as u32);
+    for p in &f.params {
+        push_u32(out, *p as u32);
+    }
+    push_u32(out, f.param_ty.len() as u32);
+    for t in &f.param_ty {
+        encode_type(out, t);
+    }
+    push_u32(out, f.param_defaults.len() as u32);
+    for d in &f.param_defaults {
+        out.push(*d as u8);
+    }
+    push_u32(out, f.defaults.len() as u32);
+    for d in &f.defaults {
+        match d {
+            Some(c) => {
+                out.push(1);
+                encode_const(out, c);
+            }
+            None => out.push(0),
+        }
+    }
+    push_u32(out, f.n_slots as u32);
+    out.push(f.is_test as u8);
+    push_u32(out, f.body.len() as u32);
+    for inst in &f.body {
+        encode_inst(out, inst);
+    }
+}
+
+/// Type 编码（对齐 `decode_type`；tag 0-8）
+fn encode_type(out: &mut Vec<u8>, t: &Type) {
+    match t {
+        Type::Named(n, args) => {
+            out.push(0);
+            push_str(out, n);
+            push_u32(out, args.len() as u32);
+            for a in args {
+                encode_type(out, a);
+            }
+        }
+        Type::Ptr(inner, mut_) => {
+            out.push(1);
+            encode_type(out, inner);
+            out.push(*mut_ as u8);
+        }
+        Type::Slice(inner, mut_) => {
+            out.push(2);
+            encode_type(out, inner);
+            out.push(*mut_ as u8);
+        }
+        Type::Optional(inner) => {
+            out.push(3);
+            encode_type(out, inner);
+        }
+        Type::ErrorUnion(e, inner) => {
+            out.push(4);
+            match e {
+                Some(e) => {
+                    out.push(1);
+                    encode_type(out, e);
+                }
+                None => out.push(0),
+            }
+            encode_type(out, inner);
+        }
+        Type::Tuple(items) => {
+            out.push(5);
+            push_u32(out, items.len() as u32);
+            for i in items {
+                encode_type(out, i);
+            }
+        }
+        Type::Array(n, inner) => {
+            out.push(6);
+            push_u32(out, *n as u32);
+            encode_type(out, inner);
+        }
+        Type::Infer => out.push(7),
+        Type::Owned(inner) => {
+            out.push(8);
+            encode_type(out, inner);
+        }
+    }
 }
 
 fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
@@ -371,6 +461,52 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
             push_u32(out, *iter as u32);
             push_u32(out, *slot as u32);
         }
+        // Phase 4 闭包 / 函数引用 / 方法 / 动态调用：opcode 37-40
+        IrInst::MakeClosure {
+            temp,
+            func,
+            captures,
+            is_move,
+        } => {
+            out.push(37);
+            push_u32(out, *temp as u32);
+            push_u32(out, *func as u32);
+            push_u32(out, captures.len() as u32);
+            for (name, slot) in captures {
+                push_str(out, name);
+                push_u32(out, *slot as u32);
+            }
+            out.push(*is_move as u8);
+        }
+        IrInst::FnRef { temp, name } => {
+            out.push(38);
+            push_u32(out, *temp as u32);
+            push_str(out, name);
+        }
+        IrInst::CallIndirect { temp, callee, args } => {
+            out.push(39);
+            push_u32(out, *temp as u32);
+            push_u32(out, *callee as u32);
+            push_u32(out, args.len() as u32);
+            for a in args {
+                push_u32(out, *a as u32);
+            }
+        }
+        IrInst::CallMethod {
+            temp,
+            base,
+            method,
+            args,
+        } => {
+            out.push(40);
+            push_u32(out, *temp as u32);
+            push_u32(out, *base as u32);
+            push_str(out, method);
+            push_u32(out, args.len() as u32);
+            for a in args {
+                push_u32(out, *a as u32);
+            }
+        }
     }
 }
 
@@ -459,33 +595,115 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
     let mut func_index = HashMap::with_capacity(n_entries);
     for _ in 0..n_entries {
         let name = r.str()?;
-        let idx = r.u32()? as usize;
-        func_index.insert(name, idx);
+        let n_idxs = r.u32()? as usize;
+        let mut idxs = Vec::with_capacity(n_idxs);
+        for _ in 0..n_idxs {
+            idxs.push(r.u32()? as usize);
+        }
+        func_index.insert(name, idxs);
     }
     let mut funcs = Vec::with_capacity(n_funcs);
     for _ in 0..n_funcs {
-        let name = r.str()?;
-        let n_params = r.u32()? as usize;
-        let mut params = Vec::with_capacity(n_params);
-        for _ in 0..n_params {
-            params.push(r.u32()? as usize);
-        }
-        let n_slots = r.u32()? as usize;
-        let is_test = r.u8()? != 0;
-        let n_insts = r.u32()? as usize;
-        let mut body = Vec::with_capacity(n_insts);
-        for _ in 0..n_insts {
-            body.push(decode_inst(&mut r)?);
-        }
-        funcs.push(IrFunc {
-            name,
-            params,
-            n_slots,
-            body,
-            is_test,
-        });
+        funcs.push(decode_func(&mut r)?);
     }
-    Ok(IrModule { funcs, func_index })
+    let n_closures = r.u32()? as usize;
+    let mut closures = Vec::with_capacity(n_closures);
+    for _ in 0..n_closures {
+        closures.push(decode_func(&mut r)?);
+    }
+    Ok(IrModule {
+        funcs,
+        closures,
+        func_index,
+    })
+}
+
+fn decode_func(r: &mut Reader) -> Result<IrFunc, String> {
+    let name = r.str()?;
+    let n_params = r.u32()? as usize;
+    let mut params = Vec::with_capacity(n_params);
+    for _ in 0..n_params {
+        params.push(r.u32()? as usize);
+    }
+    let n_pty = r.u32()? as usize;
+    let mut param_ty = Vec::with_capacity(n_pty);
+    for _ in 0..n_pty {
+        param_ty.push(decode_type(r)?);
+    }
+    let n_pdef = r.u32()? as usize;
+    let mut param_defaults = Vec::with_capacity(n_pdef);
+    for _ in 0..n_pdef {
+        param_defaults.push(r.u8()? != 0);
+    }
+    let n_defs = r.u32()? as usize;
+    let mut defaults = Vec::with_capacity(n_defs);
+    for _ in 0..n_defs {
+        if r.u8()? != 0 {
+            defaults.push(Some(decode_const(r)?));
+        } else {
+            defaults.push(None);
+        }
+    }
+    let n_slots = r.u32()? as usize;
+    let is_test = r.u8()? != 0;
+    let n_insts = r.u32()? as usize;
+    let mut body = Vec::with_capacity(n_insts);
+    for _ in 0..n_insts {
+        body.push(decode_inst(r)?);
+    }
+    Ok(IrFunc {
+        name,
+        params,
+        param_ty,
+        param_defaults,
+        defaults,
+        n_slots,
+        body,
+        is_test,
+    })
+}
+
+/// Type 解码（对齐 `encode_type`；tag 0-8）
+fn decode_type(r: &mut Reader) -> Result<Type, String> {
+    Ok(match r.u8()? {
+        0 => Type::Named(r.str()?, {
+            let n = r.u32()? as usize;
+            let mut args = Vec::with_capacity(n);
+            for _ in 0..n {
+                args.push(decode_type(r)?);
+            }
+            args
+        }),
+        1 => Type::Ptr(
+            Box::new(decode_type(r)?),
+            r.u8()? != 0,
+        ),
+        2 => Type::Slice(
+            Box::new(decode_type(r)?),
+            r.u8()? != 0,
+        ),
+        3 => Type::Optional(Box::new(decode_type(r)?)),
+        4 => {
+            let e = if r.u8()? != 0 {
+                Some(Box::new(decode_type(r)?))
+            } else {
+                None
+            };
+            Type::ErrorUnion(e, Box::new(decode_type(r)?))
+        }
+        5 => {
+            let n = r.u32()? as usize;
+            let mut items = Vec::with_capacity(n);
+            for _ in 0..n {
+                items.push(decode_type(r)?);
+            }
+            Type::Tuple(items)
+        }
+        6 => Type::Array(r.u32()? as usize, Box::new(decode_type(r)?)),
+        7 => Type::Infer,
+        8 => Type::Owned(Box::new(decode_type(r)?)),
+        other => return Err(format!("未知 Type 标签 {other}")),
+    })
 }
 
 fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
@@ -680,6 +898,48 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
             iter: r.u32()? as usize,
             slot: r.u32()? as usize,
         },
+        37 => IrInst::MakeClosure {
+            temp: r.u32()? as usize,
+            func: r.u32()? as usize,
+            captures: {
+                let n = r.u32()? as usize;
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    v.push((r.str()?, r.u32()? as usize));
+                }
+                v
+            },
+            is_move: r.u8()? != 0,
+        },
+        38 => IrInst::FnRef {
+            temp: r.u32()? as usize,
+            name: r.str()?,
+        },
+        39 => IrInst::CallIndirect {
+            temp: r.u32()? as usize,
+            callee: r.u32()? as usize,
+            args: {
+                let n = r.u32()? as usize;
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    v.push(r.u32()? as usize);
+                }
+                v
+            },
+        },
+        40 => IrInst::CallMethod {
+            temp: r.u32()? as usize,
+            base: r.u32()? as usize,
+            method: r.str()?,
+            args: {
+                let n = r.u32()? as usize;
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    v.push(r.u32()? as usize);
+                }
+                v
+            },
+        },
         _ => return Err(format!("未知指令 opcode {op}")),
     })
 }
@@ -787,14 +1047,18 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
 
-    /// 手工构造覆盖全部 19 种指令 + 全部常量标签 + 全部 binop/unop 标签的模块
+    /// 手工构造覆盖全部指令 + 全部常量标签 + 全部 binop/unop 标签 + 闭包表的模块
     fn exhaustive_module() -> IrModule {
         let mut func_index = HashMap::new();
-        func_index.insert("main".to_string(), 0);
-        func_index.insert("m.f".to_string(), 1);
+        func_index.insert("main".to_string(), vec![0]);
+        func_index.insert("m.f".to_string(), vec![1]);
+        func_index.insert("m.g".to_string(), vec![0, 1]); // 重载双候选
         let f0 = IrFunc {
             name: "main".to_string(),
             params: vec![0, 1],
+            param_ty: vec![Type::Named("i32".into(), vec![]), Type::Infer],
+            param_defaults: vec![false, true],
+            defaults: vec![None, Some(IrConst::Int(42))],
             n_slots: 8,
             is_test: false,
             body: vec![
@@ -930,17 +1194,53 @@ mod tests {
                 IrInst::Unwrap { temp: 7, a: 0 },
                 IrInst::Return { temp: 7 },
                 IrInst::ReturnVoid,
+                // Phase 4 闭包 / 函数引用 / 方法 / 动态调用
+                IrInst::MakeClosure {
+                    temp: 7,
+                    func: 0,
+                    captures: vec![("x".to_string(), 0), ("y".to_string(), 1)],
+                    is_move: true,
+                },
+                IrInst::FnRef {
+                    temp: 7,
+                    name: "m.g".to_string(),
+                },
+                IrInst::CallIndirect {
+                    temp: 7,
+                    callee: 7,
+                    args: vec![0, 1],
+                },
+                IrInst::CallMethod {
+                    temp: 7,
+                    base: 0,
+                    method: "area".to_string(),
+                    args: vec![1],
+                },
             ],
         };
         let f1 = IrFunc {
             name: "m.f".to_string(),
             params: vec![],
+            param_ty: vec![],
+            param_defaults: vec![],
+            defaults: vec![],
             n_slots: 1,
             is_test: true,
             body: vec![IrInst::ReturnVoid],
         };
+        let c0 = IrFunc {
+            name: "<closure>".to_string(),
+            params: vec![0, 1],
+            param_ty: vec![Type::Infer, Type::Named("i32".into(), vec![])],
+            param_defaults: vec![false, false],
+            defaults: vec![None, None],
+            n_slots: 2,
+            is_test: false,
+            body: vec![IrInst::Return { temp: 1 }],
+        };
         IrModule {
             funcs: vec![f0, f1],
+            closures: vec![c0],
             func_index,
         }
     }
@@ -960,14 +1260,19 @@ mod tests {
         let m = exhaustive_module();
         let d = decode(&encode(&m)).expect("decode");
         assert_eq!(d.funcs.len(), 2);
+        assert_eq!(d.closures.len(), 1);
         assert_eq!(d.func_index, m.func_index);
         assert_eq!(d.funcs[0].name, "main");
         assert_eq!(d.funcs[0].params, vec![0, 1]);
+        assert_eq!(d.funcs[0].param_ty[0], Type::Named("i32".into(), vec![]));
+        assert_eq!(d.funcs[0].param_defaults, vec![false, true]);
+        assert_eq!(d.funcs[0].defaults[1], Some(IrConst::Int(42)));
         assert_eq!(d.funcs[0].n_slots, 8);
         assert!(!d.funcs[0].is_test);
         assert!(d.funcs[1].is_test);
         assert_eq!(d.funcs[0].body.len(), m.funcs[0].body.len());
         assert_eq!(d.funcs[1].params, Vec::<usize>::new());
+        assert_eq!(d.closures[0].name, "<closure>");
     }
 
     #[test]
@@ -996,10 +1301,26 @@ mod tests {
 
     #[test]
     fn decode_rejects_unknown_opcode() {
-        let mut bytes = encode(&exhaustive_module());
-        // 最后一字节 = 最后一条指令 opcode（ReturnVoid → 覆盖为非法值）
-        let last = bytes.len() - 1;
-        bytes[last] = 0xFF;
+        // 手工：单函数、单条指令，opcode 非法（闭包表在函数之后——整体覆盖最后
+        // 一字节不再命中 opcode，改为精确构造）
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        push_u32(&mut bytes, VERSION);
+        push_u32(&mut bytes, 1); // n_funcs
+        push_u32(&mut bytes, 1); // n_entries
+        push_str(&mut bytes, "main");
+        push_u32(&mut bytes, 1); // n_idx
+        push_u32(&mut bytes, 0);
+        push_str(&mut bytes, "main");
+        push_u32(&mut bytes, 0); // n_params
+        push_u32(&mut bytes, 0); // n_param_ty
+        push_u32(&mut bytes, 0); // n_param_defaults
+        push_u32(&mut bytes, 0); // n_defaults
+        push_u32(&mut bytes, 1); // n_slots
+        bytes.push(0); // is_test
+        push_u32(&mut bytes, 1); // n_insts
+        bytes.push(0xFF); // 非法 opcode
+        push_u32(&mut bytes, 0); // n_closures
         assert!(decode(&bytes).unwrap_err().contains("opcode"));
     }
 
@@ -1012,9 +1333,13 @@ mod tests {
         push_u32(&mut bytes, 1); // n_funcs
         push_u32(&mut bytes, 1); // n_entries
         push_str(&mut bytes, "main");
+        push_u32(&mut bytes, 1); // n_idx
         push_u32(&mut bytes, 0);
         push_str(&mut bytes, "main");
         push_u32(&mut bytes, 0); // n_params
+        push_u32(&mut bytes, 0); // n_param_ty
+        push_u32(&mut bytes, 0); // n_param_defaults
+        push_u32(&mut bytes, 0); // n_defaults
         push_u32(&mut bytes, 2); // n_slots
         bytes.push(0); // is_test
         push_u32(&mut bytes, 1); // n_insts
@@ -1023,6 +1348,7 @@ mod tests {
         push_u32(&mut bytes, 0);
         push_u32(&mut bytes, 0);
         push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, 0); // n_closures
         assert!(decode(&bytes).unwrap_err().contains("binop"));
     }
 }

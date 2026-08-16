@@ -167,7 +167,7 @@ pub struct EnumVariant {
 
 // ---------- 类型 ----------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     /// 简单命名类型：i32 / String / Point / Vec(i32) / I(T1,T2)
     Named(String, Vec<Type>),

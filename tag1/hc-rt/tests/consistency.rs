@@ -867,3 +867,70 @@ fn for_break_and_continue() {
 "#;
     assert_all_pass(src);
 }
+
+// ---------- Phase 4：闭包 / 方法 / 重载 双模式一致 ----------
+
+#[test]
+fn closure_capture_consistency() {
+    // 读捕获共享槽 / move 捕获拷贝 / mut 捕获写穿（对齐 closures.rs oracle）
+    assert_all_pass(
+        r#"
+[test] fn read_cap() void {
+    var a = 10;
+    var f = |v| v + a;
+    a = 100;
+    expect_eq(f(5), 105);
+}
+[test] fn move_cap() void {
+    var a = 10;
+    var f = move |v| v + a;
+    a = 100;
+    expect_eq(f(5), 15);
+}
+[test] fn mut_cap() void {
+    var total = 0;
+    var acc = mut |v| { total = total + v; return total; };
+    expect_eq(acc(3), 3);
+    expect_eq(acc(4), 7);
+    expect_eq(total, 7);
+}
+"#,
+    );
+}
+
+#[test]
+fn method_dispatch_consistency() {
+    // 实例方法（注入 self 动态分派）+ 静态调用（显式 self）两模式一致
+    assert_all_pass(
+        r#"
+class Rect {
+    w: i32,
+    h: i32,
+    fn area(self: *Self) i32 { return self.w * self.h; }
+}
+[test] fn instance_method() void {
+    var r = Rect{ w = 3, h = 4 };
+    expect_eq(r.area(), 12);
+}
+[test] fn static_call() void {
+    var r = Rect{ w = 3, h = 4 };
+    expect_eq(Rect.area(&r), 12);
+}
+"#,
+    );
+}
+
+#[test]
+fn overload_consistency() {
+    // func_index 一名多候选：按实参数量精确分派（对齐 pick_fn）
+    assert_all_pass(
+        r#"
+fn sq(x: i32) i32 { return x * x; }
+fn sq(x: i32, y: i32) i32 { return x * y; }
+[test] fn overloads() void {
+    expect_eq(sq(3), 9);
+    expect_eq(sq(2, 4), 8);
+}
+"#,
+    );
+}
