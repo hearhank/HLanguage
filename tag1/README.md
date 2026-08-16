@@ -99,7 +99,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **238 项单元/集成测试 + 41 项示例回归**，全部通过，唯一样例外是示例回归中的 `ex46_recursion`（tree-walking 递归深度致**栈溢出**，已知红项，非本轮回归）。逐测试文件明细：
+`cargo test --workspace` 共 **239 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -107,7 +107,7 @@ hc --help
 | hc | `tests/bytecode.rs`（VM == 参考解释器一致性） | 12 |
 | hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
-| hc | `tests/ir.rs`（共享 IR） | 22 |
+| hc | `tests/ir.rs`（共享 IR） | 23 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
 | hc-rt | `tests/consistency.rs`（M3.4 双模式一致） | 14 |
@@ -120,23 +120,25 @@ hc --help
 | hc-rt | `tests/serialize.rs`（序列化内建） | 4 |
 | hc-rt | `tests/dep.rs`（M7.2 跨包/pub 边界） | 3 |
 | hc-rt | `tests/scalar.rs`（标量接口族） | 2 |
-| hc-rt | `tests/examples.rs`（41 示例回归） | 40 ✅ + 1 ❌（`ex46_recursion` 栈溢出） |
+| hc-rt | `tests/examples.rs`（41 示例回归） | 41 ✅ |
 | hc-tools | `src` 单元测试（CLI/buildzon/merge_modules） | 19 |
 | hc-tools | `tests/native.rs`（M3.3 原生端到端，zig 缺失自动 SKIP） | 7 |
 
 补充：
 
 - **示例回归**（CLI `hc test examples/`）：**122/134 通过**；12 项失败属第三块（第二部分）特性或未实现库 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80）、接口错误契约（24 引用未实现的 json/csv 库），均非本阶段范围。
-- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 62 项 mismatch —— 均为原生标量子集外特性（io/arena/切片/闭包/errdefer/并发），按文件粒度正确标记。
+- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生标量子集外特性（io/arena/切片/闭包/errdefer/并发/全局变量），按文件粒度正确标记。
+
+CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret 122/134 + compile ≤80 mismatch，低于基线即失败）。
 
 ## 已知取舍
 
-- **原生后端为标量子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片（标量/短路/if/while/return/try/catch/orelse/error/限定名调用/断言内建），io/集合/class 方法/闭包/指针/for/switch/defer 等走 `error.NoFunction` 或编译失败。
+- **原生后端为标量子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片（标量/短路/if/while/return/try/catch/orelse/error/限定名调用/断言内建），io/集合/class 方法/闭包/指针/for/switch/defer 等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式。
 - **i64 载荷**（非 i128）：LLVM 值盒 `{ tag, data }` 的 `data` 为 i64，i128/f64 有截断或位型转换（f64 已修正为十进制位型发射）。
 - **原生交叉验证为文件粒度**：全绿 vs 有失败，非逐测试 PASS/FAIL 清单（断言失败在测试函数 ret 路径直接 abort）。
 - **字节码 VM 复用 `run_ir`**：未做紧凑运行时 dispatch / 寄存器式 VM（性能优化留后续，须一致性套件证明等价）。
 - **跨包静态链接（M7.2 后续）**：`build.zon` 的 `deps` 已支持本地依赖装载（解释/检查路径），但原生编译目前仅同目录包内合并，跨包链接归后续。
-- **`ex46_recursion` 栈溢出**：tree-walking 递归深度限制，测试套件已知红项。
+- **tree-walking 求值递归栈深**：`hc run` 与示例回归测试均在 64MB 栈线程中运行（Windows 主线程默认 1MB、测试线程默认栈更小，不足以承载深递归/大帧），非语义限制。
 
 ## 本阶段明确不实现（第三块 / 第二部分）
 

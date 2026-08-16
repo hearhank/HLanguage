@@ -57,7 +57,7 @@ fn check(src: &str) -> (usize, usize) {
     }
 
     // 模式 B：IR 参考解释器
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     let mut tw_pass = 0usize;
     let mut ir_pass = 0usize;
     for (name, passed_tw) in &tw {

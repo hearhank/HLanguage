@@ -9,7 +9,7 @@ use hc::parse_source;
 /// 解析 + 降级 + 执行（失败时 unwrap 给出诊断）
 fn run(src: &str, entry: &str, args: &[IrValue]) -> Result<IrValue, hc::ir::IrError> {
     let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed: {d:?}"));
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     run_ir(&module, entry, args)
 }
 
@@ -257,7 +257,7 @@ namespace io {
 fn top(x: i32) i32 { return x; }
 "#;
     let program = parse_source(src).unwrap();
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     assert!(module.func_index.contains_key("top"));
     assert!(module.func_index.contains_key("double"));
     assert!(module.func_index.contains_key("io.net.double"));
@@ -292,7 +292,7 @@ fn int_overflow_errors() {
 fn missing_entry_error() {
     let src = "fn f() i32 { return 1; }";
     let program = parse_source(src).unwrap();
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     let e = run_ir(&module, "nope", &[]).unwrap_err();
     assert_eq!(e.name, "NoFunction");
 }
@@ -309,4 +309,27 @@ fn test_fn_is_registered() {
     // test fn 也降级（测试入口经 IR 运行）
     let src = "test fn t() void { expect_eq(2 * 3, 6); }";
     assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Void);
+}
+
+#[test]
+fn out_of_slice_constructs_are_hard_errors() {
+    // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
+    let cases: &[&str] = &[
+        // for 循环（含区间糖）
+        "fn f() i32 { for (0..3) |i| { return i; } return 0; }",
+        // 全局常量声明（程序启动初始化）
+        "const X: i32 = 1;\nfn f() i32 { return X; }",
+        // 闭包
+        "fn f() i32 { var x = |v| v + 1; return 0; }",
+        // switch 语句
+        "fn f(x: i32) i32 { switch (x) { else => return 0; } }",
+    ];
+    for src in cases {
+        let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
+        let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
+        assert_eq!(
+            e.name, "Unsupported",
+            "预期 Unsupported 硬错误，src: {src}"
+        );
+    }
 }

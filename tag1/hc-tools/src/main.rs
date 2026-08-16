@@ -233,6 +233,11 @@ fn zig_cc_available() -> bool {
         .unwrap_or(false)
 }
 
+/// IR 降级错误 → 可直接打印文本（`error.{name}: {message}`）。
+fn lower_err(e: hc::ir::IrError) -> String {
+    format!("error.{}: {}", e.name, e.message)
+}
+
 /// 源码 → HBC2 字节码（解析 → 语义检查 → `lower` → `encode`）。
 /// 失败返回可直接打印的诊断文本（与 `programs_to_ll` 同前置检查）。
 fn source_to_bytecode(source: &str) -> Result<Vec<u8>, String> {
@@ -241,7 +246,7 @@ fn source_to_bytecode(source: &str) -> Result<Vec<u8>, String> {
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, source));
     }
-    let module = hc::ir::lower(&program);
+    let module = hc::ir::lower(&program).map_err(lower_err)?;
     Ok(hc::bytecode::encode(&module))
 }
 
@@ -344,9 +349,11 @@ fn check_and_merge(
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, entry_source));
     }
-    let entry_module = hc::ir::lower(entry);
-    let mut sibling_modules: Vec<hc::ir::IrModule> =
-        siblings.iter().map(|p| hc::ir::lower(p)).collect();
+    let entry_module = hc::ir::lower(entry).map_err(lower_err)?;
+    let mut sibling_modules: Vec<hc::ir::IrModule> = siblings
+        .iter()
+        .map(|p| hc::ir::lower(p).map_err(lower_err))
+        .collect::<Result<Vec<_>, String>>()?;
     if strip_sibling_tests {
         for m in &mut sibling_modules {
             strip_test_funcs_in_place(m);
@@ -657,8 +664,13 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, source));
     }
-    // 3) 降级为线性 IR，交给共享执行器（`hc run --ir` 与字节码 VM 同语义源）
-    execute_ir(&hc::ir::lower(&program))
+    // 3) 降级为线性 IR，交给共享执行器（`hc run --ir` 与字节码 VM 同语义源）；
+    //    子集外特性 → 硬错误（不静默丢弃）
+    let module = match hc::ir::lower(&program) {
+        Ok(m) => m,
+        Err(e) => return Err(format!("error.{}: {}", e.name, e.message)),
+    };
+    execute_ir(&module)
 }
 
 /// 执行已降级的 IR 模块入口 `main`，结果归一化为 [`IrRunOutcome`]。
@@ -1225,14 +1237,17 @@ fn main() i32 {
     #[test]
     fn merge_modules_exports_qualified_only() {
         // 入口 + 兄弟：兄弟顶层函数扁平名文件私有；命名空间函数限定名导出、索引偏移正确
-        let entry =
-            hc::ir::lower(&hc::parse_source("fn main() i32 { return Math.square(4); }\n").unwrap());
+        let entry = hc::ir::lower(
+            &hc::parse_source("fn main() i32 { return Math.square(4); }\n").unwrap(),
+        )
+        .unwrap();
         let sib = hc::ir::lower(
             &hc::parse_source(
                 "fn load_config(x: i32) i32 { return x; }\nnamespace Math { fn square(x: i32) i32 { return x * x; } }\n",
             )
             .unwrap(),
-        );
+        )
+        .unwrap();
         let merged = merge_modules(entry, vec![sib]);
         assert!(merged.func_index.contains_key("main"));
         assert!(merged.func_index.contains_key("Math.square"));
@@ -1272,7 +1287,8 @@ fn main() i32 {
                 "test fn a() !void {}\nfn helper() i32 { return 1; }\nnamespace N { fn f() i32 { return 2; } }\n",
             )
             .unwrap(),
-        );
+        )
+        .unwrap();
         strip_test_funcs_in_place(&mut m);
         assert!(m.funcs.iter().all(|f| !f.is_test));
         assert!(m.func_index.contains_key("helper"));

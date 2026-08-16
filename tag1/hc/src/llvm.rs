@@ -1176,7 +1176,7 @@ mod tests {
 
     fn gen(src: &str) -> String {
         let p = crate::parse_source(src).expect("parse");
-        let m = ir::lower(&p);
+        let m = ir::lower(&p).expect("lower");
         let t = crate::errorcodes::collect(&p, 0);
         codegen(&m, &t)
     }

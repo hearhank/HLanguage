@@ -41,7 +41,7 @@ fn compile_and_run(src: &str) -> std::process::ExitStatus {
         "语义检查失败: {:?}",
         errs
     );
-    let module = hc::ir::lower(&program);
+    let module = hc::ir::lower(&program).expect("lower");
     let table = hc::error_code_table(&program);
     let ll = hc::llvm::codegen(&module, &table);
 
@@ -80,7 +80,7 @@ fn compile_tests_and_run(src: &str) -> std::process::ExitStatus {
         "语义检查失败: {:?}",
         errs
     );
-    let module = hc::ir::lower(&program);
+    let module = hc::ir::lower(&program).expect("lower");
     let table = hc::error_code_table(&program);
     let ll = hc::llvm::codegen_tests(&module, &table);
 

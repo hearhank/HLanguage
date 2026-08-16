@@ -4,25 +4,40 @@
 //! 闭包/切片/序列化/集合/所有权/泛型。
 
 use hc_rt::Interp;
+use std::thread;
 
-/// 运行单个 .hc 文件的所有 test fn，返回 (passed, failed, skipped)
+/// 运行单个 .hc 文件的所有 test fn，返回 (passed, failed, skipped)。
+/// 在 64MB 栈线程中运行（tree-walking 求值递归栈深，镜像 CLI 64MB 做法；
+/// 否则深递归/大帧在默认测试线程栈上溢出，如 ex46_recursion）。
 fn run_tests_in(path: &str) -> (usize, usize, usize) {
-    let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let program = hc::parse_source(&src).unwrap_or_else(|d| panic!("parse {path}: {:?}", d));
-    let mut interp = Interp::new(&src);
-    interp
-        .load(&program)
-        .unwrap_or_else(|e| panic!("load {path}: {}", e.name));
-    let r = interp.run_tests();
-    for line in &interp.test_out {
-        if line.starts_with("[FAIL]") {
-            eprintln!("{path}::{line}");
-        }
-    }
-    r
+    let path = path.to_string();
+    thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let src =
+                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let program =
+                hc::parse_source(&src).unwrap_or_else(|d| panic!("parse {path}: {:?}", d));
+            let mut interp = Interp::new(&src);
+            interp
+                .load(&program)
+                .unwrap_or_else(|e| panic!("load {path}: {}", e.name));
+            let r = interp.run_tests();
+            for line in &interp.test_out {
+                if line.starts_with("[FAIL]") {
+                    eprintln!("{path}::{line}");
+                }
+            }
+            r
+        })
+        .expect("spawn example test thread")
+        .join()
+        .expect("example test thread panicked")
 }
 
-const EXAMPLES: &str = "C:/Users/Hank/Documents/works/AI/H2/examples";
+// 相对 workspace 解析（`<repo>/tag1/hc-rt` → 上两级 → `<repo>/examples`），
+// 避免硬编码绝对路径——CI（Linux）与本地（Windows）均可运行。
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
 #[test]
 fn ex01_hello() {

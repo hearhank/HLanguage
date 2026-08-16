@@ -8,10 +8,11 @@
 //! if（语句/表达式/else-if/optional 捕获）+ while（含续步）+ return +
 //! error 字面量 + try/catch + orelse + 全局函数调用（含多级限定名）+
 //! 断言内建。
-//! **不做**（记录扩展）：defer/errdefer、for/switch、break/continue、
+//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、for/switch、break/continue、
 //! 闭包、集合/class 方法（原子内建调用）、指针操作。复杂库操作 = `CallBuiltin` 原子指令。
 
 use crate::ast::*;
+use crate::token::Span;
 use std::collections::HashMap;
 
 // ---------- IR 结构 ----------
@@ -148,15 +149,26 @@ pub enum IrInst {
 
 // ---------- AST → IR 降级 ----------
 
-pub fn lower(program: &Program) -> IrModule {
+pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     let mut module = IrModule::default();
     for d in &program.decls {
-        lower_decl(d, &mut module);
+        lower_decl(d, &mut module)?;
     }
-    module
+    Ok(module)
 }
 
-fn lower_decl(d: &Decl, module: &mut IrModule) {
+/// 构造「原生/IR 后端不支持」的降级错误（子集外特性 → 硬错误而非静默丢弃）。
+fn unsupported_ir_err(what: &str, span: &Span) -> IrError {
+    IrError::msg(
+        "Unsupported",
+        format!(
+            "原生/IR 后端为标量子集，不支持{what}（第 {} 行第 {} 列）——请用默认 tree-walking 模式 `hc run <file>`",
+            span.line, span.col
+        ),
+    )
+}
+
+fn lower_decl(d: &Decl, module: &mut IrModule) -> Result<(), IrError> {
     match d {
         Decl::Fn {
             name,
@@ -165,14 +177,14 @@ fn lower_decl(d: &Decl, module: &mut IrModule) {
             is_test,
             ..
         } => {
-            let func = lower_func(name, params, body, *is_test);
+            let func = lower_func(name, params, body, *is_test)?;
             register_func(module, name, func);
         }
         Decl::Namespace { name, decls, .. } => {
             // namespace 内函数：扁平名 + 限定名双注册（与运行时/语义一致）；
             // 多级 namespace（io.net.connect）注册全限定名
             let mut inner: Vec<(String, String, IrFunc)> = Vec::new();
-            collect_ns_funcs(decls, &[name.clone()], &mut inner);
+            collect_ns_funcs(decls, &[name.clone()], &mut inner)?;
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
                 module.funcs.push(func);
@@ -182,12 +194,27 @@ fn lower_decl(d: &Decl, module: &mut IrModule) {
                 module.func_index.insert(qn, idx);
             }
         }
-        _ => {}
+        // 全局/常量声明：程序启动即需执行初始化，原生/IR 后端无此语义 → 拒绝而非静默丢弃
+        Decl::Global { span, .. } | Decl::Const { span, .. } => {
+            return Err(unsupported_ir_err("global/const 声明（程序启动初始化）", span));
+        }
+        // 类型级声明（class/enum/interface/using/script）：无运行时代码，安全忽略；
+        // 其方法/字段被实际使用时在调用点报错（见 lower_expr 的 Call/Field 分支）
+        Decl::Class { .. }
+        | Decl::Enum { .. }
+        | Decl::Interface { .. }
+        | Decl::Using { .. }
+        | Decl::Script { .. } => {}
     }
+    Ok(())
 }
 
 /// 递归收集 namespace 内非测试函数：(扁平名, 全限定名, IR 函数)
-fn collect_ns_funcs(decls: &[Decl], path: &[String], out: &mut Vec<(String, String, IrFunc)>) {
+fn collect_ns_funcs(
+    decls: &[Decl],
+    path: &[String],
+    out: &mut Vec<(String, String, IrFunc)>,
+) -> Result<(), IrError> {
     for d in decls {
         match d {
             Decl::Fn {
@@ -199,7 +226,7 @@ fn collect_ns_funcs(decls: &[Decl], path: &[String], out: &mut Vec<(String, Stri
             } if !*is_test => {
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
-                let func = lower_func(name, params, body, false);
+                let func = lower_func(name, params, body, false)?;
                 out.push((name.clone(), qn.join("."), func));
             }
             Decl::Namespace {
@@ -209,11 +236,17 @@ fn collect_ns_funcs(decls: &[Decl], path: &[String], out: &mut Vec<(String, Stri
             } => {
                 let mut p = path.to_vec();
                 p.push(name.clone());
-                collect_ns_funcs(nested, &p, out);
+                collect_ns_funcs(nested, &p, out)?;
             }
+            // namespace 内 global/const：与顶层一致，拒绝（启动初始化语义缺失）
+            Decl::Global { span, .. } | Decl::Const { span, .. } => {
+                return Err(unsupported_ir_err("namespace 内 global/const 声明", span));
+            }
+            // 类型级声明在 namespace 内：安全忽略
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn register_func(module: &mut IrModule, name: &str, func: IrFunc) {
@@ -222,7 +255,7 @@ fn register_func(module: &mut IrModule, name: &str, func: IrFunc) {
     module.func_index.insert(name.to_string(), idx);
 }
 
-fn lower_func(name: &str, params: &[Param], body: &Block, is_test: bool) -> IrFunc {
+fn lower_func(name: &str, params: &[Param], body: &Block, is_test: bool) -> Result<IrFunc, IrError> {
     let mut ctx = LowerCtx::default();
     ctx.push_scope();
     // 参数槽（声明序，从 0 开始）
@@ -235,16 +268,20 @@ fn lower_func(name: &str, params: &[Param], body: &Block, is_test: bool) -> IrFu
         ctx.lower_stmt(stmt);
     }
     ctx.pop_scope();
+    // 子集外特性 → 硬错误（不静默丢弃语句；降级已推进完毕以保持槽号连续）
+    if let Some(e) = ctx.err {
+        return Err(e);
+    }
     // 隐式末尾 return void
     ctx.insts.push(IrInst::ReturnVoid);
     let n_slots = ctx.next_slot;
-    IrFunc {
+    Ok(IrFunc {
         name: name.to_string(),
         params: param_slots,
         n_slots,
         body: ctx.insts,
         is_test,
-    }
+    })
 }
 
 #[derive(Default)]
@@ -254,6 +291,8 @@ struct LowerCtx {
     next_slot: usize,
     insts: Vec<IrInst>,
     next_label: usize,
+    /// 首个子集外特性错误（降级失败信号；降级继续推进以收集更多槽号，但最终报错）
+    err: Option<IrError>,
 }
 
 impl LowerCtx {
@@ -288,6 +327,20 @@ impl LowerCtx {
     }
     fn resolve(&self, name: &str) -> Option<usize> {
         self.scopes.iter().rev().find_map(|m| m.get(name).copied())
+    }
+    /// 记录「原生/IR 后端不支持」的硬错误（首个生效，避免报错刷屏）
+    fn fail(&mut self, what: &str, span: &Span) {
+        if self.err.is_none() {
+            self.err = Some(unsupported_ir_err(what, span));
+        }
+    }
+    /// 子集外表达式：记录硬错误 + 返回 void 占位（保持槽号连续）
+    fn fail_void(&mut self, t: usize, what: &str, span: &Span) {
+        self.fail(what, span);
+        self.push(IrInst::Const {
+            temp: t,
+            val: IrConst::Void,
+        });
     }
     /// 块语句序列（推/弹作用域）；空块安全
     fn lower_block(&mut self, b: &Block) {
@@ -352,15 +405,12 @@ impl LowerCtx {
                     val: IrConst::Err(name.clone()),
                 });
             }
-            Expr::Ident(name, _) => match self.resolve(name) {
+            Expr::Ident(name, span) => match self.resolve(name) {
                 Some(slot) => self.push(IrInst::Load { temp: t, slot }),
-                // 全局变量等不在 IR 范围内：void 占位（正常流程语义检查已拦截）
-                None => self.push(IrInst::Const {
-                    temp: t,
-                    val: IrConst::Void,
-                }),
+                // 全局变量/常量引用：原生/IR 后端无程序启动初始化语义 → 硬错误
+                None => self.fail_void(t, "全局变量/常量引用", span),
             },
-            Expr::Binary(op, l, r, _) => {
+            Expr::Binary(op, l, r, span) => {
                 let a = self.lower_expr(l);
                 match op {
                     // 短路 and/or（与运行时 eval_binary 一致）
@@ -398,12 +448,8 @@ impl LowerCtx {
                         });
                         self.label(done);
                     }
-                    // 区间糖（[lo,hi) 数组/切片）不在 IR 标量范围：void 占位
-                    // （与集合同类，见文件头「不做」清单）
-                    BinOp::Range => self.push(IrInst::Const {
-                        temp: t,
-                        val: IrConst::Void,
-                    }),
+                    // 区间糖（[lo,hi) 数组/切片）不在 IR 标量范围 → 硬错误
+                    BinOp::Range => self.fail_void(t, "区间 `lo..hi`（数组/切片）", span),
                     _ => {
                         let b = self.lower_expr(r);
                         self.push(IrInst::Bin {
@@ -506,7 +552,7 @@ impl LowerCtx {
                     slot: res_slot,
                 });
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, span } => {
                 let arg_ts: Vec<usize> = args.iter().map(|a| self.lower_expr(a)).collect();
                 match callee.as_ref() {
                     Expr::Ident(name, _) => {
@@ -551,15 +597,14 @@ impl LowerCtx {
                                 args: arg_ts,
                                 temp: t,
                             });
+                        } else {
+                            // 实例方法调用（p.dist(q) 等）：子集外 → 硬错误
+                            self.fail_void(t, "实例方法调用（class 方法）", span);
                         }
-                        // 方法/实例调用（非命名空间限定）：记录扩展——不注册则运行时 NoFunction
                     }
                     _ => {
-                        // 方法/内建调用：子集不支持（返回 void 占位）
-                        self.push(IrInst::Const {
-                            temp: t,
-                            val: IrConst::Void,
-                        });
+                        // 其它调用形态（闭包/函数指针/内建原子调用等）：子集外 → 硬错误
+                        self.fail_void(t, "此类调用形态", span);
                     }
                 }
             }
@@ -644,25 +689,33 @@ impl LowerCtx {
                 });
             }
             Expr::Assign {
-                target, op, value, ..
+                target, op, value, span,
             } => match self.lower_assign(*op, target, value) {
                 // 赋值表达式（while 续步 i += 1 等）：值 = 新值（对齐 eval_assign）
                 Some(stored) => self.push(IrInst::Load {
                     temp: t,
                     slot: stored,
                 }),
-                None => self.push(IrInst::Const {
-                    temp: t,
-                    val: IrConst::Void,
-                }),
+                // 目标不是局部变量（字段/索引/解构等）→ 子集外硬错误
+                None => self.fail_void(t, "字段/索引/解构赋值", span),
             },
-            _ => {
-                // 集合/闭包/字段/索引等：子集不支持（void 占位）
-                self.push(IrInst::Const {
-                    temp: t,
-                    val: IrConst::Void,
-                });
+            // 子集外表达式：硬错误（而非静默 void 占位）
+            Expr::ArrayLit(_, span) => self.fail_void(t, "数组/集合字面量", span),
+            Expr::TupleLit(_, span) => self.fail_void(t, "元组字面量", span),
+            Expr::NamedLit { span, .. } => self.fail_void(t, "struct/enum 字面量构造", span),
+            Expr::Dot { span, .. } | Expr::Field { span, .. } => {
+                self.fail_void(t, "字段访问/方法调用", span)
             }
+            Expr::Index { span, .. } => self.fail_void(t, "索引访问", span),
+            Expr::Deref(_, span) => self.fail_void(t, "指针解引用", span),
+            Expr::AddrOf(_, _, span) => self.fail_void(t, "取地址 `&`", span),
+            Expr::Unwrap(_, span) => self.fail_void(t, "`.?` 断言解包", span),
+            Expr::SwitchExpr { span, .. } => self.fail_void(t, "switch 表达式", span),
+            Expr::Block(_, span) => self.fail_void(t, "块表达式", span),
+            Expr::FnRef(_, span) => self.fail_void(t, "函数引用", span),
+            Expr::TupleDestructure(_, _, span) => self.fail_void(t, "元组解构", span),
+            Expr::Move(_, span) => self.fail_void(t, "`move` 所有权转移", span),
+            Expr::Closure { span, .. } => self.fail_void(t, "闭包", span),
         }
         t
     }
@@ -723,10 +776,12 @@ impl LowerCtx {
                 self.push(IrInst::Store { slot, temp: t });
             }
             Stmt::Expr(Expr::Assign {
-                target, op, value, ..
+                target, op, value, span,
             }) => {
-                // 语句级赋值：副作用即可（目标/字段/索引等不在 IR 范围 → 忽略）
-                let _ = self.lower_assign(*op, target, value);
+                // 语句级赋值：副作用即可；目标不在 IR 范围（字段/索引/解构）→ 硬错误
+                if self.lower_assign(*op, target, value).is_none() {
+                    self.fail("字段/索引/解构赋值", span);
+                }
             }
             Stmt::Expr(e) => {
                 let _ = self.lower_expr(e);
@@ -795,8 +850,14 @@ impl LowerCtx {
                 None => self.push(IrInst::ReturnVoid),
             },
             Stmt::Block(b) => self.lower_block(b),
-            // for/switch/break/continue/defer/errdefer：不在 IR 范围（记录扩展，见文件头）
-            _ => {}
+            // for/switch/break/continue/defer/errdefer：不在 IR 范围 → 硬错误
+            Stmt::For(f) => self.fail("`for` 循环", &f.span),
+            Stmt::Switch(s) => self.fail("`switch` 语句", &s.span),
+            Stmt::Break(_, span) => self.fail("`break`", span),
+            Stmt::Continue(_, span) => self.fail("`continue`", span),
+            Stmt::Defer(_, span) => self.fail("`defer`", span),
+            Stmt::Errdefer(_, span) => self.fail("`errdefer`", span),
+            Stmt::Empty => {}
         }
     }
 }

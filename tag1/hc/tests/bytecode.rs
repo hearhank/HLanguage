@@ -11,14 +11,14 @@ use hc::parse_source;
 /// 解析 + lower + encode → 字节码 VM 执行（失败时 unwrap 给出诊断）
 fn run_bc(src: &str, entry: &str, args: &[IrValue]) -> Result<IrValue, IrError> {
     let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed: {d:?}"));
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     run_bytecode(&encode(&module), entry, args)
 }
 
 /// 断言字节码 VM 与参考解释器（同语义源）结果一致：值 / 错误名逐项相等。
 fn assert_consistent(src: &str, entry: &str, args: &[IrValue]) {
     let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed: {d:?}"));
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     let reference = run_ir(&module, entry, args);
     let via_bc = run_bytecode(&encode(&module), entry, args);
     match (reference, via_bc) {
@@ -181,7 +181,7 @@ fn int_overflow_error() {
 fn missing_entry_and_unknown_call() {
     let src = "fn f() i32 { return 1; }";
     let program = parse_source(src).unwrap();
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     let reference = run_ir(&module, "nope", &[]).unwrap_err();
     let via_bc = run_bytecode(&encode(&module), "nope", &[]).unwrap_err();
     assert_eq!(reference.name, via_bc.name);
@@ -204,7 +204,7 @@ namespace io {
 fn top(x: i32) i32 { return x; }
 "#;
     let program = parse_source(src).unwrap();
-    let module = lower(&program);
+    let module = lower(&program).unwrap();
     let bytes = encode(&module);
     let decoded = hc::bytecode::decode(&bytes).expect("decode");
     assert_eq!(decoded.func_index, module.func_index);

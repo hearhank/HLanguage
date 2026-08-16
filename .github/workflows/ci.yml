@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  ci:
+    name: 构建 + 测试 + 示例回归
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 原生后端（`hc build` / `hc test --mode=compile`）用 zig cc 链接
+      - name: 安装 zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # Rust 单元/集成 + 41 精选示例回归（含原生端到端 tests/native.rs）
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      # 完整示例套件回归：interpret 122/134 + compile 交叉验证（<=80 mismatch）
+      - name: 示例套件回归
+        run: bash tag1/scripts/check-examples.sh

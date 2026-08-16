@@ -1,7 +1,9 @@
-//! H 语言编译器前端（M1 前端：lexer / parser / AST / 诊断 / 模块）
+//! H 语言编译器（hc）：lexer / parser / AST / 诊断 / 语义检查 / 共享 IR / 字节码 VM / LLVM 发射
 //!
-//! 对应实现计划（07-bootstrap-plan.md）第一块语言系统 M1。
-//! tag1 垂直切片范围：核心语法子集 + 基础诊断；完整所有权/重载等留后续。
+//! 对应实现计划（07-bootstrap-plan.md）第一部分最小功能集（M0–M7）。
+//! tag1 垂直切片：核心语法子集 + 完整语义检查（所有权/重载/错误集/推断）
+//! + 双后端（字节码 VM / LLVM 原生，共享 `ir::IrModule` 唯一语义源，ADR-0004）。
+//! 子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（见 `ir::lower`），不静默丢弃。
 
 pub mod ast;
 pub mod bytecode;
