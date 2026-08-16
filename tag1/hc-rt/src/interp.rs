@@ -105,8 +105,9 @@ enum Flow {
     /// 表达式值（switch 表达式臂 / 闭包单表达式体）——与 `Return`（语句 return）区分：
     /// 语句 return 必须向上传播到函数边界，表达式值就地消费
     Value(Value),
-    Break,
-    Continue,
+    /// 带标签 break/continue（`:label`）：`None` = 无标签（最内层循环）
+    Break(Option<String>),
+    Continue(Option<String>),
 }
 
 /// 作用域
@@ -746,7 +747,17 @@ impl Interp {
         self.scopes.push(Scope::new());
     }
 
-    fn pop_scope(&mut self) -> Result<()> {
+    fn pop_scope(&mut self, err_path: bool) -> Result<()> {
+        // defer 同作用域捕获：先取走 defers（释放借用），在作用域**仍压栈**时执行
+        // （defer 表达式可引用本作用域局部变量），再弹出作用域标记悬垂。
+        let defers = std::mem::take(
+            &mut self
+                .scopes
+                .last_mut()
+                .expect("scope stack underflow")
+                .defers,
+        );
+        let defer_err = self.run_defers(&defers, err_path);
         let scope = self.scopes.pop().expect("scope stack underflow");
         // M2.5/M4.7 Debug 悬垂标记：作用域退出 = 目标销毁（LIFO）→ 把被取过地址的
         // 目标 cell 内容标记为 Dangling（有指针持有的 cell 不释放、地址唯一——
@@ -760,13 +771,13 @@ impl Interp {
                 }
             }
         }
-        self.run_defers(scope, false)
+        defer_err
     }
 
-    fn run_defers(&mut self, scope: Scope, err_path: bool) -> Result<()> {
+    fn run_defers(&mut self, defers: &[DeferEntry], err_path: bool) -> Result<()> {
         // LIFO（Q21：后声明先执行）
         let mut err = None;
-        for entry in scope.defers.iter().rev() {
+        for entry in defers.iter().rev() {
             if entry.errdefer && !err_path {
                 continue;
             }
@@ -777,6 +788,25 @@ impl Interp {
         match err {
             Some(e) => Err(e),
             None => Ok(()),
+        }
+    }
+
+    /// 判定退出作用域是否处于"错误路径"（errdefer 触发条件）：
+    /// 块执行返回真错误（非信号），或流携带/值是错误值（`return error.X`、
+    /// `try` 传播的 `Flow::Return(err)` 信号、块/臂表达式值本身为错误）。
+    fn is_err_path(r: &Result<Flow>) -> bool {
+        match r {
+            Err(e) => {
+                if !e.is_signal() {
+                    return true;
+                }
+                matches!(
+                    &e.signal,
+                    Some(Flow::Return(v)) | Some(Flow::Value(v)) if value_is_err(v)
+                )
+            }
+            Ok(Flow::Return(v)) | Ok(Flow::Value(v)) => value_is_err(v),
+            _ => false,
         }
     }
 
@@ -811,20 +841,20 @@ impl Interp {
             self.bind(name, v.clone());
         }
         let result = self.exec_block_inner(body);
-        let _ = self.pop_scope();
+        let _ = self.pop_scope(Self::is_err_path(&result));
         self.call_depth -= 1;
         match result {
             Ok(Flow::Return(v)) => Ok(v),
             Ok(Flow::Value(v)) => Ok(v),
             Ok(Flow::None) => Ok(Value::Void),
-            Ok(Flow::Break) | Ok(Flow::Continue) => Err(RtError::msg(
+            Ok(Flow::Break(_)) | Ok(Flow::Continue(_)) => Err(RtError::msg(
                 "InvalidControlFlow",
                 "break/continue outside loop",
             )),
             Err(e) if e.is_signal() => match e.signal {
                 Some(Flow::Return(v)) => Ok(v),
                 Some(Flow::Value(v)) => Ok(v),
-                Some(Flow::Break) | Some(Flow::Continue) => Err(RtError::msg(
+                Some(Flow::Break(_)) | Some(Flow::Continue(_)) => Err(RtError::msg(
                     "InvalidControlFlow",
                     "break/continue outside loop",
                 )),
@@ -837,7 +867,7 @@ impl Interp {
     fn exec_block(&mut self, b: &Block) -> Result<Flow> {
         self.push_scope();
         let r = self.exec_block_inner(b);
-        let _ = self.pop_scope();
+        let _ = self.pop_scope(Self::is_err_path(&r));
         r
     }
 
@@ -959,8 +989,8 @@ impl Interp {
                 self.expected_ret = prev_expected;
                 Ok(Flow::Return(v))
             }
-            Stmt::Break(_, _) => Ok(Flow::Break),
-            Stmt::Continue(_, _) => Ok(Flow::Continue),
+            Stmt::Break(l, _) => Ok(Flow::Break(l.clone())),
+            Stmt::Continue(l, _) => Ok(Flow::Continue(l.clone())),
             Stmt::Defer(e, _) => {
                 self.scopes.last_mut().unwrap().defers.push(DeferEntry {
                     expr: e.clone(),
@@ -1055,7 +1085,7 @@ impl Interp {
                     self.push_scope();
                     self.bind(name, (*v).clone());
                     let r = self.exec_block(&ifs.then_b);
-                    let _ = self.pop_scope();
+                    let _ = self.pop_scope(Self::is_err_path(&r));
                     return r;
                 }
                 Value::Opt(None) => {
@@ -1068,7 +1098,7 @@ impl Interp {
                     self.push_scope();
                     self.bind(name, other);
                     let r = self.exec_block(&ifs.then_b);
-                    let _ = self.pop_scope();
+                    let _ = self.pop_scope(Self::is_err_path(&r));
                     return r;
                 }
             }
@@ -1090,17 +1120,36 @@ impl Interp {
             }
             self.push_scope();
             let r = self.exec_block_inner(&w.body);
-            let _ = self.pop_scope();
+            let _ = self.pop_scope(Self::is_err_path(&r));
             match r {
-                Ok(Flow::Break) => return Ok(Flow::None),
-                Ok(Flow::Continue) => {}
+                // 带标签 break/continue：仅匹配本循环标签才消费，否则向上一级传播
+                Ok(Flow::Break(l)) => {
+                    if l.is_some() && l != w.label {
+                        return Ok(Flow::Break(l));
+                    }
+                    return Ok(Flow::None);
+                }
+                Ok(Flow::Continue(l)) => {
+                    if l.is_some() && l != w.label {
+                        return Ok(Flow::Continue(l));
+                    }
+                }
                 Ok(Flow::Return(v)) => return Ok(Flow::Return(v)),
                 Ok(Flow::Value(_)) => {}
                 Ok(Flow::None) => {}
                 // `orelse continue` / `catch break` 等表达式内信号 → 恢复为流
                 Err(e) if e.is_signal() => match e.signal {
-                    Some(Flow::Break) => return Ok(Flow::None),
-                    Some(Flow::Continue) => {}
+                    Some(Flow::Break(l)) => {
+                        if l.is_some() && l != w.label {
+                            return Ok(Flow::Break(l));
+                        }
+                        return Ok(Flow::None);
+                    }
+                    Some(Flow::Continue(l)) => {
+                        if l.is_some() && l != w.label {
+                            return Ok(Flow::Continue(l));
+                        }
+                    }
                     Some(Flow::Return(v)) => return Ok(Flow::Return(v)),
                     _ => return Err(e),
                 },
@@ -1116,7 +1165,7 @@ impl Interp {
         let iter = self.eval(&f.iter)?;
         // 展开可迭代对象
         let items: Vec<(Rc<RefCell<Value>>, bool)> = self.iter_items(&iter)?;
-        for (cell, is_ref) in items {
+        'outer: for (cell, is_ref) in items {
             self.push_scope();
             match f.capture {
                 CaptureMode::Read => {
@@ -1138,17 +1187,38 @@ impl Interp {
                 }
             }
             let r = self.exec_block_inner(&f.body);
-            let _ = self.pop_scope();
+            let _ = self.pop_scope(Self::is_err_path(&r));
             match r {
-                Ok(Flow::Break) => return Ok(Flow::None),
-                Ok(Flow::Continue) => continue,
+                // 带标签 break/continue：仅匹配本循环标签才消费，否则向上一级传播
+                Ok(Flow::Break(l)) => {
+                    if l.is_some() && l != f.label {
+                        return Ok(Flow::Break(l));
+                    }
+                    return Ok(Flow::None);
+                }
+                Ok(Flow::Continue(l)) => {
+                    if l.is_some() && l != f.label {
+                        return Ok(Flow::Continue(l));
+                    }
+                    continue 'outer;
+                }
                 Ok(Flow::Return(v)) => return Ok(Flow::Return(v)),
                 Ok(Flow::Value(_)) => {}
                 Ok(Flow::None) => {}
                 // `orelse continue` 等表达式内信号 → 恢复为流
                 Err(e) if e.is_signal() => match e.signal {
-                    Some(Flow::Break) => return Ok(Flow::None),
-                    Some(Flow::Continue) => continue,
+                    Some(Flow::Break(l)) => {
+                        if l.is_some() && l != f.label {
+                            return Ok(Flow::Break(l));
+                        }
+                        return Ok(Flow::None);
+                    }
+                    Some(Flow::Continue(l)) => {
+                        if l.is_some() && l != f.label {
+                            return Ok(Flow::Continue(l));
+                        }
+                        continue 'outer;
+                    }
                     Some(Flow::Return(v)) => return Ok(Flow::Return(v)),
                     _ => return Err(e),
                 },
@@ -1327,7 +1397,7 @@ impl Interp {
         if arm.body.stmts.len() == 1 {
             if let Stmt::Expr(e) = &arm.body.stmts[0] {
                 let v = self.eval(e);
-                let _ = self.pop_scope();
+                let _ = self.pop_scope(Self::is_err_path(&v.clone().map(Flow::Value)));
                 return match v {
                     Ok(val) => Ok(Flow::Value(val)),
                     Err(err) => Err(err),
@@ -1335,7 +1405,7 @@ impl Interp {
             }
         }
         let r = self.exec_block_inner(&arm.body);
-        let _ = self.pop_scope();
+        let _ = self.pop_scope(Self::is_err_path(&r));
         r
     }
 
@@ -1471,20 +1541,20 @@ impl Interp {
         } else {
             self.exec_block_inner(&c.body)
         };
-        let _ = self.pop_scope();
+        let _ = self.pop_scope(Self::is_err_path(&r));
         self.scopes = saved;
         self.current_ret = saved_ret;
         match r {
             Ok(Flow::Return(v)) => Ok(v),
             Ok(Flow::Value(v)) => Ok(v),
             Ok(Flow::None) => Ok(Value::Void),
-            Ok(Flow::Break) | Ok(Flow::Continue) => {
+            Ok(Flow::Break(_)) | Ok(Flow::Continue(_)) => {
                 Err(RtError::new("InvalidControlFlow", Some(span.clone())))
             }
             Err(e) if e.is_signal() => match e.signal {
                 Some(Flow::Return(v)) => Ok(v),
                 Some(Flow::Value(v)) => Ok(v),
-                Some(Flow::Break) | Some(Flow::Continue) => {
+                Some(Flow::Break(_)) | Some(Flow::Continue(_)) => {
                     Err(RtError::new("InvalidControlFlow", Some(span.clone())))
                 }
                 _ => Err(e),
@@ -1801,8 +1871,8 @@ impl Interp {
                                 Flow::None => Ok(Value::Void),
                                 Flow::Value(v) => Ok(v),
                                 Flow::Return(v) => Err(RtError::signal(Flow::Return(v))),
-                                Flow::Break => Err(RtError::signal(Flow::Break)),
-                                Flow::Continue => Err(RtError::signal(Flow::Continue)),
+                                Flow::Break(l) => Err(RtError::signal(Flow::Break(l))),
+                                Flow::Continue(l) => Err(RtError::signal(Flow::Continue(l))),
                             }
                         } else {
                             self.eval(r)
@@ -1842,14 +1912,14 @@ impl Interp {
                             let err_clone = v.clone();
                             self.bind(bname, err_clone);
                             let r = self.exec_block_inner(body);
-                            let _ = self.pop_scope();
+                            let _ = self.pop_scope(Self::is_err_path(&r));
                             match r? {
                                 Flow::None => Ok(Value::Void),
                                 Flow::Value(v) => Ok(v),
                                 // 语句 return/break/continue：向函数/循环边界传播（与块表达式一致）
                                 Flow::Return(v) => Err(RtError::signal(Flow::Return(v))),
-                                Flow::Break => Err(RtError::signal(Flow::Break)),
-                                Flow::Continue => Err(RtError::signal(Flow::Continue)),
+                                Flow::Break(l) => Err(RtError::signal(Flow::Break(l))),
+                                Flow::Continue(l) => Err(RtError::signal(Flow::Continue(l))),
                             }
                         }
                     },
@@ -1872,7 +1942,7 @@ impl Interp {
                             self.push_scope();
                             self.bind(name, (*v).clone());
                             let r = self.eval(then_e);
-                            let _ = self.pop_scope();
+                            let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
                             return r;
                         }
                         Value::Opt(None) => return self.eval(else_e),
@@ -1880,7 +1950,7 @@ impl Interp {
                             self.push_scope();
                             self.bind(name, other);
                             let r = self.eval(then_e);
-                            let _ = self.pop_scope();
+                            let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
                             return r;
                         }
                     }
@@ -1901,7 +1971,7 @@ impl Interp {
                     span: Span::new(0, 0, 0, 0),
                 };
                 match self.exec_switch(&sw)? {
-                    Flow::None | Flow::Break | Flow::Continue => Ok(Value::Void),
+                    Flow::None | Flow::Break(_) | Flow::Continue(_) => Ok(Value::Void),
                     // 表达式臂值：switch 表达式结果
                     Flow::Value(v) => Ok(v),
                     // 语句 return（`=> return x`）：向函数边界传播
@@ -1911,14 +1981,14 @@ impl Interp {
             Expr::Block(b, _) => {
                 self.push_scope();
                 let r = self.exec_block_inner(b);
-                let _ = self.pop_scope();
+                let _ = self.pop_scope(Self::is_err_path(&r));
                 match r? {
                     Flow::None => Ok(Value::Void),
                     Flow::Value(v) => Ok(v),
                     // 语句 return/break/continue：向函数/循环边界传播
                     Flow::Return(v) => Err(RtError::signal(Flow::Return(v))),
-                    Flow::Break => Err(RtError::signal(Flow::Break)),
-                    Flow::Continue => Err(RtError::signal(Flow::Continue)),
+                    Flow::Break(l) => Err(RtError::signal(Flow::Break(l))),
+                    Flow::Continue(l) => Err(RtError::signal(Flow::Continue(l))),
                 }
             }
             Expr::Assign {
@@ -5654,7 +5724,7 @@ impl Interp {
             self.bind("alloc", Value::Alloc);
             self.fail_info = None;
             let r = self.exec_fn_body(&t.body, &[]);
-            let _ = self.pop_scope();
+            let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
             // 显示名：名称 ?? 函数名
             let display = t
                 .test_name
@@ -5715,9 +5785,14 @@ impl Flow {
             Flow::Return(v) => v,
             Flow::Value(v) => v,
             Flow::None => Value::Void,
-            Flow::Break | Flow::Continue => Value::Void,
+            Flow::Break(_) | Flow::Continue(_) => Value::Void,
         }
     }
+}
+
+/// 值是否为错误值（errdefer 错误路径判定）
+fn value_is_err(v: &Value) -> bool {
+    matches!(v, Value::Err { .. })
 }
 
 /// 类型参数是否含泛型占位（大写类型名 T/U 等，tag1 启发式）

@@ -840,6 +840,16 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        // 循环标签：`:label while (...)` / `:label for (...)`（break :label 的对称形式）
+        let label = if self.at(&TokenKind::Colon) {
+            let l = self.label_if_ident();
+            if !matches!(self.peek(), TokenKind::KwWhile | TokenKind::KwFor) {
+                return Err(self.error_at("`循环标签`后需跟 `while` 或 `for`"));
+            }
+            l
+        } else {
+            None
+        };
         let start = self.span();
         match self.peek().clone() {
             TokenKind::LBrace => Ok(Stmt::Block(self.parse_block()?)),
@@ -864,8 +874,8 @@ impl Parser {
                 })
             }
             TokenKind::KwIf => self.parse_if_stmt(),
-            TokenKind::KwWhile => self.parse_while_stmt(),
-            TokenKind::KwFor => self.parse_for_stmt(),
+            TokenKind::KwWhile => self.parse_while_stmt(label),
+            TokenKind::KwFor => self.parse_for_stmt(label),
             TokenKind::KwSwitch => {
                 let sw = self.parse_switch()?;
                 Ok(Stmt::Switch(sw))
@@ -1037,7 +1047,7 @@ impl Parser {
         }
     }
 
-    fn parse_while_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+    fn parse_while_stmt(&mut self, label: Option<String>) -> Result<Stmt, Diagnostic> {
         self.advance(); // while
         self.expect(&TokenKind::LParen, "`(` after while")?;
         let cond = self.parse_expr()?;
@@ -1054,6 +1064,7 @@ impl Parser {
         let body = self.parse_body_or_stmt()?;
         let bspan = body.span.clone();
         Ok(Stmt::While(WhileStmt {
+            label,
             cond,
             step,
             body,
@@ -1061,7 +1072,7 @@ impl Parser {
         }))
     }
 
-    fn parse_for_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+    fn parse_for_stmt(&mut self, label: Option<String>) -> Result<Stmt, Diagnostic> {
         self.advance(); // for
         self.expect(&TokenKind::LParen, "`(` after for")?;
         let iter = self.parse_expr()?;
@@ -1070,6 +1081,7 @@ impl Parser {
         let body = self.parse_body_or_stmt()?;
         let bspan = body.span.clone();
         Ok(Stmt::For(ForStmt {
+            label,
             iter,
             capture: mode,
             capture_name: name,

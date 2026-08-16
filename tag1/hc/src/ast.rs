@@ -251,6 +251,8 @@ pub struct IfStmt {
 
 #[derive(Debug, Clone)]
 pub struct WhileStmt {
+    /// 循环标签（`:label while`），供 `break :label` / `continue :label` 定位
+    pub label: Option<String>,
     pub cond: Expr,
     pub step: Option<Expr>,
     pub body: Block,
@@ -259,6 +261,8 @@ pub struct WhileStmt {
 
 #[derive(Debug, Clone)]
 pub struct ForStmt {
+    /// 循环标签（`:label for`），供 `break :label` / `continue :label` 定位
+    pub label: Option<String>,
     pub iter: Expr,
     pub capture: CaptureMode,
     pub capture_name: String,

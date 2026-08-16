@@ -705,3 +705,190 @@ fn main() i32 {
 
 // （NotIterable 运行时路径为语义检查后的防御性兜底：`for (n) |x|` 在 check_semantics
 //  即被拒绝，无法到达运行时代码——故不设端到端失败用例。）
+
+#[test]
+fn phase6_defer_lifo_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // defer LIFO（%defers 计数器数组 + JumpIfNotDefer 守卫）+ 块级作用域退出触发。
+    let src = r#"
+global log: i32 = 0;
+fn rec(v: i32) void { log = log * 10 + v; }
+fn main() i32 {
+    log = 0;
+    {
+        defer rec(1);
+        defer rec(2);
+        defer rec(3);
+    }
+    if (log != 321) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase6_defer_runs_on_return_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // `return` 排空函数级 defers：正常值仅非 errdefer。
+    let src = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn early() i32 {
+    defer bump(5);
+    return 1;
+}
+fn main() i32 {
+    g = 0;
+    var r = early();
+    if (r != 1) { return 1; }
+    if (g != 5) { return 2; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase6_defer_loop_break_continue_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // break/continue 排空循环体 defers：每轮迭代 defer 都运行（含 continue 路径）。
+    let src = r#"
+global dlog: i32 = 0;
+fn bump() void { dlog += 1; }
+fn main() i32 {
+    dlog = 0;
+    var i: i32 = 0;
+    while (true) {
+        defer bump();
+        i += 1;
+        if (i >= 3) { break; }
+    }
+    if (dlog != 3) { return 1; }
+    dlog = 0;
+    var clog: i32 = 0;
+    i = 0;
+    while (i < 5) {
+        defer bump();
+        i += 1;
+        if (i == 3) { continue; }
+        clog += 1;
+    }
+    if (dlog != 5) { return 2; }
+    if (clog != 4) { return 3; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase6_errdefer_error_path_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // errdefer：错误返回路径触发（+ 正常 defer 也触发）；正常返回不触发 errdefer。
+    let src = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn maybe(ok: bool) !i32 {
+    defer bump(1);
+    errdefer bump(100);
+    if (ok) { return 5; }
+    return error.Fail;
+}
+fn main() i32 {
+    g = 0;
+    var r = maybe(false) catch 0;
+    if (r != 0) { return 1; }
+    if (g != 101) { return 2; }
+    g = 0;
+    r = maybe(true) catch 0;
+    if (r != 5) { return 3; }
+    if (g != 1) { return 4; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase6_labeled_break_continue_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 带标签 break/continue：标签跨多层循环定位（JumpIfNotDefer 守卫 + 目标 label）。
+    let src = r#"
+fn main() i32 {
+    var s: i32 = 0;
+    :outer while (true) {
+        var j: i32 = 0;
+        while (j < 10) {
+            j += 1;
+            if (j == 2) { break :outer; }
+            s += j;
+        }
+    }
+    if (s != 1) { return 1; }
+    s = 0;
+    :outer for (0..3) |i| {
+        if (i == 1) { continue :outer; }
+        s += i;
+    }
+    if (s != 2) { return 2; }
+    s = 0;
+    :outer for (0..3) |i| {
+        var j: i32 = 0;
+        while (j < 5) {
+            j += 1;
+            if (i == 1) { continue :outer; }
+            s += j;
+        }
+        s += 100;
+    }
+    if (s != 230) { return 3; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn phase6_labeled_break_runs_defers_native() {
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    // 带标签 break 排空目标循环体 defers。
+    let src = r#"
+global g: i32 = 0;
+fn bump() void { g += 1; }
+fn main() i32 {
+    g = 0;
+    :outer while (true) {
+        defer bump();
+        break :outer;
+    }
+    if (g != 1) { return 1; }
+    return 0;
+}
+"#;
+    let st = compile_and_run(src);
+    assert!(st.success(), "exit: {st}");
+}

@@ -351,6 +351,24 @@ pub enum IrInst {
         temp: usize,
         name: String,
     },
+    // ---- Phase 6：defer / errdefer ----
+    /// 登记 defer（运行时活跃计数 +1；`id` 为该 defer 语句的编译期唯一编号）。
+    /// 在 defer 语句处发射；退出点用守卫（JumpIfNotDefer）+ 内联体 + PopDefer 排空。
+    /// 对齐 oracle `exec_stmt` 的 `Stmt::Defer`（`interp.rs`）——defer 求值推迟到作用域退出。
+    PushDefer {
+        id: usize,
+    },
+    /// 该 defer 未登记于当前动态路径（活跃计数为 0）→ 跳过内联体（分支/已运行路径）。
+    /// 运行时 LIFO 顺序由发射顺序（编译期）保证，计数仅做「是否待运行」判定。
+    JumpIfNotDefer {
+        id: usize,
+        label: usize,
+    },
+    /// 排空该 defer（活跃计数 -1）。正常路径上 errdefer 由裸 PopDefer 清理（不运行）；
+    /// 运行后紧随 PopDefer 同步移除。计数减法（非栈顶弹出）天然支持 errdefer 穿插。
+    PopDefer {
+        id: usize,
+    },
 }
 
 /// switch 模式（对齐 AST [`crate::ast::SwitchPattern`]；`Else` 不发射 MatchTest——
@@ -839,6 +857,19 @@ struct LowerCtx<'a> {
     globals: &'a HashSet<String>,
     /// 循环栈（Phase 3）：无标签 break/continue 定位（对齐 oracle 单级跳出；标签 → Phase 6）
     loops: Vec<LoopCtx>,
+    /// 已登记 defers（Phase 6，按登记序累积；**不弹**——作用域标记划分发射范围）。
+    /// 退出点（作用域自然结束 / return / break / continue / try 错误返回）按 LIFO
+    /// 发射内联体（守卫 JumpIfNotDefer + PopDefer）。作用域弹栈时截断到标记。
+    defers: Vec<DeferRecord>,
+    /// 与 `scopes` 平行的 defer 标记：进入作用域时的 `defers.len()`。`pop_scope` 发射
+    /// 从当前长度下到标记的 defers（仅该作用域登记的部分），再截断——对齐 oracle
+    /// 每作用域独立 defer 列表、弹栈即运行。
+    defer_markers: Vec<usize>,
+    /// defer 体缓冲：非 None 时 `push`/`label` 路由到缓冲（defer 体单独降级，
+    /// 退出点整体发射）。defer 语句降级完即复位为外层缓冲。
+    pending: Option<Vec<IrInst>>,
+    /// 下一个 defer id（函数级单调递增；每个 defer 语句唯一）。
+    next_defer_id: usize,
     /// 首个子集外特性错误（降级失败信号；降级继续推进以收集更多槽号，但最终报错）
     err: Option<IrError>,
     /// 闭包函数共享缓冲（Phase 4，模块级）：`MakeClosure.func` = 追加前长度
@@ -864,16 +895,46 @@ impl<'a> LowerCtx<'a> {
             funcs,
             globals,
             loops: Vec::new(),
+            defers: Vec::new(),
+            defer_markers: Vec::new(),
+            pending: None,
+            next_defer_id: 0,
             err: None,
             closures,
         }
     }
 }
 
-/// 循环上下文（Phase 3）：break 目标 + continue 目标
+/// 循环上下文（Phase 3）：break 目标 + continue 目标；
+/// Phase 6 增补：循环标签 + 进入时 defer 深度（退出该循环须排空其体内 defers）。
 struct LoopCtx {
     break_label: usize,
     continue_label: usize,
+    /// 循环标签（`:label while` / `:label for`），供 `break :label` / `continue :label` 定位
+    label: Option<String>,
+    /// 进入循环时已登记 defers 数：break/continue 排空 [depth..len)（含嵌套作用域，
+    /// 但不含循环外层的 defers——外层退出点另行处理）。
+    defer_depth_at_entry: usize,
+}
+
+/// 一个 defer/errdefer 语句的编译期记录：id（PushDefer/PopDefer/守卫共用）+ 内联体 + 是否 errdefer。
+/// 体已确保无控制流指令（带 label 的跳转会因重复发射而冲突——降级期硬错误）。
+#[derive(Clone)]
+struct DeferRecord {
+    id: usize,
+    body: Vec<IrInst>,
+    errdefer: bool,
+}
+
+/// 退出点的 errdefer 策略（对齐 oracle `run_defers(err_path)`）：
+/// - `Never`：正常路径（作用域自然结束 / break / continue）——errdefer 不运行，裸 PopDefer 清理。
+/// - `Always`：错误路径（`try` 错误返回）——全部 defers（含 errdefer）运行。
+/// - `Value(t)`：`return e` 按运行期值判定——错误值走 `Always` 分支，否则 `Never`。
+#[derive(Clone, Copy)]
+enum ErrPath {
+    Never,
+    Always,
+    Value(usize),
 }
 
 impl<'a> LowerCtx<'a> {
@@ -888,16 +949,89 @@ impl<'a> LowerCtx<'a> {
         l
     }
     fn push(&mut self, inst: IrInst) {
-        self.insts.push(inst);
+        if let Some(buf) = &mut self.pending {
+            buf.push(inst);
+        } else {
+            self.insts.push(inst);
+        }
     }
     fn label(&mut self, id: usize) {
-        self.insts.push(IrInst::Label { id });
+        self.push(IrInst::Label { id });
     }
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.defer_markers.push(self.defers.len());
     }
+    /// 弹作用域：先发射本作用域 defers（正常路径，仅非 errdefer；守卫 + 内联体），
+    /// 截断到进入时标记，再弹作用域。对齐 oracle `pop_scope`——先跑 defers 再弹
+    /// （同作用域局部变量仍可解析）。
     fn pop_scope(&mut self) {
+        let marker = self
+            .defer_markers
+            .pop()
+            .expect("defer marker underflow (push_scope/pop_scope 不配对)");
+        self.emit_defers(marker, ErrPath::Never);
+        self.defers.truncate(marker);
         self.scopes.pop();
+    }
+    /// 退出点发射 defers（LIFO：从最新登记下到 `depth`；`depth` 以下归外层退出点）。
+    /// 守卫（JumpIfNotDefer）跳过未登记/已运行路径——分支 DAG 下同一退出点代码
+    /// 可被多条路径到达，运行时活跃计数判定「本路径是否待运行」。
+    fn emit_defers(&mut self, depth: usize, err_path: ErrPath) {
+        let n = self.defers.len();
+        match err_path {
+            ErrPath::Never => {
+                for i in (depth..n).rev() {
+                    let rec = self.defers[i].clone();
+                    if rec.errdefer {
+                        // 正常路径：errdefer 不运行，仅清理活跃计数（防跨路径泄漏）
+                        self.push(IrInst::PopDefer { id: rec.id });
+                    } else {
+                        self.emit_defer_guarded(&rec);
+                    }
+                }
+            }
+            ErrPath::Always => {
+                for i in (depth..n).rev() {
+                    let rec = self.defers[i].clone();
+                    self.emit_defer_guarded(&rec);
+                }
+            }
+            ErrPath::Value(v) => {
+                // `return e`：按运行期值分派——错误 → 全 defers；否则仅非 errdefer
+                let l_err = self.new_label();
+                let l_done = self.new_label();
+                self.push(IrInst::JumpIfErr { temp: v, label: l_err });
+                for i in (depth..n).rev() {
+                    let rec = self.defers[i].clone();
+                    if rec.errdefer {
+                        self.push(IrInst::PopDefer { id: rec.id });
+                    } else {
+                        self.emit_defer_guarded(&rec);
+                    }
+                }
+                self.push(IrInst::Jump { label: l_done });
+                self.label(l_err);
+                for i in (depth..n).rev() {
+                    let rec = self.defers[i].clone();
+                    self.emit_defer_guarded(&rec);
+                }
+                self.label(l_done);
+            }
+        }
+    }
+    /// 单条 defer 守卫 + 内联体 + 排空。体无控制流（降级期硬错误保证），可多次安全发射。
+    fn emit_defer_guarded(&mut self, rec: &DeferRecord) {
+        let l_skip = self.new_label();
+        self.push(IrInst::JumpIfNotDefer {
+            id: rec.id,
+            label: l_skip,
+        });
+        for inst in &rec.body {
+            self.push(inst.clone());
+        }
+        self.push(IrInst::PopDefer { id: rec.id });
+        self.label(l_skip);
     }
     /// 当前作用域绑定（遮蔽时分配新槽，旧绑定保留在外层）
     fn bind(&mut self, name: &str, slot: usize) {
@@ -1074,7 +1208,9 @@ impl<'a> LowerCtx<'a> {
                 self.push(IrInst::Un { op: un, temp: t, a });
             }
             Expr::Try(inner, _) => {
-                // try：错误值 → 从当前函数返回（值通道）
+                // try：错误值 → 从当前函数返回（值通道）。错误路径为运行期「返回错误」，
+                // errdefer 须触发（对齐 oracle `is_err_path(Err(signal(Flow::Return(err))))`）——
+                // 故用 ErrPath::Always 排空函数级 defers（含 errdefer）。
                 let a = self.lower_expr(inner);
                 let l_ret = self.new_label();
                 let done = self.new_label();
@@ -1085,6 +1221,7 @@ impl<'a> LowerCtx<'a> {
                 self.push(IrInst::Load { temp: t, slot: a });
                 self.push(IrInst::Jump { label: done });
                 self.label(l_ret);
+                self.emit_defers(0, ErrPath::Always);
                 self.push(IrInst::Return { temp: a });
                 self.label(done);
             }
@@ -1882,9 +2019,13 @@ impl<'a> LowerCtx<'a> {
                             temp: c,
                             label: l_else,
                         });
+                        // then 块是独立作用域（对齐 oracle `exec_block`）：块内变量/
+                        // defer 随块结束（弹栈）——defer 时序依赖此作用域边界。
+                        self.push_scope();
                         for stmt in &ifs.then_b.stmts {
                             self.lower_stmt(stmt);
                         }
+                        self.pop_scope();
                     }
                 }
                 match &ifs.else_b {
@@ -1910,9 +2051,12 @@ impl<'a> LowerCtx<'a> {
                     temp: c,
                     label: l_end,
                 });
+                let defer_depth = self.defers.len();
                 self.loops.push(LoopCtx {
                     break_label: l_end,
                     continue_label: l_cont,
+                    label: w.label.clone(),
+                    defer_depth_at_entry: defer_depth,
                 });
                 self.lower_block(&w.body);
                 self.loops.pop();
@@ -1926,31 +2070,36 @@ impl<'a> LowerCtx<'a> {
             Stmt::Return(e, _) => match e {
                 Some(e) => {
                     let t = self.lower_expr(e);
+                    // 返回排空函数级 defers：errdefer 仅当返回值为错误值（运行期判定）触发
+                    self.emit_defers(0, ErrPath::Value(t));
                     self.push(IrInst::Return { temp: t });
                 }
-                None => self.push(IrInst::ReturnVoid),
+                None => {
+                    // void 返回：正常路径（无错误值），仅非 errdefer
+                    self.emit_defers(0, ErrPath::Never);
+                    self.push(IrInst::ReturnVoid);
+                }
             },
             Stmt::Block(b) => self.lower_block(b),
             Stmt::For(f) => self.lower_for(f),
             Stmt::Switch(s) => self.lower_switch(s),
             Stmt::Break(l, span) => {
-                if l.is_some() {
-                    // 带标签 break：Phase 6（当前标签被忽略 → 硬错误避免静默单级跳出）
-                    self.fail("带标签 `break`", span);
+                if let Some(label) = l {
+                    self.lower_labeled_exit(label, true, span);
                 } else {
                     self.lower_break(span);
                 }
             }
             Stmt::Continue(l, span) => {
-                if l.is_some() {
-                    self.fail("带标签 `continue`", span);
+                if let Some(label) = l {
+                    self.lower_labeled_exit(label, false, span);
                 } else {
                     self.lower_continue(span);
                 }
             }
-            // defer/errdefer：Phase 6
-            Stmt::Defer(_, span) => self.fail("`defer`", span),
-            Stmt::Errdefer(_, span) => self.fail("`errdefer`", span),
+            // defer/errdefer（Phase 6）：体降级入缓冲 → 登记 + PushDefer；退出点排空
+            Stmt::Defer(e, span) => self.lower_defer(e, false, span),
+            Stmt::Errdefer(e, span) => self.lower_defer(e, true, span),
             Stmt::Empty => {}
         }
     }
@@ -1988,9 +2137,12 @@ impl<'a> LowerCtx<'a> {
         });
         self.label(l_body);
 
+        let defer_depth = self.defers.len();
         self.loops.push(LoopCtx {
             break_label: l_end,
             continue_label: l_next,
+            label: f.label.clone(),
+            defer_depth_at_entry: defer_depth,
         });
         self.lower_block(&f.body);
         self.loops.pop();
@@ -2006,19 +2158,75 @@ impl<'a> LowerCtx<'a> {
     }
 
     /// 无标签 break：跳到最近循环的结束标签（对齐 oracle 单级跳出）。
+    /// 排空 [循环进入时 defer 深度 .. 当前] 的 defers（含嵌套作用域内登记的），
+    /// 正常路径（errdefer 不运行）——对齐 oracle `exec_while` 的 `pop_scope(is_err_path=false)`。
     fn lower_break(&mut self, span: &Span) {
-        match self.loops.last() {
-            Some(l) => self.push(IrInst::Jump { label: l.break_label }),
-            None => self.fail("`break` 在循环外", span),
-        }
+        let (depth, label) = match self.loops.last() {
+            Some(l) => (l.defer_depth_at_entry, l.break_label),
+            None => {
+                self.fail("`break` 在循环外", span);
+                return;
+            }
+        };
+        self.emit_defers(depth, ErrPath::Never);
+        self.push(IrInst::Jump { label });
     }
 
-    /// 无标签 continue：跳到最近循环的 continue 标签。
+    /// 无标签 continue：跳到最近循环的 continue 标签（排空该循环体内 defers，同 break）。
     fn lower_continue(&mut self, span: &Span) {
-        match self.loops.last() {
-            Some(l) => self.push(IrInst::Jump { label: l.continue_label }),
-            None => self.fail("`continue` 在循环外", span),
+        let (depth, label) = match self.loops.last() {
+            Some(l) => (l.defer_depth_at_entry, l.continue_label),
+            None => {
+                self.fail("`continue` 在循环外", span);
+                return;
+            }
+        };
+        self.emit_defers(depth, ErrPath::Never);
+        self.push(IrInst::Jump { label });
+    }
+
+    /// 带标签 break/continue：从循环栈向外找最近匹配标签的循环，跳到其 break/continue
+    /// 标签。排空从目标循环进入深度到当前的 defers——中间层循环体内登记的 defers
+    /// （未在各自退出点运行）一并排空；外层（目标循环之外）defers 由后续退出点处理。
+    fn lower_labeled_exit(&mut self, label: &str, is_break: bool, span: &Span) {
+        let Some(pos) = self
+            .loops
+            .iter()
+            .rposition(|lc| lc.label.as_deref() == Some(label))
+        else {
+            self.fail(&format!("未找到标签 `:{label}` 对应的循环"), span);
+            return;
+        };
+        let depth = self.loops[pos].defer_depth_at_entry;
+        self.emit_defers(depth, ErrPath::Never);
+        let jump = if is_break {
+            self.loops[pos].break_label
+        } else {
+            self.loops[pos].continue_label
+        };
+        self.push(IrInst::Jump { label: jump });
+    }
+
+    /// defer/errdefer 降级：体表达式降级入独立缓冲（无控制流指令——硬错误保证重复
+    /// 发射安全），登记 + 主流 PushDefer。体在退出点（作用域结束/return/break/
+    /// continue/try 错误）由守卫 + 内联体排空。
+    fn lower_defer(&mut self, e: &Expr, errdefer: bool, span: &Span) {
+        let id = self.next_defer_id;
+        self.next_defer_id += 1;
+        // 1) 体降级入缓冲（push/label 路由到 pending）
+        let prev = self.pending.take();
+        self.pending = Some(Vec::new());
+        let _ = self.lower_expr(e);
+        let mut body = self.pending.take().expect("pending 缓冲已初始化");
+        self.pending = prev;
+        // 2) 体含控制流指令 → 硬错误（带 label 指令重复发射冲突；对齐「硬错误 > 静默误编译」）
+        if body.iter().any(|i| is_control_flow_inst(i)) {
+            self.fail("`defer`/`errdefer` 体不允许控制流（如 `defer try f()`）", span);
+            body.clear(); // 避免污染退出点发射
         }
+        // 3) 主流登记
+        self.push(IrInst::PushDefer { id });
+        self.defers.push(DeferRecord { id, body, errdefer });
     }
 
     /// `switch` 语句：降级为 first-match 线性链（不穷举检查，对齐 oracle `exec_switch`）。
@@ -2140,6 +2348,25 @@ impl<'a> LowerCtx<'a> {
         }
         self.pop_scope();
     }
+}
+
+/// 指令是否含控制流/登记副作用——defer 体内出现即硬错误（带 label 的跳转指令
+/// 在退出点重复发射会冲突；PushDefer/PopDefer 为 defer 登记副作用）。
+fn is_control_flow_inst(i: &IrInst) -> bool {
+    matches!(
+        i,
+        IrInst::Jump { .. }
+            | IrInst::JumpIf { .. }
+            | IrInst::JumpIfNot { .. }
+            | IrInst::JumpIfNull { .. }
+            | IrInst::JumpIfErr { .. }
+            | IrInst::Label { .. }
+            | IrInst::Return { .. }
+            | IrInst::ReturnVoid
+            | IrInst::PushDefer { .. }
+            | IrInst::PopDefer { .. }
+            | IrInst::JumpIfNotDefer { .. }
+    )
 }
 
 /// switch 模式 → IR 模式（`Else` → None：不发射 MatchTest，由兜底臂处理）。
@@ -2732,9 +2959,12 @@ fn class_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
 }
 
 /// 帧：槽 → cell 索引（别名关键装置——`&x` 即 `Ptr(frame.cells[slot_of_x])`）。
+/// `defers`：本调用内待运行 defer 的多重集（PushDefer 增 / PopDefer 减；守卫判成员）。
+/// 运行时 LIFO 顺序由编译期发射顺序保证，故此处仅需「是否待运行」判定，无需栈序。
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub cells: Vec<usize>,
+    pub defers: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -3238,6 +3468,7 @@ fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], dep
     let func = &module.funcs[idx];
     let mut frame = Frame {
         cells: Vec::with_capacity(func.n_slots),
+        defers: Vec::new(),
     };
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
@@ -3272,6 +3503,7 @@ fn call_closure_ir(
     let func = &module.closures[func_idx];
     let mut frame = Frame {
         cells: Vec::with_capacity(func.n_slots),
+        defers: Vec::new(),
     };
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
@@ -3378,6 +3610,20 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 }
             }
             IrInst::Label { .. } => {}
+            // ---- Phase 6：defer / errdefer ----
+            IrInst::PushDefer { id } => frame.defers.push(*id),
+            IrInst::JumpIfNotDefer { id, label } => {
+                if !frame.defers.contains(id) {
+                    pc = find_label(func, *label)?;
+                    continue;
+                }
+            }
+            IrInst::PopDefer { id } => {
+                // 移除最近一次登记（rposition）；未登记（分支未达）→ 无操作
+                if let Some(pos) = frame.defers.iter().rposition(|d| d == id) {
+                    frame.defers.remove(pos);
+                }
+            }
             IrInst::Call { name, args, temp } => {
                 let arg_vals: Vec<IrValue> =
                     args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();

@@ -52,7 +52,7 @@ fn main(io: Io) !void {
 # 脚本模式（tree-walking 解释器，全语言）
 cargo run -p hc-tools -- run examples/hello.hc
 
-# 原生编译（LLVM IR + zig cc，标量子集）
+# 原生编译（LLVM IR + zig cc，M3.1–Phase 6 子集）
 cargo run -p hc-tools -- build examples/hello.hc
 ```
 
@@ -60,8 +60,8 @@ cargo run -p hc-tools -- build examples/hello.hc
 
 ```
 hc run <file.hc>           运行脚本模式（解释执行）
-hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；标量子集）
-hc run --ir <file.hc>      用 IR 参考解释器运行（标量子集）
+hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；M3.1–Phase 6 子集）
+hc run --ir <file.hc>      用 IR 参考解释器运行（M3.1–Phase 6 子集）
 hc test [--mode=interpret|compile] [file.hc|dir]
                           运行 `[test]` 测试函数（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
 hc check <file.hc>         仅检查（词法/语法/装载）
@@ -91,26 +91,26 @@ hc --help
 | 后端 | 入口 | 覆盖 |
 |---|---|---|
 | tree-walking 解释器 | `hc run <file.hc>`（默认） | **全语言** |
-| IR 参考解释器 | `hc run --ir <file.hc>` | 标量子集（M3.1 切片） |
-| 字节码 VM | `hc run <file.hbc>`（HBC2） | 标量子集，复用 IR 语义 |
-| LLVM 原生 | `hc build <file.hc>` | 标量子集（emit-.ll + zig cc） |
+| IR 参考解释器 | `hc run --ir <file.hc>` | M3.1–Phase 6 子集（唯一语义源） |
+| 字节码 VM | `hc run <file.hbc>`（HBC2） | M3.1–Phase 6 子集，复用 IR 语义 |
+| LLVM 原生 | `hc build <file.hc>` | M3.1–Phase 6 子集（emit-.ll + zig cc） |
 
 四个后端共享同一语义源（`IrModule` + `run_ir`，ADR-0004），禁止后端私语义 —— 这是「双模式一致」承诺的根基。
 
 ## 测试
 
-`cargo test --workspace` 共 **371 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **428 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
-| hc | `src` 单元测试（bytecode 7 + llvm 24） | 31 |
-| hc | `tests/bytecode.rs`（VM == 参考解释器一致性） | 20 |
+| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 31 |
+| hc | `tests/bytecode.rs`（VM == 参考解释器一致性，opcode 0–46 往返） | 27 |
 | hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
-| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for） | 38 |
+| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签） | 63 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–3） | 41 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–6） | 56 |
 | hc-rt | `tests/inference.rs`（类型推断） | 11 |
 | hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 10 |
 | hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
@@ -121,19 +121,19 @@ hc --help
 | hc-rt | `tests/dep.rs`（M7.2 跨包/pub 边界） | 3 |
 | hc-rt | `tests/scalar.rs`（标量接口族） | 2 |
 | hc-rt | `tests/examples.rs`（41 示例回归） | 41 ✅ |
-| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules） | 19 |
-| hc-tools | `tests/native.rs`（M3.3 原生端到端，zig 缺失自动 SKIP） | 27 |
+| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules） | 20 |
+| hc-tools | `tests/native.rs`（M3.3 原生端到端，含 Phase 6 defer/errdefer/带标签，zig 缺失自动 SKIP） | 36 |
 
 补充：
 
 - **示例回归**（CLI `hc test examples/`）：**125/136 通过**；11 项失败属第三块（第二部分）特性 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80），均非本阶段范围。
-- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生/IR 子集外特性（global/const、defer、闭包/实例方法、io/并发等），按文件粒度正确标记。
+- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生/IR 子集外特性（`io.*`/接口类型参等全核心标准库、struct 字面量构造、`&test_io` 取址、defer 体控制流），按文件粒度正确标记（defer/errdefer/带标签 break/continue 降级期失败点已于 Phase 6 消除）。
 
-CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥124 passed / ≤11 failed + compile ≤80 mismatch，低于基线即失败）。
+CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥125 passed / ≤11 failed + compile ≤80 mismatch，低于基线即失败）。
 
 ## 已知取舍
 
-- **原生/IR 后端为标量 + 指针 + 聚合 + switch/for 子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片 + Phase 1 指针 + Phase 2 聚合 + Phase 3 switch/for（字段/索引/切片/数组/class/enum/元组解构/move/unwrap/switch 全模式/for 迭代含 mut 写回），global/const、defer/errdefer、带标签 break/continue、闭包/实例方法、Table 多索引等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式。
+- **原生/IR 后端为标量 + 指针 + 聚合 + switch/for + 闭包/函数引用/方法/重载 + global/const + defer/errdefer + 带标签 break/continue 子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片 + Phase 1 指针 + Phase 2 聚合 + Phase 3 switch/for（字段/索引/切片/数组/class/enum/元组解构/move/unwrap/switch 全模式/for 迭代含 mut 写回）+ Phase 4 闭包/函数引用/实例方法/重载 + Phase 5 global/const（声明序初始化 + 跨函数/跨测试可变全局 + `&global` 取址写穿）+ Phase 6 defer/errdefer（LIFO + 仅错误路径）+ 带标签 break/continue（跨层定位）；Table 多索引、全核心标准库（`io.*`/接口类型参等）、defer 体控制流等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式。
 - **LLVM 值盒全精度载荷**：`%Value = { i32, i128 }`（i128 修复 i64 截断；浮点位模式存低 64 位）；`hc build` 依赖外部 `zig cc`，无优化 pass，硬错误消息依赖 libc。
 - **LLVM Mut/Move for 捕获 = copy-in/copy-out 写回**：迭代体内中读源容器在 LLVM 见旧值（`run_ir` 槽 cell == 源 cell 无此问题），接受近似。
 - **原生交叉验证为文件粒度**：全绿 vs 有失败，非逐测试 PASS/FAIL 清单（断言失败在测试函数 ret 路径直接 abort）。

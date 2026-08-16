@@ -428,11 +428,12 @@ fn deref_eq() bool {
 #[test]
 fn out_of_slice_constructs_are_hard_errors() {
     // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
-    // Phase 3 for/switch、Phase 4 闭包、Phase 5 global/const 均已纳入 IR 支持面（见正例测试）；
-    // 此处仅保留仍未实现者（Phase 6：defer/errdefer）。
+    // Phase 3-6 for/switch/闭包/global/const/defer/errdefer/标签均已纳入 IR 支持面（见正例测试）；
+    // 此处仅保留仍未实现者（未知标识符 / 循环外 break / defer 体控制流）。
     for src in [
-        "fn f() void { defer 1; }", // 延迟执行（Phase 6）
-        "fn f() void { errdefer 1; }", // 错误路径延迟（Phase 6）
+        "fn f() i32 { return nosuch; }", // 未知标识符
+        "fn f() i32 { break; }", // break 在循环外
+        "fn f() void { defer try foo(); }", // defer 体含控制流（try → 跳转指令）
     ] {
         let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
         let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
@@ -763,4 +764,271 @@ fn read() i32 { return counter; }
     assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(1));
     assert_eq!(rt.call(&module, "bump", &[]).unwrap(), IrValue::Int(2));
     assert_eq!(rt.call(&module, "read", &[]).unwrap(), IrValue::Int(2));
+}
+
+// ---------- Phase 6：defer / errdefer + 带标签 break/continue ----------
+
+#[test]
+fn defer_lifo_at_scope_exit() {
+    // defer LIFO：3, 2, 1 登记序 → 作用域退出按 1, 2, 3 运行（对齐 oracle `run_defers` 逆序）。
+    let src = r#"
+global log: i32 = 0;
+fn rec(v: i32) void { log = log * 10 + v; }
+fn f() i32 {
+    log = 0;
+    {
+        defer rec(1);
+        defer rec(2);
+        defer rec(3);
+    }
+    return log;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(321));
+}
+
+#[test]
+fn defer_same_scope_capture_reads_final_value() {
+    // defer 体在作用域退出时重求值：同作用域局部变量读到「退出时最终值」而非登记时值。
+    let src = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g = v; }
+fn f() i32 {
+    var x: i32 = 1;
+    g = 0;
+    {
+        defer bump(x);
+        x = 100;
+    }
+    return g;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(100));
+}
+
+#[test]
+fn defer_nested_block_runs_at_block_close() {
+    // 内层块 defer 随块结束（弹栈）运行，而非函数结束。
+    let src = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn f() i32 {
+    g = 0;
+    {
+        defer bump(10);
+        g += 1;
+    }
+    return g;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(11));
+}
+
+#[test]
+fn defer_runs_on_return() {
+    // `return` 排空函数级 defers（正常值仅非 errdefer）。
+    let src = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn early() i32 {
+    defer bump(5);
+    return 1;
+}
+fn f() i32 {
+    g = 0;
+    var r = early();
+    return g * 10 + r;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(51)); // g=5, r=1
+}
+
+#[test]
+fn defer_runs_on_loop_break() {
+    // break 排空循环体内 defers：每轮迭代 defer 都运行。
+    let src = r#"
+global dlog: i32 = 0;
+fn bump() void { dlog += 1; }
+fn f() i32 {
+    dlog = 0;
+    var i: i32 = 0;
+    while (true) {
+        defer bump();
+        i += 1;
+        if (i >= 3) { break; }
+    }
+    return dlog;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(3));
+}
+
+#[test]
+fn defer_runs_on_loop_continue() {
+    // continue 同样排空循环体内 defers：本轮 defer 运行后再跳下一轮。
+    let src = r#"
+global dlog: i32 = 0;
+global clog: i32 = 0;
+fn bump() void { dlog += 1; }
+fn f() i32 {
+    dlog = 0;
+    clog = 0;
+    var i: i32 = 0;
+    while (i < 5) {
+        defer bump();
+        i += 1;
+        if (i == 3) { continue; }
+        clog += 1;
+    }
+    return dlog * 10 + clog;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(54)); // dlog=5, clog=4
+}
+
+#[test]
+fn errdefer_runs_only_on_error_path() {
+    // errdefer：错误返回路径触发（+ 正常 defer 也触发）；正常返回不触发 errdefer。
+    let src = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn maybe(ok: bool) !i32 {
+    defer bump(1);
+    errdefer bump(100);
+    if (ok) { return 5; }
+    return error.Fail;
+}
+fn f() i32 {
+    g = 0;
+    var r = maybe(false) catch 0;
+    return g * 10 + r;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(1010)); // g=101, r=0
+
+    let src_ok = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn maybe(ok: bool) !i32 {
+    defer bump(1);
+    errdefer bump(100);
+    if (ok) { return 5; }
+    return error.Fail;
+}
+fn f() i32 {
+    g = 0;
+    var r = maybe(true) catch 0;
+    return g * 10 + r;
+}
+"#;
+    assert_eq!(run(src_ok, "f", &[]).unwrap(), IrValue::Int(15)); // g=1, r=5
+
+    // 正常作用域结束：errdefer 不触发
+    let src_block = r#"
+global g: i32 = 0;
+fn bump(v: i32) void { g += v; }
+fn f() i32 {
+    g = 0;
+    {
+        errdefer bump(100);
+        bump(1);
+    }
+    return g;
+}
+"#;
+    assert_eq!(run(src_block, "f", &[]).unwrap(), IrValue::Int(1));
+}
+
+#[test]
+fn errdefer_runs_on_try_propagation() {
+    // `try` 错误传播 = 从当前函数返回错误值：errdefer 须触发（错误路径）。
+    let src = r#"
+global g: i32 = 0;
+fn bump() void { g += 1; }
+fn maybe_err(ok: bool) !i32 {
+    if (ok) { return 5; }
+    return error.Fail;
+}
+fn wrapper(ok: bool) !i32 {
+    defer bump();
+    errdefer bump();
+    var x = try maybe_err(ok);
+    return x;
+}
+fn f() i32 {
+    g = 0;
+    var r = wrapper(false) catch 0;
+    return g * 10 + r;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(20)); // g=2, r=0
+}
+
+#[test]
+fn labeled_break_continue() {
+    // 带标签 break：跳出外层标签循环（标签跨多层循环定位）。
+    let src_break = r#"
+fn f() i32 {
+    var s: i32 = 0;
+    :outer while (true) {
+        var j: i32 = 0;
+        while (j < 10) {
+            j += 1;
+            if (j == 2) { break :outer; }
+            s += j;
+        }
+    }
+    return s;
+}
+"#;
+    assert_eq!(run(src_break, "f", &[]).unwrap(), IrValue::Int(1));
+
+    // 带标签 continue 跳自身循环下一轮
+    let src_self = r#"
+fn f() i32 {
+    var s: i32 = 0;
+    :outer for (0..3) |i| {
+        if (i == 1) { continue :outer; }
+        s += i;
+    }
+    return s;
+}
+"#;
+    assert_eq!(run(src_self, "f", &[]).unwrap(), IrValue::Int(2));
+
+    // 带标签 continue 跳出内层 while，跳到外层 for 下一轮
+    let src_nested = r#"
+fn f() i32 {
+    var s: i32 = 0;
+    :outer for (0..3) |i| {
+        var j: i32 = 0;
+        while (j < 5) {
+            j += 1;
+            if (i == 1) { continue :outer; }
+            s += j;
+        }
+        s += 100;
+    }
+    return s;
+}
+"#;
+    assert_eq!(run(src_nested, "f", &[]).unwrap(), IrValue::Int(230));
+}
+
+#[test]
+fn labeled_break_runs_loop_defers() {
+    // 带标签 break 排空目标循环体（含嵌套作用域）的 defers。
+    let src = r#"
+global g: i32 = 0;
+fn bump() void { g += 1; }
+fn f() i32 {
+    g = 0;
+    :outer while (true) {
+        defer bump();
+        break :outer;
+    }
+    return g;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(1));
 }

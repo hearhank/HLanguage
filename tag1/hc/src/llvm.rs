@@ -2154,6 +2154,24 @@ fn emit_func(
     for (i, ps) in f.params.iter().enumerate() {
         be.emit(format!("store %Value %p{i}, %Value* %sp.{ps}"));
     }
+    // defer 活跃计数表（Phase 6）：每个 PushDefer id 一个 i32 计数器，entry 置零。
+    // 计数 = 本调用内待运行 defers 多重集；PushDefer 增 / PopDefer 减 / 守卫 JumpIfNotDefer 查零。
+    // LIFO 顺序由编译期发射顺序保证（计数仅作「是否待运行」判定，无需栈序）。
+    let n_defers = f
+        .body
+        .iter()
+        .filter(|i| matches!(i, IrInst::PushDefer { .. }))
+        .count();
+    if n_defers > 0 {
+        be.emit(format!("%defers = alloca [{n_defers} x i32], align 4"));
+        for id in 0..n_defers {
+            be.emit(format!(
+                "%defer.{id} = getelementptr inbounds [{n} x i32], [{n} x i32]* %defers, i32 0, i32 {id}",
+                n = n_defers
+            ));
+            be.emit(format!("store i32 0, i32* %defer.{id}"));
+        }
+    }
     for inst in &f.body {
         be.inst(inst, strings, errors, canon, funcs, gidx);
     }
@@ -3011,6 +3029,28 @@ impl BodyEmitter {
                 } else {
                     self.abort_feature("noglobal");
                 }
+            }
+            // ---- Phase 6：defer / errdefer ----
+            IrInst::PushDefer { id } => {
+                let c = self.r();
+                self.emit(format!("{c} = load i32, i32* %defer.{id}"));
+                let c1 = self.r();
+                self.emit(format!("{c1} = add i32 {c}, 1"));
+                self.emit(format!("store i32 {c1}, i32* %defer.{id}"));
+            }
+            IrInst::PopDefer { id } => {
+                let c = self.r();
+                self.emit(format!("{c} = load i32, i32* %defer.{id}"));
+                let c1 = self.r();
+                self.emit(format!("{c1} = sub i32 {c}, 1"));
+                self.emit(format!("store i32 {c1}, i32* %defer.{id}"));
+            }
+            IrInst::JumpIfNotDefer { id, label } => {
+                let c = self.r();
+                self.emit(format!("{c} = load i32, i32* %defer.{id}"));
+                let z = self.r();
+                self.emit(format!("{z} = icmp eq i32 {c}, 0"));
+                self.cond_br(&z, *label);
             }
         }
     }

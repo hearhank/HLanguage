@@ -532,6 +532,20 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
             push_u32(out, *temp as u32);
             push_str(out, name);
         }
+        // Phase 6 defer/errdefer：opcode 44-46
+        IrInst::PushDefer { id } => {
+            out.push(44);
+            push_u32(out, *id as u32);
+        }
+        IrInst::JumpIfNotDefer { id, label } => {
+            out.push(45);
+            push_u32(out, *id as u32);
+            push_u32(out, *label as u32);
+        }
+        IrInst::PopDefer { id } => {
+            out.push(46);
+            push_u32(out, *id as u32);
+        }
     }
 }
 
@@ -985,6 +999,16 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
             temp: r.u32()? as usize,
             name: r.str()?,
         },
+        44 => IrInst::PushDefer {
+            id: r.u32()? as usize,
+        },
+        45 => IrInst::JumpIfNotDefer {
+            id: r.u32()? as usize,
+            label: r.u32()? as usize,
+        },
+        46 => IrInst::PopDefer {
+            id: r.u32()? as usize,
+        },
         _ => return Err(format!("未知指令 opcode {op}")),
     })
 }
@@ -1261,6 +1285,10 @@ mod tests {
                     method: "area".to_string(),
                     args: vec![1],
                 },
+                // Phase 6 defer/errdefer
+                IrInst::PushDefer { id: 0 },
+                IrInst::JumpIfNotDefer { id: 0, label: 3 },
+                IrInst::PopDefer { id: 0 },
             ],
         };
         let f1 = IrFunc {
