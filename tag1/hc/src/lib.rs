@@ -4,6 +4,7 @@
 //! tag1 垂直切片范围：核心语法子集 + 基础诊断；完整所有权/重载等留后续。
 
 pub mod ast;
+pub mod bytecode;
 pub mod diag;
 pub mod errorcodes;
 pub mod ir;

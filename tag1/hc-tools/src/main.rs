@@ -1,7 +1,8 @@
 //! hc 工具链 CLI（M7.1：`hc build` / `hc run` / `hc test`——tag1 子集）
 //!
-//! - `hc run <file.hc>`：脚本模式（tree-walking 解释器）
-//! - `hc run --ir <file.hc>`：IR 参考解释器过渡模式（M3.2 字节码 VM 的过渡形态，标量子集）
+//! - `hc run <file.hc>`：脚本模式（tree-walking 解释器，全语言）
+//! - `hc run <file.hbc>`：字节码 VM（M3.2，装载 HBC2 字节码复用 IR 语义；标量子集）
+//! - `hc run --ir <file.hc>`：IR 参考解释器（标量子集，与字节码 VM 同语义源）
 //! - `hc test [file.hc|dir]`：收集并运行 `test fn`，输出 [PASS]/[FAIL]/[SKIP] + 汇总
 //! - `hc build <file.hc>`：原生编译（M3.3 LLVM 后端，emit-.ll + `zig cc`）
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
@@ -21,7 +22,8 @@ H 语言工具链（tag1 垂直切片）
 
 USAGE:
     hc run <file.hc>           运行脚本模式（解释执行）
-    hc run --ir <file.hc>      用 IR 参考解释器运行（M3.2 字节码 VM 过渡；标量子集）
+    hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；标量子集）
+    hc run --ir <file.hc>      用 IR 参考解释器运行（标量子集）
     hc test [file.hc|dir]      运行 test fn（默认当前目录全部 .hc）
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
@@ -60,13 +62,16 @@ fn run_cli() -> ExitCode {
                 eprintln!("error: `hc run` requires a file path");
                 return ExitCode::from(2);
             };
-            // 显式模式标志：`hc run --ir <file>` 走 IR 参考解释器；否则默认 tree-walking
+            // 显式模式标志：`hc run --ir <file>` 走 IR 参考解释器；
+            // `.hbc`（HBC2 字节码）走字节码 VM；否则默认 tree-walking
             if path == "--ir" {
                 let Some(p) = args.get(3) else {
                     eprintln!("error: `hc run --ir` requires a file path");
                     return ExitCode::from(2);
                 };
                 run_file_ir(Path::new(p))
+            } else if is_hbc2(Path::new(path)) {
+                run_file_bytecode(Path::new(path))
             } else {
                 run_file(Path::new(path))
             }
@@ -119,7 +124,8 @@ fn read_source(path: &Path) -> Result<String, ExitCode> {
     })
 }
 
-/// 字节码镜像魔数（tag1：镜像 = 魔数 + 源码；完整字节码 VM 归 M3.2 后续）
+/// 旧字节码镜像魔数（tag1 过渡形态：镜像 = 魔数 + 源码；仅保留读取兼容，
+/// 新 `hc build` 回退产出真实 HBC2 字节码）
 const HBC_MAGIC: &[u8; 4] = b"HBC1";
 
 /// 读取 .hc 或 .hbc（字节码镜像解包）
@@ -151,7 +157,27 @@ fn read_program(path: &Path) -> Result<String, ExitCode> {
     }
 }
 
-/// `zig cc` 是否可用（M3.3 原生后端驱动；缺失则回退字节码镜像）
+/// 判断文件是否为 HBC2 字节码（M3.2 VM 镜像）。
+fn is_hbc2(path: &Path) -> bool {
+    std::fs::read(path)
+        .map(|b| b.len() >= 4 && &b[..4] == &hc::bytecode::MAGIC)
+        .unwrap_or(false)
+}
+
+/// 读取 HBC2 字节码文件；魔数不符/读取失败返回退出码。
+fn read_bytecode(path: &Path) -> Result<Vec<u8>, ExitCode> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        eprintln!("error: cannot read {}: {e}", path.display());
+        ExitCode::FAILURE
+    })?;
+    if bytes.len() < 4 || &bytes[..4] != &hc::bytecode::MAGIC {
+        eprintln!("error: {}: 不是 HBC2 字节码", path.display());
+        return Err(ExitCode::FAILURE);
+    }
+    Ok(bytes)
+}
+
+/// `zig cc` 是否可用（M3.3 原生后端驱动；缺失则回退字节码）
 fn zig_cc_available() -> bool {
     std::process::Command::new("zig")
         .arg("cc")
@@ -172,6 +198,26 @@ fn source_to_ll(source: &str) -> Result<String, String> {
     let module = hc::ir::lower(&program);
     let table = hc::error_code_table(&program);
     Ok(hc::llvm::codegen(&module, &table))
+}
+
+/// 源码 → HBC2 字节码（解析 → 语义检查 → `lower` → `encode`）。
+/// 失败返回可直接打印的诊断文本（与 `source_to_ll` 同前置检查）。
+fn source_to_bytecode(source: &str) -> Result<Vec<u8>, String> {
+    let program = hc::parse_source(source).map_err(|d| diag::render(&d, source))?;
+    let errs = hc::check_semantics(&program);
+    if errs.iter().any(|d| d.is_error()) {
+        return Err(diag::render(&errs, source));
+    }
+    let module = hc::ir::lower(&program);
+    Ok(hc::bytecode::encode(&module))
+}
+
+/// 将字节码写入 `<dir>/<stem>.hbc`，返回产物路径。
+fn write_bytecode_artifact(dir: &Path, stem: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    let hbc_path = dir.join(format!("{stem}.hbc"));
+    std::fs::write(&hbc_path, bytes)
+        .map_err(|e| format!("写入 {} 失败: {e}", hbc_path.display()))?;
+    Ok(hbc_path)
 }
 
 /// `hc build file.hc`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
@@ -247,24 +293,28 @@ fn build_file(path: &Path) -> ExitCode {
         }
     }
 
-    // 回退：字节码镜像 + 平台启动器（zig cc 缺失）
-    eprintln!("[warn] 未检测到 zig cc——回退字节码镜像（M3.3 原生后端需要 zig）");
-    let src_bytes = source.as_bytes();
-    let mut image = Vec::new();
-    image.extend_from_slice(HBC_MAGIC);
-    image.extend_from_slice(&(src_bytes.len() as u64).to_le_bytes());
-    image.extend_from_slice(src_bytes);
-    let hbc_path = dir.join(format!("{stem}.hbc"));
-    if let Err(e) = std::fs::write(&hbc_path, &image) {
-        eprintln!("error: 写入 {} 失败: {e}", hbc_path.display());
-        return ExitCode::FAILURE;
-    }
+    // 回退：真实 HBC2 字节码 + 平台启动器（zig cc 缺失；M3.2 字节码 VM）
+    eprintln!("[warn] 未检测到 zig cc——回退字节码 VM（M3.2 标量子集；原生后端需要 zig）");
+    let bytecode = match source_to_bytecode(&source) {
+        Ok(b) => b,
+        Err(msg) => {
+            eprint!("{msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let hbc_path = match write_bytecode_artifact(dir, &stem, &bytecode) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let runner = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("hc-tools"));
     let launcher = if cfg!(windows) {
         let l = dir.join(format!("{stem}.cmd"));
         let content = format!(
-            "@echo off\r\nrem H 语言字节码启动器（tag1：由解释器加载 .hbc）\r\n\"{}\" run \"{}\"\r\n",
+            "@echo off\r\nrem H 语言字节码启动器（tag1：由字节码 VM 加载 .hbc）\r\n\"{}\" run \"{}\"\r\n",
             runner.display(),
             hbc_path.display()
         );
@@ -282,7 +332,7 @@ fn build_file(path: &Path) -> ExitCode {
     };
 
     println!("编译产物：");
-    println!("  字节码镜像: {}", hbc_path.display());
+    println!("  字节码    : {}", hbc_path.display());
     println!("  启动器    : {}", launcher.display());
     println!("运行方式：{}", launcher.display());
     ExitCode::SUCCESS
@@ -405,9 +455,8 @@ enum IrRunOutcome {
 
 /// 用 IR 参考解释器运行源码入口 `main`（`hc run --ir` 核心，可测试）。
 ///
-/// 流程：解析 → 语义检查（准确优先）→ `lower` → 查 `func_index` 有 `main` →
-/// `run_ir(module, "main", [])` → 结果归一化；失败返回可直接打印的文本
-/// （诊断渲染 / `error.{name}: {message}` + 切片外特性提示）。
+/// 流程：解析 → 语义检查（准确优先）→ `lower` → `execute_ir`；失败返回可直接
+/// 打印的文本（诊断渲染 / `error.{name}: {message}` + 切片外特性提示）。
 /// 不依赖文件系统与退出码——仅 `hc run --ir` 使用，默认路径不受影响。
 fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
     // 1) 解析（失败渲染诊断）
@@ -421,15 +470,21 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, source));
     }
-    // 3) 降级为线性 IR
-    let module = hc::ir::lower(&program);
-    // 4) 入口 main 必须存在（NoMain——先查表，避免 run_ir 的 NoFunction 误导为切片外）
+    // 3) 降级为线性 IR，交给共享执行器（`hc run --ir` 与字节码 VM 同语义源）
+    execute_ir(&hc::ir::lower(&program))
+}
+
+/// 执行已降级的 IR 模块入口 `main`，结果归一化为 [`IrRunOutcome`]。
+///
+/// `hc run --ir`（`lower` 后）与字节码 VM（`decode` 后）共用——ADR-0004 唯一语义源。
+fn execute_ir(module: &hc::ir::IrModule) -> Result<IrRunOutcome, String> {
+    // 入口 main 必须存在（NoMain——先查表，避免 run_ir 的 NoFunction 误导为切片外）
     if !module.func_index.contains_key("main") {
         return Err("error.NoMain: 入口函数 `main` 未定义".into());
     }
-    // 5) 运行（main(io: Io) 的 io 参数在 IR 下为 Void 占位——用了 io.* 会走 NoFunction
-    //    提示，正常；零参 main 可完整运行）
-    match hc::ir::run_ir(&module, "main", &[]) {
+    // 运行（main(io: Io) 的 io 参数在 IR 下为 Void 占位——用了 io.* 会走 NoFunction
+    // 提示，正常；零参 main 可完整运行）
+    match hc::ir::run_ir(module, "main", &[]) {
         // 未处理错误值到达入口（值通道）：panic 式失败
         Ok(hc::ir::IrValue::Err(name)) => Ok(IrRunOutcome::UnhandledError(name)),
         Ok(_) => Ok(IrRunOutcome::Success),
@@ -447,15 +502,10 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
     }
 }
 
-/// `hc run --ir file.hc`：只读文件 + 调用 `run_ir_source` + 映射退出码。
-/// 退出码语义：IR 模式只看 run_ir 结果（Ok=0，Err/未处理错误=非零）；
-/// main 返回非零 Int 不影响退出码。
-fn run_file_ir(path: &Path) -> ExitCode {
-    let source = match read_program(path) {
-        Ok(s) => s,
-        Err(c) => return c,
-    };
-    match run_ir_source(&source) {
+/// IR 运行结果 → 退出码（`hc run --ir` 与字节码 VM 共用）。
+/// 退出码语义：只看 run_ir 结果（Ok=0，Err/未处理错误=非零）；main 返回非零 Int 不影响退出码。
+fn ir_exit(outcome: Result<IrRunOutcome, String>) -> ExitCode {
+    match outcome {
         Ok(IrRunOutcome::Success) => ExitCode::SUCCESS,
         Ok(IrRunOutcome::UnhandledError(name)) => {
             eprintln!("error.{name} 到达入口（未处理）");
@@ -466,6 +516,31 @@ fn run_file_ir(path: &Path) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `hc run --ir file.hc`：只读文件 + 调用 `run_ir_source` + 映射退出码。
+fn run_file_ir(path: &Path) -> ExitCode {
+    let source = match read_program(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    ir_exit(run_ir_source(&source))
+}
+
+/// `hc run file.hbc`：装载 HBC2 字节码 + `execute_ir` + 映射退出码（M3.2 字节码 VM）。
+fn run_file_bytecode(path: &Path) -> ExitCode {
+    let bytes = match read_bytecode(path) {
+        Ok(b) => b,
+        Err(c) => return c,
+    };
+    let module = match hc::bytecode::decode(&bytes) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("error: {}: {msg}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    ir_exit(execute_ir(&module))
 }
 
 /// 同目录兄弟 .hc 文件（M1.4：目录 = 包；build.zon 文件清单解析归 M7.2）
@@ -756,7 +831,7 @@ fn collect_hc_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_ir_source, IrRunOutcome};
+    use super::{run_ir_source, source_to_bytecode, write_bytecode_artifact, IrRunOutcome};
 
     /// 断言切片内程序运行成功
     fn expect_success(src: &str) {
@@ -854,5 +929,27 @@ fn main() i32 {
     fn parse_error_rendered() {
         // 解析失败 → 渲染诊断文本
         assert!(run_ir_source("fn main( {").is_err());
+    }
+
+    #[test]
+    fn bytecode_source_round_trips() {
+        // source_to_bytecode → decode → 重新 encode 字节级一致（覆盖 HBC2 编码确定性）
+        let src = "fn main() i32 { return 42; }";
+        let bytes = source_to_bytecode(src).expect("encode");
+        assert_eq!(&bytes[..4], &hc::bytecode::MAGIC);
+        let module = hc::bytecode::decode(&bytes).expect("decode");
+        assert_eq!(hc::bytecode::encode(&module), bytes);
+    }
+
+    #[test]
+    fn write_bytecode_artifact_decodable() {
+        // 产物写入后可重新 decode（回退路径的产物是可装载字节码）
+        let dir = std::env::temp_dir().join(format!("hc_bc_artifact_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bytes = source_to_bytecode("fn main() i32 { return 7; }").expect("encode");
+        let p = write_bytecode_artifact(&dir, "prog", &bytes).expect("write");
+        let read = std::fs::read(&p).expect("read");
+        assert!(hc::bytecode::decode(&read).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
