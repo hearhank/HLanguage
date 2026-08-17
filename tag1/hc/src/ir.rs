@@ -2551,6 +2551,8 @@ fn is_type_arg_pos(name: &str, i: usize) -> bool {
         "@intCast" | "@enumFromInt" | "@ptrCast" | "@alignCast" => i == 0,
         // alloc.init(ABC)：类型名参数（运行时按名建空实例）
         "alloc.init" => i == 0,
+        // math.nan/math.inf/math.inf_neg(f64)：类型名参数（运行时忽略，仅指示宽度）
+        "math.nan" | "math.inf" | "math.inf_neg" => i == 0,
         _ => false,
     }
 }
@@ -4221,9 +4223,9 @@ const IMPLICIT_ENV: &[&str] = &[
     "alloc", "io", "test_io", "stdout", "stderr", "pi", "Vec", "Deque", "Map", "Table",
 ];
 
-/// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from）
+/// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from、math.*）
 fn is_dotted_implicit_root(root: &str) -> bool {
-    IMPLICIT_ENV.contains(&root) || matches!(root, "json" | "csv" | "String")
+    IMPLICIT_ENV.contains(&root) || matches!(root, "json" | "csv" | "String" | "math")
 }
 
 /// 错误值（码 = 编译期错误码表；内建产生的错误与 `error.X` 字面量同码）
@@ -6120,6 +6122,40 @@ fn call_dotted_implicit(
     args: &[IrValue],
 ) -> R<IrValue> {
     match name {
+        // math.nan/inf/inf_neg/sqrt/abs/pow/floor/ceil/round（对齐 oracle call_math
+        // interp.rs:4922-4960：nan/inf/inf_neg 忽略类型名参数；数值函数取 arg[0]，
+        // Int 强制 f64 后计算，返回 Float）
+        "math.nan" => return Ok(IrValue::Float(f64::NAN)),
+        "math.inf" => return Ok(IrValue::Float(f64::INFINITY)),
+        "math.inf_neg" => return Ok(IrValue::Float(f64::NEG_INFINITY)),
+        "math.sqrt" | "math.abs" | "math.pow" | "math.floor" | "math.ceil" | "math.round" => {
+            let field = name.strip_prefix("math.").unwrap_or(name);
+            let v = deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", format!("math.{field}")))?,
+            );
+            let f = match v {
+                IrValue::Int(i) => *i as f64,
+                IrValue::Float(f) => *f,
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        format!("math.{field} expects a number"),
+                    ))
+                }
+            };
+            let r = match field {
+                "sqrt" => f.sqrt(),
+                "abs" => f.abs(),
+                "pow" => f.powf(2.0),
+                "floor" => f.floor(),
+                "ceil" => f.ceil(),
+                "round" => f.round(),
+                _ => unreachable!(),
+            };
+            return Ok(IrValue::Float(r));
+        }
         "json.parse" => {
             let data = str_arg_ir(ctx, args, 0)?;
             let obj = parse_json_obj_ir(ctx, &String::from_utf8_lossy(&data))?;

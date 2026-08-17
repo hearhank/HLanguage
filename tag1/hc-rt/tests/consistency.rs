@@ -1354,6 +1354,34 @@ fn p7_sort_binary_search_and_scalar() {
 }
 
 #[test]
+fn p7_math_builtins() {
+    // math 命名空间（对齐 oracle call_math interp.rs:4922-4960）：
+    // nan/inf/inf_neg 忽略类型名参数；sqrt/abs/pow/floor/ceil/round 取 arg[0]，
+    // Int 强制 f64 后计算返回 Float。pow 在 oracle 为 `f.powf(2.0)`（单参平方）。
+    assert_all_pass(
+        r#"
+[test] fn math_special_values() !void {
+    var nan = math.nan(f64);
+    try expect(nan != nan);   // NaN 不等于自身
+    var inf = math.inf(f32);
+    try expect(inf > 1.0e30);
+    var inf_neg = math.inf_neg(f64);
+    try expect(inf_neg < -1.0e30);
+}
+[test] fn math_numeric() !void {
+    try expect_eq(math.sqrt(4.0), 2.0);
+    try expect_eq(math.abs(-3.5), 3.5);
+    try expect_eq(math.pow(3.0), 9.0);      // 3² = 9
+    try expect_eq(math.floor(2.7), 2.0);
+    try expect_eq(math.ceil(2.2), 3.0);
+    try expect_eq(math.round(2.5), 3.0);
+    try expect_eq(math.sqrt(9), 3.0);        // Int 实参强制 f64
+}
+"#,
+    );
+}
+
+#[test]
 fn p7_map_json_csv_and_string() {
     // Map（from_json/put/get/len/iter）、json.parse、csv.parse、字符串方法族
     assert_all_pass(

@@ -296,7 +296,10 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     out.push_str("declare i32 @printf(i8*, ...)\n");
     out.push_str("declare double @fmod(double, double)\n");
     out.push_str("declare double @fabs(double)\n");
-    out.push_str("declare double @sqrt(double)\n\n");
+    out.push_str("declare double @sqrt(double)\n");
+    out.push_str("declare double @floor(double)\n");
+    out.push_str("declare double @ceil(double)\n");
+    out.push_str("declare double @round(double)\n\n");
 
     // 断言失败标志（全局；单线程顺序执行）
     out.push_str("@hc_fail_msg = global i8* null\n");
@@ -2616,6 +2619,31 @@ entry:
 }
 "#;
 
+/// math 一元浮点 helper（对齐 oracle call_math interp.rs:4922-4960）：
+/// Int → f64 强制 / Float 直用，应用 `op`（LLVM 计算行，结果在 `%r`）后返回 Float。
+/// 与 `@hc_sqrt` 同构；`pow` 在 oracle 为 `f.powf(2.0)`（单参平方）。
+fn math_unop_helper(fname: &str, op: &str) -> String {
+    format!(
+        r#"define %Value @{fname}(%Value %v) {{
+entry:
+  %t = extractvalue %Value %v, 0
+  %d = extractvalue %Value %v, 1
+  %is_int = icmp eq i32 %t, 2
+  %dt = trunc i128 %d to i64
+  %asf = sitofp i64 %dt to double
+  %raw = bitcast i64 %dt to double
+  %f = select i1 %is_int, double %asf, double %raw
+  {op}
+  %bits = bitcast double %r to i64
+  %z = zext i64 %bits to i128
+  %v0 = insertvalue %Value {{ i32 0, i128 0 }}, i32 3, 0
+  %v1 = insertvalue %Value %v0, i128 %z, 1
+  ret %Value %v1
+}}
+"#
+    )
+}
+
 const HC_BOX: &str = r#"define %Value @hc_box(%Value %v) {
 entry:
   %sz = ptrtoint %Value* getelementptr (%Value, %Value* null, i32 1) to i64
@@ -2929,6 +2957,12 @@ fn emit_scalar_builtin_helpers(out: &mut String) {
         out.push_str(h);
         out.push('\n');
     }
+    // math.* 数值 helper（对齐 oracle call_math）
+    out.push_str(&math_unop_helper("hc_abs", "%r = call double @fabs(double %f)"));
+    out.push_str(&math_unop_helper("hc_floor", "%r = call double @floor(double %f)"));
+    out.push_str(&math_unop_helper("hc_ceil", "%r = call double @ceil(double %f)"));
+    out.push_str(&math_unop_helper("hc_round", "%r = call double @round(double %f)"));
+    out.push_str(&math_unop_helper("hc_pow", "%r = fmul double %f, %f"));
 }
 
 // ---------- Phase 7 Io 值构造（main(io: Io) 单参入口 / test_io 绑定） ----------
@@ -3559,6 +3593,11 @@ impl BodyEmitter {
             self.call_alloc_init(args, temp, slot_consts, strings);
             return;
         }
+        // math.nan/inf/inf_neg/sqrt/abs/pow/floor/ceil/round（对齐 oracle call_math）
+        if let Some(field) = name.strip_prefix("math.") {
+            self.call_math(field, args, temp);
+            return;
+        }
         let Some(candidates) = canon.get(name) else {
             // Phase 7：未实现的内建/限定名（json.parse 等）响亮拒绝，禁止 NoFunction 静默歧义
             if name.contains('.') {
@@ -3605,6 +3644,31 @@ impl BodyEmitter {
         let res = self.r();
         self.emit(format!("{res} = call %Value @\"hc_fn{target}\"({arglist})"));
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+    }
+
+    /// math.* 原生 codegen（对齐 oracle call_math interp.rs:4922-4960）：
+    /// nan/inf/inf_neg 忽略类型名参数，直接发 Float 位模式常量；数值函数经一元
+    /// helper（Int→f64 强制 / Float 直用）返回 Float。
+    fn call_math(&mut self, field: &str, args: &[usize], temp: usize) {
+        match field {
+            "nan" => {
+                self.build_store(temp, T_FLOAT, format!("{}", f64::NAN.to_bits() as u128))
+            }
+            "inf" => self
+                .build_store(temp, T_FLOAT, format!("{}", f64::INFINITY.to_bits() as u128)),
+            "inf_neg" => self.build_store(
+                temp,
+                T_FLOAT,
+                format!("{}", f64::NEG_INFINITY.to_bits() as u128),
+            ),
+            "sqrt" => self.emit_unop_helper("hc_sqrt", args, temp),
+            "abs" => self.emit_unop_helper("hc_abs", args, temp),
+            "floor" => self.emit_unop_helper("hc_floor", args, temp),
+            "ceil" => self.emit_unop_helper("hc_ceil", args, temp),
+            "round" => self.emit_unop_helper("hc_round", args, temp),
+            "pow" => self.emit_unop_helper("hc_pow", args, temp),
+            _ => self.abort_feature("builtin"),
+        }
     }
 
     fn call_builtin(
@@ -4764,6 +4828,30 @@ mod tests {
         assert!(ll.contains("call %Value @hc_make_class(i8*"), "{ll}");
         assert!(ll.contains("i64 0)"), "{ll}");
         assert!(ll.contains("c\"ABC\\00\""), "{ll}");
+    }
+
+    #[test]
+    fn phase7_math_builtins_emit_nan_and_helpers() {
+        // math.nan(f64) 类型名参数 → 忽略，直接发 NaN 位模式 Float；
+        // math.sqrt/abs/pow → 一元 helper 调用；helper 定义进 preamble。
+        let ll = gen(
+            r#"fn main(io: Io) !void {
+    var nan = math.nan(f64);
+    var s = math.sqrt(4.0);
+    var p = math.pow(3.0);
+    io.print("{} {} {}\n", nan, s, p);
+}"#,
+        );
+        // f64::NAN.to_bits() = 0x7FF8000000000000
+        assert!(ll.contains("i32 3, 0"), "{ll}");
+        assert!(ll.contains("i128 9221120237041090560"), "{ll}");
+        assert!(ll.contains("call %Value @hc_sqrt(%Value"), "{ll}");
+        assert!(ll.contains("call %Value @hc_pow(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_abs(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_floor(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_ceil(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_round(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_pow(%Value"), "{ll}");
     }
 
     #[test]
