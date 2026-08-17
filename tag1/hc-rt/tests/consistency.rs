@@ -1269,3 +1269,97 @@ fn bump() void { g += 1; }
 "#,
     );
 }
+
+// ---------- Phase 7 全核心标准库双模式一致 ----------
+
+#[test]
+fn p7_sort_binary_search_and_scalar() {
+    // 自由内建：sort（就地重排）/ binary_search（Opt 结果）/ min/max/sqrt
+    assert_all_pass(
+        r#"
+[test] fn sort_arr() !void {
+    var v = [3, 1, 2];
+    v.append(0);
+    sort(v);
+    try expect_eq(v[0], 0);
+    try expect_eq(v[1], 1);
+    try expect_eq(v[2], 2);
+    try expect_eq(v[3], 3);
+    var found = binary_search(v, 2).?;
+    try expect_eq(found, 2);
+    try expect_eq(binary_search(v, 99), null);
+}
+[test] fn scalar_tools() !void {
+    try expect_eq(min(3, 9), 3);
+    try expect_eq(max(3, 9), 9);
+    try expect_eq(sqrt(9), 3.0);
+    try expect_eq(7.add(3), 10);
+    try expect_eq(7.div(2), 3);
+    try expect_eq(2.pow(8), 256);
+}
+"#,
+    );
+}
+
+#[test]
+fn p7_map_json_csv_and_string() {
+    // Map（from_json/put/get/len/iter）、json.parse、csv.parse、字符串方法族
+    assert_all_pass(
+        r#"
+[test] fn map_ops() !void {
+    var m = Map.from_json("{\"a\":1,\"b\":2}");
+    m.put("c", 3);
+    try expect_eq(m.get("a").?, 1);
+    try expect_eq(m.len(), 3);
+    var s: i32 = 0;
+    for (m.iter()) |kv| { s += @intCast(i32, kv.value); }
+    try expect_eq(s, 6);
+}
+[test] fn json_csv() !void {
+    var parsed = json.parse("{\"x\":42}");
+    try expect_eq(parsed.get("x").?, 42);
+    var rows = csv.parse("a,b\n1,2");
+    try expect_eq(rows.len(), 2);
+}
+[test] fn string_methods() !void {
+    var name = "hello,world";
+    var parts = name.split(',');
+    try expect_eq(parts[0], "hello");
+    try expect_eq(name.replace("hello", "hi"), "hi,world");
+    try expect_eq(name.substring(0, 5), "hello");
+    try expect_eq(name.find(111).?, 4);
+    try expect_eq(name.concat("!"), "hello,world!");
+}
+"#,
+    );
+}
+
+#[test]
+fn p7_alloc_and_at_builtins() {
+    // @ 内建（sizeOf/intCast/typeOf/intFromEnum/enumFromInt 往返）、box 指针
+    assert_all_pass(
+        r#"
+enum Status { ready, busy }
+[test] fn at_builtins() !void {
+    try expect_eq(@sizeOf(i32), 4);
+    try expect_eq(@intCast(i32, 7), 7);
+    try expect_eq(@typeOf(42), "i128");
+    var k = Status.busy;
+    try expect_eq(@intFromEnum(k), 1);
+    var k2 = @enumFromInt(Status, 0);
+    try expect_eq(@intFromEnum(k2), 0);
+}
+[test] fn box_read() !void {
+    var p = box(42);
+    try expect_eq(p.*, 42);
+}
+[test] fn mut_ptr_write() !void {
+    var mut x: i32 = 42;
+    var p = &mut x;
+    try expect_eq(p.*, 42);
+    p.* = 7;
+    try expect_eq(p.*, 7);
+}
+"#,
+    );
+}

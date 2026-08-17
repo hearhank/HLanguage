@@ -8,6 +8,7 @@
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -293,6 +294,8 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
     let mut func_index = entry.func_index;
     let mut closures = entry.closures;
     let mut globals = entry.globals;
+    let mut error_codes = entry.error_codes;
+    let mut enum_variants = entry.enum_variants;
     for m in siblings {
         let offset = funcs.len();
         let coffset = closures.len();
@@ -331,12 +334,18 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
                 globals.push(g);
             }
         }
+        // 错误码表：并入兄弟（名→码全局唯一，重复同名同码，直接覆盖等价）
+        error_codes.extend(m.error_codes);
+        // 枚举变体表：并入兄弟（同名同定义，覆盖等价）
+        enum_variants.extend(m.enum_variants);
     }
     hc::ir::IrModule {
         funcs,
         closures,
         func_index,
         globals,
+        error_codes,
+        enum_variants,
     }
 }
 
@@ -719,23 +728,35 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
 /// 执行已降级的 IR 模块入口 `main`，结果归一化为 [`IrRunOutcome`]。
 ///
 /// `hc run --ir`（`lower` 后）与字节码 VM（`decode` 后）共用——ADR-0004 唯一语义源。
+/// 走 [`IrRuntime`]（共享堆 + 全局 cell + `@__init__` 一次性初始化 + 隐式环境注入），
+/// 运行后冲刷 `io.print` 缓冲（`ctx.out`）到 stdout。
 fn execute_ir(module: &hc::ir::IrModule) -> Result<IrRunOutcome, String> {
-    // 入口 main 必须存在（NoMain——先查表，避免 run_ir 的 NoFunction 误导为切片外）
+    // 入口 main 必须存在（NoMain——先查表，避免 call 的 NoFunction 误导为子集外）
     if !module.func_index.contains_key("main") {
         return Err("error.NoMain: 入口函数 `main` 未定义".into());
     }
-    // 运行（main(io: Io) 的 io 参数在 IR 下为 Void 占位——用了 io.* 会走 NoFunction
-    // 提示，正常；零参 main 可完整运行）
-    match hc::ir::run_ir(module, "main", &[]) {
+    let mut rt = hc::ir::IrRuntime::new();
+    // io.args：对齐 oracle `Interp::new`（interp.rs:234）——进程实参（跳过二进制本身）
+    rt.ctx.args = std::env::args().skip(1).map(|a| a.into_bytes()).collect();
+    let result = rt.call(module, "main", &[]);
+    // 冲刷 io.print 缓冲（ctx.out）——成功/退出/错误均先落盘
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(&rt.ctx.out);
+    let _ = stdout.flush();
+    match result {
         // 未处理错误值到达入口（值通道）：panic 式失败
         Ok(hc::ir::IrValue::Err { name, .. }) => Ok(IrRunOutcome::UnhandledError(name)),
         Ok(_) => Ok(IrRunOutcome::Success),
         Err(e) => {
+            // io.exit(code)：正常退出信号（对齐 oracle run_main——按 code 归零）
+            if e.name == "ExitRequested" {
+                return Ok(IrRunOutcome::Success);
+            }
             let mut msg = format!("error.{}: {}", e.name, e.message);
-            // NoFunction/TypeError 常来自 io/集合/指针等 IR 切片外特性：追加提示
+            // NoFunction/TypeError 常来自接口类型参/裸指针等 IR 子集外特性：追加提示
             if e.name == "NoFunction" || e.name == "TypeError" {
                 msg.push_str(
-                    "\n程序使用了 IR 切片外特性（io/集合/指针等）——请用默认 \
+                    "\n程序使用了 IR 子集外特性（接口类型参/裸指针等）——请用默认 \
                      tree-walking 模式 `hc run <file>`",
                 );
             }
@@ -1234,18 +1255,13 @@ fn main() i32 {
     }
 
     #[test]
-    fn out_of_slice_io_print_hint() {
-        // io.print 属 IR 切片外：io 内建放行语义检查；lower 展平 io.print → 运行 NoFunction
+    fn io_print_through_ir() {
+        // Phase 7：io.print 已入 IR 子集——`io` 隐式环境经 LoadGlobal 解析，限定名
+        // 调用路由 call_dotted_implicit → call_io_method_ir，成功返回。
         let src = r#"fn main() void { io.print("hi"); }"#;
         match run_ir_source(src) {
-            Err(msg) => {
-                assert!(msg.contains("NoFunction"), "消息：{msg}");
-                assert!(
-                    msg.contains("IR 切片外特性") && msg.contains("hc run"),
-                    "缺少切片外提示，消息：{msg}"
-                );
-            }
-            other => panic!("预期 NoFunction，实际：{other:?}"),
+            Ok(_) => {}
+            other => panic!("预期 Success，实际：{other:?}"),
         }
     }
 
@@ -1316,8 +1332,27 @@ fn main() i32 {
         .unwrap();
         let sib2 = hc::ir::lower(&hc::parse_source("global shared: i32 = 9;\n").unwrap()).unwrap();
         let merged = merge_modules(entry, vec![sib, sib2]);
-        // 全局表：声明序 + 去重（同名只保留入口/先序一份）
-        assert_eq!(merged.globals, vec!["app", "lib", "shared"]);
+        // 全局表：声明序 + 去重（同名只保留入口/先序一份）。
+        // Phase 7 起隐式环境名（alloc/io/pi/Vec…）也登记全局——入口模块已含，
+        // 兄弟并入时去重跳过；用户全局仍保声明序（app → lib → shared）。
+        assert_eq!(
+            merged.globals,
+            vec![
+                "app",
+                "alloc",
+                "io",
+                "test_io",
+                "stdout",
+                "stderr",
+                "pi",
+                "Vec",
+                "Deque",
+                "Map",
+                "Table",
+                "lib",
+                "shared",
+            ]
+        );
         // 各模块 `@__init__` 全部保留（funcs 序依次执行）
         let init_count = merged.funcs.iter().filter(|f| f.name == "@__init__").count();
         assert_eq!(init_count, 3);

@@ -3,6 +3,7 @@ node_modules/
 
 # H 语言 C 编译产物（zig cc / gcc 生成）
 *.exe
+*.pdb
 *.c.bak
 *.o
 *.bin

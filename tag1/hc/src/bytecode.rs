@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
 /// v3：Phase 5 增全局表 + LoadGlobal/StoreGlobal/GlobalAddr opcode（41-43）。
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 // ---------- 常量 / 运算符 / 指令 标签 ----------
 
@@ -136,6 +136,25 @@ pub fn encode(module: &IrModule) -> Vec<u8> {
     push_u32(&mut out, module.globals.len() as u32);
     for name in &module.globals {
         push_str(&mut out, name);
+    }
+    // 错误码表（Phase 7）：名 → 码（内建错误值与 error.X 字面量同码）
+    let mut ec: Vec<(&String, &u32)> = module.error_codes.iter().collect();
+    ec.sort_by(|a, b| a.0.cmp(b.0));
+    push_u32(&mut out, ec.len() as u32);
+    for (name, code) in ec {
+        push_str(&mut out, name);
+        push_u32(&mut out, *code);
+    }
+    // 枚举变体表（Phase 7）：枚举名 → 变体名序（@intFromEnum/@enumFromInt 运行时分派）
+    let mut ev: Vec<(&String, &Vec<String>)> = module.enum_variants.iter().collect();
+    ev.sort_by(|a, b| a.0.cmp(b.0));
+    push_u32(&mut out, ev.len() as u32);
+    for (name, variants) in ev {
+        push_str(&mut out, name);
+        push_u32(&mut out, variants.len() as u32);
+        for v in variants {
+            push_str(&mut out, v);
+        }
     }
     out
 }
@@ -656,11 +675,33 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
     for _ in 0..n_globals {
         globals.push(r.str()?);
     }
+    // 错误码表（Phase 7）：名 → 码
+    let n_ec = r.u32()? as usize;
+    let mut error_codes = HashMap::with_capacity(n_ec);
+    for _ in 0..n_ec {
+        let name = r.str()?;
+        let code = r.u32()?;
+        error_codes.insert(name, code);
+    }
+    // 枚举变体表（Phase 7）：枚举名 → 变体名序
+    let n_ev = r.u32()? as usize;
+    let mut enum_variants = HashMap::with_capacity(n_ev);
+    for _ in 0..n_ev {
+        let name = r.str()?;
+        let n_v = r.u32()? as usize;
+        let mut variants = Vec::with_capacity(n_v);
+        for _ in 0..n_v {
+            variants.push(r.str()?);
+        }
+        enum_variants.insert(name, variants);
+    }
     Ok(IrModule {
         funcs,
         closures,
         func_index,
         globals,
+        error_codes,
+        enum_variants,
     })
 }
 
@@ -1311,11 +1352,21 @@ mod tests {
             is_test: false,
             body: vec![IrInst::Return { temp: 1 }],
         };
+        let mut error_codes = HashMap::new();
+        error_codes.insert("error.FileNotFound".to_string(), 1u32);
+        error_codes.insert("error.OutOfMemory".to_string(), 2u32);
+        let mut enum_variants = HashMap::new();
+        enum_variants.insert(
+            "Kind".to_string(),
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        );
         IrModule {
             funcs: vec![f0, f1],
             closures: vec![c0],
             func_index,
             globals: vec!["g_counter".to_string(), "g_name".to_string()],
+            error_codes,
+            enum_variants,
         }
     }
 

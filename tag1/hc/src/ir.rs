@@ -21,6 +21,7 @@ use crate::ast::*;
 use crate::errorcodes::ErrorCodeTable;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, Write};
 
 // ---------- IR 结构 ----------
 
@@ -37,6 +38,12 @@ pub struct IrModule {
     /// `exec_decl_top` 无前缀登记；错误集别名除外）。运行时 `IrRuntime::init`
     /// 预分配 cell 后执行全部 `@__init__` 函数（多文件合并 = 多个 init 依次运行）。
     pub globals: Vec<String>,
+    /// 错误名 → 码（M2.6 编译期错误码表；运行时内建产生的错误值携带与
+    /// `error.X` 字面量一致的码——`value_eq` 按码比较，须同一张表）。
+    pub error_codes: HashMap<String, u32>,
+    /// 枚举名（扁平 + 全限定）→ 变体名（声明序；Phase 7 `@intFromEnum`/`@enumFromInt`
+    /// 运行时分派按序求索引，对齐 oracle `TypeDef::Enum`）。
+    pub enum_variants: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -405,7 +412,8 @@ pub struct ClassInfo {
 
 #[derive(Debug, Default, Clone)]
 pub struct EnumInfo {
-    pub variants: std::collections::HashSet<String>,
+    /// 变体名（声明序——`@intFromEnum`/`@enumFromInt` 运行时分派按序求索引）
+    pub variants: Vec<String>,
 }
 
 /// 由 `program.decls` 构建类型表（lower 阶段判型用；运行时类型名内嵌于值）。
@@ -465,8 +473,21 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     let errors = crate::errorcodes::collect(program, 0);
     let types = build_type_table(program);
     let funcs = collect_func_names(program);
-    let globals = collect_globals(program);
+    let mut globals = collect_globals(program);
+    // Phase 7：隐式环境名（alloc/io/pi/Vec…）按全局处理——`io.print` 等限定名根标识符
+    // 须经 `LoadGlobal` 解析（对齐 oracle interp.rs:1585-1595 的隐式环境注入）。
+    for g in IMPLICIT_ENV {
+        globals.insert((*g).to_string());
+    }
     let mut module = IrModule::default();
+    // 错误码表（名 → 码）：内建运行时错误值（io.fs 等）须与 `error.X` 字面量同码
+    for e in errors.entries() {
+        module.error_codes.insert(e.name.clone(), e.code);
+    }
+    // 枚举变体序（Phase 7）：`@intFromEnum`/`@enumFromInt` 运行时分派
+    for (n, ei) in &types.enums {
+        module.enum_variants.insert(n.clone(), ei.variants.clone());
+    }
     for d in &program.decls {
         lower_decl(d, &mut module, &errors, &types, &funcs, &globals)?;
     }
@@ -475,7 +496,13 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     if let Some(init) = lower_init_func(program, &errors, &types, &funcs, &globals, &mut module.closures)? {
         module.funcs.push(init);
     }
-    module.globals = globals_set_to_ordered(program);
+    let mut ordered = globals_set_to_ordered(program);
+    for g in IMPLICIT_ENV {
+        if !ordered.iter().any(|x| x == g) {
+            ordered.push((*g).to_string());
+        }
+    }
+    module.globals = ordered;
     Ok(module)
 }
 
@@ -1293,10 +1320,68 @@ impl<'a> LowerCtx<'a> {
                 });
             }
             Expr::Call { callee, args, span: _ } => {
-                let arg_ts: Vec<usize> = args.iter().map(|a| self.lower_expr(a)).collect();
+                // `@` 内建的类型位置参数（@sizeOf(i32) 等）在调用点编码为 `Const Str(type_name)`，
+                // 运行时按名解析——对齐 oracle 从 `Expr::Ident` 读类型名。
+                // 限定名调用（alloc.init(ABC) 等）展平为 `"alloc.init"` 后同样适用。
+                let callee_name = match callee.as_ref() {
+                    Expr::Ident(n, _) => Some(n.clone()),
+                    Expr::Dot { base, field, .. } | Expr::Field { base, field, .. } => {
+                        let mut parts = vec![field.clone()];
+                        let mut b = base.as_ref();
+                        while let Expr::Dot {
+                            base: b2,
+                            field: f2,
+                            ..
+                        }
+                        | Expr::Field {
+                            base: b2,
+                            field: f2,
+                            ..
+                        } = b
+                        {
+                            parts.push(f2.clone());
+                            b = b2.as_ref();
+                        }
+                        if let Expr::Ident(ns, _) = b {
+                            parts.push(ns.clone());
+                        }
+                        parts.reverse();
+                        Some(parts.join("."))
+                    }
+                    _ => None,
+                };
+                let arg_ts: Vec<usize> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        if let Some(cn) = &callee_name {
+                            if is_type_arg_pos(cn, i) {
+                                let name = match a {
+                                    Expr::Ident(n, _) => Some(n.clone()),
+                                    Expr::StrLit { value, .. } => Some(value.clone()),
+                                    _ => None,
+                                };
+                                if let Some(n) = name {
+                                    let at = self.alloc_slot();
+                                    self.push(IrInst::Const {
+                                        temp: at,
+                                        val: IrConst::Str(n),
+                                    });
+                                    return at;
+                                }
+                            }
+                        }
+                        self.lower_expr(a)
+                    })
+                    .collect();
                 match callee.as_ref() {
                     Expr::Ident(name, _) => {
-                        if name.starts_with('@') || is_assert_builtin(name) {
+                        // `@`/断言恒为内建；自由内建名被用户函数遮蔽时走用户函数
+                        // （对齐 oracle eval_call：先查用户函数，后回退内建）。
+                        let builtin = name.starts_with('@')
+                            || is_assert_builtin(name)
+                            || (is_free_builtin(name) && !self.funcs.contains(name));
+                        if builtin {
                             self.push(IrInst::CallBuiltin {
                                 name: name.clone(),
                                 args: arg_ts,
@@ -2427,6 +2512,40 @@ fn is_assert_builtin(name: &str) -> bool {
     )
 }
 
+/// 自由内建（非 `@` 前缀；测试内隐式可用，普通函数体按名路由到 `CallBuiltin`）。
+/// 对齐 oracle `call_builtin`（interp.rs:2911）的用户可调内建面。
+fn is_free_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        // 内存/复制
+        "box" | "copy"
+            // 数值工具
+            | "sqrt" | "min" | "max"
+            // 字节工具
+            | "read_u64_le"
+            // 算法
+            | "sort" | "binary_search"
+            // 解析器辅助（71-recursive-parser）
+            | "skip_space" | "peek" | "advance" | "is_digit" | "parse_number"
+            // 文本解析
+            | "parse_int" | "parse_float"
+    )
+}
+
+/// `@` 内建的「类型位置」参数（类型名以 `Const Str` 编码，运行时按名解析）。
+/// 对齐 oracle `@sizeOf/@alignOf/@offsetOf/@intCast/@enumFromInt/@ptrCast/@alignCast`
+/// 从 `Expr::Ident` 读类型名（interp.rs:3009-3030, 3068-3093）。
+fn is_type_arg_pos(name: &str, i: usize) -> bool {
+    match name {
+        "@sizeOf" | "@alignOf" => i == 0,
+        "@offsetOf" => i == 0 || i == 1,
+        "@intCast" | "@enumFromInt" | "@ptrCast" | "@alignCast" => i == 0,
+        // alloc.init(ABC)：类型名参数（运行时按名建空实例）
+        "alloc.init" => i == 0,
+        _ => false,
+    }
+}
+
 /// 整数/浮点字面量解析（后缀、下划线、进制）
 fn parse_int_lit(text: &str) -> i128 {
     let cleaned: String = text
@@ -2535,6 +2654,20 @@ pub struct Ctx {
     /// 全局/常量名 → cell 索引（Phase 5）：cell 由 [`IrRuntime::init`] 预分配，
     /// `@__init__`（`StoreGlobal`）写入初值；`LoadGlobal`/`StoreGlobal` 读写写穿。
     pub globals: HashMap<String, usize>,
+    /// io.print/printErr 输出缓冲（Phase 7）：`execute_ir` 运行后冲刷到 stdout。
+    pub out: Vec<u8>,
+    /// 程序参数（io.args()；由 `hc run`/`hc test` 注入，对齐 oracle `Interp.args`）
+    pub args: Vec<Vec<u8>>,
+    /// io.fs 真实文件句柄表（Phase 7）：File 值 = `Class{_fd}`，fd 索引本表。
+    pub files: HashMap<i64, std::fs::File>,
+    /// 下一文件描述符（自增分配）
+    pub next_fd: i64,
+    /// io.net TCP 连接表（fd → TcpStream）
+    pub tcp_streams: HashMap<i64, std::net::TcpStream>,
+    /// io.net TCP 监听器表（fd → TcpListener）
+    pub tcp_listeners: HashMap<i64, std::net::TcpListener>,
+    /// 下一网络描述符（自增分配）
+    pub next_net_fd: i64,
 }
 
 impl Ctx {
@@ -3194,9 +3327,15 @@ impl IrRuntime {
             return Ok(());
         }
         self.inited = true;
-        // 预分配全部全局 cell（声明序）——即使无全局也继续（保险：`@__init__` 仍须执行）
+        // 预分配全部全局 cell（声明序）——即使无全局也继续（保险：`@__init__` 仍须执行）。
+        // Phase 7：隐式环境名（alloc/io/pi/Vec…）预置内建值（对齐 oracle 隐式环境注入）。
         for name in &module.globals {
-            let cell = self.ctx.alloc(Cell::Value(IrValue::Void));
+            let v = if IMPLICIT_ENV.iter().any(|e| *e == name) {
+                implicit_env_value(&mut self.ctx, name)
+            } else {
+                IrValue::Void
+            };
+            let cell = self.ctx.alloc(Cell::Value(v));
             self.ctx.globals.insert(name.clone(), cell);
         }
         for (idx, f) in module.funcs.iter().enumerate() {
@@ -3210,9 +3349,20 @@ impl IrRuntime {
     /// 调用模块函数（自动先初始化全局）。
     pub fn call(&mut self, module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
         self.init(module)?;
-        let idx = pick_func(&self.ctx, module, entry, args)
+        // main(io: Io) !void——单参数 io 版本或零参版本（对齐 oracle `run_main`
+        // interp.rs:5663-5675：候选池内有 1 参 main 时注入 io，否则传空）。
+        let mut args = args.to_vec();
+        if entry == "main" && args.is_empty() {
+            let has_1p = module.func_index.get("main").map_or(false, |v| {
+                v.iter().any(|&i| module.funcs[i].params.len() == 1)
+            });
+            if has_1p {
+                args.push(io_value_ir(&mut self.ctx));
+            }
+        }
+        let idx = pick_func(&self.ctx, module, entry, &args)
             .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{entry}`")))?;
-        exec_func(&mut self.ctx, module, idx, args, 0)
+        exec_func(&mut self.ctx, module, idx, &args, 0)
     }
 }
 
@@ -3627,6 +3777,19 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
             IrInst::Call { name, args, temp } => {
                 let arg_vals: Vec<IrValue> =
                     args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
+                // Phase 7：隐式环境限定名（io.print / io.fs.open / alloc.init…）与
+                // 虚拟根（json.parse / csv.parse / String.from）——未登记为用户函数时按
+                // 「根值 → 字段 → 方法」路由（对齐 oracle eval_call 隐式环境 + 方法分派）；
+                // 登记了同名用户函数则优先用户函数。
+                if !module.func_index.contains_key(name) {
+                    let root = name.split('.').next().unwrap_or("");
+                    if is_dotted_implicit_root(root) && name.contains('.') {
+                        let v = call_dotted_implicit(ctx, module, name, &arg_vals)?;
+                        ctx.set(&frame, *temp, v);
+                        pc += 1;
+                        continue;
+                    }
+                }
                 let callee_idx = pick_func(ctx, module, name, &arg_vals).ok_or_else(|| {
                     IrError::msg("NoFunction", format!("no function `{name}`"))
                 })?;
@@ -3636,7 +3799,7 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
             IrInst::CallBuiltin { name, args, temp } => {
                 let arg_vals: Vec<IrValue> =
                     args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
-                let v = call_assert_builtin(name, ctx, &arg_vals, &mut fail)?;
+                let v = call_builtin(ctx, module, name, &arg_vals, &mut fail)?;
                 ctx.set(&frame, *temp, v);
             }
             IrInst::Return { temp } => {
@@ -3986,7 +4149,7 @@ fn call_method_ir(
     method: &str,
     arg_vals: &[IrValue],
 ) -> R<IrValue> {
-    if let Some(v) = call_builtin_method_shim(ctx, self_v, method, &arg_vals[1..])? {
+    if let Some(v) = call_builtin_method(ctx, module, self_v, method, &arg_vals[1..])? {
         return Ok(v);
     }
     let fname = format!("{}.{}", ir_type_name(ctx, self_v), method);
@@ -3995,59 +4158,1960 @@ fn call_method_ir(
     exec_func(ctx, module, idx, arg_vals, 0)
 }
 
-/// 内建方法 shim（对齐 oracle `call_builtin_method`/`call_scalar_method` 的子集，
-/// 支撑泛型方法体（sum 的 `.add`）与常见聚合方法；Phase 7 扩为全量）。
-fn call_builtin_method_shim(
+// ==================== Phase 7 内建运行时（对齐 oracle interp.rs call_builtin* 面） ====================
+
+/// 隐式环境名（对齐 oracle interp.rs:1585-1595 的隐式环境注入表）
+const IMPLICIT_ENV: &[&str] = &[
+    "alloc", "io", "test_io", "stdout", "stderr", "pi", "Vec", "Deque", "Map", "Table",
+];
+
+/// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from）
+fn is_dotted_implicit_root(root: &str) -> bool {
+    IMPLICIT_ENV.contains(&root) || matches!(root, "json" | "csv" | "String")
+}
+
+/// 错误值（码 = 编译期错误码表；内建产生的错误与 `error.X` 字面量同码）
+fn err_val(module: &IrModule, name: &str) -> IrValue {
+    let code = module.error_codes.get(name).copied().unwrap_or(0);
+    IrValue::Err {
+        name: name.to_string(),
+        code,
+    }
+}
+
+fn str_val(s: &str) -> IrValue {
+    IrValue::Str(s.as_bytes().to_vec())
+}
+fn str_bytes_val(b: Vec<u8>) -> IrValue {
+    IrValue::Str(b)
+}
+fn opt_val(v: Option<IrValue>) -> IrValue {
+    IrValue::Opt(v.map(Box::new))
+}
+
+/// 元素数组 → Arr（元素为普通值 cell）
+fn make_arr(ctx: &mut Ctx, items: Vec<IrValue>) -> IrValue {
+    let elems: Vec<usize> = items
+        .into_iter()
+        .map(|v| ctx.alloc(Cell::Value(v)))
+        .collect();
+    IrValue::Arr(ctx.alloc(Cell::Elems(elems)))
+}
+
+/// M5.4 Io 实例（含 fs/time/net 子模块——对齐 oracle `io_value` interp.rs:1023-1029）
+fn io_value_ir(ctx: &mut Ctx) -> IrValue {
+    let fs = ctx.alloc(Cell::Class {
+        name: "Fs".into(),
+        fields: HashMap::new(),
+    });
+    let fs_cell = ctx.alloc(Cell::Value(IrValue::Class(fs)));
+    let time = ctx.alloc(Cell::Class {
+        name: "Time".into(),
+        fields: HashMap::new(),
+    });
+    let time_cell = ctx.alloc(Cell::Value(IrValue::Class(time)));
+    let net = ctx.alloc(Cell::Class {
+        name: "Net".into(),
+        fields: HashMap::new(),
+    });
+    let net_cell = ctx.alloc(Cell::Value(IrValue::Class(net)));
+    let mut fields = HashMap::new();
+    fields.insert("fs".into(), fs_cell);
+    fields.insert("time".into(), time_cell);
+    fields.insert("net".into(), net_cell);
+    IrValue::Class(ctx.alloc(Cell::Class {
+        name: "Io".into(),
+        fields,
+    }))
+}
+
+/// 隐式环境值（对齐 oracle 隐式环境注入：alloc→Alloc、io/test_io/stdout/stderr→Io、
+/// pi→Float(PI)、Vec/Deque/Table→空 Arr、Map→空 Map）
+fn implicit_env_value(ctx: &mut Ctx, name: &str) -> IrValue {
+    match name {
+        "alloc" => IrValue::Class(ctx.alloc(Cell::Class {
+            name: "Alloc".into(),
+            fields: HashMap::new(),
+        })),
+        "io" | "test_io" | "stdout" | "stderr" => io_value_ir(ctx),
+        "pi" => IrValue::Float(std::f64::consts::PI),
+        "Vec" | "Deque" | "Table" => make_arr(ctx, Vec::new()),
+        "Map" => IrValue::Class(ctx.alloc(Cell::Class {
+            name: "Map".into(),
+            fields: HashMap::new(),
+        })),
+        _ => IrValue::Void,
+    }
+}
+
+/// 可迭代值 → 元素值数组（iter/filter/map/sort/binary_search 共用；对齐 oracle
+/// `iter_to_arr` interp.rs:1307-1357 的元素浅克隆语义）
+fn arr_items(ctx: &mut Ctx, v: &IrValue) -> R<Vec<IrValue>> {
+    match deref_value(ctx, v).clone() {
+        IrValue::Arr(c) => match &ctx.cells[c] {
+            Cell::Elems(e) => Ok(e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect()),
+            _ => Err(IrError::msg("TypeError", "bad array")),
+        },
+        IrValue::Slice { data, start, len } => match &ctx.cells[data] {
+            Cell::Elems(e) => Ok(e[start..start + len]
+                .iter()
+                .map(|ec| ctx.cell_value(*ec).clone())
+                .collect()),
+            _ => Err(IrError::msg("TypeError", "bad slice")),
+        },
+        IrValue::Str(s) => Ok(s.iter().map(|b| IrValue::Int(*b as i128)).collect()),
+        IrValue::Class(c) if class_name(ctx, c) == "Map" => {
+            let fields = match &ctx.cells[c] {
+                Cell::Class { fields, .. } => fields.clone(),
+                _ => unreachable!(),
+            };
+            let mut out = Vec::new();
+            for (k, vc) in fields {
+                let mut f = HashMap::new();
+                f.insert("key".into(), ctx.alloc(Cell::Value(str_val(&k))));
+                f.insert("value".into(), vc);
+                out.push(IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "KV".into(),
+                    fields: f,
+                })));
+            }
+            Ok(out)
+        }
+        _ => Err(IrError::msg("NotIterable", "value is not iterable")),
+    }
+}
+
+/// 任意可迭代值 → 元素数组（含用户 IIterable——复用 `make_iter` 的 next() 展开）
+fn iter_to_arr_ir(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<IrValue> {
+    let items = make_iter(ctx, module, v, depth)?;
+    let mut out = Vec::new();
+    for it in items {
+        out.push(ctx.cell_value(it.cell).clone());
+    }
+    Ok(make_arr(ctx, out))
+}
+
+/// Str/Arr/Slice → 字节（对齐 oracle `value_bytes` interp.rs:1436-1460）
+fn value_bytes_ir(ctx: &Ctx, v: &IrValue) -> Option<Vec<u8>> {
+    match deref_value(ctx, v) {
+        IrValue::Str(s) => Some(s.clone()),
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => Some(
+                e.iter()
+                    .map(|ec| match ctx.cell_value(*ec) {
+                        IrValue::Int(i) => *i as u8,
+                        _ => 0,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        },
+        IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
+            Cell::Elems(e) => {
+                let mut out = Vec::with_capacity(*len);
+                for i in 0..*len {
+                    match ctx.cell_value(e[*start + i]) {
+                        IrValue::Int(n) => out.push(*n as u8),
+                        _ => return None,
+                    }
+                }
+                Some(out)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 任意值 → 字节（标量/嵌套；Int 在 i32 范围用 4 字节——对齐 oracle `value_to_bytes`
+/// interp.rs:5345-5369；Class 无布局表 → 空（Phase 7 取舍：堆类型请用 to_json）。
+/// 当前 run_ir 侧 Str/Arr 的 to_bytes 走内联实现；本 helper 预留给 P7e LLVM 原生后端。
+#[allow(dead_code)]
+fn value_to_bytes_ir(ctx: &Ctx, v: &IrValue) -> Vec<u8> {
+    match v {
+        IrValue::Int(i) => {
+            if *i >= i32::MIN as i128 && *i <= i32::MAX as i128 {
+                (*i as i32).to_le_bytes().to_vec()
+            } else {
+                (*i as i64).to_le_bytes().to_vec()
+            }
+        }
+        IrValue::Float(f) => f.to_le_bytes().to_vec(),
+        IrValue::Bool(b) => vec![if *b { 1 } else { 0 }],
+        IrValue::Str(s) => {
+            let mut out = (s.len() as u64).to_le_bytes().to_vec();
+            out.extend_from_slice(s);
+            out
+        }
+        IrValue::Ptr(c) => value_to_bytes_ir(ctx, ctx.cell_value(*c)),
+        _ => vec![],
+    }
+}
+
+/// 任意值 → JSON 字符串（对齐 oracle `value_to_json` interp.rs:5372-5412）
+fn value_to_json_ir(ctx: &Ctx, v: &IrValue) -> String {
+    match v {
+        IrValue::Int(i) => i.to_string(),
+        IrValue::Float(f) => f.to_string(),
+        IrValue::Bool(b) => b.to_string(),
+        IrValue::Str(s) => format!(
+            "\"{}\"",
+            String::from_utf8_lossy(s)
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        ),
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => {
+                let items: Vec<String> = e
+                    .iter()
+                    .map(|ec| value_to_json_ir(ctx, ctx.cell_value(*ec)))
+                    .collect();
+                format!("[{}]", items.join(","))
+            }
+            _ => "null".into(),
+        },
+        IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
+            Cell::Elems(e) => {
+                let items: Vec<String> = e[*start..*start + *len]
+                    .iter()
+                    .map(|ec| value_to_json_ir(ctx, ctx.cell_value(*ec)))
+                    .collect();
+                format!("[{}]", items.join(","))
+            }
+            _ => "null".into(),
+        },
+        IrValue::Class(c) => {
+            let items: Vec<String> = match &ctx.cells[*c] {
+                Cell::Class { fields, .. } => fields
+                    .iter()
+                    .map(|(k, vc)| {
+                        format!("\"{k}\":{}", value_to_json_ir(ctx, ctx.cell_value(*vc)))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            format!("{{{}}}", items.join(","))
+        }
+        IrValue::Opt(Some(b)) => value_to_json_ir(ctx, b),
+        IrValue::Opt(None) => "null".into(),
+        IrValue::Ptr(c) => value_to_json_ir(ctx, ctx.cell_value(*c)),
+        IrValue::Err { name, .. } => format!("\"error.{name}\""),
+        _ => "null".into(),
+    }
+}
+
+/// @intCast 目标宽度范围（Debug 溢出检查；对齐 oracle `int_width_bounds` interp.rs:5067-5083）
+fn int_width_bounds_ir(ty: &str) -> Option<(i128, i128)> {
+    match ty {
+        "i8" => Some((i8::MIN as i128, i8::MAX as i128)),
+        "i16" => Some((i16::MIN as i128, i16::MAX as i128)),
+        "i32" => Some((i32::MIN as i128, i32::MAX as i128)),
+        "i64" => Some((i64::MIN as i128, i64::MAX as i128)),
+        "i128" => Some((i128::MIN, i128::MAX)),
+        "isize" => Some((isize::MIN as i128, isize::MAX as i128)),
+        "u8" => Some((0, u8::MAX as i128)),
+        "u16" => Some((0, u16::MAX as i128)),
+        "u32" => Some((0, u32::MAX as i128)),
+        "u64" => Some((0, u64::MAX as i128)),
+        "u128" => Some((0, u128::MAX as i128)),
+        "usize" => Some((0, usize::MAX as i128)),
+        _ => None,
+    }
+}
+
+/// @sizeOf(T) 标量表（对齐 oracle `type_size_of` interp.rs:5086-5122 的标量/引用面；
+/// 用户 class/enum 无布局表 → None）
+fn scalar_size_ir(ty: &str) -> Option<usize> {
+    match ty {
+        "i8" | "u8" | "bool" => Some(1),
+        "i16" | "u16" | "f16" => Some(2),
+        "i32" | "u32" | "f32" => Some(4),
+        "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
+        "i128" | "u128" | "f128" => Some(16),
+        "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
+        _ => None,
+    }
+}
+
+/// 调用函数值（Fn 引用 / Closure；对齐 oracle `call_closure_value` interp.rs:1504-1511）
+fn call_closure_value_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    f: &IrValue,
+    args: &[IrValue],
+) -> R<IrValue> {
+    match f {
+        IrValue::Closure { func, captures, .. } => {
+            call_closure_ir(ctx, module, *func, captures, args, 0)
+        }
+        IrValue::Fn(name) => {
+            let idx = pick_func(ctx, module, name, args)
+                .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
+            exec_func(ctx, module, idx, args, 0)
+        }
+        _ => Err(IrError::msg("TypeError", "expected function")),
+    }
+}
+
+fn call_closure_bool_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    f: &IrValue,
+    args: &[IrValue],
+) -> R<bool> {
+    Ok(call_closure_value_ir(ctx, module, f, args)?.as_bool())
+}
+
+/// io.print（对齐 oracle `call_io_print` interp.rs:4029-4087）：`{}` 与 `{x}`/`{b}`/`{s}`
+/// 占位符格式化；输出缓冲到 `ctx.out`（`execute_ir` 运行后冲刷）
+fn call_io_print_ir(ctx: &mut Ctx, args: &[IrValue]) -> R<()> {
+    if args.is_empty() {
+        return Err(IrError::msg(
+            "ArityMismatch",
+            "io.print expects a format string",
+        ));
+    }
+    let fmt = match deref_value(ctx, &args[0]) {
+        IrValue::Str(s) => s.clone(),
+        _ => return Err(IrError::msg("TypeError", "io.print expects &[u8]")),
+    };
+    let mut out = Vec::new();
+    let mut argi = 1usize;
+    let mut i = 0usize;
+    while i < fmt.len() {
+        if fmt[i] == b'{' && i + 1 < fmt.len() && fmt[i + 1] == b'}' {
+            if argi < args.len() {
+                let v = deref_value(ctx, &args[argi]);
+                out.extend_from_slice(v.display(ctx).as_bytes());
+                argi += 1;
+            }
+            i += 2;
+        } else if fmt[i] == b'{'
+            && i + 2 < fmt.len()
+            && fmt[i + 2] == b'}'
+            && (fmt[i + 1] == b'x' || fmt[i + 1] == b'b' || fmt[i + 1] == b's')
+        {
+            let spec = fmt[i + 1];
+            if argi < args.len() {
+                let v = deref_value(ctx, &args[argi]);
+                match spec {
+                    b'x' => match v {
+                        IrValue::Int(n) => out.extend_from_slice(format!("{n:x}").as_bytes()),
+                        _ => out.extend_from_slice(v.display(ctx).as_bytes()),
+                    },
+                    b'b' => match v {
+                        IrValue::Int(n) => out.extend_from_slice(format!("{n:b}").as_bytes()),
+                        _ => out.extend_from_slice(v.display(ctx).as_bytes()),
+                    },
+                    _ => out.extend_from_slice(v.display(ctx).as_bytes()),
+                }
+                argi += 1;
+            }
+            i += 3;
+        } else {
+            out.push(fmt[i]);
+            i += 1;
+        }
+    }
+    ctx.out.extend_from_slice(&out);
+    Ok(())
+}
+
+/// 标量方法（ICompare/INumber 族内建：add/sub/mul/div/neg/mod/abs/eq/lt/pow；
+/// 对齐 oracle `call_scalar_method` interp.rs:3408-3509）
+fn call_scalar_method_ir(
+    ctx: &Ctx,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    // 一元整数操作
+    if args.is_empty() {
+        if let IrValue::Int(a) = self_v {
+            let v = match field {
+                "neg" => Some(IrValue::Int(-*a)),
+                "abs" => Some(IrValue::Int(a.abs())),
+                _ => None,
+            };
+            if let Some(v) = v {
+                return Ok(Some(v));
+            }
+        }
+    }
+    // 二元整数操作（保持整数语义：div 截断、mod 取余、溢出检查）
+    if args.len() == 1 {
+        let b = deref_value(ctx, &args[0]);
+        if let (IrValue::Int(a), IrValue::Int(b)) = (self_v, b) {
+            let v = match field {
+                "add" => Some(IrValue::Int(
+                    a.checked_add(*b)
+                        .ok_or_else(|| IrError::msg("Overflow", "integer overflow"))?,
+                )),
+                "sub" => Some(IrValue::Int(
+                    a.checked_sub(*b)
+                        .ok_or_else(|| IrError::msg("Overflow", "integer overflow"))?,
+                )),
+                "mul" => Some(IrValue::Int(
+                    a.checked_mul(*b)
+                        .ok_or_else(|| IrError::msg("Overflow", "integer overflow"))?,
+                )),
+                "div" => {
+                    if *b == 0 {
+                        return Err(IrError::msg("DivisionByZero", "division by zero"));
+                    }
+                    Some(IrValue::Int(a / b))
+                }
+                "mod" => {
+                    if *b == 0 {
+                        return Err(IrError::msg("DivisionByZero", "modulo by zero"));
+                    }
+                    Some(IrValue::Int(a % b))
+                }
+                "eq" => Some(IrValue::Bool(a == b)),
+                "lt" => Some(IrValue::Bool(a < b)),
+                _ => None,
+            };
+            if let Some(v) = v {
+                return Ok(Some(v));
+            }
+        }
+    }
+    // 浮点路径（混合 Int/Float 也走此路径）
+    let v = match self_v {
+        IrValue::Int(i) => *i as f64,
+        IrValue::Float(f) => *f,
+        _ => return Ok(None),
+    };
+    let arg_num = |ix: usize| -> R<f64> {
+        let a = args
+            .get(ix)
+            .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
+        match deref_value(ctx, a) {
+            IrValue::Int(i) => Ok(*i as f64),
+            IrValue::Float(f) => Ok(*f),
+            _ => Err(IrError::msg("TypeError", "expected number")),
+        }
+    };
+    let r = match field {
+        "add" => v + arg_num(0)?,
+        "sub" => v - arg_num(0)?,
+        "mul" => v * arg_num(0)?,
+        "div" => v / arg_num(0)?,
+        "mod" => v % arg_num(0)?,
+        "neg" => -v,
+        "abs" => v.abs(),
+        "pow" => v.powf(arg_num(0)?),
+        "eq" | "lt" => {
+            let other = arg_num(0)?;
+            let b = match field {
+                "eq" => v == other,
+                _ => v < other,
+            };
+            return Ok(Some(IrValue::Bool(b)));
+        }
+        _ => return Ok(None),
+    };
+    // 整数保持整数（无小数部分时）
+    if r.fract() == 0.0 && r.is_finite() && r.abs() < 9e18 {
+        Ok(Some(IrValue::Int(r as i128)))
+    } else {
+        Ok(Some(IrValue::Float(r)))
+    }
+}
+
+// ---- 解析器辅助内建（71：peek/advance/expect/skip_space/is_digit/parse_number）----
+
+fn parser_bytes(ctx: &Ctx, args: &[IrValue], ix: usize) -> R<Vec<u8>> {
+    let v = args
+        .get(ix)
+        .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
+    match deref_value(ctx, v) {
+        IrValue::Str(s) => Ok(s.clone()),
+        IrValue::Ptr(c) => match ctx.cell_value(*c) {
+            IrValue::Str(s) => Ok(s.clone()),
+            _ => Err(IrError::msg("TypeError", "expected bytes")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected bytes")),
+    }
+}
+
+fn parser_pos(ctx: &Ctx, args: &[IrValue], ix: usize) -> R<usize> {
+    let v = args
+        .get(ix)
+        .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
+    match deref_value(ctx, v) {
+        IrValue::Ptr(c) => Ok(*c),
+        _ => Err(IrError::msg("TypeError", "expected pointer")),
+    }
+}
+
+fn parser_pos_int(ctx: &Ctx, cell: usize) -> R<i128> {
+    match ctx.cell_value(cell) {
+        IrValue::Int(i) => Ok(*i),
+        _ => Err(IrError::msg("TypeError", "expected int position")),
+    }
+}
+
+/// 对齐 oracle `call_parser_builtin` interp.rs:4656-4769
+fn call_parser_builtin_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    name: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let _ = module;
+    match name {
+        "skip_space" => {
+            let data = parser_bytes(ctx, args, 0)?;
+            let pc = parser_pos(ctx, args, 1)?;
+            let mut i = parser_pos_int(ctx, pc)? as usize;
+            while i < data.len() && data[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            ctx.set_cell(pc, IrValue::Int(i as i128));
+            Ok(Some(IrValue::Void))
+        }
+        "peek" => {
+            let data = parser_bytes(ctx, args, 0)?;
+            let pc = parser_pos(ctx, args, 1)?;
+            let i = parser_pos_int(ctx, pc)? as usize;
+            Ok(Some(if i < data.len() {
+                IrValue::Opt(Some(Box::new(IrValue::Int(data[i] as i128))))
+            } else {
+                IrValue::Opt(None)
+            }))
+        }
+        "advance" => {
+            let pc = parser_pos(ctx, args, 1)?;
+            let i = parser_pos_int(ctx, pc)?;
+            ctx.set_cell(pc, IrValue::Int(i + 1));
+            Ok(Some(IrValue::Void))
+        }
+        "expect" => {
+            let data = parser_bytes(ctx, args, 0)?;
+            let pc = parser_pos(ctx, args, 1)?;
+            let want = match deref_value(
+                ctx,
+                args.get(2)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "expect"))?,
+            ) {
+                IrValue::Int(i) => *i as u8,
+                _ => return Err(IrError::msg("TypeError", "expected byte")),
+            };
+            let i = parser_pos_int(ctx, pc)? as usize;
+            if i < data.len() && data[i] == want {
+                ctx.set_cell(pc, IrValue::Int(i as i128 + 1));
+                Ok(Some(IrValue::Void))
+            } else {
+                Err(IrError::msg("UnexpectedToken", "expect: unexpected token"))
+            }
+        }
+        "is_digit" => {
+            let v = deref_value(
+                ctx,
+                args.get(0)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "is_digit"))?,
+            )
+            .clone();
+            match v {
+                IrValue::Int(i) => Ok(Some(IrValue::Bool((i as u8 as char).is_ascii_digit()))),
+                _ => Err(IrError::msg("TypeError", "expected int")),
+            }
+        }
+        "parse_number" => {
+            let data = parser_bytes(ctx, args, 0)?;
+            let pc = parser_pos(ctx, args, 1)?;
+            let mut i = parser_pos_int(ctx, pc)? as usize;
+            let start = i;
+            while i < data.len() && data[i].is_ascii_digit() {
+                i += 1;
+            }
+            let n: i128 = String::from_utf8_lossy(&data[start..i]).parse().unwrap_or(0);
+            ctx.set_cell(pc, IrValue::Int(i as i128));
+            Ok(Some(IrValue::Int(n)))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- 数据/路径参数辅助 ----
+
+fn str_arg_ir(ctx: &Ctx, args: &[IrValue], i: usize) -> R<Vec<u8>> {
+    let a = args
+        .get(i)
+        .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
+    match deref_value(ctx, a) {
+        IrValue::Str(s) => Ok(s.clone()),
+        _ => Err(IrError::msg("TypeError", "expected &[u8]")),
+    }
+}
+
+fn path_arg_ir(ctx: &Ctx, args: &[IrValue], i: usize) -> R<String> {
+    Ok(String::from_utf8_lossy(&str_arg_ir(ctx, args, i)?).into_owned())
+}
+
+fn int_arg_ir(ctx: &Ctx, args: &[IrValue], i: usize) -> R<i128> {
+    let a = args
+        .get(i)
+        .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
+    match deref_value(ctx, a) {
+        IrValue::Int(n) => Ok(*n),
+        _ => Err(IrError::msg("TypeError", "expected int")),
+    }
+}
+
+// ---- File/网络句柄 ----
+
+fn file_fd_ir(ctx: &Ctx, v: &IrValue) -> R<i64> {
+    match deref_value(ctx, v) {
+        IrValue::Class(c) if class_name(ctx, *c) == "File" => match &ctx.cells[*c] {
+            Cell::Class { fields, .. } => match fields.get("_fd") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(fd) => Ok(*fd as i64),
+                    _ => Err(IrError::msg("BadFd", "bad file descriptor")),
+                },
+                _ => Err(IrError::msg("BadFd", "bad file descriptor")),
+            },
+            _ => Err(IrError::msg("BadFd", "bad file descriptor")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected File")),
+    }
+}
+
+fn net_fd_ir(ctx: &Ctx, v: &IrValue) -> R<i64> {
+    match deref_value(ctx, v) {
+        IrValue::Class(c) => match &ctx.cells[*c] {
+            Cell::Class { fields, .. } => match fields.get("fd") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(fd) => Ok(*fd as i64),
+                    _ => Err(IrError::msg("BadFd", "bad net descriptor")),
+                },
+                _ => Err(IrError::msg("BadFd", "bad net descriptor")),
+            },
+            _ => Err(IrError::msg("BadFd", "bad net descriptor")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected connection")),
+    }
+}
+
+fn io_error_name_ir(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "NotFound".into(),
+        std::io::ErrorKind::PermissionDenied => "PermissionDenied".into(),
+        _ => "Io".into(),
+    }
+}
+
+fn register_file_ir(ctx: &mut Ctx, f: std::fs::File) -> IrValue {
+    let fd = ctx.next_fd;
+    ctx.next_fd += 1;
+    ctx.files.insert(fd, f);
+    let mut fields = HashMap::new();
+    fields.insert(
+        "_fd".into(),
+        ctx.alloc(Cell::Value(IrValue::Int(fd as i128))),
+    );
+    IrValue::Class(ctx.alloc(Cell::Class {
+        name: "File".into(),
+        fields,
+    }))
+}
+
+// ---- io.fs / io.time / io.net 方法族（对齐 oracle call_fs_method 等）----
+
+fn call_fs_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "open" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+            {
+                Ok(f) => Ok(Some(register_file_ir(ctx, f))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "create" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)
+            {
+                Ok(f) => Ok(Some(register_file_ir(ctx, f))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "read_file" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            match std::fs::read(&path) {
+                Ok(b) => Ok(Some(str_bytes_val(b))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "read_all" => {
+            let f = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "read_all"))?;
+            let fd = file_fd_ir(ctx, f)?;
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            file.seek(std::io::SeekFrom::Start(0))
+                .map_err(|e| IrError::msg("Io", format!("seek: {e}")))?;
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
+                .map_err(|e| IrError::msg("Io", format!("read: {e}")))?;
+            Ok(Some(str_bytes_val(buf)))
+        }
+        "write_all" => {
+            let f = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "write_all"))?;
+            let fd = file_fd_ir(ctx, f)?;
+            let data = str_arg_ir(ctx, args, 1)?;
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            file.write_all(&data)
+                .map_err(|e| IrError::msg("Io", format!("write: {e}")))?;
+            Ok(Some(IrValue::Void))
+        }
+        "append" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            let data = str_arg_ir(ctx, args, 1)?;
+            match std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    f.write_all(&data)
+                        .map_err(|e| IrError::msg("Io", format!("append: {e}")))?;
+                    Ok(Some(IrValue::Void))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "remove" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            match std::fs::remove_file(&path) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "rename" => {
+            let from = path_arg_ir(ctx, args, 0)?;
+            let to = path_arg_ir(ctx, args, 1)?;
+            match std::fs::rename(&from, &to) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "read_int" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            match std::fs::read(&path) {
+                Ok(b) => match String::from_utf8_lossy(&b).trim().parse::<i64>() {
+                    Ok(n) => Ok(Some(IrValue::Int(n as i128))),
+                    Err(_) => Ok(Some(err_val(module, "InvalidFormat"))),
+                },
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "write_int" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            let v = int_arg_ir(ctx, args, 1)?;
+            match std::fs::write(&path, v.to_string().as_bytes()) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "list_dir" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            match std::fs::read_dir(&path) {
+                Ok(rd) => {
+                    let names: Vec<IrValue> = rd
+                        .flatten()
+                        .map(|e| str_val(&e.file_name().to_string_lossy()))
+                        .collect();
+                    Ok(Some(make_arr(ctx, names)))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_file_method_ir(
+    ctx: &mut Ctx,
+    _module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let fd = file_fd_ir(ctx, self_v)?;
+    match field {
+        "close" => {
+            ctx.files.remove(&fd);
+            Ok(Some(IrValue::Void))
+        }
+        "write_all" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            file.write_all(&data)
+                .map_err(|e| IrError::msg("Io", format!("write: {e}")))?;
+            Ok(Some(IrValue::Void))
+        }
+        "read_all" => {
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            file.seek(std::io::SeekFrom::Start(0))
+                .map_err(|e| IrError::msg("Io", format!("seek: {e}")))?;
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
+                .map_err(|e| IrError::msg("Io", format!("read: {e}")))?;
+            Ok(Some(str_bytes_val(buf)))
+        }
+        "seek" => {
+            let off = int_arg_ir(ctx, args, 0)?;
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            file.seek(std::io::SeekFrom::Start(off.max(0) as u64))
+                .map_err(|e| IrError::msg("Io", format!("seek: {e}")))?;
+            Ok(Some(IrValue::Void))
+        }
+        "pos" => {
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            let pos = file
+                .stream_position()
+                .map_err(|e| IrError::msg("Io", format!("pos: {e}")))?;
+            Ok(Some(IrValue::Int(pos as i128)))
+        }
+        "read_at" => {
+            let off = int_arg_ir(ctx, args, 0)?;
+            let len = int_arg_ir(ctx, args, 1)?.max(0) as usize;
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            let saved = file
+                .stream_position()
+                .map_err(|e| IrError::msg("Io", format!("pos: {e}")))?;
+            file.seek(std::io::SeekFrom::Start(off.max(0) as u64))
+                .map_err(|e| IrError::msg("Io", format!("seek: {e}")))?;
+            let mut buf = vec![0u8; len];
+            let k = file
+                .read(&mut buf)
+                .map_err(|e| IrError::msg("Io", format!("read: {e}")))?;
+            buf.truncate(k);
+            let _ = file.seek(std::io::SeekFrom::Start(saved));
+            Ok(Some(str_bytes_val(buf)))
+        }
+        "write_at" => {
+            let off = int_arg_ir(ctx, args, 0)?;
+            let data = str_arg_ir(ctx, args, 1)?;
+            let file = ctx
+                .files
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad file"))?;
+            let saved = file
+                .stream_position()
+                .map_err(|e| IrError::msg("Io", format!("pos: {e}")))?;
+            file.seek(std::io::SeekFrom::Start(off.max(0) as u64))
+                .map_err(|e| IrError::msg("Io", format!("seek: {e}")))?;
+            file.write_all(&data)
+                .map_err(|e| IrError::msg("Io", format!("write: {e}")))?;
+            let _ = file.seek(std::io::SeekFrom::Start(saved));
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_time_method_ir(
+    ctx: &mut Ctx,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "now" => {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i128;
+            Ok(Some(IrValue::Int(ms)))
+        }
+        "sleep" => {
+            let ms = int_arg_ir(ctx, args, 0)?;
+            std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_net_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "connect" => {
+            let host = str_arg_ir(ctx, args, 0)?;
+            let port = int_arg_ir(ctx, args, 1)? as u16;
+            let host = String::from_utf8_lossy(&host).to_string();
+            match std::net::TcpStream::connect((host.as_str(), port)) {
+                Ok(stream) => {
+                    let fd = ctx.next_net_fd;
+                    ctx.next_net_fd += 1;
+                    let _ = stream.set_nodelay(true);
+                    ctx.tcp_streams.insert(fd, stream);
+                    let mut fields = HashMap::new();
+                    fields.insert(
+                        "fd".into(),
+                        ctx.alloc(Cell::Value(IrValue::Int(fd as i128))),
+                    );
+                    Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: "TcpConn".into(),
+                        fields,
+                    }))))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "listen" => {
+            let host = str_arg_ir(ctx, args, 0)?;
+            let port = int_arg_ir(ctx, args, 1)? as u16;
+            let host = String::from_utf8_lossy(&host).to_string();
+            let addr = format!("{host}:{port}");
+            match std::net::TcpListener::bind(&addr) {
+                Ok(listener) => {
+                    let fd = ctx.next_net_fd;
+                    ctx.next_net_fd += 1;
+                    ctx.tcp_listeners.insert(fd, listener);
+                    let mut fields = HashMap::new();
+                    fields.insert(
+                        "fd".into(),
+                        ctx.alloc(Cell::Value(IrValue::Int(fd as i128))),
+                    );
+                    Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: "TcpListener".into(),
+                        fields,
+                    }))))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_conn_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let fd = net_fd_ir(ctx, self_v)?;
+    match field {
+        "write" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let stream = ctx
+                .tcp_streams
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad conn"))?;
+            match stream.write_all(&data) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "read" => {
+            let n = int_arg_ir(ctx, args, 0)?.max(0) as usize;
+            let stream = ctx
+                .tcp_streams
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad conn"))?;
+            let mut buf = vec![0u8; n];
+            match stream.read(&mut buf) {
+                Ok(0) => Ok(Some(str_bytes_val(vec![]))),
+                Ok(k) => {
+                    buf.truncate(k);
+                    Ok(Some(str_bytes_val(buf)))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "read_all" => {
+            let stream = ctx
+                .tcp_streams
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad conn"))?;
+            let mut buf = Vec::new();
+            match stream.read_to_end(&mut buf) {
+                Ok(_) => Ok(Some(str_bytes_val(buf))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "write_u32_le" => {
+            let n = int_arg_ir(ctx, args, 0)?;
+            let stream = ctx
+                .tcp_streams
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad conn"))?;
+            match stream.write_all(&(n as u32).to_le_bytes()) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "read_u32_le" => {
+            let stream = ctx
+                .tcp_streams
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad conn"))?;
+            let mut buf = [0u8; 4];
+            match stream.read_exact(&mut buf) {
+                Ok(_) => Ok(Some(IrValue::Int(u32::from_le_bytes(buf) as i128))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "shutdown" => {
+            let stream = ctx
+                .tcp_streams
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad conn"))?;
+            match stream.shutdown(std::net::Shutdown::Write) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "close" => {
+            ctx.tcp_streams.remove(&fd);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_listener_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let _ = args;
+    let fd = net_fd_ir(ctx, self_v)?;
+    match field {
+        "local_port" => {
+            let listener = ctx
+                .tcp_listeners
+                .get(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad listener"))?;
+            match listener.local_addr() {
+                Ok(addr) => Ok(Some(IrValue::Int(addr.port() as i128))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "accept" => {
+            let listener = ctx
+                .tcp_listeners
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad listener"))?;
+            match listener.accept() {
+                Ok((stream, _peer)) => {
+                    let cfd = ctx.next_net_fd;
+                    ctx.next_net_fd += 1;
+                    let _ = stream.set_nodelay(true);
+                    ctx.tcp_streams.insert(cfd, stream);
+                    let mut fields = HashMap::new();
+                    fields.insert(
+                        "fd".into(),
+                        ctx.alloc(Cell::Value(IrValue::Int(cfd as i128))),
+                    );
+                    Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: "TcpConn".into(),
+                        fields,
+                    }))))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "close" => {
+            ctx.tcp_listeners.remove(&fd);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_map_method_ir(
     ctx: &mut Ctx,
     self_v: &IrValue,
     method: &str,
     args: &[IrValue],
 ) -> R<Option<IrValue>> {
-    let self_v = deref_value(ctx, self_v);
-    let r = match (self_v, method) {
-        (IrValue::Int(a), "add") => {
-            let b = match deref_value(ctx, args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "add"))?) {
-                IrValue::Int(b) => *b,
-                _ => return Err(IrError::msg("TypeError", "add expects int")),
-            };
-            IrValue::Int(*a + b)
-        }
-        (IrValue::Float(a), "add") => {
-            let b = match deref_value(ctx, args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "add"))?) {
-                IrValue::Float(b) => *b,
-                _ => return Err(IrError::msg("TypeError", "add expects float")),
-            };
-            IrValue::Float(*a + b)
-        }
-        (IrValue::Str(s), "concat") => {
-            let mut out = s.clone();
-            for a in args {
-                match deref_value(ctx, a) {
-                    IrValue::Str(bs) => out.extend_from_slice(bs),
-                    other => out.extend_from_slice(other.display(ctx).as_bytes()),
-                }
-            }
-            IrValue::Str(out)
-        }
-        (IrValue::Str(s), "len") => IrValue::Int(s.len() as i128),
-        (IrValue::Str(s), "as_slice") => {
-            let bytes = s.clone();
-            let elems: Vec<usize> = bytes
-                .iter()
-                .map(|b| ctx.alloc(Cell::Value(IrValue::Int(*b as i128))))
-                .collect();
-            let data = ctx.alloc(Cell::Elems(elems));
-            IrValue::Slice {
-                data,
-                start: 0,
-                len: bytes.len(),
-            }
-        }
-        (IrValue::Arr(c), "len") => IrValue::Int(ctx.elems_len(*c) as i128),
-        (IrValue::Slice { len, .. }, "len") => IrValue::Int(*len as i128),
+    let c = match self_v {
+        IrValue::Class(c) => *c,
         _ => return Ok(None),
     };
-    Ok(Some(r))
+    match method {
+        "put" => {
+            let k = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "put"))?;
+            let v = args
+                .get(1)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "put"))?;
+            let key = deref_value(ctx, k).display(ctx);
+            let nc = ctx.alloc(Cell::Value(v.clone()));
+            match &mut ctx.cells[c] {
+                Cell::Class { fields, .. } => {
+                    fields.insert(key, nc);
+                    Ok(Some(IrValue::Void))
+                }
+                _ => Err(IrError::msg("TypeError", "put expects Map")),
+            }
+        }
+        "get" => {
+            let k = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "get"))?;
+            let key = deref_value(ctx, k).display(ctx);
+            let v = match &ctx.cells[c] {
+                Cell::Class { fields, .. } => fields.get(&key).map(|fc| ctx.cell_value(*fc).clone()),
+                _ => None,
+            };
+            Ok(Some(opt_val(v)))
+        }
+        "contains" => {
+            let k = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "contains"))?;
+            let key = deref_value(ctx, k).display(ctx);
+            let b = match &ctx.cells[c] {
+                Cell::Class { fields, .. } => fields.contains_key(&key),
+                _ => false,
+            };
+            Ok(Some(IrValue::Bool(b)))
+        }
+        "remove" => {
+            let k = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "remove"))?;
+            let key = deref_value(ctx, k).display(ctx);
+            match &mut ctx.cells[c] {
+                Cell::Class { fields, .. } => {
+                    fields.remove(&key);
+                    Ok(Some(IrValue::Void))
+                }
+                _ => Err(IrError::msg("TypeError", "remove expects Map")),
+            }
+        }
+        "len" => {
+            let n = match &ctx.cells[c] {
+                Cell::Class { fields, .. } => fields.len(),
+                _ => 0,
+            };
+            Ok(Some(IrValue::Int(n as i128)))
+        }
+        // Map.iter() → KV 条目数组（key/value 字段，与 for |kv| 捕获一致；
+        // 对齐 oracle `call_builtin_method` 的 `(_, "iter")` 分支）
+        "iter" => {
+            let items = arr_items(ctx, self_v)?;
+            Ok(Some(make_arr(ctx, items)))
+        }
+        "to_json" => Ok(Some(str_val(&value_to_json_ir(ctx, self_v)))),
+        "from_json" => {
+            let json = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "from_json"))?;
+            let s = str_arg_ir(ctx, &[json.clone()], 0)?;
+            let obj = parse_json_obj_ir(ctx, &String::from_utf8_lossy(&s))?;
+            let mut fields = HashMap::new();
+            for (k, v) in obj {
+                fields.insert(k, ctx.alloc(Cell::Value(v)));
+            }
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Map".into(),
+                fields,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn call_alloc_method_ir(
+    ctx: &mut Ctx,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match method {
+        // alloc.init(T)：类型名参数建空实例（tag1 IR 无布局表——字段型构造请用
+        // 字面量 `alloc.init(T{...})`；对齐 oracle interp.rs:3865-3891 的 Ident 分支）。
+        // 实参已是类实例（字面量构造）→ 原样返回（对齐 oracle 字面量分支）。
+        "init" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "alloc.init expects 1 arg"));
+            }
+            match deref_value(ctx, &args[0]).clone() {
+                IrValue::Str(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                    name: String::from_utf8_lossy(&s).to_string(),
+                    fields: HashMap::new(),
+                })))),
+                IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
+                _ => Err(IrError::msg("TypeError", "alloc.init expects type name or literal")),
+            }
+        }
+        "alloc" => {
+            let n = int_arg_ir(ctx, args, 0)?;
+            Ok(Some(str_bytes_val(vec![0u8; n.max(0) as usize])))
+        }
+        "deinit" => Ok(Some(IrValue::Void)),
+        _ => Ok(None),
+    }
+}
+
+fn call_arena_method_ir(
+    ctx: &mut Ctx,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match method {
+        "alloc" => {
+            if let Some(a) = args.first() {
+                if matches!(deref_value(ctx, a), IrValue::Int(_)) {
+                    let n = int_arg_ir(ctx, args, 0)?;
+                    return Ok(Some(str_bytes_val(vec![0u8; n.max(0) as usize])));
+                }
+            }
+            Ok(args.first().cloned())
+        }
+        "init" => Ok(Some(IrValue::Void)),
+        _ => Ok(None),
+    }
+}
+
+fn call_io_method_ir(
+    ctx: &mut Ctx,
+    _module: &IrModule,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match method {
+        "print" => {
+            call_io_print_ir(ctx, args)?;
+            Ok(Some(IrValue::Void))
+        }
+        // io.exit(ExitType, code)：正常退出信号（execute_ir 视 ExitRequested 为成功）
+        "exit" => {
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", "io.exit expects 2 args"));
+            }
+            let t = deref_value(ctx, &args[0]);
+            let code = match deref_value(ctx, &args[1]) {
+                IrValue::Int(i) => (*i).clamp(0, 255) as u8,
+                _ => return Err(IrError::msg("TypeError", "io.exit expects int code")),
+            };
+            let is_error = matches!(t, IrValue::Enum { variant, .. } if variant == "Error");
+            if is_error {
+                eprintln!("error: program exited with code {code}");
+            }
+            Err(IrError::msg("ExitRequested", format!("code {code}")))
+        }
+        "stdin" => {
+            let mut line = String::new();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => Ok(Some(str_val(""))),
+                Ok(_) => {
+                    let trimmed = line.trim_end_matches(['\n', '\r']);
+                    Ok(Some(str_val(trimmed)))
+                }
+            }
+        }
+        "args" => Ok(Some(make_arr(
+            ctx,
+            ctx.args.iter().map(|a| IrValue::Str(a.clone())).collect(),
+        ))),
+        "env" => {
+            let name = str_arg_ir(ctx, args, 0)?;
+            match std::env::var(String::from_utf8_lossy(&name).as_ref()) {
+                Ok(v) => Ok(Some(opt_val(Some(str_val(&v))))),
+                Err(_) => Ok(Some(IrValue::Opt(None))),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- JSON 解析（Map.from_json / json.parse；对齐 oracle parse_json_*）----
+
+fn parse_json_value_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
+    let s = s.trim_start();
+    match s.as_bytes().first().copied() {
+        Some(b'{') => parse_json_object_ir(ctx, s),
+        Some(b'[') => parse_json_array_ir(ctx, s),
+        Some(b'"') => parse_json_string_ir(s),
+        Some(b't') if s.starts_with("true") => Ok((IrValue::Bool(true), 4)),
+        Some(b'f') if s.starts_with("false") => Ok((IrValue::Bool(false), 5)),
+        Some(b'n') if s.starts_with("null") => Ok((IrValue::Opt(None), 4)),
+        Some(c) if c == b'-' || c.is_ascii_digit() => parse_json_number_ir(s),
+        _ => Err(IrError::msg("InvalidJson", "unexpected token")),
+    }
+}
+
+fn parse_json_object_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
+    let b = s.as_bytes();
+    let mut fields: HashMap<String, usize> = HashMap::new();
+    let mut pos = 1usize;
+    loop {
+        while pos < b.len() && b[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= b.len() {
+            return Err(IrError::msg("InvalidJson", "unterminated object"));
+        }
+        if b[pos] == b'}' {
+            let class = IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Map".into(),
+                fields,
+            }));
+            return Ok((class, pos + 1));
+        }
+        if b[pos] != b'"' {
+            return Err(IrError::msg("InvalidJson", "expected string key"));
+        }
+        let (key, klen) = parse_json_string_ir(&s[pos..])?;
+        pos += klen;
+        while pos < b.len() && b[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= b.len() || b[pos] != b':' {
+            return Err(IrError::msg("InvalidJson", "expected ':'"));
+        }
+        pos += 1;
+        let (val, vlen) = parse_json_value_ir(ctx, &s[pos..])?;
+        pos += vlen;
+        if let IrValue::Str(ks) = key {
+            fields.insert(String::from_utf8_lossy(&ks).to_string(), ctx.alloc(Cell::Value(val)));
+        }
+        while pos < b.len() && b[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        match b.get(pos).copied() {
+            Some(b',') => pos += 1,
+            Some(b'}') => {
+                let class = IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "Map".into(),
+                    fields,
+                }));
+                return Ok((class, pos + 1));
+            }
+            _ => return Err(IrError::msg("InvalidJson", "expected ',' or '}'")),
+        }
+    }
+}
+
+fn parse_json_array_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
+    let b = s.as_bytes();
+    let mut items: Vec<IrValue> = Vec::new();
+    let mut pos = 1usize;
+    loop {
+        while pos < b.len() && b[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= b.len() {
+            return Err(IrError::msg("InvalidJson", "unterminated array"));
+        }
+        if b[pos] == b']' {
+            return Ok((make_arr(ctx, items), pos + 1));
+        }
+        let (val, vlen) = parse_json_value_ir(ctx, &s[pos..])?;
+        pos += vlen;
+        items.push(val);
+        while pos < b.len() && b[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        match b.get(pos).copied() {
+            Some(b',') => pos += 1,
+            Some(b']') => return Ok((make_arr(ctx, items), pos + 1)),
+            _ => return Err(IrError::msg("InvalidJson", "expected ',' or ']'")),
+        }
+    }
+}
+
+fn parse_json_string_ir(s: &str) -> R<(IrValue, usize)> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 1usize;
+    while i < b.len() {
+        match b[i] {
+            b'"' => return Ok((IrValue::Str(out), i + 1)),
+            b'\\' => {
+                i += 1;
+                if i >= b.len() {
+                    return Err(IrError::msg("InvalidJson", "bad escape"));
+                }
+                match b[i] {
+                    b'"' => out.push(b'"'),
+                    b'\\' => out.push(b'\\'),
+                    b'/' => out.push(b'/'),
+                    b'n' => out.push(b'\n'),
+                    b't' => out.push(b'\t'),
+                    b'r' => out.push(b'\r'),
+                    _ => return Err(IrError::msg("InvalidJson", "unknown escape")),
+                }
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    Err(IrError::msg("InvalidJson", "unterminated string"))
+}
+
+fn parse_json_number_ir(s: &str) -> R<(IrValue, usize)> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    while i < b.len()
+        && (b[i].is_ascii_digit() || matches!(b[i], b'-' | b'+' | b'.' | b'e' | b'E'))
+    {
+        i += 1;
+    }
+    let text = &s[..i];
+    let v = if text.contains('.') || text.contains('e') || text.contains('E') {
+        IrValue::Float(
+            text.parse::<f64>()
+                .map_err(|_| IrError::msg("InvalidJson", "bad number"))?,
+        )
+    } else {
+        match text.parse::<i128>() {
+            Ok(n) => IrValue::Int(n),
+            Err(_) => IrValue::Float(
+                text.parse::<f64>()
+                    .map_err(|_| IrError::msg("InvalidJson", "bad number"))?,
+            ),
+        }
+    };
+    Ok((v, i))
+}
+
+fn parse_json_obj_ir(ctx: &mut Ctx, s: &str) -> R<HashMap<String, IrValue>> {
+    let (v, _) = parse_json_value_ir(ctx, s)?;
+    match v {
+        IrValue::Class(c) => match &ctx.cells[c] {
+            Cell::Class { fields, .. } => Ok(fields
+                .iter()
+                .map(|(k, vc)| (k.clone(), ctx.cell_value(*vc).clone()))
+                .collect()),
+            _ => Ok(HashMap::new()),
+        },
+        _ => Ok(HashMap::new()),
+    }
+}
+
+/// 内建方法（对齐 oracle `call_builtin_method` interp.rs:3511-4027 全量面：标量/Str/Arr/
+/// Map/Alloc/Arena/Io/Fs/Time/Net/TcpConn/TcpListener/File + iter/filter/map + 序列化）。
+/// 返回 `Ok(None)` = 非内建方法（调用方回退到 `{Type}.{method}` 用户方法表）。
+fn call_builtin_method(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let self_v = deref_value(ctx, self_v).clone();
+    // 标量方法（INumber/ICompare 族：a.add(b) ≡ a + b）
+    if matches!(self_v, IrValue::Int(_) | IrValue::Float(_)) {
+        if let Some(v) = call_scalar_method_ir(ctx, &self_v, method, args)? {
+            return Ok(Some(v));
+        }
+    }
+    match (&self_v, method) {
+        (IrValue::Str(s), "concat") => {
+            let other = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "concat"))?;
+            match deref_value(ctx, other) {
+                IrValue::Str(os) => {
+                    let mut bytes = s.clone();
+                    bytes.extend_from_slice(os);
+                    Ok(Some(str_bytes_val(bytes)))
+                }
+                _ => Err(IrError::msg("TypeError", "concat expects &[u8]")),
+            }
+        }
+        (IrValue::Str(s), "as_slice") => Ok(Some(IrValue::Str(s.clone()))),
+        (IrValue::Str(s), "split") => {
+            let sep_v = deref_value(
+                ctx,
+                args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "split"))?,
+            )
+            .clone();
+            let sep = match sep_v {
+                IrValue::Int(i) => vec![i as u8],
+                IrValue::Str(ss) => ss,
+                _ => return Err(IrError::msg("TypeError", "split expects byte or bytes")),
+            };
+            let data = s.clone();
+            let mut out = Vec::new();
+            if sep.is_empty() {
+                return Ok(Some(make_arr(ctx, vec![str_bytes_val(data)])));
+            }
+            let mut start = 0usize;
+            let mut i = 0usize;
+            while i + sep.len() <= data.len() {
+                if &data[i..i + sep.len()] == sep.as_slice() {
+                    out.push(str_bytes_val(data[start..i].to_vec()));
+                    i += sep.len();
+                    start = i;
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(str_bytes_val(data[start..].to_vec()));
+            Ok(Some(make_arr(ctx, out)))
+        }
+        (IrValue::Str(s), "to_bytes") => {
+            let mut out = (s.len() as u64).to_le_bytes().to_vec();
+            out.extend_from_slice(s);
+            Ok(Some(str_bytes_val(out)))
+        }
+        (IrValue::Str(s), "find") => {
+            let needle_v = deref_value(
+                ctx,
+                args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "find"))?,
+            )
+            .clone();
+            let needle_bytes: Vec<u8> = match needle_v {
+                IrValue::Str(n) => n,
+                IrValue::Int(i) => vec![i as u8],
+                _ => return Err(IrError::msg("TypeError", "find expects byte or bytes")),
+            };
+            let data = s.clone();
+            let pos = if needle_bytes.is_empty() {
+                Some(0usize)
+            } else {
+                data.windows(needle_bytes.len())
+                    .position(|w| w == needle_bytes.as_slice())
+            };
+            Ok(Some(match pos {
+                Some(p) => IrValue::Opt(Some(Box::new(IrValue::Int(p as i128)))),
+                None => IrValue::Opt(None),
+            }))
+        }
+        (IrValue::Str(s), "substring") => {
+            let lo = int_arg_ir(ctx, args, 0)?;
+            let hi = int_arg_ir(ctx, args, 1)?;
+            let (lo, hi) = (lo.max(0) as usize, hi.max(0) as usize);
+            let hi = hi.min(s.len());
+            let sub = s[lo.min(hi)..hi].to_vec();
+            Ok(Some(str_bytes_val(sub)))
+        }
+        (IrValue::Str(s), "replace") => {
+            let from_b = str_arg_ir(ctx, args, 0)?;
+            let to_b = str_arg_ir(ctx, args, 1)?;
+            let data = s.clone();
+            let mut out = Vec::new();
+            let mut i = 0usize;
+            while i < data.len() {
+                if from_b.is_empty() {
+                    out.push(data[i]);
+                    i += 1;
+                } else if i + from_b.len() <= data.len()
+                    && &data[i..i + from_b.len()] == from_b.as_slice()
+                {
+                    out.extend_from_slice(&to_b);
+                    i += from_b.len();
+                } else {
+                    out.push(data[i]);
+                    i += 1;
+                }
+            }
+            Ok(Some(str_bytes_val(out)))
+        }
+        (IrValue::Str(_), "len") => Ok(Some(IrValue::Int(self_v.display(ctx).len() as i128))),
+        (IrValue::Arr(c), "len") => Ok(Some(IrValue::Int(ctx.elems_len(*c) as i128))),
+        (IrValue::Arr(c), "append") => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "append"))?
+                .clone();
+            let nc = ctx.alloc(Cell::Value(v));
+            match &mut ctx.cells[*c] {
+                Cell::Elems(e) => e.push(nc),
+                _ => return Err(IrError::msg("TypeError", "append expects array")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        (IrValue::Arr(c), "push_back") => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "push_back"))?
+                .clone();
+            let nc = ctx.alloc(Cell::Value(v));
+            match &mut ctx.cells[*c] {
+                Cell::Elems(e) => e.push(nc),
+                _ => return Err(IrError::msg("TypeError", "push_back expects array")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        (IrValue::Arr(c), "push_front") => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "push_front"))?
+                .clone();
+            let nc = ctx.alloc(Cell::Value(v));
+            match &mut ctx.cells[*c] {
+                Cell::Elems(e) => e.insert(0, nc),
+                _ => return Err(IrError::msg("TypeError", "push_front expects array")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        (IrValue::Arr(c), "pop_back") => {
+            let popped = match &mut ctx.cells[*c] {
+                Cell::Elems(e) => e.pop(),
+                _ => None,
+            };
+            let v = popped.map(|ec| ctx.cell_value(ec).clone());
+            Ok(Some(opt_val(v)))
+        }
+        (IrValue::Arr(c), "pop_front") => {
+            let popped = match &mut ctx.cells[*c] {
+                Cell::Elems(e) => {
+                    if e.is_empty() {
+                        None
+                    } else {
+                        Some(e.remove(0))
+                    }
+                }
+                _ => None,
+            };
+            let v = popped.map(|ec| ctx.cell_value(ec).clone());
+            Ok(Some(opt_val(v)))
+        }
+        (IrValue::Arr(c), "front") => {
+            let v = match &ctx.cells[*c] {
+                Cell::Elems(e) => e.first().map(|ec| ctx.cell_value(*ec).clone()),
+                _ => None,
+            };
+            Ok(Some(opt_val(v)))
+        }
+        (IrValue::Arr(c), "back") => {
+            let v = match &ctx.cells[*c] {
+                Cell::Elems(e) => e.last().map(|ec| ctx.cell_value(*ec).clone()),
+                _ => None,
+            };
+            Ok(Some(opt_val(v)))
+        }
+        (IrValue::Arr(c), "get") => {
+            let i = as_index(
+                ctx,
+                args.get(0)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "get"))?,
+            )?;
+            let v = match &ctx.cells[*c] {
+                Cell::Elems(e) => e.get(i).map(|ec| ctx.cell_value(*ec).clone()),
+                _ => None,
+            };
+            Ok(Some(opt_val(v)))
+        }
+        (IrValue::Arr(c), "put") => {
+            let i = as_index(
+                ctx,
+                args.get(0)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "put"))?,
+            )?;
+            let v = args
+                .get(1)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "put"))?
+                .clone();
+            let nc = ctx.alloc(Cell::Value(v));
+            match &mut ctx.cells[*c] {
+                Cell::Elems(e) => {
+                    if i >= e.len() {
+                        return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+                    }
+                    e[i] = nc;
+                    Ok(Some(IrValue::Void))
+                }
+                _ => Err(IrError::msg("TypeError", "put expects array")),
+            }
+        }
+        (IrValue::Arr(c), "remove") => {
+            let i = as_index(
+                ctx,
+                args.get(0)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "remove"))?,
+            )?;
+            let removed = match &mut ctx.cells[*c] {
+                Cell::Elems(e) => {
+                    if i >= e.len() {
+                        return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+                    }
+                    Some(e.remove(i))
+                }
+                _ => None,
+            };
+            match removed {
+                Some(ec) => Ok(Some(ctx.cell_value(ec).clone())),
+                None => Err(IrError::msg("TypeError", "remove expects array")),
+            }
+        }
+        (IrValue::Arr(c), "extend") => {
+            let v = deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "extend"))?,
+            )
+            .clone();
+            match v {
+                IrValue::Arr(src) => {
+                    let src_elems = match &ctx.cells[src] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => return Err(IrError::msg("TypeError", "extend expects array")),
+                    };
+                    match &mut ctx.cells[*c] {
+                        Cell::Elems(e) => {
+                            e.extend_from_slice(&src_elems);
+                            Ok(Some(IrValue::Void))
+                        }
+                        _ => Err(IrError::msg("TypeError", "extend expects array")),
+                    }
+                }
+                IrValue::Str(b) => {
+                    let mut new_cells = Vec::new();
+                    for byte in b {
+                        new_cells.push(ctx.alloc(Cell::Value(IrValue::Int(byte as i128))));
+                    }
+                    match &mut ctx.cells[*c] {
+                        Cell::Elems(e) => {
+                            e.extend_from_slice(&new_cells);
+                            Ok(Some(IrValue::Void))
+                        }
+                        _ => Err(IrError::msg("TypeError", "extend expects array")),
+                    }
+                }
+                _ => Err(IrError::msg("TypeError", "extend expects array or bytes")),
+            }
+        }
+        (IrValue::Arr(c), "append_u64") => {
+            let n = match deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "append_u64"))?,
+            ) {
+                IrValue::Int(i) => *i as u64,
+                _ => return Err(IrError::msg("TypeError", "append_u64 expects int")),
+            };
+            let mut new_cells = Vec::new();
+            for byte in n.to_le_bytes() {
+                new_cells.push(ctx.alloc(Cell::Value(IrValue::Int(byte as i128))));
+            }
+            match &mut ctx.cells[*c] {
+                Cell::Elems(e) => {
+                    e.extend_from_slice(&new_cells);
+                    Ok(Some(IrValue::Void))
+                }
+                _ => Err(IrError::msg("TypeError", "append_u64 expects array")),
+            }
+        }
+        (IrValue::Arr(_), "init") => Ok(Some(make_arr(ctx, Vec::new()))),
+        (IrValue::Arr(_), "from_bytes") => {
+            let b = str_arg_ir(ctx, args, 0)?;
+            if b.len() < 8 {
+                return Err(IrError::msg("InvalidBytes", "truncated byte data"));
+            }
+            let n = u64::from_le_bytes(b[0..8].try_into().unwrap()) as usize;
+            let mut items = Vec::new();
+            let mut pos = 8usize;
+            for _ in 0..n {
+                let v = if b.len() >= pos + 4 {
+                    let i = i32::from_le_bytes(b[pos..pos + 4].try_into().unwrap());
+                    pos += 4;
+                    IrValue::Int(i as i128)
+                } else {
+                    break;
+                };
+                items.push(v);
+            }
+            Ok(Some(make_arr(ctx, items)))
+        }
+        (IrValue::Arr(c), "to_bytes") => {
+            // 集合 → 字节（u64 LE 元素数前缀 + 逐元素 value_to_bytes，对齐 oracle
+            // interp.rs:3959-3969）。IR 的 value_to_bytes_ir 覆盖标量/字符串子集，
+            // 聚合元素序列化为空（Phase 7 取舍）。
+            let elems = match &ctx.cells[*c] {
+                Cell::Elems(e) => e.clone(),
+                _ => return Err(IrError::msg("TypeError", "to_bytes expects array")),
+            };
+            let mut out = (elems.len() as u64).to_le_bytes().to_vec();
+            for ec in elems {
+                let v = ctx.cell_value(ec).clone();
+                out.extend(value_to_bytes_ir(ctx, &v));
+            }
+            Ok(Some(str_bytes_val(out)))
+        }
+        (IrValue::Slice { len, .. }, "len") => Ok(Some(IrValue::Int(*len as i128))),
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Map" => {
+            call_map_method_ir(ctx, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Alloc" => {
+            call_alloc_method_ir(ctx, m, args)
+        }
+        (IrValue::Class(c), m)
+            if class_name(ctx, *c) == "Arena" && matches!(m, "alloc" | "init") =>
+        {
+            call_arena_method_ir(ctx, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Io" => {
+            call_io_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Fs" => {
+            call_fs_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Time" => {
+            call_time_method_ir(ctx, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Net" => {
+            call_net_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "TcpConn" => {
+            call_conn_method_ir(ctx, module, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "TcpListener" => {
+            call_listener_method_ir(ctx, module, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "File" => {
+            call_file_method_ir(ctx, module, &self_v, m, args)
+        }
+        // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
+        (IrValue::Class(_), "to_bytes") => Err(IrError::msg(
+            "Unsupported",
+            "class to_bytes requires type layout (not in IR runtime)",
+        )),
+        (IrValue::Class(_), "to_json") => Ok(Some(str_val(&value_to_json_ir(ctx, &self_v)))),
+        (_, "iter") => Ok(Some(iter_to_arr_ir(ctx, module, &self_v, 0)?)),
+        (_, "filter") => {
+            let f = deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "filter"))?,
+            )
+            .clone();
+            let src = iter_to_arr_ir(ctx, module, &self_v, 0)?;
+            let mut out = Vec::new();
+            for item in arr_items(ctx, &src)? {
+                if call_closure_bool_ir(ctx, module, &f, &[item.clone()])? {
+                    out.push(item);
+                }
+            }
+            Ok(Some(make_arr(ctx, out)))
+        }
+        (_, "map") => {
+            let f = deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "map"))?,
+            )
+            .clone();
+            let src = iter_to_arr_ir(ctx, module, &self_v, 0)?;
+            let mut out = Vec::new();
+            for item in arr_items(ctx, &src)? {
+                let mapped = call_closure_value_ir(ctx, module, &f, &[item])?;
+                out.push(mapped);
+            }
+            Ok(Some(make_arr(ctx, out)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// 隐式环境限定名调用（io.print / io.fs.open / alloc.init…）：
+/// 根值 → 中段字段访问 → 末段方法分派（对齐 oracle eval_call 的隐式环境 + 方法分派）。
+/// `json.parse`/`csv.parse`/`String.from` 为虚拟根静态内建（非值对象）。
+fn call_dotted_implicit(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    name: &str,
+    args: &[IrValue],
+) -> R<IrValue> {
+    match name {
+        "json.parse" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let obj = parse_json_obj_ir(ctx, &String::from_utf8_lossy(&data))?;
+            let mut fields = HashMap::new();
+            for (k, v) in obj {
+                fields.insert(k, ctx.alloc(Cell::Value(v)));
+            }
+            return Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Map".into(),
+                fields,
+            })));
+        }
+        "csv.parse" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let text = String::from_utf8_lossy(&data).to_string();
+            let rows: Vec<IrValue> = text
+                .split('\n')
+                .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                .filter(|line| !line.is_empty())
+                .map(|line| line.split(',').map(str_val).collect::<Vec<_>>())
+                .map(|cols| make_arr(ctx, cols))
+                .collect();
+            return Ok(make_arr(ctx, rows));
+        }
+        "String.from" => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.from"))?;
+            let v = deref_value(ctx, v);
+            let s = match v {
+                IrValue::Str(s) => s.clone(),
+                other => other.display(ctx).as_bytes().to_vec(),
+            };
+            return Ok(IrValue::Str(s));
+        }
+        _ => {}
+    }
+    let parts: Vec<&str> = name.split('.').collect();
+    let root = parts[0];
+    let mut self_v = implicit_env_value(ctx, root);
+    for mid in &parts[1..parts.len() - 1] {
+        self_v = field_value(ctx, &self_v, mid)?;
+    }
+    let method = parts[parts.len() - 1];
+    let v = call_builtin_method(ctx, module, &self_v, method, args)?.ok_or_else(|| {
+        IrError::msg(
+            "NoMethod",
+            format!("no method `{method}` on {}", ir_type_name(ctx, &self_v)),
+        )
+    })?;
+    Ok(v)
 }
 
 fn find_label(func: &IrFunc, id: usize) -> R<usize> {
@@ -4179,14 +6243,378 @@ fn value_lt(a: &IrValue, b: &IrValue) -> bool {
 }
 
 /// 断言内建（IR 参考语义：失败记 fail，返回时抛 AssertFailed）
-fn call_assert_builtin(
+/// 全量内建（对齐 oracle `call_builtin` interp.rs:2911-3404 全面：box/copy/@ 内建/
+/// sqrt/min/max/read_u64_le/sort/binary_search/解析器/parse_int/parse_float/断言五件套）。
+/// 断言失败经 `fail` 通道延迟到 `Return`（对齐 IR `AssertFailed` 通道）。
+fn call_builtin(
+    ctx: &mut Ctx,
+    module: &IrModule,
     name: &str,
-    ctx: &Ctx,
     args: &[IrValue],
     fail: &mut Option<String>,
 ) -> R<IrValue> {
     match name {
+        "box" => {
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", "box expects 2 args"));
+            }
+            let nc = ctx.alloc(Cell::Value(args[0].clone()));
+            Ok(IrValue::Ptr(nc))
+        }
+        "copy" => {
+            if args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "copy"));
+            }
+            // copy(&x, .shallow)（L1：CopyMode 内建枚举，.shallow 推断）
+            let shallow = if args.len() > 1 {
+                matches!(
+                    deref_value(ctx, &args[1]),
+                    IrValue::Enum { variant, .. } if variant == "shallow"
+                )
+            } else {
+                false
+            };
+            let v = args[0].clone();
+            Ok(if shallow { v } else { deep_copy(ctx, v) })
+        }
+        // ---------- @ 内建 ----------
+        "@intFromEnum" => {
+            let v = deref_value(ctx, &args[0]);
+            match v {
+                IrValue::Enum { name, variant, .. } => {
+                    // 内建枚举（L3）：ExitType = [Exit, Error]
+                    let idx = if name == "ExitType" {
+                        match variant.as_str() {
+                            "Exit" => 0,
+                            "Error" => 1,
+                            _ => 0,
+                        }
+                    } else {
+                        match module.enum_variants.get(name) {
+                            Some(variants) => {
+                                variants.iter().position(|v| v == variant).unwrap_or(0) as i128
+                            }
+                            None => 0,
+                        }
+                    };
+                    Ok(IrValue::Int(idx))
+                }
+                _ => Err(IrError::msg("TypeError", "@intFromEnum expects enum")),
+            }
+        }
+        "@enumFromInt" => {
+            let ty = match deref_value(ctx, &args[0]) {
+                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                _ => return Err(IrError::msg("TypeError", "@enumFromInt expects type name")),
+            };
+            let i = match deref_value(ctx, &args[1]) {
+                IrValue::Int(i) => *i,
+                _ => return Err(IrError::msg("TypeError", "@enumFromInt expects int")),
+            };
+            match module.enum_variants.get(&ty) {
+                Some(variants) => match variants.get(i as usize) {
+                    Some(v) => Ok(IrValue::Enum {
+                        name: ty.clone(),
+                        variant: v.clone(),
+                        payload: None,
+                    }),
+                    None => Err(IrError::msg("IndexOutOfBounds", "@enumFromInt: index out of bounds")),
+                },
+                None => Err(IrError::msg(
+                    "UnknownType",
+                    format!("@enumFromInt: unknown type `{ty}`"),
+                )),
+            }
+        }
+        "@panic" => {
+            // Q-S2：@panic("消息", 位置) abort
+            let msg = if args.is_empty() {
+                "panic".to_string()
+            } else {
+                deref_value(ctx, &args[0]).display(ctx)
+            };
+            Err(IrError::msg("Panic", msg))
+        }
+        "@sizeOf" => {
+            let ty = match deref_value(ctx, &args[0]) {
+                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                _ => return Err(IrError::msg("TypeError", "@sizeOf expects type name")),
+            };
+            match scalar_size_ir(&ty) {
+                Some(s) => Ok(IrValue::Int(s as i128)),
+                None => Err(IrError::msg(
+                    "UnknownType",
+                    format!("@sizeOf: unknown type `{ty}`"),
+                )),
+            }
+        }
+        "@alignOf" => {
+            let ty = match deref_value(ctx, &args[0]) {
+                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                _ => return Err(IrError::msg("TypeError", "@alignOf expects type name")),
+            };
+            let align = match ty.as_str() {
+                "i8" | "u8" | "bool" => 1,
+                "i16" | "u16" | "f16" => 2,
+                "i32" | "u32" | "f32" => 4,
+                "i128" | "u128" | "f128" => 16,
+                _ => scalar_size_ir(&ty).map(|s| s.min(8)).unwrap_or(8),
+            };
+            Ok(IrValue::Int(align as i128))
+        }
+        "@offsetOf" => Err(IrError::msg(
+            "Unsupported",
+            "@offsetOf requires type layout (not in IR runtime)",
+        )),
+        "@typeOf" => {
+            let v = deref_value(ctx, &args[0]);
+            Ok(str_val(&ir_type_name(ctx, v)))
+        }
+        "@intCast" => {
+            let ty = match deref_value(ctx, &args[0]) {
+                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                _ => return Err(IrError::msg("TypeError", "@intCast expects type name")),
+            };
+            let i = match deref_value(ctx, &args[1]) {
+                IrValue::Int(i) => *i,
+                _ => return Err(IrError::msg("TypeError", "@intCast expects int")),
+            };
+            if let Some((min, max)) = int_width_bounds_ir(&ty) {
+                if i < min || i > max {
+                    return Err(IrError::msg(
+                        "IntCastOverflow",
+                        format!("@intCast overflow to {ty}"),
+                    ));
+                }
+            }
+            Ok(IrValue::Int(i))
+        }
+        "@ptrCast" | "@alignCast" => {
+            // tag1 指针无类型化——透传
+            let v = args
+                .last()
+                .ok_or_else(|| IrError::msg("ArityMismatch", name))?;
+            Ok(deref_value(ctx, v).clone())
+        }
+        "@compileError" => {
+            let msg = if args.is_empty() {
+                "compileError".to_string()
+            } else {
+                deref_value(ctx, &args[0]).display(ctx)
+            };
+            Err(IrError::msg("CompileError", format!("@compileError: {msg}")))
+        }
+        "@addWithOverflow" | "@subWithOverflow" | "@mulWithOverflow" => {
+            // 返回 (T, bool) 元组；tag1 Int = i128 无溢出（标志恒 false）
+            let a = match deref_value(ctx, &args[0]) {
+                IrValue::Int(i) => *i,
+                _ => return Err(IrError::msg("TypeError", "expected int")),
+            };
+            let b = match deref_value(ctx, &args[1]) {
+                IrValue::Int(i) => *i,
+                _ => return Err(IrError::msg("TypeError", "expected int")),
+            };
+            let r = match name {
+                "@addWithOverflow" => a.wrapping_add(b),
+                "@subWithOverflow" => a.wrapping_sub(b),
+                _ => a.wrapping_mul(b),
+            };
+            Ok(make_arr(
+                ctx,
+                vec![IrValue::Int(r), IrValue::Bool(false)],
+            ))
+        }
+        // ---------- 数值工具 ----------
+        "sqrt" => {
+            let v = deref_value(ctx, &args[0]);
+            match v {
+                IrValue::Int(i) => Ok(IrValue::Float((*i as f64).sqrt())),
+                IrValue::Float(f) => Ok(IrValue::Float(f.sqrt())),
+                _ => Err(IrError::msg("TypeError", "sqrt expects number")),
+            }
+        }
+        "min" | "max" => {
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", name));
+            }
+            let a = deref_value(ctx, &args[0]).clone();
+            let b = deref_value(ctx, &args[1]).clone();
+            let take_a = match (&a, &b) {
+                (IrValue::Int(x), IrValue::Int(y)) => {
+                    if name == "min" {
+                        x <= y
+                    } else {
+                        x >= y
+                    }
+                }
+                (IrValue::Float(x), IrValue::Float(y)) => {
+                    if name == "min" {
+                        x <= y
+                    } else {
+                        x >= y
+                    }
+                }
+                (IrValue::Int(x), IrValue::Float(y)) => {
+                    if name == "min" {
+                        (*x as f64) <= *y
+                    } else {
+                        (*x as f64) >= *y
+                    }
+                }
+                (IrValue::Float(x), IrValue::Int(y)) => {
+                    if name == "min" {
+                        *x <= (*y as f64)
+                    } else {
+                        *x >= (*y as f64)
+                    }
+                }
+                _ => return Err(IrError::msg("TypeError", "min/max expects numbers")),
+            };
+            Ok(if take_a { a } else { b })
+        }
+        // ---------- 字节/算法 ----------
+        "read_u64_le" => {
+            let v = deref_value(ctx, &args[0]);
+            let b = value_bytes_ir(ctx, v)
+                .ok_or_else(|| IrError::msg("TypeError", "read_u64_le expects bytes"))?;
+            if b.len() < 8 {
+                return Err(IrError::msg("IndexOutOfBounds", "read_u64_le: truncated"));
+            }
+            let n = u64::from_le_bytes(b[0..8].try_into().unwrap());
+            Ok(IrValue::Int(n as i128))
+        }
+        "sort" => {
+            let v = deref_value(ctx, &args[0]).clone();
+            // 对齐 oracle interp.rs:3195-3205：第二参若提供必须是比较器闭包，
+            // 否则 TypeError（避免静默不排序）
+            let cmp_f = match args.get(1) {
+                Some(a) => {
+                    let f = deref_value(ctx, a).clone();
+                    match &f {
+                        IrValue::Closure { .. } | IrValue::Fn(_) => Some(f),
+                        _ => {
+                            return Err(IrError::msg(
+                                "TypeError",
+                                "sort comparator must be a closure",
+                            ))
+                        }
+                    }
+                }
+                None => None,
+            };
+            match v {
+                IrValue::Arr(c) => {
+                    let elems = match &ctx.cells[c] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => return Err(IrError::msg("TypeError", "sort expects array")),
+                    };
+                    let mut items: Vec<(usize, IrValue)> = elems
+                        .iter()
+                        .map(|ec| (*ec, ctx.cell_value(*ec).clone()))
+                        .collect();
+                    items.sort_by(|x, y| match &cmp_f {
+                        Some(f) => {
+                            let r = call_closure_value_ir(
+                                ctx,
+                                module,
+                                f,
+                                &[x.1.clone(), y.1.clone()],
+                            );
+                            match r {
+                                Ok(IrValue::Int(i)) if i < 0 => std::cmp::Ordering::Less,
+                                Ok(IrValue::Int(i)) if i > 0 => std::cmp::Ordering::Greater,
+                                Ok(IrValue::Float(ff)) if ff < 0.0 => std::cmp::Ordering::Less,
+                                Ok(IrValue::Float(ff)) if ff > 0.0 => std::cmp::Ordering::Greater,
+                                _ => std::cmp::Ordering::Equal,
+                            }
+                        }
+                        None => {
+                            if value_lt(&x.1, &y.1) {
+                                std::cmp::Ordering::Less
+                            } else if x.1.value_eq(ctx, &y.1) {
+                                std::cmp::Ordering::Equal
+                            } else {
+                                std::cmp::Ordering::Greater
+                            }
+                        }
+                    });
+                    let new_elems: Vec<usize> = items.iter().map(|(c, _)| *c).collect();
+                    ctx.cells[c] = Cell::Elems(new_elems);
+                    Ok(IrValue::Void)
+                }
+                _ => Err(IrError::msg("TypeError", "sort expects array")),
+            }
+        }
+        "binary_search" => {
+            let v = deref_value(ctx, &args[0]).clone();
+            let target = deref_value(ctx, &args[1]).clone();
+            let items: Vec<IrValue> = match &v {
+                IrValue::Arr(c) => match &ctx.cells[*c] {
+                    Cell::Elems(e) => e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect(),
+                    _ => return Err(IrError::msg("TypeError", "binary_search expects array")),
+                },
+                IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
+                    Cell::Elems(e) => e[*start..*start + *len]
+                        .iter()
+                        .map(|ec| ctx.cell_value(*ec).clone())
+                        .collect(),
+                    _ => return Err(IrError::msg("TypeError", "binary_search expects slice")),
+                },
+                _ => return Err(IrError::msg("TypeError", "binary_search expects array or slice")),
+            };
+            let mut lo = 0usize;
+            let mut hi = items.len();
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if value_lt(&items[mid], &target) {
+                    lo = mid + 1;
+                } else if items[mid].value_eq(ctx, &target) {
+                    return Ok(IrValue::Opt(Some(Box::new(IrValue::Int(mid as i128)))));
+                } else {
+                    hi = mid;
+                }
+            }
+            Ok(IrValue::Opt(None))
+        }
+        // ---------- 解析器辅助（71-recursive-parser；操作 &[u8] 与 *usize）----------
+        "skip_space" | "peek" | "advance" | "is_digit" | "parse_number" => {
+            let r = call_parser_builtin_ir(ctx, module, name, args)?
+                .ok_or_else(|| IrError::msg("NoMethod", name))?;
+            Ok(r)
+        }
+        "parse_int" => {
+            let s = str_arg_ir(ctx, args, 0)?;
+            let text = String::from_utf8_lossy(&s).trim().to_string();
+            let parsed = if text.is_empty() {
+                None
+            } else {
+                text.parse::<i128>().ok()
+            };
+            Ok(match parsed {
+                Some(n) => IrValue::Opt(Some(Box::new(IrValue::Int(n)))),
+                None => IrValue::Opt(None),
+            })
+        }
+        "parse_float" => {
+            let s = str_arg_ir(ctx, args, 0)?;
+            let text = String::from_utf8_lossy(&s).trim().to_string();
+            let parsed = if text.is_empty() {
+                None
+            } else {
+                text.parse::<f64>().ok()
+            };
+            Ok(match parsed {
+                Some(n) => IrValue::Opt(Some(Box::new(IrValue::Float(n)))),
+                None => IrValue::Opt(None),
+            })
+        }
+        // ---------- 断言五件套（Q-T1）：测试函数内隐式可用；3 参 expect = 解析器 ----------
         "expect" => {
+            if args.len() == 3 {
+                let r = call_parser_builtin_ir(ctx, module, "expect", args)?
+                    .ok_or_else(|| IrError::msg("NoMethod", "expect parser"))?;
+                return Ok(r);
+            }
             if args.first().map_or(false, |v| v.as_bool()) {
                 Ok(IrValue::Void)
             } else {
@@ -4194,41 +6622,63 @@ fn call_assert_builtin(
                 Ok(IrValue::Void)
             }
         }
-        "expect_eq" => {
-            if args.len() >= 2 && args[0].value_eq(ctx, &args[1]) {
-                Ok(IrValue::Void)
-            } else {
-                let got = args.first().map(|v| v.display(ctx)).unwrap_or_default();
-                let want = args.get(1).map(|v| v.display(ctx)).unwrap_or_default();
-                *fail = Some(format!("expect_eq failed: got {got}, want {want}"));
-                Ok(IrValue::Void)
+        "expect_eq" | "expect_neq" => {
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", name));
             }
-        }
-        "expect_neq" => {
-            if args.len() >= 2 && !args[0].value_eq(ctx, &args[1]) {
-                Ok(IrValue::Void)
-            } else {
-                *fail = Some("expect_neq failed".into());
-                Ok(IrValue::Void)
+            let a = deref_value(ctx, &args[0]);
+            let b = deref_value(ctx, &args[1]);
+            let eq = a.value_eq(ctx, b);
+            let want_eq = name == "expect_eq";
+            if eq != want_eq {
+                *fail = Some(format!(
+                    "{} failed: expected {} {}, got {}",
+                    name,
+                    if want_eq { "=" } else { "!=" },
+                    b.display(ctx),
+                    a.display(ctx)
+                ));
             }
+            Ok(IrValue::Void)
         }
         "expect_error" => {
-            if args.len() >= 2
-                && args[0].is_err()
-                && args[1].is_err()
-                && args[0].value_eq(ctx, &args[1])
-            {
-                Ok(IrValue::Void)
-            } else {
-                *fail = Some("expect_error failed".into());
-                Ok(IrValue::Void)
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", "expect_error"));
+            }
+            let want = deref_value(ctx, &args[0]);
+            let got = deref_value(ctx, &args[1]);
+            match (want, got) {
+                // M4.2：错误码比较（码全局唯一）
+                (IrValue::Err { name: w, .. }, IrValue::Err { name: g, .. }) if w == g => {
+                    Ok(IrValue::Void)
+                }
+                (IrValue::Err { name: w, .. }, IrValue::Err { name: g, .. }) => {
+                    *fail = Some(format!("expect_error failed: expected error.{w}, got error.{g}"));
+                    Ok(IrValue::Void)
+                }
+                (_, g) => {
+                    *fail = Some(format!(
+                        "expect_error failed: expected error, got {}",
+                        ir_type_name(ctx, g)
+                    ));
+                    Ok(IrValue::Void)
+                }
             }
         }
         "expect_eq_slices" => {
-            if args.len() >= 2 && args[0].value_eq(ctx, &args[1]) {
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", "expect_eq_slices"));
+            }
+            let a = deref_value(ctx, &args[0]);
+            let b = deref_value(ctx, &args[1]);
+            if a.value_eq(ctx, b) {
                 Ok(IrValue::Void)
             } else {
-                *fail = Some("expect_eq_slices failed".into());
+                *fail = Some(format!(
+                    "expect_eq_slices failed: {} != {}",
+                    a.display(ctx),
+                    b.display(ctx)
+                ));
                 Ok(IrValue::Void)
             }
         }

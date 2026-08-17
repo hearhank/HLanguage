@@ -107,10 +107,14 @@ fn emit_globals(out: &mut String, module: &IrModule) {
 
 /// 收集全部字符串常量（去重、保序）。除 `Str` 常量外，还收集 Phase 2 指令携带的
 /// 字面量字段名 / 类型名 / 枚举名变体名——它们需要以模块级全局字符串形式供 helper 取地址。
+/// Phase 7：`io.print` 格式串的字面量段（`{}` 之间的字节）是格式串的子串，未必单独
+/// 出现在 `Const Str` 中——必须在此登记，否则 `str_idx` 回退到 `.str.0` 打印错串。
+/// 实例方法分派的拥有者名（`{Type}.{method}` 的 `{Type}`）同样登记。
 fn collect_strings(module: &IrModule) -> Vec<String> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut out: Vec<String> = Vec::new();
     for f in &module.funcs {
+        let slot_consts = build_slot_consts(f);
         for inst in &f.body {
             match inst {
                 IrInst::Const { val: IrConst::Str(s), .. } => push_str(s, &mut seen, &mut out),
@@ -137,11 +141,56 @@ fn collect_strings(module: &IrModule) -> Vec<String> {
                         _ => {}
                     }
                 }
+                // Phase 7：io.print 静态/实例调用的字面量段
+                IrInst::Call { name, args, .. } => {
+                    if is_io_print_name(name) {
+                        collect_print_literals(args, &slot_consts, &mut seen, &mut out);
+                    }
+                }
+                IrInst::CallMethod { method, args, .. } => {
+                    if method == "print" {
+                        collect_print_literals(args, &slot_consts, &mut seen, &mut out);
+                        // 内建拥有者 "Io" 不在 func_index 中，须显式登记，
+                        // 否则 `str_idx` 静默回退索引 0 导致 strcmp 链错配。
+                        push_str("Io", &mut seen, &mut out);
+                    }
+                    // 用户方法拥有者名（`{Type}.{method}` 的 `{Type}`）
+                    let suffix = format!(".{method}");
+                    for key in module.func_index.keys() {
+                        if let Some(owner) = key.strip_suffix(&suffix) {
+                            push_str(owner, &mut seen, &mut out);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
     }
     out
+}
+
+/// 登记 `io.print(fmt, ...)` 格式串的全部字面量段（含空格式串的边界无段）。
+fn collect_print_literals(
+    args: &[usize],
+    slot_consts: &HashMap<usize, IrConst>,
+    seen: &mut HashMap<String, usize>,
+    out: &mut Vec<String>,
+) {
+    let Some(fmt) = args
+        .first()
+        .and_then(|a| slot_consts.get(a))
+        .and_then(|c| match c {
+            IrConst::Str(s) => Some(s.clone()),
+            _ => None,
+        })
+    else {
+        return;
+    };
+    for seg in parse_print_fmt(&fmt, args) {
+        if let PrintSeg::Lit(s) = seg {
+            push_str(&s, seen, out);
+        }
+    }
 }
 
 /// 去重入表。
@@ -209,6 +258,9 @@ const MSGS: &[Msg] = &[
     Msg { key: "nomethod", text: "error.NoMethod: method calls not yet in native mode (Phase 7)" },
     // Phase 5 全局单元
     Msg { key: "noglobal", text: "error.NoGlobal: undefined global" },
+    // Phase 7 内建：未实现内建响亮拒绝（禁止静默 Void 误编译）
+    Msg { key: "builtin", text: "error.NotBuiltin: builtin not yet in native mode (Phase 7)" },
+    Msg { key: "intcast", text: "error.IntCastOverflow: @intCast overflow" },
 ];
 
 // ---------- 导言 ----------
@@ -239,7 +291,12 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     out.push_str("declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)\n");
     out.push_str("declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)\n");
     out.push_str("declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)\n");
-    out.push_str("declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)\n\n");
+    out.push_str("declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)\n");
+    // Phase 7 io.print / 数值显示辅助（libc 可变参 printf；fmod/fabs 判浮点整值）
+    out.push_str("declare i32 @printf(i8*, ...)\n");
+    out.push_str("declare double @fmod(double, double)\n");
+    out.push_str("declare double @fabs(double)\n");
+    out.push_str("declare double @sqrt(double)\n\n");
 
     // 断言失败标志（全局；单线程顺序执行）
     out.push_str("@hc_fail_msg = global i8* null\n");
@@ -254,7 +311,47 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     out.push_str("@.hc_map = private unnamed_addr constant [4 x i8] c\"Map\\00\"\n");
     out.push_str("@.hc_kv = private unnamed_addr constant [3 x i8] c\"KV\\00\"\n");
     out.push_str("@.hc_key = private unnamed_addr constant [4 x i8] c\"key\\00\"\n");
-    out.push_str("@.hc_value = private unnamed_addr constant [6 x i8] c\"value\\00\"\n\n");
+    out.push_str("@.hc_value = private unnamed_addr constant [6 x i8] c\"value\\00\"\n");
+    // Phase 7 io.print 显示格式常量（printf 格式串 + 定长字节写辅助）
+    out.push_str("@.fmt_pct = private unnamed_addr constant [5 x i8] c\"%.*s\\00\"\n");
+    out.push_str("@.fmt_s = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n");
+    out.push_str("@.fmt_one = private unnamed_addr constant [5 x i8] c\"%.1f\\00\"\n");
+    out.push_str("@.fmt_g15 = private unnamed_addr constant [6 x i8] c\"%.15g\\00\"\n");
+    out.push_str("@.hc_dash = private unnamed_addr constant [2 x i8] c\"-\\00\"\n");
+    out.push_str("@.hc_lb = private unnamed_addr constant [2 x i8] c\"[\\00\"\n");
+    out.push_str("@.hc_rb = private unnamed_addr constant [2 x i8] c\"]\\00\"\n");
+    out.push_str("@.hc_comma = private unnamed_addr constant [3 x i8] c\", \\00\"\n");
+    out.push_str("@.hc_bra_l = private unnamed_addr constant [4 x i8] c\" { \\00\"\n");
+    out.push_str("@.hc_bra_r = private unnamed_addr constant [3 x i8] c\" }\\00\"\n");
+    out.push_str("@.hc_eqs = private unnamed_addr constant [4 x i8] c\" = \\00\"\n");
+    out.push_str("@.hc_errpre = private unnamed_addr constant [7 x i8] c\"error.\\00\"\n");
+    out.push_str("@.hc_dot = private unnamed_addr constant [2 x i8] c\".\\00\"\n");
+    out.push_str("@.hc_shallow = private unnamed_addr constant [8 x i8] c\"shallow\\00\"\n\n");
+
+    // @typeOf 类型名常量（hc_typeof 返回值）
+    out.push_str("@.t_i128 = private unnamed_addr constant [5 x i8] c\"i128\\00\"\n");
+    out.push_str("@.t_f64 = private unnamed_addr constant [4 x i8] c\"f64\\00\"\n");
+    out.push_str("@.t_bool = private unnamed_addr constant [5 x i8] c\"bool\\00\"\n");
+    out.push_str("@.t_str = private unnamed_addr constant [6 x i8] c\"&[u8]\\00\"\n");
+    out.push_str("@.t_arr = private unnamed_addr constant [6 x i8] c\"array\\00\"\n");
+    out.push_str("@.t_slice = private unnamed_addr constant [6 x i8] c\"slice\\00\"\n");
+    out.push_str("@.t_opt = private unnamed_addr constant [9 x i8] c\"optional\\00\"\n");
+    out.push_str("@.t_err = private unnamed_addr constant [6 x i8] c\"error\\00\"\n");
+    out.push_str("@.t_ptr = private unnamed_addr constant [8 x i8] c\"pointer\\00\"\n");
+    out.push_str("@.t_fn = private unnamed_addr constant [3 x i8] c\"fn\\00\"\n");
+    out.push_str("@.t_closure = private unnamed_addr constant [8 x i8] c\"closure\\00\"\n");
+    out.push_str("@.t_end = private unnamed_addr constant [4 x i8] c\"end\\00\"\n");
+    out.push_str("@.t_void = private unnamed_addr constant [5 x i8] c\"void\\00\"\n");
+    out.push_str("@.t_iter = private unnamed_addr constant [7 x i8] c\"<iter>\\00\"\n\n");
+
+    // main(io: Io) 单参入口：Io 值构造（fs/time/net 空子类，与 IR io_value_ir 对齐）
+    out.push_str("@.t_io = private unnamed_addr constant [3 x i8] c\"Io\\00\"\n");
+    out.push_str("@.t_fs = private unnamed_addr constant [3 x i8] c\"Fs\\00\"\n");
+    out.push_str("@.t_time = private unnamed_addr constant [5 x i8] c\"Time\\00\"\n");
+    out.push_str("@.t_net = private unnamed_addr constant [4 x i8] c\"Net\\00\"\n");
+    out.push_str("@.f_fs = private unnamed_addr constant [3 x i8] c\"fs\\00\"\n");
+    out.push_str("@.f_time = private unnamed_addr constant [5 x i8] c\"time\\00\"\n");
+    out.push_str("@.f_net = private unnamed_addr constant [4 x i8] c\"net\\00\"\n\n");
 
     // 硬错误消息全局
     for m in MSGS {
@@ -293,6 +390,9 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     emit_aggregate_helpers(out);
     emit_switch_helpers(out);
     emit_iter_helpers(out);
+    emit_print_helpers(out);
+    emit_scalar_builtin_helpers(out);
+    emit_io_helper(out);
 }
 
 // ---------- 算术 helper（加/减/乘/除/模/欧几里得模） ----------
@@ -2075,6 +2175,785 @@ fn emit_iter_helpers(out: &mut String) {
     }
 }
 
+// ---------- Phase 7 io.print 显示 helper（定长字节写 + 值格式化） ----------
+//
+// 取舍（P7e 子集）：`hc_write_value` 对 Int/Float/Bool/Str/Null/Err/Arr/Slice/Class/Enum
+// 对齐 oracle `display`；`{x}/{b}` 对 Int 走 16/2 进制（负数按无符号位模式，对齐 Rust
+// `{n:x}`）。Err 显示为 `error.{code}`（原生无错误名表——与 IR 的 `error.{name}` 有差异，
+// 记录为已知取舍）。Float 用 `%.1f`（整值）/`%.15g`（余值）近似 Rust 最短表示。
+
+const HC_WRITE_BYTES: &str = r#"define void @hc_write_bytes(i8* %p, i64 %n) {
+entry:
+  %n32 = trunc i64 %n to i32
+  %f = getelementptr inbounds [5 x i8], ptr @.fmt_pct, i64 0, i64 0
+  call i32 (i8*, ...) @printf(i8* %f, i32 %n32, i8* %p)
+  ret void
+}
+"#;
+
+const HC_WRITE_STRZ: &str = r#"define void @hc_write_strz(i8* %p) {
+entry:
+  %f = getelementptr inbounds [3 x i8], ptr @.fmt_s, i64 0, i64 0
+  call i32 (i8*, ...) @printf(i8* %f, i8* %p)
+  ret void
+}
+"#;
+
+const HC_WRITE_U128_BASE: &str = r#"define void @hc_write_u128_base(i128 %v, i32 %base) {
+entry:
+  %buf = alloca [64 x i8], align 1
+  %b64 = zext i32 %base to i128
+  br label %loop
+loop:
+  %val = phi i128 [ %v, %entry ], [ %quot, %loop ]
+  %pos = phi i64 [ 63, %entry ], [ %dec, %loop ]
+  %quot = udiv i128 %val, %b64
+  %rem = urem i128 %val, %b64
+  %rem64 = trunc i128 %rem to i64
+  %lt10 = icmp ult i64 %rem64, 10
+  %dig = add i64 %rem64, 48
+  %up = add i64 %rem64, 87
+  %ch64 = select i1 %lt10, i64 %dig, i64 %up
+  %ch = trunc i64 %ch64 to i8
+  %dst = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %pos
+  store i8 %ch, i8* %dst
+  %dec = sub i64 %pos, 1
+  %is0 = icmp eq i128 %quot, 0
+  br i1 %is0, label %write, label %loop
+write:
+  %sp = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %pos
+  %len = sub i64 64, %pos
+  call void @hc_write_bytes(i8* %sp, i64 %len)
+  ret void
+}
+"#;
+
+const HC_WRITE_I128_DEC: &str = r#"define void @hc_write_i128_dec(i128 %n) {
+entry:
+  %is_neg = icmp slt i128 %n, 0
+  br i1 %is_neg, label %neg, label %mag
+neg:
+  %dash = getelementptr inbounds [2 x i8], ptr @.hc_dash, i64 0, i64 0
+  call void @hc_write_bytes(i8* %dash, i64 1)
+  br label %mag
+mag:
+  %negv = sub i128 0, %n
+  %m = select i1 %is_neg, i128 %negv, i128 %n
+  call void @hc_write_u128_base(i128 %m, i32 10)
+  ret void
+}
+"#;
+
+const HC_WRITE_INT: &str = r#"define void @hc_write_int(%Value %v, i32 %mode) {
+entry:
+  %d = extractvalue %Value %v, 1
+  %m0 = icmp eq i32 %mode, 0
+  %m3 = icmp eq i32 %mode, 3
+  %is_dec = or i1 %m0, %m3
+  br i1 %is_dec, label %dec, label %basefmt
+dec:
+  call void @hc_write_i128_dec(i128 %d)
+  ret void
+basefmt:
+  %is_bin = icmp eq i32 %mode, 2
+  %is_hex = icmp eq i32 %mode, 1
+  %b1 = select i1 %is_hex, i32 16, i32 10
+  %base = select i1 %is_bin, i32 2, i32 %b1
+  call void @hc_write_u128_base(i128 %d, i32 %base)
+  ret void
+}
+"#;
+
+const HC_WRITE_TYPENAME: &str = r#"define void @hc_write_typename(%Value %v) {
+entry:
+  %tag = extractvalue %Value %v, 0
+  %d = extractvalue %Value %v, 1
+  %tc = icmp eq i32 %tag, 10
+  br i1 %tc, label %cls, label %t_en
+t_en:
+  %te = icmp eq i32 %tag, 11
+  br i1 %te, label %en, label %t2
+cls:
+  %cop = inttoptr i128 %d to %ClassObj*
+  %co = load %ClassObj, %ClassObj* %cop
+  %tn = extractvalue %ClassObj %co, 0
+  call void @hc_write_strz(i8* %tn)
+  ret void
+en:
+  %eop = inttoptr i128 %d to %EnumObj*
+  %eo = load %EnumObj, %EnumObj* %eop
+  %n = extractvalue %EnumObj %eo, 0
+  call void @hc_write_strz(i8* %n)
+  ret void
+t2:
+  %t2c = icmp eq i32 %tag, 2
+  br i1 %t2c, label %n_i128, label %t3
+t3:
+  %t3c = icmp eq i32 %tag, 3
+  br i1 %t3c, label %n_f64, label %t4
+t4:
+  %t4c = icmp eq i32 %tag, 4
+  br i1 %t4c, label %n_bool, label %t5
+t5:
+  %t5c = icmp eq i32 %tag, 5
+  br i1 %t5c, label %n_str, label %t8
+t8:
+  %t8c = icmp eq i32 %tag, 8
+  br i1 %t8c, label %n_arr, label %t9
+t9:
+  %t9c = icmp eq i32 %tag, 9
+  br i1 %t9c, label %n_slice, label %t1
+t1:
+  %t1c = icmp eq i32 %tag, 1
+  br i1 %t1c, label %n_opt, label %t6
+t6:
+  %t6c = icmp eq i32 %tag, 6
+  br i1 %t6c, label %n_err, label %t7
+t7:
+  %t7c = icmp eq i32 %tag, 7
+  br i1 %t7c, label %n_ptr, label %t14
+t14:
+  %t14c = icmp eq i32 %tag, 14
+  br i1 %t14c, label %n_fn, label %t15
+t15:
+  %t15c = icmp eq i32 %tag, 15
+  br i1 %t15c, label %n_closure, label %t12
+t12:
+  %t12c = icmp eq i32 %tag, 12
+  br i1 %t12c, label %n_end, label %t13
+t13:
+  %t13c = icmp eq i32 %tag, 13
+  br i1 %t13c, label %n_iter, label %n_void
+n_i128:
+  call void @hc_write_strz(i8* @.t_i128)
+  ret void
+n_f64:
+  call void @hc_write_strz(i8* @.t_f64)
+  ret void
+n_bool:
+  call void @hc_write_strz(i8* @.t_bool)
+  ret void
+n_str:
+  call void @hc_write_strz(i8* @.t_str)
+  ret void
+n_arr:
+  call void @hc_write_strz(i8* @.t_arr)
+  ret void
+n_slice:
+  call void @hc_write_strz(i8* @.t_slice)
+  ret void
+n_opt:
+  call void @hc_write_strz(i8* @.t_opt)
+  ret void
+n_err:
+  call void @hc_write_strz(i8* @.t_err)
+  ret void
+n_ptr:
+  call void @hc_write_strz(i8* @.t_ptr)
+  ret void
+n_fn:
+  call void @hc_write_strz(i8* @.t_fn)
+  ret void
+n_closure:
+  call void @hc_write_strz(i8* @.t_closure)
+  ret void
+n_end:
+  call void @hc_write_strz(i8* @.t_end)
+  ret void
+n_iter:
+  call void @hc_write_strz(i8* @.t_iter)
+  ret void
+n_void:
+  call void @hc_write_strz(i8* @.t_void)
+  ret void
+}
+"#;
+
+const HC_WRITE_VALUE: &str = r#"define void @hc_write_value(%Value %v, i32 %mode) {
+entry:
+  %tag = extractvalue %Value %v, 0
+  %d = extractvalue %Value %v, 1
+  %ti = icmp eq i32 %tag, 2
+  br i1 %ti, label %int_case, label %ck_f
+ck_f:
+  %tf = icmp eq i32 %tag, 3
+  br i1 %tf, label %float_case, label %ck_b
+ck_b:
+  %tb = icmp eq i32 %tag, 4
+  br i1 %tb, label %bool_case, label %ck_s
+ck_s:
+  %ts = icmp eq i32 %tag, 5
+  br i1 %ts, label %str_case, label %ck_n
+ck_n:
+  %tn = icmp eq i32 %tag, 1
+  br i1 %tn, label %null_case, label %ck_e
+ck_e:
+  %te = icmp eq i32 %tag, 6
+  br i1 %te, label %err_case, label %ck_a
+ck_a:
+  %ta = icmp eq i32 %tag, 8
+  br i1 %ta, label %arr_case, label %ck_sl
+ck_sl:
+  %tsl = icmp eq i32 %tag, 9
+  br i1 %tsl, label %slice_case, label %ck_c
+ck_c:
+  %tc = icmp eq i32 %tag, 10
+  br i1 %tc, label %class_case, label %ck_en
+ck_en:
+  %ten = icmp eq i32 %tag, 11
+  br i1 %ten, label %enum_case, label %ck_p
+ck_p:
+  %tp = icmp eq i32 %tag, 7
+  br i1 %tp, label %ptr_case, label %fallback
+fallback:
+  call void @hc_write_typename(%Value %v)
+  ret void
+int_case:
+  call void @hc_write_int(%Value %v, i32 %mode)
+  ret void
+float_case:
+  %dt = trunc i128 %d to i64
+  %fv = bitcast i64 %dt to double
+  %fr = call double @fmod(double %fv, double 1.0)
+  %fz = fcmp oeq double %fr, 0.0
+  %fa = call double @fabs(double %fv)
+  %fl = fcmp olt double %fa, 1.0e15
+  %whole = and i1 %fz, %fl
+  br i1 %whole, label %whole_f, label %frac_f
+whole_f:
+  %p1 = getelementptr inbounds [5 x i8], ptr @.fmt_one, i64 0, i64 0
+  call i32 (i8*, ...) @printf(i8* %p1, double %fv)
+  ret void
+frac_f:
+  %pg = getelementptr inbounds [6 x i8], ptr @.fmt_g15, i64 0, i64 0
+  call i32 (i8*, ...) @printf(i8* %pg, double %fv)
+  ret void
+bool_case:
+  %is_t = icmp eq i128 %d, 1
+  %bp = select i1 %is_t, i8* @.hc_true, i8* @.hc_false
+  call void @hc_write_strz(i8* %bp)
+  ret void
+str_case:
+  %sp = trunc i128 %d to i64
+  %pp = inttoptr i64 %sp to i8*
+  %n = call i64 @strlen(i8* %pp)
+  call void @hc_write_bytes(i8* %pp, i64 %n)
+  ret void
+null_case:
+  call void @hc_write_strz(i8* @.hc_null)
+  ret void
+err_case:
+  %ep = getelementptr inbounds [7 x i8], ptr @.hc_errpre, i64 0, i64 0
+  call void @hc_write_bytes(i8* %ep, i64 6)
+  call void @hc_write_i128_dec(i128 %d)
+  ret void
+ptr_case:
+  %pd = call %Value @hc_deref(%Value %v)
+  call void @hc_write_value(%Value %pd, i32 %mode)
+  ret void
+arr_case:
+  %ap = inttoptr i128 %d to %ArrObj*
+  %ao = load %ArrObj, %ArrObj* %ap
+  %alen = extractvalue %ArrObj %ao, 0
+  %items = extractvalue %ArrObj %ao, 1
+  %lb = getelementptr inbounds [2 x i8], ptr @.hc_lb, i64 0, i64 0
+  call void @hc_write_bytes(i8* %lb, i64 1)
+  br label %aloop
+aloop:
+  %i = phi i64 [ 0, %arr_case ], [ %inext, %aelem ]
+  %gt0 = icmp ugt i64 %i, 0
+  br i1 %gt0, label %acomma, label %aelem
+acomma:
+  %cma = getelementptr inbounds [3 x i8], ptr @.hc_comma, i64 0, i64 0
+  call void @hc_write_bytes(i8* %cma, i64 2)
+  br label %aelem
+aelem:
+  %ep2 = getelementptr %Value, %Value* %items, i64 %i
+  %ev = load %Value, %Value* %ep2
+  call void @hc_write_value(%Value %ev, i32 0)
+  %inext = add i64 %i, 1
+  %adone = icmp uge i64 %inext, %alen
+  br i1 %adone, label %aend, label %aloop
+aend:
+  %rb = getelementptr inbounds [2 x i8], ptr @.hc_rb, i64 0, i64 0
+  call void @hc_write_bytes(i8* %rb, i64 1)
+  ret void
+slice_case:
+  %sop = inttoptr i128 %d to %SliceObj*
+  %so = load %SliceObj, %SliceObj* %sop
+  %sdata = extractvalue %SliceObj %so, 0
+  %sstart = extractvalue %SliceObj %so, 1
+  %slen = extractvalue %SliceObj %so, 2
+  %lb2 = getelementptr inbounds [2 x i8], ptr @.hc_lb, i64 0, i64 0
+  call void @hc_write_bytes(i8* %lb2, i64 1)
+  br label %sloop
+sloop:
+  %si = phi i64 [ 0, %slice_case ], [ %sinext, %selem ]
+  %sgt0 = icmp ugt i64 %si, 0
+  br i1 %sgt0, label %scomma, label %selem
+scomma:
+  %cma2 = getelementptr inbounds [3 x i8], ptr @.hc_comma, i64 0, i64 0
+  call void @hc_write_bytes(i8* %cma2, i64 2)
+  br label %selem
+selem:
+  %sidx = add i64 %sstart, %si
+  %sep = getelementptr %Value, %Value* %sdata, i64 %sidx
+  %sev = load %Value, %Value* %sep
+  call void @hc_write_value(%Value %sev, i32 0)
+  %sinext = add i64 %si, 1
+  %sdone = icmp uge i64 %sinext, %slen
+  br i1 %sdone, label %send, label %sloop
+send:
+  %rb2 = getelementptr inbounds [2 x i8], ptr @.hc_rb, i64 0, i64 0
+  call void @hc_write_bytes(i8* %rb2, i64 1)
+  ret void
+class_case:
+  %cop = inttoptr i128 %d to %ClassObj*
+  %co = load %ClassObj, %ClassObj* %cop
+  %tyname = extractvalue %ClassObj %co, 0
+  call void @hc_write_strz(i8* %tyname)
+  %clen = extractvalue %ClassObj %co, 1
+  %cfields = extractvalue %ClassObj %co, 2
+  %bl = getelementptr inbounds [4 x i8], ptr @.hc_bra_l, i64 0, i64 0
+  call void @hc_write_bytes(i8* %bl, i64 3)
+  br label %cloop
+cloop:
+  %ci = phi i64 [ 0, %class_case ], [ %cinext, %celem ]
+  %cgt0 = icmp ugt i64 %ci, 0
+  br i1 %cgt0, label %ccomma, label %celem
+ccomma:
+  %cma3 = getelementptr inbounds [3 x i8], ptr @.hc_comma, i64 0, i64 0
+  call void @hc_write_bytes(i8* %cma3, i64 2)
+  br label %celem
+celem:
+  %cfp = getelementptr %Field, %Field* %cfields, i64 %ci
+  %cfv = load %Field, %Field* %cfp
+  %cfname = extractvalue %Field %cfv, 0
+  %cfval = extractvalue %Field %cfv, 1
+  %fnl = call i64 @strlen(i8* %cfname)
+  call void @hc_write_bytes(i8* %cfname, i64 %fnl)
+  %eqs = getelementptr inbounds [4 x i8], ptr @.hc_eqs, i64 0, i64 0
+  call void @hc_write_bytes(i8* %eqs, i64 3)
+  call void @hc_write_value(%Value %cfval, i32 0)
+  %cinext = add i64 %ci, 1
+  %cdone = icmp uge i64 %cinext, %clen
+  br i1 %cdone, label %cend, label %cloop
+cend:
+  %brr = getelementptr inbounds [3 x i8], ptr @.hc_bra_r, i64 0, i64 0
+  call void @hc_write_bytes(i8* %brr, i64 3)
+  ret void
+enum_case:
+  %eop = inttoptr i128 %d to %EnumObj*
+  %eo = load %EnumObj, %EnumObj* %eop
+  %ename = extractvalue %EnumObj %eo, 0
+  %evariant = extractvalue %EnumObj %eo, 1
+  %epay = extractvalue %EnumObj %eo, 2
+  call void @hc_write_strz(i8* %ename)
+  %dot = getelementptr inbounds [2 x i8], ptr @.hc_dot, i64 0, i64 0
+  call void @hc_write_bytes(i8* %dot, i64 1)
+  call void @hc_write_strz(i8* %evariant)
+  %is_none = icmp eq %Value* %epay, null
+  br i1 %is_none, label %en_end, label %en_pay
+en_pay:
+  %eqs2 = getelementptr inbounds [4 x i8], ptr @.hc_eqs, i64 0, i64 0
+  call void @hc_write_bytes(i8* %eqs2, i64 3)
+  %pv = load %Value, %Value* %epay
+  call void @hc_write_value(%Value %pv, i32 0)
+  br label %en_end
+en_end:
+  ret void
+}
+"#;
+
+fn emit_print_helpers(out: &mut String) {
+    for h in [
+        HC_WRITE_BYTES,
+        HC_WRITE_STRZ,
+        HC_WRITE_U128_BASE,
+        HC_WRITE_I128_DEC,
+        HC_WRITE_INT,
+        HC_WRITE_TYPENAME,
+        HC_WRITE_VALUE,
+    ] {
+        out.push_str(h);
+        out.push('\n');
+    }
+}
+
+// ---------- Phase 7 标量内建 helper（@sizeOf/@intCast/@typeOf/min/max/sqrt/box/copy/溢出） ----------
+
+const HC_MIN: &str = r#"define %Value @hc_min(%Value %a, %Value %b) {
+entry:
+  %lt = call i1 @hc_lt(%Value %a, %Value %b)
+  %r = select i1 %lt, %Value %a, %Value %b
+  ret %Value %r
+}
+"#;
+
+const HC_MAX: &str = r#"define %Value @hc_max(%Value %a, %Value %b) {
+entry:
+  %lt = call i1 @hc_lt(%Value %a, %Value %b)
+  %r = select i1 %lt, %Value %b, %Value %a
+  ret %Value %r
+}
+"#;
+
+const HC_SQRT: &str = r#"define %Value @hc_sqrt(%Value %v) {
+entry:
+  %t = extractvalue %Value %v, 0
+  %d = extractvalue %Value %v, 1
+  %is_int = icmp eq i32 %t, 2
+  %dt = trunc i128 %d to i64
+  %asf = sitofp i64 %dt to double
+  %raw = bitcast i64 %dt to double
+  %f = select i1 %is_int, double %asf, double %raw
+  %sq = call double @sqrt(double %f)
+  %bits = bitcast double %sq to i64
+  %z = zext i64 %bits to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 3, 0
+  %v1 = insertvalue %Value %v0, i128 %z, 1
+  ret %Value %v1
+}
+"#;
+
+const HC_BOX: &str = r#"define %Value @hc_box(%Value %v) {
+entry:
+  %sz = ptrtoint %Value* getelementptr (%Value, %Value* null, i32 1) to i64
+  %raw = call i8* @hc_alloc(i64 %sz)
+  %cell = bitcast i8* %raw to %Value*
+  store %Value %v, %Value* %cell
+  %dp = ptrtoint %Value* %cell to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 7, 0
+  %v1 = insertvalue %Value %v0, i128 %dp, 1
+  ret %Value %v1
+}
+"#;
+
+const HC_COPY: &str = r#"define %Value @hc_copy(%Value %v, %Value %mode) {
+entry:
+  %t = extractvalue %Value %mode, 0
+  %is_enum = icmp eq i32 %t, 11
+  br i1 %is_enum, label %chk, label %deep
+chk:
+  %d = extractvalue %Value %mode, 1
+  %op = inttoptr i128 %d to %EnumObj*
+  %eo = load %EnumObj, %EnumObj* %op
+  %vn = extractvalue %EnumObj %eo, 1
+  %sp = getelementptr inbounds [8 x i8], ptr @.hc_shallow, i64 0, i64 0
+  %c = call i32 @strcmp(i8* %vn, i8* %sp)
+  %is_sh = icmp eq i32 %c, 0
+  br i1 %is_sh, label %id, label %deep
+id:
+  ret %Value %v
+deep:
+  %t2 = extractvalue %Value %v, 0
+  %t8 = icmp eq i32 %t2, 8
+  %t10 = icmp eq i32 %t2, 10
+  %t7 = icmp eq i32 %t2, 7
+  %t1 = icmp eq i32 %t2, 1
+  %is_agg = or i1 %t8, %t10
+  %is_agg2 = or i1 %is_agg, %t7
+  %is_agg3 = or i1 %is_agg2, %t1
+  br i1 %is_agg3, label %abort, label %id
+abort:
+  call void @hc_abort_builtin()
+  unreachable
+}
+"#;
+
+const HC_INTCAST: &str = r#"define %Value @hc_intcast(%Value %v, i128 %min, i128 %max) {
+entry:
+  %t = extractvalue %Value %v, 0
+  %is_int = icmp eq i32 %t, 2
+  br i1 %is_int, label %chk, label %abort
+chk:
+  %d = extractvalue %Value %v, 1
+  %lo_ok = icmp sge i128 %d, %min
+  %hi_ok = icmp sle i128 %d, %max
+  %ok = and i1 %lo_ok, %hi_ok
+  br i1 %ok, label %retv, label %abort
+retv:
+  ret %Value %v
+abort:
+  call void @hc_abort_intcast()
+  unreachable
+}
+"#;
+
+const HC_TYPEOF: &str = r#"define %Value @hc_typeof(%Value %v) {
+entry:
+  %tag = extractvalue %Value %v, 0
+  %d = extractvalue %Value %v, 1
+  %tc = icmp eq i32 %tag, 10
+  br i1 %tc, label %cls, label %t_en
+t_en:
+  %te = icmp eq i32 %tag, 11
+  br i1 %te, label %en, label %t2
+cls:
+  %cop = inttoptr i128 %d to %ClassObj*
+  %co = load %ClassObj, %ClassObj* %cop
+  %tn = extractvalue %ClassObj %co, 0
+  br label %ret_str
+en:
+  %eop = inttoptr i128 %d to %EnumObj*
+  %eo = load %EnumObj, %EnumObj* %eop
+  %en_tn = extractvalue %EnumObj %eo, 0
+  br label %ret_str
+t2:
+  %t2c = icmp eq i32 %tag, 2
+  br i1 %t2c, label %n_i128, label %t3
+t3:
+  %t3c = icmp eq i32 %tag, 3
+  br i1 %t3c, label %n_f64, label %t4
+t4:
+  %t4c = icmp eq i32 %tag, 4
+  br i1 %t4c, label %n_bool, label %t5
+t5:
+  %t5c = icmp eq i32 %tag, 5
+  br i1 %t5c, label %n_str, label %t8
+t8:
+  %t8c = icmp eq i32 %tag, 8
+  br i1 %t8c, label %n_arr, label %t9
+t9:
+  %t9c = icmp eq i32 %tag, 9
+  br i1 %t9c, label %n_slice, label %t1
+t1:
+  %t1c = icmp eq i32 %tag, 1
+  br i1 %t1c, label %n_opt, label %t6
+t6:
+  %t6c = icmp eq i32 %tag, 6
+  br i1 %t6c, label %n_err, label %t7
+t7:
+  %t7c = icmp eq i32 %tag, 7
+  br i1 %t7c, label %n_ptr, label %t14
+t14:
+  %t14c = icmp eq i32 %tag, 14
+  br i1 %t14c, label %n_fn, label %t15
+t15:
+  %t15c = icmp eq i32 %tag, 15
+  br i1 %t15c, label %n_closure, label %t12
+t12:
+  %t12c = icmp eq i32 %tag, 12
+  br i1 %t12c, label %n_end, label %t13
+t13:
+  %t13c = icmp eq i32 %tag, 13
+  br i1 %t13c, label %n_iter, label %n_void
+n_i128:
+  br label %ret_global
+n_f64:
+  br label %ret_global
+n_bool:
+  br label %ret_global
+n_str:
+  br label %ret_global
+n_arr:
+  br label %ret_global
+n_slice:
+  br label %ret_global
+n_opt:
+  br label %ret_global
+n_err:
+  br label %ret_global
+n_ptr:
+  br label %ret_global
+n_fn:
+  br label %ret_global
+n_closure:
+  br label %ret_global
+n_end:
+  br label %ret_global
+n_iter:
+  br label %ret_global
+n_void:
+  br label %ret_global
+ret_global:
+  %gp = phi i8* [ @.t_i128, %n_i128 ], [ @.t_f64, %n_f64 ], [ @.t_bool, %n_bool ], [ @.t_str, %n_str ], [ @.t_arr, %n_arr ], [ @.t_slice, %n_slice ], [ @.t_opt, %n_opt ], [ @.t_err, %n_err ], [ @.t_ptr, %n_ptr ], [ @.t_fn, %n_fn ], [ @.t_closure, %n_closure ], [ @.t_end, %n_end ], [ @.t_iter, %n_iter ], [ @.t_void, %n_void ]
+  br label %ret_str
+ret_str:
+  %tp = phi i8* [ %tn, %cls ], [ %en_tn, %en ], [ %gp, %ret_global ]
+  %pi = ptrtoint i8* %tp to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v1 = insertvalue %Value %v0, i128 %pi, 1
+  ret %Value %v1
+}
+"#;
+
+const HC_READ_U64_LE: &str = r#"define %Value @hc_read_u64_le(%Value %v) {
+entry:
+  %t = extractvalue %Value %v, 0
+  %is_str = icmp eq i32 %t, 5
+  br i1 %is_str, label %read, label %abort
+read:
+  %d = extractvalue %Value %v, 1
+  %p = trunc i128 %d to i64
+  %pp = inttoptr i64 %p to i8*
+  %b0 = load i8, i8* %pp
+  %u0 = zext i8 %b0 to i64
+  %p1 = getelementptr i8, i8* %pp, i64 1
+  %b1 = load i8, i8* %p1
+  %u1 = zext i8 %b1 to i64
+  %s1 = shl i64 %u1, 8
+  %o1 = or i64 %u0, %s1
+  %p2 = getelementptr i8, i8* %pp, i64 2
+  %b2 = load i8, i8* %p2
+  %u2 = zext i8 %b2 to i64
+  %s2 = shl i64 %u2, 16
+  %o2 = or i64 %o1, %s2
+  %p3 = getelementptr i8, i8* %pp, i64 3
+  %b3 = load i8, i8* %p3
+  %u3 = zext i8 %b3 to i64
+  %s3 = shl i64 %u3, 24
+  %o3 = or i64 %o2, %s3
+  %p4 = getelementptr i8, i8* %pp, i64 4
+  %b4 = load i8, i8* %p4
+  %u4 = zext i8 %b4 to i64
+  %s4 = shl i64 %u4, 32
+  %o4 = or i64 %o3, %s4
+  %p5 = getelementptr i8, i8* %pp, i64 5
+  %b5 = load i8, i8* %p5
+  %u5 = zext i8 %b5 to i64
+  %s5 = shl i64 %u5, 40
+  %o5 = or i64 %o4, %s5
+  %p6 = getelementptr i8, i8* %pp, i64 6
+  %b6 = load i8, i8* %p6
+  %u6 = zext i8 %b6 to i64
+  %s6 = shl i64 %u6, 48
+  %o6 = or i64 %o5, %s6
+  %p7 = getelementptr i8, i8* %pp, i64 7
+  %b7 = load i8, i8* %p7
+  %u7 = zext i8 %b7 to i64
+  %s7 = shl i64 %u7, 56
+  %o7 = or i64 %o6, %s7
+  %z = zext i64 %o7 to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v1 = insertvalue %Value %v0, i128 %z, 1
+  ret %Value %v1
+abort:
+  call void @hc_abort_typeerr()
+  unreachable
+}
+"#;
+
+const HC_ADD_OVERFLOW: &str = r#"define %Value @hc_add_overflow(%Value %a, %Value %b) {
+entry:
+  %ta = extractvalue %Value %a, 0
+  %tb = extractvalue %Value %b, 0
+  %da = extractvalue %Value %a, 1
+  %db = extractvalue %Value %b, 1
+  %ai = icmp eq i32 %ta, 2
+  %bi = icmp eq i32 %tb, 2
+  %both = and i1 %ai, %bi
+  br i1 %both, label %int_op, label %abort
+int_op:
+  %res = call { i128, i1 } @llvm.sadd.with.overflow.i128(i128 %da, i128 %db)
+  %rv = extractvalue { i128, i1 } %res, 0
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v1 = insertvalue %Value %v0, i128 %rv, 1
+  %arr = call %Value @hc_make_arr(i64 2)
+  call void @hc_arr_set(%Value %arr, i64 0, %Value %v1)
+  %boolv = call %Value @hc_bool(i1 false)
+  call void @hc_arr_set(%Value %arr, i64 1, %Value %boolv)
+  ret %Value %arr
+abort:
+  call void @hc_abort_typeerr()
+  unreachable
+}
+"#;
+
+const HC_SUB_OVERFLOW: &str = r#"define %Value @hc_sub_overflow(%Value %a, %Value %b) {
+entry:
+  %ta = extractvalue %Value %a, 0
+  %tb = extractvalue %Value %b, 0
+  %da = extractvalue %Value %a, 1
+  %db = extractvalue %Value %b, 1
+  %ai = icmp eq i32 %ta, 2
+  %bi = icmp eq i32 %tb, 2
+  %both = and i1 %ai, %bi
+  br i1 %both, label %int_op, label %abort
+int_op:
+  %res = call { i128, i1 } @llvm.ssub.with.overflow.i128(i128 %da, i128 %db)
+  %rv = extractvalue { i128, i1 } %res, 0
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v1 = insertvalue %Value %v0, i128 %rv, 1
+  %arr = call %Value @hc_make_arr(i64 2)
+  call void @hc_arr_set(%Value %arr, i64 0, %Value %v1)
+  %boolv = call %Value @hc_bool(i1 false)
+  call void @hc_arr_set(%Value %arr, i64 1, %Value %boolv)
+  ret %Value %arr
+abort:
+  call void @hc_abort_typeerr()
+  unreachable
+}
+"#;
+
+const HC_MUL_OVERFLOW: &str = r#"define %Value @hc_mul_overflow(%Value %a, %Value %b) {
+entry:
+  %ta = extractvalue %Value %a, 0
+  %tb = extractvalue %Value %b, 0
+  %da = extractvalue %Value %a, 1
+  %db = extractvalue %Value %b, 1
+  %ai = icmp eq i32 %ta, 2
+  %bi = icmp eq i32 %tb, 2
+  %both = and i1 %ai, %bi
+  br i1 %both, label %int_op, label %abort
+int_op:
+  %res = call { i128, i1 } @llvm.smul.with.overflow.i128(i128 %da, i128 %db)
+  %rv = extractvalue { i128, i1 } %res, 0
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v1 = insertvalue %Value %v0, i128 %rv, 1
+  %arr = call %Value @hc_make_arr(i64 2)
+  call void @hc_arr_set(%Value %arr, i64 0, %Value %v1)
+  %boolv = call %Value @hc_bool(i1 false)
+  call void @hc_arr_set(%Value %arr, i64 1, %Value %boolv)
+  ret %Value %arr
+abort:
+  call void @hc_abort_typeerr()
+  unreachable
+}
+"#;
+
+fn emit_scalar_builtin_helpers(out: &mut String) {
+    for h in [
+        HC_MIN,
+        HC_MAX,
+        HC_SQRT,
+        HC_BOX,
+        HC_COPY,
+        HC_INTCAST,
+        HC_TYPEOF,
+        HC_READ_U64_LE,
+        HC_ADD_OVERFLOW,
+        HC_SUB_OVERFLOW,
+        HC_MUL_OVERFLOW,
+    ] {
+        out.push_str(h);
+        out.push('\n');
+    }
+}
+
+// ---------- Phase 7 Io 值构造（main(io: Io) 单参入口 / test_io 绑定） ----------
+
+const HC_MAKE_IO: &str = r#"define %Value @hc_make_io() {
+entry:
+  %fs = call %Value @hc_make_class(i8* @.t_fs, i64 0)
+  %time = call %Value @hc_make_class(i8* @.t_time, i64 0)
+  %net = call %Value @hc_make_class(i8* @.t_net, i64 0)
+  %io = call %Value @hc_make_class(i8* @.t_io, i64 3)
+  %fp = getelementptr inbounds [3 x i8], ptr @.f_fs, i64 0, i64 0
+  call void @hc_class_set(%Value %io, i64 0, i8* %fp, %Value %fs)
+  %tp = getelementptr inbounds [5 x i8], ptr @.f_time, i64 0, i64 0
+  call void @hc_class_set(%Value %io, i64 1, i8* %tp, %Value %time)
+  %np = getelementptr inbounds [4 x i8], ptr @.f_net, i64 0, i64 0
+  call void @hc_class_set(%Value %io, i64 2, i8* %np, %Value %net)
+  ret %Value %io
+}
+"#;
+
+fn emit_io_helper(out: &mut String) {
+    out.push_str(HC_MAKE_IO);
+    out.push('\n');
+}
+
 // ---------- 断言内建 helper（失败写全局 @hc_fail_msg） ----------
 
 fn emit_assert_helpers(out: &mut String) {
@@ -2126,6 +3005,134 @@ fn emit_assert_helpers(out: &mut String) {
 
 // ---------- 函数发射 ----------
 
+/// 槽 → 编译期常量（SSA：每个 `IrInst::Const` 槽位恰好一次）。
+/// 供 io.print 格式串 / @sizeOf/@intCast 类型名在 codegen 期解析。
+fn build_slot_consts(f: &IrFunc) -> HashMap<usize, IrConst> {
+    let mut m = HashMap::new();
+    for inst in &f.body {
+        if let IrInst::Const { temp, val } = inst {
+            m.insert(*temp, val.clone());
+        }
+    }
+    m
+}
+
+/// 从槽常量子表读类型名（`@sizeOf(i32)` / `alloc.init(ABC)` 的类型位置参数）。
+fn const_str_arg(slot_consts: &HashMap<usize, IrConst>, arg: Option<&usize>) -> Option<String> {
+    match arg.and_then(|a| slot_consts.get(a)) {
+        Some(IrConst::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// @sizeOf(T) 标量表（对齐 run_ir `scalar_size_ir`；用户 class/enum 无布局表 → None）
+fn scalar_size_native(ty: &str) -> Option<usize> {
+    match ty {
+        "i8" | "u8" | "bool" => Some(1),
+        "i16" | "u16" | "f16" => Some(2),
+        "i32" | "u32" | "f32" => Some(4),
+        "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
+        "i128" | "u128" | "f128" => Some(16),
+        "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
+        _ => None,
+    }
+}
+
+/// @alignOf(T)（对齐 run_ir：i8/i16/i32/i128 显式，余下 size.min(8)，未知默认 8）
+fn align_native(ty: &str) -> usize {
+    match ty {
+        "i8" | "u8" | "bool" => 1,
+        "i16" | "u16" | "f16" => 2,
+        "i32" | "u32" | "f32" => 4,
+        "i128" | "u128" | "f128" => 16,
+        _ => scalar_size_native(ty).map(|s| s.min(8)).unwrap_or(8),
+    }
+}
+
+/// @intCast 目标宽度范围（对齐 run_ir `int_width_bounds_ir`）
+fn int_bounds_native(ty: &str) -> Option<(i128, i128)> {
+    match ty {
+        "i8" => Some((i8::MIN as i128, i8::MAX as i128)),
+        "i16" => Some((i16::MIN as i128, i16::MAX as i128)),
+        "i32" => Some((i32::MIN as i128, i32::MAX as i128)),
+        "i64" => Some((i64::MIN as i128, i64::MAX as i128)),
+        "i128" => Some((i128::MIN, i128::MAX)),
+        "isize" => Some((isize::MIN as i128, isize::MAX as i128)),
+        "u8" => Some((0, u8::MAX as i128)),
+        "u16" => Some((0, u16::MAX as i128)),
+        "u32" => Some((0, u32::MAX as i128)),
+        "u64" => Some((0, u64::MAX as i128)),
+        "u128" => Some((0, u128::MAX as i128)),
+        "usize" => Some((0, usize::MAX as i128)),
+        _ => None,
+    }
+}
+
+/// 隐式 Io 实例静态名（`Call{"io.print"}` 形态：root 未解析为局部变量时）
+fn is_io_print_name(name: &str) -> bool {
+    matches!(
+        name,
+        "io.print" | "stdout.print" | "stderr.print" | "test_io.print"
+    )
+}
+
+/// io.print 格式串段（对齐 oracle interp.rs:4042-4079 解析）。
+enum PrintSeg {
+    Lit(String),
+    Arg { slot: Option<usize>, mode: u32 },
+}
+
+/// 解析格式串：`{}`→显示、`{x}`→十六进制、`{b}`→二进制、`{s}`→显示；
+/// 其余字节为字面量。占位符无对应实参（参数不足）→ oracle 跳过（slot=None）。
+fn parse_print_fmt(fmt: &str, args: &[usize]) -> Vec<PrintSeg> {
+    let bytes = fmt.as_bytes();
+    let mut out: Vec<PrintSeg> = Vec::new();
+    let mut lit: Vec<u8> = Vec::new();
+    let mut argi = 1usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let flush = |lit: &mut Vec<u8>, out: &mut Vec<PrintSeg>| {
+            if !lit.is_empty() {
+                out.push(PrintSeg::Lit(String::from_utf8_lossy(lit).to_string()));
+                lit.clear();
+            }
+        };
+        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
+            flush(&mut lit, &mut out);
+            out.push(PrintSeg::Arg {
+                slot: args.get(argi).copied(),
+                mode: 0,
+            });
+            argi += 1;
+            i += 2;
+        } else if bytes[i] == b'{'
+            && i + 2 < bytes.len()
+            && matches!(bytes[i + 1], b'x' | b'b' | b's')
+            && bytes[i + 2] == b'}'
+        {
+            flush(&mut lit, &mut out);
+            let mode = match bytes[i + 1] {
+                b'x' => 1,
+                b'b' => 2,
+                _ => 0,
+            };
+            out.push(PrintSeg::Arg {
+                slot: args.get(argi).copied(),
+                mode,
+            });
+            argi += 1;
+            i += 3;
+        } else {
+            lit.push(bytes[i]);
+            i += 1;
+        }
+    }
+    if !lit.is_empty() {
+        out.push(PrintSeg::Lit(String::from_utf8_lossy(&lit).to_string()));
+    }
+    out
+}
+
 fn emit_func(
     out: &mut String,
     f: &IrFunc,
@@ -2136,6 +3143,7 @@ fn emit_func(
     funcs: &[IrFunc],
     gidx: &HashMap<String, usize>,
 ) {
+    let slot_consts = build_slot_consts(f);
     let _ = writeln!(out, "; hc_fn{idx} = {}", f.name);
     let params = (0..f.params.len())
         .map(|i| format!("%Value %p{i}"))
@@ -2173,7 +3181,7 @@ fn emit_func(
         }
     }
     for inst in &f.body {
-        be.inst(inst, strings, errors, canon, funcs, gidx);
+        be.inst(inst, strings, errors, canon, funcs, gidx, &slot_consts);
     }
     out.push_str(&be.finish());
     out.push_str("}\n\n");
@@ -2210,7 +3218,10 @@ fn emit_main_wrapper(out: &mut String, module: &IrModule) {
             .find(|&i| module.funcs[i].params.is_empty())
             .unwrap_or(idxs[0]);
         let nparams = module.funcs[idx].params.len();
-        if nparams > 0 {
+        if nparams == 1 {
+            // Phase 7：单参 main 注入真实 Io 值（对齐 IrRuntime::call 的 io_value_ir）
+            out.push_str("  %argvoid = call %Value @hc_make_io()\n");
+        } else if nparams > 1 {
             out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
         }
         let mut arglist = String::new();
@@ -2535,8 +3546,25 @@ impl BodyEmitter {
         funcs: &[IrFunc],
         strings: &[String],
         errors: &ErrorCodeTable,
+        slot_consts: &HashMap<usize, IrConst>,
     ) {
+        // Phase 7：隐式环境静态方法形态——root 标识符（io/alloc 等）未解析为局部
+        // 变量时，`io.print(...)` / `alloc.init(ABC)` 以点分静态名出现，与 CallMethod
+        // 同语义（io 为隐式 Io 实例 / alloc 为隐式 Allocator）。
+        if is_io_print_name(name) {
+            self.call_print(args, temp, slot_consts, strings);
+            return;
+        }
+        if name == "alloc.init" {
+            self.call_alloc_init(args, temp, slot_consts, strings);
+            return;
+        }
         let Some(candidates) = canon.get(name) else {
+            // Phase 7：未实现的内建/限定名（json.parse 等）响亮拒绝，禁止 NoFunction 静默歧义
+            if name.contains('.') {
+                self.abort_feature("builtin");
+                return;
+            }
             let res = self.r();
             self.emit(format!("{res} = call %Value @hc_no_function()"));
             self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
@@ -2579,31 +3607,397 @@ impl BodyEmitter {
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
-    fn call_builtin(&mut self, name: &str, args: &[usize], temp: usize) {
-        let helper = match name {
+    fn call_builtin(
+        &mut self,
+        name: &str,
+        args: &[usize],
+        temp: usize,
+        slot_consts: &HashMap<usize, IrConst>,
+        _strings: &[String],
+        _errors: &ErrorCodeTable,
+    ) {
+        // ---------- 断言族（现有 5 helper） ----------
+        if let Some(helper) = match name {
             "expect" => Some("hc_expect"),
             "expect_eq" => Some("hc_expect_eq"),
             "expect_neq" => Some("hc_expect_neq"),
             "expect_error" => Some("hc_expect_error"),
             "expect_eq_slices" => Some("hc_expect_eq_slices"),
             _ => None,
-        };
-        let Some(helper) = helper else {
-            // 切片外内建（@ 内建等）→ void 占位（对齐 call_assert_builtin 默认 Void）
-            self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+        } {
+            let mut arglist = String::new();
+            for a in args {
+                let v = self.r();
+                self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
+                if !arglist.is_empty() {
+                    arglist.push_str(", ");
+                }
+                arglist.push_str(&format!("%Value {v}"));
+            }
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @{helper}({arglist})"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
+        // ---------- @ 内建（类型位置参数在 slot_consts 以 Const Str 存在） ----------
+        if name == "@sizeOf" || name == "@alignOf" {
+            let Some(ty) = const_str_arg(slot_consts, args.first()) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let v = if name == "@sizeOf" {
+                match scalar_size_native(&ty) {
+                    Some(s) => s as i128,
+                    None => {
+                        self.abort_feature("builtin");
+                        return;
+                    }
+                }
+            } else {
+                align_native(&ty) as i128
+            };
+            self.build_store(temp, T_INT, v.to_string());
+            return;
+        }
+        if name == "@intCast" {
+            let Some(ty) = const_str_arg(slot_consts, args.first()) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let Some((min, max)) = int_bounds_native(&ty) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let Some(&vslot) = args.get(1) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+            let res = self.r();
+            self.emit(format!(
+                "{res} = call %Value @hc_intcast(%Value {v}, i128 {min}, i128 {max})"
+            ));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
+        if name == "@typeOf" {
+            let Some(&vslot) = args.first() else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @hc_typeof(%Value {v})"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
+        if name == "@ptrCast" || name == "@alignCast" {
+            // tag1 指针无类型化——透传（对齐 run_ir：取末参原样返回）
+            let Some(&vslot) = args.last() else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+            self.emit(format!("store %Value {v}, %Value* %sp.{temp}"));
+            return;
+        }
+        if name == "@addWithOverflow" || name == "@subWithOverflow" || name == "@mulWithOverflow" {
+            let helper = match name {
+                "@addWithOverflow" => "hc_add_overflow",
+                "@subWithOverflow" => "hc_sub_overflow",
+                _ => "hc_mul_overflow",
+            };
+            self.emit_binop_helper(helper, args, temp);
+            return;
+        }
+        // ---------- 数值/字节内建 ----------
+        match name {
+            "min" => {
+                self.emit_binop_helper("hc_min", args, temp);
+                return;
+            }
+            "max" => {
+                self.emit_binop_helper("hc_max", args, temp);
+                return;
+            }
+            "sqrt" => {
+                self.emit_unop_helper("hc_sqrt", args, temp);
+                return;
+            }
+            "box" => {
+                self.emit_unop_helper("hc_box", args, temp);
+                return;
+            }
+            "copy" => {
+                if args.is_empty() {
+                    self.abort_feature("builtin");
+                    return;
+                }
+                let v = self.r();
+                self.emit(format!("{v} = load %Value, %Value* %sp.{}", args[0]));
+                // 模式参（.shallow/.deep）为运行期 Enum——传给 hc_copy 运行时分派；
+                // 无模式参 → 传 Void（落入 deep 路径，对齐 run_ir 默认深拷贝）
+                let mode = if args.len() > 1 {
+                    let m = self.r();
+                    self.emit(format!("{m} = load %Value, %Value* %sp.{}", args[1]));
+                    m
+                } else {
+                    self.r();
+                    "%Value { i32 0, i128 0 }".to_string()
+                };
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_copy(%Value {v}, {mode})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+                return;
+            }
+            "read_u64_le" => {
+                self.emit_unop_helper("hc_read_u64_le", args, temp);
+                return;
+            }
+            _ => {}
+        }
+        // ---------- 其余内建（sort/binary_search/集合/json/csv/io/fs/时间）→ 响亮拒绝 ----------
+        self.abort_feature("builtin");
+    }
+
+    /// 单参 helper（sqrt/box/read_u64_le）：加载首参 → 调用 → 存槽。
+    fn emit_unop_helper(&mut self, helper: &str, args: &[usize], temp: usize) {
+        let Some(&vslot) = args.first() else {
+            self.abort_feature("builtin");
             return;
         };
-        let mut arglist = String::new();
+        let v = self.r();
+        self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+        let res = self.r();
+        self.emit(format!("{res} = call %Value @{helper}(%Value {v})"));
+        self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+    }
+
+    /// 双参 helper（min/max/溢出）：加载两参 → 调用 → 存槽。
+    fn emit_binop_helper(&mut self, helper: &str, args: &[usize], temp: usize) {
+        if args.len() < 2 {
+            self.abort_feature("builtin");
+            return;
+        }
+        let va = self.r();
+        self.emit(format!("{va} = load %Value, %Value* %sp.{}", args[0]));
+        let vb = self.r();
+        self.emit(format!("{vb} = load %Value, %Value* %sp.{}", args[1]));
+        let res = self.r();
+        self.emit(format!("{res} = call %Value @{helper}(%Value {va}, %Value {vb})"));
+        self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+    }
+
+    /// alloc.init(T)：无字段类空实例（Phase 7 子集；字段默认值布局留待 Phase 9 全量）。
+    /// 类型名在 slot_consts 以 Const Str 存在（is_type_arg_pos arg0），与 MakeClass 同址。
+    fn call_alloc_init(
+        &mut self,
+        args: &[usize],
+        temp: usize,
+        slot_consts: &HashMap<usize, IrConst>,
+        strings: &[String],
+    ) {
+        let Some(ty) = const_str_arg(slot_consts, args.first()) else {
+            self.abort_feature("builtin");
+            return;
+        };
+        let (ti, tn) = str_idx(strings, &ty);
+        let g = self.r();
+        self.emit(format!(
+            "{g} = getelementptr inbounds [{tn} x i8], ptr @.str.{ti}, i64 0, i64 0"
+        ));
+        let res = self.r();
+        self.emit(format!("{res} = call %Value @hc_make_class(i8* {g}, i64 0)"));
+        self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+    }
+
+    /// `io.print(fmt, args...)`（含静态形态 `Call{"io.print"}` 与实例 `CallMethod`）。
+    /// 格式串必须为编译期字面量（slot_consts 命中）——动态格式串响亮拒绝（禁止静默误编译）。
+    fn call_print(
+        &mut self,
+        args: &[usize],
+        temp: usize,
+        slot_consts: &HashMap<usize, IrConst>,
+        strings: &[String],
+    ) {
+        let Some(fmt) = args
+            .first()
+            .and_then(|a| slot_consts.get(a))
+            .and_then(|c| match c {
+                IrConst::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+        else {
+            self.abort_feature("builtin");
+            return;
+        };
+        let segs = parse_print_fmt(&fmt, args);
+        for seg in &segs {
+            match seg {
+                PrintSeg::Lit(s) => {
+                    let (si, sn) = str_idx(strings, s);
+                    let g = self.r();
+                    self.emit(format!(
+                        "{g} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"
+                    ));
+                    self.emit(format!("call void @hc_write_bytes(i8* {g}, i64 {})", s.len()));
+                }
+                PrintSeg::Arg { slot: Some(slot), mode } => {
+                    let v = self.r();
+                    self.emit(format!("{v} = load %Value, %Value* %sp.{slot}"));
+                    self.emit(format!("call void @hc_write_value(%Value {v}, i32 {mode})"));
+                }
+                // 占位符无对应实参 → oracle 跳过该占位符（interp.rs call_io_print）
+                PrintSeg::Arg { slot: None, .. } => {}
+            }
+        }
+        // io.print 返回 Void
+        self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+    }
+
+    /// 实例方法分派：解引用基值 → 类名（%ClassObj 首字段）→ 链式 strcmp 匹配拥有者
+    /// `{Type}.{method}`（canon）。内建 Io.print 优先；匹配到用户方法则调用 `hc_fn{k}`
+    /// 且 self（解引用后值）注入首参（对齐 run_ir 的 self_v = deref_value(base)）。
+    fn call_method(
+        &mut self,
+        temp: usize,
+        base: usize,
+        method: &str,
+        args: &[usize],
+        canon: &HashMap<String, Vec<usize>>,
+        funcs: &[IrFunc],
+        strings: &[String],
+        errors: &ErrorCodeTable,
+        slot_consts: &HashMap<usize, IrConst>,
+    ) {
+        // 编译期候选拥有者：内建 Io.print + 用户 `{Type}.{method}`（canon 键点分前缀）
+        let mut owners: Vec<String> = Vec::new();
+        if method == "print" {
+            owners.push("Io".to_string());
+        }
+        let mut user_owners: Vec<String> = canon
+            .keys()
+            .filter_map(|k| k.strip_suffix(&format!(".{method}")).map(|p| p.to_string()))
+            .collect();
+        user_owners.sort();
+        user_owners.dedup();
+        owners.extend(user_owners);
+        if owners.is_empty() {
+            self.abort_feature("nomethod");
+            return;
+        }
+
+        // 运行时基址：load base → deref → 必须为 Class → 取类名
+        let bv = self.r();
+        self.emit(format!("{bv} = load %Value, %Value* %sp.{base}"));
+        let dv = self.r();
+        self.emit(format!("{dv} = call %Value @hc_deref(%Value {bv})"));
+        let tag = self.r();
+        self.emit(format!("{tag} = extractvalue %Value {dv}, 0"));
+        let is_cls = self.r();
+        self.emit(format!("{is_cls} = icmp eq i32 {tag}, {T_CLASS}"));
+        let l_notcls = self.fb();
+        let l_disp = self.fb();
+        self.term(format!("br i1 {is_cls}, label %{l_disp}, label %{l_notcls}"));
+        self.blocks
+            .push(format!("{l_notcls}:\n  call void @hc_abort_nomethod()\n  unreachable\n"));
+        self.cur = format!("{l_disp}:\n");
+        self.terminated = false;
+        let d1 = self.r();
+        self.emit(format!("{d1} = extractvalue %Value {dv}, 1"));
+        let op = self.r();
+        self.emit(format!("{op} = inttoptr i128 {d1} to %ClassObj*"));
+        let co = self.r();
+        self.emit(format!("{co} = load %ClassObj, %ClassObj* {op}"));
+        let cname = self.r();
+        self.emit(format!("{cname} = extractvalue %ClassObj {co}, 0"));
+
+        // 链式 strcmp：每个拥有者一个比较块；命中 → found 处理器；全不中 → abort
+        let mut done: Option<String> = None;
+        for owner in &owners {
+            let (oi, on) = str_idx(strings, owner);
+            let og = self.r();
+            self.emit(format!(
+                "{og} = getelementptr inbounds [{on} x i8], ptr @.str.{oi}, i64 0, i64 0"
+            ));
+            let cmp = self.r();
+            self.emit(format!("{cmp} = call i32 @strcmp(i8* {cname}, i8* {og})"));
+            let eq = self.r();
+            self.emit(format!("{eq} = icmp eq i32 {cmp}, 0"));
+            let l_found = self.fb();
+            let l_next = self.fb();
+            self.term(format!("br i1 {eq}, label %{l_found}, label %{l_next}"));
+
+            // found 块
+            self.cur = format!("{l_found}:\n");
+            self.terminated = false;
+            if owner == "Io" && method == "print" {
+                self.call_print(args, temp, slot_consts, strings);
+            } else {
+                self.call_method_user(owner, method, &dv, args, temp, canon, funcs, strings, errors);
+            }
+            let l_done = done.get_or_insert_with(|| self.fb()).clone();
+            self.term(format!("br label %{l_done}"));
+
+            // 下一比较块
+            self.cur = format!("{l_next}:\n");
+            self.terminated = false;
+        }
+        // 全部不中 → 硬中止；续块换成 done（后续指令落入 done）
+        self.abort_feature("nomethod");
+        let l_done = done.unwrap_or_else(|| self.fb());
+        self.cur = format!("{l_done}:\n");
+        self.terminated = false;
+    }
+
+    /// 用户方法静态调用：canon `{Type}.{method}` 按 arity（含 self）精确分派，
+    /// 调 `hc_fn{k}` 且解引用后基值注入首参（对齐 run_ir self_v = deref_value(base)）。
+    fn call_method_user(
+        &mut self,
+        owner: &str,
+        method: &str,
+        dv: &str,
+        args: &[usize],
+        temp: usize,
+        canon: &HashMap<String, Vec<usize>>,
+        funcs: &[IrFunc],
+        strings: &[String],
+        errors: &ErrorCodeTable,
+    ) {
+        let key = format!("{owner}.{method}");
+        let candidates = canon.get(&key).cloned().unwrap_or_default();
+        let exact: Vec<usize> = candidates
+            .iter()
+            .copied()
+            .filter(|&i| funcs[i].params.len() == args.len() + 1)
+            .collect();
+        let pool = if exact.is_empty() {
+            candidates.clone()
+        } else {
+            exact
+        };
+        let Some(&target) = pool.first() else {
+            self.abort_feature("nomethod");
+            return;
+        };
+        let fdef = &funcs[target];
+        let mut arglist = format!("%Value {dv}");
         for a in args {
             let v = self.r();
             self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
-            if !arglist.is_empty() {
-                arglist.push_str(", ");
+            arglist.push_str(&format!(", %Value {v}"));
+        }
+        for d in fdef.defaults.iter().skip(args.len() + 1) {
+            if let Some(c) = d {
+                let v = self.const_value(c, strings, errors);
+                arglist.push_str(&format!(", %Value {v}"));
             }
-            arglist.push_str(&format!("%Value {v}"));
         }
         let res = self.r();
-        self.emit(format!("{res} = call %Value @{helper}({arglist})"));
+        self.emit(format!("{res} = call %Value @\"hc_fn{target}\"({arglist})"));
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
@@ -2645,6 +4039,7 @@ impl BodyEmitter {
         canon: &HashMap<String, Vec<usize>>,
         funcs: &[IrFunc],
         gidx: &HashMap<String, usize>,
+        slot_consts: &HashMap<usize, IrConst>,
     ) {
         match inst {
             IrInst::Const { temp, val } => self.const_(*temp, val, strings, errors),
@@ -2974,15 +4369,23 @@ impl BodyEmitter {
                 self.emit(format!("call void @hc_iter_write_back(%IterObj* {itp}, %Value* %sp.{slot})"));
             }
             IrInst::Call { name, args, temp } => {
-                self.call(name, args, *temp, canon, funcs, strings, errors);
+                self.call(name, args, *temp, canon, funcs, strings, errors, slot_consts);
             }
-            IrInst::CallBuiltin { name, args, temp } => self.call_builtin(name, args, *temp),
-            // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用/方法需原生 ABI 改造（Phase 7），
-            // 当前响亮拒绝（error.NotCallable / error.NoMethod），禁止静默误编译
+            IrInst::CallBuiltin { name, args, temp } => {
+                self.call_builtin(name, args, *temp, slot_consts, strings, errors)
+            }
+            IrInst::CallMethod {
+                temp,
+                base,
+                method,
+                args,
+            } => self.call_method(*temp, *base, method, args, canon, funcs, strings, errors, slot_consts),
+            // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用需原生 ABI 改造（Phase 8），
+            // 当前响亮拒绝（error.NotCallable），禁止静默误编译。
+            // 方法调用已由 Phase 7 内建/用户类分派覆盖；闭包仍在 Phase 8。
             IrInst::MakeClosure { .. } => self.abort_feature("notcallable"),
             IrInst::FnRef { .. } => self.abort_feature("notcallable"),
             IrInst::CallIndirect { .. } => self.abort_feature("notcallable"),
-            IrInst::CallMethod { .. } => self.abort_feature("nomethod"),
             IrInst::Return { temp } => self.ret(*temp),
             IrInst::ReturnVoid => self.ret_void(),
             // Phase 5 全局单元：`@.h_globals` 数组寻址读写（声明序槽位）
@@ -3332,5 +4735,78 @@ mod tests {
         let ll = gen("fn f() i32 { var a = [1]; var mut s: i32 = 0; for (a) |x| { s += x; } return s; }");
         assert!(ll.contains("@.msg_notiter"), "{ll}");
         assert!(ll.contains("define void @hc_abort_notiter"), "{ll}");
+    }
+
+    // ---- Phase 7 原生内建 helper（子集） ----
+
+    #[test]
+    fn phase7_io_print_emits_write_helpers() {
+        // main(io: Io) 的 io.print：单参 main 注入 @hc_make_io()；格式串切分为
+        // 字面量段（hc_write_bytes）+ 参数槽（hc_write_value，模式 0=显示）。
+        let ll = gen("fn main(io: Io) !void { io.print(\"x = {}, y = {}\\n\", 42, 3.14); }");
+        assert!(ll.contains("call %Value @hc_make_io()"), "{ll}");
+        assert!(ll.contains("define %Value @hc_make_io()"), "{ll}");
+        assert!(ll.contains("define void @hc_write_bytes"), "{ll}");
+        assert!(ll.contains("define void @hc_write_value"), "{ll}");
+        // 字面量段 "x = " 与 "\n" 登记为独立全局（不是格式串整体）
+        assert!(ll.contains("c\"x = \\00\""), "{ll}");
+        assert!(ll.contains("c\"\\0A\\00\""), "{ll}");
+        assert!(ll.contains("call void @hc_write_bytes"), "{ll}");
+        assert!(ll.contains("call void @hc_write_value"), "{ll}");
+    }
+
+    #[test]
+    fn phase7_alloc_init_emits_make_class() {
+        // alloc.init(ABC) → @hc_make_class(ABC 类型名全局, i64 0)（无字段类子集）
+        let ll = gen(
+            "class ABC { x: i32, } fn main() i32 { var abc = alloc.init(ABC); return abc.x; }",
+        );
+        assert!(ll.contains("call %Value @hc_make_class(i8*"), "{ll}");
+        assert!(ll.contains("i64 0)"), "{ll}");
+        assert!(ll.contains("c\"ABC\\00\""), "{ll}");
+    }
+
+    #[test]
+    fn phase7_user_method_dispatch_emits_strcmp_chain() {
+        // abc.print(&io)：运行时分派——解引用基值 → 类名 strcmp 匹配 "ABC" →
+        // 调 hc_fn{k} 且 self（解引用后值）注入首参。
+        let ll = gen(
+            r#"class ABC {
+    pub fn print(self: *Self, io: *Io) { io.print("m\n"); }
+}
+fn main(io: Io) !void {
+    var abc = alloc.init(ABC);
+    abc.print(&io);
+}"#,
+        );
+        assert!(ll.contains("call i32 @strcmp"), "{ll}");
+        assert!(ll.contains("c\"ABC\\00\""), "{ll}");
+        assert!(ll.contains("call %Value @hc_deref"), "{ll}");
+        assert!(ll.contains("hc_fn"), "{ll}");
+        // self 注入：方法分派后至少一处以解引用值调 hc_fn{k}
+        assert!(ll.contains("call %Value @\"hc_fn"), "{ll}");
+    }
+
+    #[test]
+    fn phase7_scalar_builtins_emit_helpers() {
+        // 标量 @ 内建 + 自由内建 → 各自 helper 调用（不再静默 Void）
+        let ll = gen(
+            r#"fn main() !void {
+    try expect_eq(@sizeOf(i32), 4);
+    try expect_eq(@intCast(i32, 7), 7);
+    try expect_eq(@typeOf(42), "i128");
+    try expect_eq(min(3, 9), 3);
+    try expect_eq(max(3, 9), 9);
+    var p = box(42);
+    try expect_eq(p.*, 42);
+}"#,
+        );
+        assert!(ll.contains("call %Value @hc_intcast"), "{ll}");
+        assert!(ll.contains("call %Value @hc_typeof"), "{ll}");
+        assert!(ll.contains("call %Value @hc_min"), "{ll}");
+        assert!(ll.contains("call %Value @hc_max"), "{ll}");
+        assert!(ll.contains("call %Value @hc_box"), "{ll}");
+        // @sizeOf 编译期常量折叠 → i32 槽直接存 4（非 helper 调用）
+        assert!(ll.contains("store %Value"), "{ll}");
     }
 }
