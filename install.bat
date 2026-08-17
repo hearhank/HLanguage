@@ -1,19 +1,20 @@
 @echo off
 setlocal EnableExtensions
-title H è¯­è¨€å·¥å…·é“¾ Â· ç¼–è¯‘å¹¶å®‰è£…
+title H ÓïÑÔ¹¤¾ßÁ´ ¡¤ ±àÒë²¢°²×°
 
 REM ================================================================
-REM  H è¯­è¨€å·¥å…·é“¾ Â· ä¸€é”®ç¼–è¯‘ + å®‰è£…
+REM  H ÓïÑÔ¹¤¾ßÁ´ ¡¤ Ò»¼ü±àÒë + °²×°
 REM
-REM  åŠŸèƒ½ï¼š
-REM    1) cargo build --release ç¼–è¯‘ tag1/ å·¥ä½œåŒº
-REM    2) æŠŠ hc.exe å¤åˆ¶åˆ° Cargo bin ç›®å½•ï¼ˆ%CARGO_HOME%\binï¼Œ
-REM       é»˜è®¤ %USERPROFILE%\.cargo\binï¼Œè¯¥ç›®å½•é€šå¸¸åœ¨ PATH ä¸­ï¼‰
-REM    3) è¿è¡Œ hc --version éªŒè¯å®‰è£…
+REM  ¹¦ÄÜ£º
+REM    1) cargo build --release ±àÒë tag1/ ¹¤×÷Çø
+REM    2) °Ñ hc.exe ¸´ÖÆµ½ Cargo bin Ä¿Â¼£¨%CARGO_HOME%\bin£¬
+REM       Ä¬ÈÏ %USERPROFILE%\.cargo\bin£¬¸ÃÄ¿Â¼Í¨³£ÔÚ PATH ÖĞ£©
+REM    3) ÔËĞĞ hc --version ÑéÖ¤°²×°
 REM
-REM  ç”¨æ³•ï¼šåŒå‡»æœ¬æ–‡ä»¶ï¼Œæˆ–å‘½ä»¤è¡Œæ‰§è¡Œ  install.bat
-REM  ä¾èµ–ï¼šRust / cargoï¼ˆzig å¯é€‰ï¼Œä»…åŸç”Ÿç¼–è¯‘æ¨¡å¼éœ€è¦ï¼‰
-REM  æ³¨æ„ï¼šæœ¬æ–‡ä»¶é¡»æ”¾åœ¨ä»“åº“æ ¹ç›®å½•ï¼ˆä¸ tag1/ åŒçº§ï¼‰ã€‚
+REM  ÓÃ·¨£ºË«»÷±¾ÎÄ¼ş£¬»òÃüÁîĞĞÖ´ĞĞ  install.bat
+REM  ÒÀÀµ£ºRust / cargo£¨zig ¿ÉÑ¡£¬½öÔ­Éú±àÒëÄ£Ê½ĞèÒª£©
+REM  ×¢Òâ£º±¾ÎÄ¼şĞë·ÅÔÚ²Ö¿â¸ùÄ¿Â¼£¨Óë tag1/ Í¬¼¶£©¡£
+REM  ±àÂë£ºGBK£¨CP936£¬ÖĞÎÄ Windows cmd Ô­Éú±àÂë£©¡£
 REM ================================================================
 
 set "TAG1=%~dp0tag1"
@@ -21,67 +22,67 @@ set "BINDIR=%CARGO_HOME%\bin"
 if "%BINDIR%"=="\bin" set "BINDIR=%USERPROFILE%\.cargo\bin"
 
 echo.
-echo === H è¯­è¨€å·¥å…·é“¾ï¼šç¼–è¯‘å¹¶å®‰è£… ===
-echo   æºç ç›®å½• : %TAG1%
-echo   å®‰è£…ç›®å½• : %BINDIR%
+echo === H ÓïÑÔ¹¤¾ßÁ´£º±àÒë²¢°²×° ===
+echo   Ô´ÂëÄ¿Â¼ : %TAG1%
+echo   °²×°Ä¿Â¼ : %BINDIR%
 echo.
 
-REM ---------- 1. ç¼–è¯‘ Release ----------
+REM ---------- 1. ±àÒë Release ----------
 echo [1/3] cargo build --release ...
 pushd "%TAG1%"
 if errorlevel 1 (
-    echo [é”™è¯¯] æ‰¾ä¸åˆ°ç›®å½•ï¼š%TAG1%
-    echo        æœ¬æ–‡ä»¶é¡»æ”¾åœ¨ä»“åº“æ ¹ç›®å½•ï¼ˆä¸ tag1/ åŒçº§ï¼‰ã€‚
+    echo [´íÎó] ÕÒ²»µ½Ä¿Â¼£º%TAG1%
+    echo        ±¾ÎÄ¼şĞë·ÅÔÚ²Ö¿â¸ùÄ¿Â¼£¨Óë tag1/ Í¬¼¶£©¡£
     exit /b 1
 )
 call cargo build --release
 if errorlevel 1 (
-    echo [é”™è¯¯] ç¼–è¯‘å¤±è´¥ã€‚è¯·ç¡®è®¤å·²å®‰è£… Rust å·¥å…·é“¾ï¼ˆrustup/cargoï¼‰ã€‚
+    echo [´íÎó] ±àÒëÊ§°Ü¡£ÇëÈ·ÈÏÒÑ°²×° Rust ¹¤¾ßÁ´£¨rustup/cargo£©¡£
     popd
     exit /b 1
 )
 popd
 
-REM ---------- 2. å®‰è£… ----------
+REM ---------- 2. °²×° ----------
 if not exist "%BINDIR%" mkdir "%BINDIR%"
-echo [2/3] å®‰è£… hc.exe åˆ° %BINDIR% ...
+echo [2/3] °²×° hc.exe µ½ %BINDIR% ...
 copy /y "%TAG1%\target\release\hc.exe" "%BINDIR%\hc.exe" >nul
 if errorlevel 1 (
-    echo [é”™è¯¯] å¤åˆ¶å¤±è´¥ã€‚è‹¥ hc æ­£åœ¨è¿è¡Œï¼Œè¯·å…ˆå…³é—­ï¼ˆtaskkill /IM hc.exeï¼‰åé‡è¯•ã€‚
+    echo [´íÎó] ¸´ÖÆÊ§°Ü¡£Èô hc ÕıÔÚÔËĞĞ£¬ÇëÏÈ¹Ø±Õ£¨taskkill /IM hc.exe£©ºóÖØÊÔ¡£
     exit /b 1
 )
 
-REM ---------- 3. éªŒè¯ ----------
-echo [3/3] éªŒè¯å®‰è£… ...
+REM ---------- 3. ÑéÖ¤ ----------
+echo [3/3] ÑéÖ¤°²×° ...
 "%BINDIR%\hc.exe" --version
 if errorlevel 1 (
-    echo [è­¦å‘Š] hc --version æ‰§è¡Œå¼‚å¸¸ï¼Œè¯·æ£€æŸ¥å®‰è£…ç›®å½•æƒé™ã€‚
+    echo [¾¯¸æ] hc --version Ö´ĞĞÒì³££¬Çë¼ì²é°²×°Ä¿Â¼È¨ÏŞ¡£
     exit /b 1
 )
 
-REM ---------- PATH æç¤ºï¼ˆä¸è‡ªåŠ¨æ”¹å†™æ³¨å†Œè¡¨ï¼Œå®‰å…¨ä¼˜å…ˆï¼‰ ----------
+REM ---------- PATH ÌáÊ¾£¨²»×Ô¶¯¸ÄĞ´×¢²á±í£¬°²È«ÓÅÏÈ£© ----------
 where hc >nul 2>nul
 if errorlevel 1 (
     echo.
-    echo [æç¤º] %BINDIR% ä¸åœ¨å½“å‰ PATH ä¸­ã€‚è¯·åœ¨ç³»ç»Ÿè®¾ç½®ä¸­è¿½åŠ è¯¥ç›®å½•ï¼Œ
-    echo        æˆ–åœ¨å‘½ä»¤è¡Œæ‰§è¡Œï¼š
+    echo [ÌáÊ¾] %BINDIR% ²»ÔÚµ±Ç° PATH ÖĞ¡£ÇëÔÚÏµÍ³ÉèÖÃÖĞ×·¼Ó¸ÃÄ¿Â¼£¬
+    echo        »òÔÚÃüÁîĞĞÖ´ĞĞ£º
     echo            setx PATH "%BINDIR%;%%PATH%%"
-    echo        ç„¶åæ–°å¼€ä¸€ä¸ªç»ˆç«¯ä½¿ç”¨ hcã€‚
+    echo        È»ºóĞÂ¿ªÒ»¸öÖÕ¶ËÊ¹ÓÃ hc¡£
 ) else (
     echo.
-    echo å®‰è£…å®Œæˆï¼hc å·²åœ¨ PATHï¼Œå¯ç›´æ¥ä½¿ç”¨ï¼š
-    echo   hc run examples/hello.hc      è§£é‡Šè¿è¡Œ
-    echo   hc build examples/hello.hc    åŸç”Ÿç¼–è¯‘ï¼ˆéœ€ zigï¼‰
-    echo   hc test examples/             è¿è¡Œæµ‹è¯•
-    echo   hc --help                     æ›´å¤šå‘½ä»¤
+    echo °²×°Íê³É£¡hc ÒÑÔÚ PATH£¬¿ÉÖ±½ÓÊ¹ÓÃ£º
+    echo   hc run examples/hello.hc      ½âÊÍÔËĞĞ
+    echo   hc build examples/hello.hc    Ô­Éú±àÒë£¨Ğè zig£©
+    echo   hc test examples/             ÔËĞĞ²âÊÔ
+    echo   hc --help                     ¸ü¶àÃüÁî
 )
 
-REM ---------- zig æ£€æŸ¥ï¼ˆä»…æç¤ºï¼‰ ----------
+REM ---------- zig ¼ì²é£¨½öÌáÊ¾£© ----------
 where zig >nul 2>nul
 if errorlevel 1 (
     echo.
-    echo [æç¤º] æœªæ£€æµ‹åˆ° zigã€‚åŸç”Ÿç¼–è¯‘ï¼ˆhc build / hc test --mode=compileï¼‰éœ€è¦ zig ccï¼›
-    echo        ç¼ºå¤±æ—¶ hc build è‡ªåŠ¨å›é€€å­—èŠ‚ç äº§ç‰©ï¼Œè„šæœ¬æ¨¡å¼ä¸å—å½±å“ã€‚
+    echo [ÌáÊ¾] Î´¼ì²âµ½ zig¡£Ô­Éú±àÒë£¨hc build / hc test --mode=compile£©ĞèÒª zig cc£»
+    echo        È±Ê§Ê± hc build ×Ô¶¯»ØÍË×Ö½ÚÂë²úÎï£¬½Å±¾Ä£Ê½²»ÊÜÓ°Ïì¡£
 )
 
 echo.
