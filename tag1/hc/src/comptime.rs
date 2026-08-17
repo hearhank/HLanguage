@@ -102,6 +102,55 @@ pub fn subst(ty: &ast::Type, bindings: &HashMap<String, ast::Type>) -> ast::Type
     }
 }
 
+/// 深度遍历类型，把每个「类型函数应用」`Named(n, args)`（args 非空）替换为
+/// `resolve(n, args)` 返回的具体化键（`Named(concrete, [])`）。复合类型递归。
+/// 自/互递归类型函数由后端 in-progress 守卫终止（resolve 返回键而不重入）。
+/// D3：嵌套/递归实例化——`List(Pair(i32))` 内层先登记、字段类型落具体化键。
+pub fn map_type_apps(
+    ty: &ast::Type,
+    resolve: &mut dyn FnMut(&str, &[ast::Type]) -> Result<String, String>,
+) -> Result<ast::Type, String> {
+    match ty {
+        ast::Type::Named(n, args) => {
+            if args.is_empty() {
+                Ok(ty.clone())
+            } else {
+                // 类型函数应用：委托后端 resolve（具体化登记 + 返回键）
+                Ok(ast::Type::Named(resolve(n, args)?, vec![]))
+            }
+        }
+        ast::Type::Ptr(inner, mut_) => {
+            Ok(ast::Type::Ptr(Box::new(map_type_apps(inner, resolve)?), *mut_))
+        }
+        ast::Type::Slice(inner, mut_) => {
+            Ok(ast::Type::Slice(Box::new(map_type_apps(inner, resolve)?), *mut_))
+        }
+        ast::Type::Optional(inner) => {
+            Ok(ast::Type::Optional(Box::new(map_type_apps(inner, resolve)?)))
+        }
+        ast::Type::ErrorUnion(e, inner) => Ok(ast::Type::ErrorUnion(
+            match e {
+                Some(x) => Some(Box::new(map_type_apps(x, resolve)?)),
+                None => None,
+            },
+            Box::new(map_type_apps(inner, resolve)?),
+        )),
+        ast::Type::Tuple(ts) => {
+            let mut out = Vec::with_capacity(ts.len());
+            for t in ts {
+                out.push(map_type_apps(t, resolve)?);
+            }
+            Ok(ast::Type::Tuple(out))
+        }
+        ast::Type::Array(n, inner) => {
+            Ok(ast::Type::Array(*n, Box::new(map_type_apps(inner, resolve)?)))
+        }
+        ast::Type::ComptimeInt(v) => Ok(ast::Type::ComptimeInt(*v)),
+        ast::Type::Infer => Ok(ast::Type::Infer),
+        ast::Type::Owned(inner) => Ok(ast::Type::Owned(Box::new(map_type_apps(inner, resolve)?))),
+    }
+}
+
 /// 具体化产物
 #[derive(Debug)]
 pub enum Instantiated {

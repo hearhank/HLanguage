@@ -1147,6 +1147,10 @@ struct LowerCtx<'a> {
     /// E1.2 组 D：类型函数定义表（name → params+body，comptime-only）。`Pair(i32)`
     /// 类型应用点惰性具体化：instantiate → 具体化 Class 登记进 `self.types`。
     type_fns: &'a HashMap<String, (Vec<Param>, Block)>,
+    /// E1.2 组 D D3：具体化登记期进行中的具体化名集合（`Pair<@i32>` 键）。
+    /// 自/互递归类型函数（`LinkedList(T) { next: ?LinkedList(T) }`）在登记期重入时
+    /// 命中即返回键本身（叶），防止无限实例化。
+    instantiating: Vec<String>,
     /// C3：文件级 import 符号选择展开表（bound 名 → 完整限定名 `jsonlib.parse`）
     import_syms: HashMap<String, String>,
     /// C3：整模块 import 前缀展开表（bound 模块名 → 包路径 `pkg.mod`）
@@ -1195,6 +1199,7 @@ impl<'a> LowerCtx<'a> {
             types,
             funcs,
             type_fns,
+            instantiating: Vec::new(),
             import_syms,
             import_mods,
             globals,
@@ -2604,7 +2609,24 @@ impl<'a> LowerCtx<'a> {
     fn lower_default_value(&mut self, ty: &Type) -> usize {
         let t = self.alloc_slot();
         match ty.strip() {
-            Type::Named(n, _) => match n.as_str() {
+            Type::Named(n, args) => {
+                // E1.2 组 D D3：类型函数应用（`Pair(i32)`）声明式无初值 → 惰性具体化后
+                // 递归（对齐 oracle default_value interp.rs:1438-1440，消除 `__none__`
+                // 静默损坏）。具体化失败（类型函数体形状非法）→ 降级硬错误 + void 占位。
+                if !args.is_empty() {
+                    match self.concrete_type_name(n, args) {
+                        Ok(cn) => {
+                            let inner = self.lower_default_value(&Type::Named(cn, vec![]));
+                            self.push(IrInst::Move { temp: t, a: inner });
+                            return t;
+                        }
+                        Err(msg) => {
+                            self.fail_void(t, &msg, &Span::new(0, 0, 0, 0));
+                            return t;
+                        }
+                    }
+                }
+                match n.as_str() {
                 "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
                 | "u128" | "usize" => {
                     self.push(IrInst::Const {
@@ -2684,6 +2706,7 @@ impl<'a> LowerCtx<'a> {
                         });
                     }
                 }
+                }
             },
             Type::Optional(_) => {
                 self.push(IrInst::Const {
@@ -2725,40 +2748,78 @@ impl<'a> LowerCtx<'a> {
         if args.is_empty() {
             return Ok(name.to_string());
         }
-        let cname = comptime::concrete_name(name, args);
+        // E1.2 组 D D3：预解析实参——内层类型函数应用先具体化登记（返回具体化键）。
+        // 自/互递归类型函数经 `instantiating` 守卫终止（见下）。
+        let mut resolved: Vec<Type> = Vec::with_capacity(args.len());
+        for a in args {
+            resolved.push(self.resolve_nested_types(a)?);
+        }
+        let cname = comptime::concrete_name(name, &resolved);
         if self.types.classes.contains_key(&cname) || self.types.enums.contains_key(&cname) {
             return Ok(cname);
         }
+        // 自/互递归守卫：`LinkedList(i32)` 字段内自引用在登记期重入 → 返回键本身（叶）。
+        if self.instantiating.contains(&cname) {
+            return Ok(cname);
+        }
         if let Some((params, body)) = self.type_fns.get(name) {
-            match comptime::instantiate(name, params, body, args) {
-                Ok(Instantiated::Class(decl)) => {
-                    if let Decl::Class {
-                        name: cn,
-                        traits,
-                        fields,
-                        methods,
-                        ..
-                    } = &decl
-                    {
-                        let ci = ClassInfo {
-                            fields: fields
-                                .iter()
-                                .map(|f| (f.name.clone(), f.ty.clone()))
-                                .collect(),
-                            methods: methods.iter().map(|m| m.name.clone()).collect(),
-                            continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
-                        };
-                        self.types.classes.insert(cn.clone(), ci);
+            self.instantiating.push(cname.clone());
+            let inst = comptime::instantiate(name, params, body, &resolved);
+            let result = match inst {
+                Ok(Instantiated::Class(mut decl)) => {
+                    match self.normalize_decl_fields(&mut decl) {
+                        Ok(()) => {
+                            if let Decl::Class {
+                                name: cn,
+                                traits,
+                                fields,
+                                methods,
+                                ..
+                            } = &decl
+                            {
+                                let ci = ClassInfo {
+                                    fields: fields
+                                        .iter()
+                                        .map(|f| (f.name.clone(), f.ty.clone()))
+                                        .collect(),
+                                    methods: methods.iter().map(|m| m.name.clone()).collect(),
+                                    continuous: traits
+                                        .iter()
+                                        .any(|t| matches!(t, Trait::Continuous)),
+                                };
+                                self.types.classes.insert(cn.clone(), ci);
+                            }
+                            Ok(cname)
+                        }
+                        Err(msg) => Err(msg),
                     }
-                    return Ok(cname);
                 }
-                Ok(Instantiated::Type(t)) => return Ok(comptime::type_key(&t)),
-                Err(msg) => return Err(msg),
-            }
+                Ok(Instantiated::Type(t)) => Ok(comptime::type_key(&t)),
+                Err(msg) => Err(msg),
+            };
+            self.instantiating.pop();
+            return result;
         }
         // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：回退基础名，由调用方
         // 既有路径处理（空集合 / 类型未登记 → 未知类型，保持原语义）。
         Ok(name.to_string())
+    }
+
+    /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair(i32)` → `Pair<@i32>`）。
+    /// 内层先具体化登记；自/互递归经 `instantiating` 守卫返回键（叶）。
+    fn resolve_nested_types(&mut self, ty: &Type) -> Result<Type, String> {
+        comptime::map_type_apps(ty, &mut |n, a| self.concrete_type_name(n, a))
+    }
+
+    /// E1.2 组 D D3：把具体化 Class 声明的字段类型深度规范化——嵌套类型函数应用
+    /// （`Pair(i32)`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
+    fn normalize_decl_fields(&mut self, decl: &mut Decl) -> Result<(), String> {
+        if let Decl::Class { fields, .. } = decl {
+            for fd in fields.iter_mut() {
+                fd.ty = self.resolve_nested_types(&fd.ty)?;
+            }
+        }
+        Ok(())
     }
 
     fn lower_stmt(&mut self, s: &Stmt) {
@@ -2769,14 +2830,19 @@ impl<'a> LowerCtx<'a> {
                 self.bind(name, slot);
                 let t = match init {
                     Some(e) => self.lower_expr(e),
-                    None => {
-                        let t = self.alloc_slot();
-                        self.push(IrInst::Const {
-                            temp: t,
-                            val: IrConst::Void,
-                        });
-                        t
-                    }
+                    // 声明式无初值：有类型标注 → 类型默认值（对齐 oracle `default_value`，
+                    // 含 D3 类型函数应用的惰性具体化）；无标注 → Void 占位（原行为）。
+                    None => match ty {
+                        Some(ty) => self.lower_default_value(ty),
+                        None => {
+                            let t = self.alloc_slot();
+                            self.push(IrInst::Const {
+                                temp: t,
+                                val: IrConst::Void,
+                            });
+                            t
+                        }
+                    },
                 };
                 // [continuous] 值语义（P11d）：声明类型为连续类，或未标注类型且初始
                 // 值为标识符 → 赋值前 DeepCopy（后者由运行时门判定，仅连续类深拷贝）。

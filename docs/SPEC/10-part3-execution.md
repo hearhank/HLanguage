@@ -111,7 +111,7 @@
 |---|---|---|---|---|
 | D1 | `type` 关键字 + 类型参数：`fn List(T: type) type` 解析/AST/语义（类型值 = 编译期对象） | parse + semantic 测试绿 | A2 | 2h |
 | D2 | ✅ `comptime { ... }` 块 + 编译期求值执行（对齐 interp 求值器子集） | comptime 测试绿 | D1 | 2h |
-| D3 | 泛型实例化完整：名字 + 实参列表具体化 + 惰性实例化缓存（对齐 M2.3 具体优先泛型） | 泛型测试绿（含嵌套/递归实例化） | D2 | 2h |
+| D3 | ✅ 泛型实例化完整：名字 + 实参列表具体化 + 惰性实例化缓存（对齐 M2.3 具体优先泛型） | 泛型测试绿（含嵌套/递归实例化） | D2 | 2h |
 | D4 | `anytype` + comptime_int/float 完整语义（惰性宽度、编译期常量折叠） | 语义测试绿 | D2 | 1.5h |
 | D5 | 三后端对齐：类型值在 IR 的表示（编译期展开后无运行时残留）+ 一致性用例 | consistency 绿 | D3 | 2h |
 
@@ -120,6 +120,8 @@
 > ✅ **组 D D3/D4 最小切片已完成（2026-08-18）**：comptime_int 值参数 + 数组类型函数——`fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`。AST 增 `Type::ComptimeInt(usize)`（类型实参位置的整数字面量，惰性宽度）与 `Expr::ArrayType { len, elem }`（`[n]T` 数组类型值表达式；parser `in_type_fn` 标志下仅类型函数体 return 位置特殊解析，避免与数组字面量歧义）；`instantiate` 参数分类（`T: type` = 类型参数 / `n: comptime_int` = 值参数）+ 长度求值（字面量/参数引用）→ `Type::Array(n, elem)`；具体化名 `ArrayLen(i32, 3)` → `ArrayLen<@i32,3>`，数组产物 `type_key` = `[3]i32`。带 init 的 var-decl **惰性放行**（不调用 `concrete_type_name`，标注仅设 expected_ret——示例 35 靠 init 驱动）；`max_value` anytype 为普通运行时函数非类型函数。示例 **35-comptime-branch** interp / IR / 原生编译三模式全绿（2 测试）；comptime 单测 +8（值参数/数组形态含错误路径）；consistency 新增 `d35_comptime_array_type_fn_consistent`。**仍待 D3/D4**：嵌套/递归实例化、comptime_float、`anytype` 完整语义、`comptime` 值函数。
 
 > ✅ **组 D D2（comptime 块最小切片）已完成（2026-08-18）**：`comptime { }` 块装载期编译期求值——AST/parser 增 `Decl::Comptime { body, span }`（`KwComptime` 声明级解析，镜像 `Decl::Script`）；`hc-tools/src/comptimegen.rs` 装载期 pass（script 展开后、语义检查前，经 `parse_with_scripts` 统一入口）：受限 Interp（`script_mode`：io/alloc/argv 不可用）求值块体，结果**丢弃**（仅编译期存在，无运行时代码、无源码替换）；失败 = 编译错误（`return error.X` → 「comptime 块返回错误 `error.X`」带块 span；运行时错误 → 原 RtError 渲染）。块内可见完整 `types` 元数据（含 script 生成类型——「script 展开后求值」顺序验证）。三后端跳过 `Decl::Comptime`（镜像 Script），IR/native 零改动。测试 `hc-tools/tests/comptime.rs` 5 项端到端（通过 / return error / 未知类型 / io 禁用 / script 生成类型可见）；`cargo test --workspace` 全绿；门禁基线不变（interpret 135/8/1、compile 53 mismatch）。**仍待 D3/D4**：嵌套/递归实例化、comptime_float、`anytype` 完整语义、`comptime` 值函数。
+
+> ✅ **组 D D3（嵌套/递归实例化）已完成（2026-08-18）**：类型函数**嵌套**（`PairPair(i32)` 字段 `a: Pair(T)` → 具体化键 `Pair<@i32>`）与**递归/自引用**（`fn LinkedList(T: type) type { return struct { value: T, next: ?LinkedList(T) }; }`）实例化。实现：`hc::comptime` 增深度遍历辅助 `map_type_apps`（后端注入 resolver 回调，规避 hc 零依赖约束——`Named(n, args)` 空 args 克隆 / 非空 → `Named(resolve(n, args), [])`，`Ptr/Slice/Optional/ErrorUnion/Tuple/Array/Owned` 递推）；interp 与 IR 的 `concrete_type_name` 重写为**先预解析实参**（内层类型函数先具体化登记，返回具体化键）→ `instantiating: Vec<String>` **in-progress 守卫**（自/互递归字段内自引用 → 返回自身键为叶，不无限重入）→ 具体化 Class 声明字段经 `normalize_decl_fields` 规范化。IR `lower_default_value` 增类型函数应用臂（惰性具体化后递归），并补 `var x: PairPair(i32);` 声明式无初值路径——对齐 oracle `default_value`（原 IR 无初值恒推 Void，字段访问报 NoField）。运行时递归靠 Optional 默认 `None` 终止（`next = null` / 无初值构造不递归）。测试：comptime 单测 +2（parser 嵌套回归、`map_type_apps` 嵌套/复合形态单测）、consistency +2（`d3_nested_instantiation_consistent`、`d3_recursive_instantiation_consistent`，均含声明式无初值）；`cargo test --workspace` 全绿；门禁基线不变（interpret 135/8/1、compile 53 mismatch）。**已知边界**：内建泛型外层嵌套 `Vec(List(i32))` 仍退化裸名 `Vec`；无限大小类型（非 `?` 自引用）语言层非法，未处理。**仍待 D4**：comptime_float、`anytype` 完整语义、`comptime` 值函数。
 
 ### E. E2.3 异步（依赖 A1 协作式路径 + 组 G；确定性 Future）
 

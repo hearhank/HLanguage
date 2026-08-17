@@ -284,6 +284,10 @@ pub struct Interp {
     /// io/alloc/stdout/stderr/argv/网络不可用（受限 H 核心子集），仅注入 `types`
     /// 元数据对象（Q23）。
     script_mode: bool,
+    /// E1.2 组 D D3：具体化登记期进行中的具体化名集合（`Pair<@i32>` 键）。
+    /// 自/互递归类型函数（`LinkedList(T) { next: ?LinkedList(T) }`）在登记期重入时
+    /// 命中即返回键本身（叶），防止无限实例化。
+    instantiating: Vec<String>,
 }
 
 impl Interp {
@@ -320,6 +324,7 @@ impl Interp {
             import_env: HashMap::new(),
             root_threads: Vec::new(),
             script_mode: false,
+            instantiating: Vec::new(),
         }
     }
 
@@ -1503,8 +1508,18 @@ impl Interp {
         if args.is_empty() {
             return Ok(name.to_string());
         }
-        let cname = comptime::concrete_name(name, args);
+        // E1.2 组 D D3：预解析实参——内层类型函数应用先具体化登记（返回具体化键）。
+        // 自/互递归类型函数经 `instantiating` 守卫终止（见下）。
+        let mut resolved: Vec<Type> = Vec::with_capacity(args.len());
+        for a in args {
+            resolved.push(self.resolve_nested_types(a)?);
+        }
+        let cname = comptime::concrete_name(name, &resolved);
         if self.types.contains_key(&cname) {
+            return Ok(cname);
+        }
+        // 自/互递归守卫：`LinkedList(i32)` 字段内自引用在登记期重入 → 返回键本身（叶）。
+        if self.instantiating.contains(&cname) {
             return Ok(cname);
         }
         // 查类型函数定义（`fn name(T: type) type`）→ 编译期求值具体化
@@ -1513,24 +1528,53 @@ impl Interp {
                 if !comptime::is_type_fn(&f.params, &f.ret) {
                     continue;
                 }
-                match comptime::instantiate(name, &f.params, &f.body, args) {
-                    Ok(Instantiated::Class(decl)) => {
-                        self.register_type_decl(&decl)?;
-                        return Ok(cname);
+                self.instantiating.push(cname.clone());
+                let inst = comptime::instantiate(name, &f.params, &f.body, &resolved);
+                let result = match inst {
+                    Ok(Instantiated::Class(mut decl)) => {
+                        // D3：字段类型规范化——`Pair(T)` → 实参具体化键（自引用命中守卫）
+                        match self.normalize_decl_fields(&mut decl) {
+                            Ok(()) => match self.register_type_decl(&decl) {
+                                Ok(()) => Ok(cname),
+                                Err(e) => Err(e),
+                            },
+                            Err(e) => Err(e),
+                        }
                     }
                     Ok(Instantiated::Type(t)) => {
                         // 透传：`Pair(i32)` ≡ 实参类型自身
-                        return Ok(comptime::type_key(&t));
+                        Ok(comptime::type_key(&t))
                     }
-                    Err(msg) => {
-                        return Err(RtError::msg("TypeInstantiation", msg));
-                    }
-                }
+                    Err(msg) => Err(RtError::msg("TypeInstantiation", msg)),
+                };
+                self.instantiating.pop();
+                return result;
             }
         }
         // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：回退基础名，由调用方
         // 既有非泛型路径处理（空集合 / 类型未登记 → UnknownType，保持原语义）。
         Ok(name.to_string())
+    }
+
+    /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair(i32)` → `Pair<@i32>`）。
+    /// 内层先具体化登记；自/互递归经 `instantiating` 守卫返回键（叶）。
+    fn resolve_nested_types(&mut self, ty: &Type) -> Result<Type> {
+        let src = self.source.clone();
+        comptime::map_type_apps(ty, &mut |n, a| {
+            self.concrete_type_name(n, a).map_err(|e| e.render(&src))
+        })
+        .map_err(|msg| RtError::msg("TypeInstantiation", msg))
+    }
+
+    /// E1.2 组 D D3：把具体化 Class 声明的字段类型深度规范化——嵌套类型函数应用
+    /// （`Pair(i32)`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
+    fn normalize_decl_fields(&mut self, decl: &mut Decl) -> Result<()> {
+        if let Decl::Class { fields, .. } = decl {
+            for fd in fields.iter_mut() {
+                fd.ty = self.resolve_nested_types(&fd.ty)?;
+            }
+        }
+        Ok(())
     }
 
     fn exec_if(&mut self, ifs: &IfStmt) -> Result<Flow> {

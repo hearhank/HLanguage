@@ -5,8 +5,10 @@
 
 use std::collections::HashMap;
 
-use hc::ast::{Block, Decl, Param, Program, Type};
-use hc::comptime::{concrete_name, instantiate, is_type_fn, subst, type_key, Instantiated};
+use hc::ast::{Block, Decl, Param, Program, Stmt, Type};
+use hc::comptime::{
+    concrete_name, instantiate, is_type_fn, map_type_apps, subst, type_key, Instantiated,
+};
 use hc::parse_source;
 
 /// 从已解析程序取具名函数的三要素（params, ret, body）
@@ -331,4 +333,95 @@ fn instantiate_type_param_gets_comptime_int_errors() {
     let args = vec![t_comptime_int(3), t_comptime_int(3)];
     let err = instantiate("ArrayLen", params, body, &args).unwrap_err();
     assert!(err.contains("需要类型实参"), "错误信息含类型说明：{err}");
+}
+
+// ---------- 组 D D3：嵌套/递归实例化 ----------
+
+#[test]
+fn parser_nested_type_application() {
+    // 组 D D3 parser 回归：`L(L(i32))` 嵌套类型实参按 `Named` 树保留
+    // （内层先于外层——具体化键由后端在登记期递归计算，见 `map_type_apps`）。
+    let prog = parse_source(
+        r#"
+        fn L(T: type) type { return struct { x: T }; }
+        fn main() void { var a: L(L(i32)); }
+        "#,
+    )
+    .unwrap();
+    let nested = Type::Named("L".into(), vec![Type::Named("L".into(), vec![t_i32()])]);
+    for d in &prog.decls {
+        if let Decl::Fn { name, body, .. } = d {
+            if name == "main" {
+                let mut found = false;
+                for s in &body.stmts {
+                    if let Stmt::VarDecl { ty: Some(t), .. } = s {
+                        assert_eq!(t, &nested, "嵌套类型实参按 Named 树保留");
+                        found = true;
+                    }
+                }
+                assert!(found, "main 内应有 var 声明");
+                return;
+            }
+        }
+    }
+    panic!("fn main 未找到");
+}
+
+#[test]
+fn map_type_apps_resolves_nested_apps() {
+    // 组 D D3：`map_type_apps` 深度遍历，把嵌套类型函数应用替换为具体化键。
+    // 假 resolver 模拟后端 `concrete_type_name` 的预解析实参步骤：内层类型函数
+    // 应用先具体化（`Pair(i32)` → `Pair<@i32>`），外层以已解析实参生成键。
+    fn fake_resolve(n: &str, args: &[Type]) -> Result<String, String> {
+        let mut resolved: Vec<Type> = Vec::new();
+        for a in args {
+            resolved.push(map_type_apps(a, &mut |n2, a2| {
+                Ok(format!(
+                    "{n2}<@{}>",
+                    a2.iter().map(type_key).collect::<Vec<_>>().join(",")
+                ))
+            })?);
+        }
+        Ok(format!(
+            "{n}<@{}>",
+            resolved.iter().map(type_key).collect::<Vec<_>>().join(",")
+        ))
+    }
+
+    // `Pair(Pair(i32))` → 外层具体化键 `Pair<@Pair<@i32>>`
+    let root = Type::Named("Pair".into(), vec![Type::Named("Pair".into(), vec![t_i32()])]);
+    assert_eq!(
+        map_type_apps(&root, &mut fake_resolve).unwrap(),
+        Type::Named("Pair<@Pair<@i32>>".into(), vec![]),
+        "嵌套类型函数应用 → 深层具体化键"
+    );
+
+    // 复合形态递推：`?Pair(i32)` / `[2]Pair(i32)` / `*mut Pair(i32)` / `(Pair(i32), i32)`
+    let opt = Type::Optional(Box::new(Type::Named("Pair".into(), vec![t_i32()])));
+    assert_eq!(
+        map_type_apps(&opt, &mut fake_resolve).unwrap(),
+        Type::Optional(Box::new(Type::Named("Pair<@i32>".into(), vec![]))),
+        "?T 递推"
+    );
+    let arr = Type::Array(2, Box::new(Type::Named("Pair".into(), vec![t_i32()])));
+    assert_eq!(
+        map_type_apps(&arr, &mut fake_resolve).unwrap(),
+        Type::Array(2, Box::new(Type::Named("Pair<@i32>".into(), vec![]))),
+        "[N]T 递推"
+    );
+    let ptr = Type::Ptr(Box::new(Type::Named("Pair".into(), vec![t_i32()])), true);
+    assert_eq!(
+        map_type_apps(&ptr, &mut fake_resolve).unwrap(),
+        Type::Ptr(Box::new(Type::Named("Pair<@i32>".into(), vec![])), true),
+        "*mut T 递推"
+    );
+    let tup = Type::Tuple(vec![
+        Type::Named("Pair".into(), vec![t_i32()]),
+        t_i32(),
+    ]);
+    assert_eq!(
+        map_type_apps(&tup, &mut fake_resolve).unwrap(),
+        Type::Tuple(vec![Type::Named("Pair<@i32>".into(), vec![]), t_i32()]),
+        "Tuple 递推"
+    );
 }

@@ -1695,3 +1695,56 @@ fn max_value(a: anytype, b: anytype) anytype {
 "#,
     );
 }
+
+#[test]
+fn d3_nested_instantiation_consistent() {
+    // 组 D D3：类型函数嵌套实例化——`PairPair(i32)` 字段类型在内层登记后为
+    // 具体化键 `Pair<@i32>`。interp == IR 双模式一致：嵌套 NamedLit 构造、字段
+    // 读写、声明式无初值（IR `lower_default_value` 惰性具体化，防 `__none__` 损坏）。
+    assert_all_pass(
+        r#"
+fn Pair(T: type) type { return struct { first: T, second: T }; }
+fn PairPair(T: type) type { return struct { a: Pair(T), b: Pair(T) }; }
+[test] fn nested_literal() void {
+    var pp: PairPair(i32) = PairPair(i32){
+        a = Pair(i32){ first = 1, second = 2 },
+        b = Pair(i32){ first = 3, second = 4 },
+    };
+    expect_eq(pp.a.first, 1);
+    expect_eq(pp.a.second, 2);
+    expect_eq(pp.b.first, 3);
+    expect_eq(pp.b.second, 4);
+    expect_eq(pp.a.first + pp.b.second, 5);
+    pp.b.second = 10;
+    expect_eq(pp.a.first + pp.b.second, 11);
+}
+[test] fn nested_no_init() void {
+    var x: PairPair(i32);
+    expect_eq(x.a.first, 0);
+    expect_eq(x.b.second, 0);
+}
+"#,
+    );
+}
+
+#[test]
+fn d3_recursive_instantiation_consistent() {
+    // 组 D D3：递归/自引用类型函数——`LinkedList(T) { value: T, next: ?LinkedList(T) }`。
+    // 登记期经 `instantiating` 守卫把字段内自引用替换为自身具体化键（叶）；运行时
+    // Optional 字段默认 `None` 终止（`next = null` / 无初值构造不递归）。
+    assert_all_pass(
+        r#"
+fn LinkedList(T: type) type { return struct { value: T, next: ?LinkedList(T) }; }
+[test] fn recursive_literal() void {
+    var l: LinkedList(i32) = LinkedList(i32){ value = 1, next = null };
+    expect_eq(l.value, 1);
+    expect_eq(l.next, null);
+}
+[test] fn recursive_no_init() void {
+    var l: LinkedList(i32);
+    expect_eq(l.value, 0);
+    expect_eq(l.next, null);
+}
+"#,
+    );
+}
