@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 30-interface.hc — 接口（特性标）与实现
 //
 // Q14 定案（2026-08-13；2026-08-14 修订）：implements 标注 = 冒号后缀（已定案）
@@ -28,7 +30,7 @@ class Circle: IShape {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
 

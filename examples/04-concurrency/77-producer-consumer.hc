@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 77-producer-consumer.hc — 生产者-消费者（线程 + 四模式类型）
 //
 // Q32 定案（2026-08-13）：四模式类型 = 内建共享特例
@@ -20,7 +22,7 @@ fn consumer(ch: *OneToOne(i32), count: i32) i32 {
     return sum;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
 
     // 两个线程共享同一容器：各持 &ch（内建共享特例，Q32）

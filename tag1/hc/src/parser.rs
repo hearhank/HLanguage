@@ -87,6 +87,7 @@ impl Parser {
                     | TokenKind::KwInterface
                     | TokenKind::KwNamespace
                     | TokenKind::KwUsing
+                    | TokenKind::KwImport
                     | TokenKind::KwGlobal
             ) {
                 return;
@@ -177,6 +178,8 @@ impl Parser {
                     name,
                     decls,
                     pub_: is_pub,
+                    // `[module]` 特性标注（A2b，2026-08-17）：模块 = 隔离的命名空间
+                    is_module: traits.iter().any(|t| matches!(t, Trait::Module)),
                     span: start.merge(&end),
                 })
             }
@@ -194,6 +197,51 @@ impl Parser {
                 Ok(Decl::Using {
                     path,
                     alias,
+                    span: start.merge(&end),
+                })
+            }
+            TokenKind::KwImport => {
+                self.advance();
+                // 路径：`pkg.mod` / `H.std`（可含多段）；符号选择 `.{` 前止步
+                let path = self.parse_import_path()?;
+                // 符号选择：`.{sym, sym as alias}`（`.{` 后非标识符——parse_path 已消费到 `.`）
+                let select = if self.at(&TokenKind::Dot) && self.peek_n(1) == &TokenKind::LBrace {
+                    self.advance(); // .
+                    self.advance(); // {
+                    let mut syms = Vec::new();
+                    loop {
+                        let name = self.expect_ident()?;
+                        let alias = if self.is_ident("as") {
+                            self.advance();
+                            Some(self.expect_ident()?)
+                        } else {
+                            None
+                        };
+                        syms.push((name, alias));
+                        if self.at(&TokenKind::Comma) {
+                            self.advance();
+                            continue;
+                        }
+                        break;
+                    }
+                    self.expect(&TokenKind::RBrace, "`}` after import symbol selection")?;
+                    Some(syms)
+                } else {
+                    None
+                };
+                // 整模块别名：`import pkg.mod as m;`
+                let alias = if select.is_none() && self.is_ident("as") {
+                    self.advance();
+                    Some(self.expect_ident()?)
+                } else {
+                    None
+                };
+                self.expect(&TokenKind::Semi, "`;` after import")?;
+                let end = self.span();
+                Ok(Decl::Import {
+                    path,
+                    alias,
+                    select,
                     span: start.merge(&end),
                 })
             }
@@ -221,6 +269,7 @@ impl Parser {
         let tr = match name.as_str() {
             "continuous" => Trait::Continuous,
             "pad" => Trait::Pad,
+            "module" => Trait::Module,
             "align" => {
                 self.expect(&TokenKind::LParen, "`(` after align")?;
                 let t = self.parse_type()?;
@@ -440,7 +489,12 @@ impl Parser {
         Ok(params)
     }
 
-    fn parse_class(&mut self, start: Span, traits: Vec<Trait>, is_pub: bool) -> Result<Decl, Diagnostic> {
+    fn parse_class(
+        &mut self,
+        start: Span,
+        traits: Vec<Trait>,
+        is_pub: bool,
+    ) -> Result<Decl, Diagnostic> {
         let name = self.expect_ident()?;
         let mut ifaces = Vec::new();
         if self.at(&TokenKind::Colon) {
@@ -666,6 +720,24 @@ impl Parser {
         while self.at(&TokenKind::Dot) {
             self.advance();
             path.push(self.expect_ident()?);
+        }
+        Ok(path)
+    }
+
+    /// import 路径：同 `parse_path`，但符号选择 `.{`（`.` 后跟 `{`）止步——
+    /// `import H.std.{io as my};` 的 `H.std` 到 `.{` 为止。
+    fn parse_import_path(&mut self) -> Result<Vec<String>, Diagnostic> {
+        let mut path = vec![self.expect_ident()?];
+        loop {
+            if self.at(&TokenKind::Dot) && self.peek_n(1) == &TokenKind::LBrace {
+                break; // 符号选择分隔符，留给 parse_decl 消费
+            }
+            if self.at(&TokenKind::Dot) {
+                self.advance();
+                path.push(self.expect_ident()?);
+            } else {
+                break;
+            }
         }
         Ok(path)
     }

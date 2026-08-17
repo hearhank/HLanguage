@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 68-memoize.hc — 记忆化缓存（Map + optional）
 //
 //   - 以输入为键缓存结果；if (opt) |v| 判断命中
@@ -20,7 +22,7 @@ fn slow_square(x: i32) i32 {
     return x * x;                    // 模拟慢计算（纯函数）
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var memo: o Memo = alloc.init(Memo);   // 无参构造（C1'）
 
     var r1 = memo.get_or_compute(5, slow_square);

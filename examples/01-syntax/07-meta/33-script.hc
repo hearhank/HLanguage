@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 33-script.hc — 脚本生成样板（数据定义 → 序列化）——**E1 示例（第三块，最小集不实现）**
 //
 // Q17 定案（2026-08-13）：就地替换
@@ -21,7 +23,7 @@ script {
     //   fn person_to_bytes(p: *Person, alloc: Allocator) o Vec(u8) { ... }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var p = alloc.init(Person{name = String.from("alice", alloc), age = 30});   // 带参构造（C1'）
     var json = person_to_json(&p);   // 脚本生成的函数（E1）
     io.print("{}\n", json);

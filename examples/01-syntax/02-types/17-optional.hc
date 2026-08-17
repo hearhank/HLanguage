@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 17-optional.hc — 可选值 ?T 与 switch 表达式
 //
 // Q27 定案（2026-08-13）：switch 是表达式（穷举保证确定值）
@@ -15,7 +17,7 @@ fn parse_int(s: &[u8]) ?i32 {
     return null;   // 草图：解析失败返回 null（optional 显式解包）
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // optional：orelse 默认值
     var n = parse_int("42") orelse 0;
     io.print("{}\n", n);

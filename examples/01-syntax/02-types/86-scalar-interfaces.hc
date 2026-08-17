@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 86-scalar-interfaces.hc — 标量类型体系（ICompare / INumber 族，2026-08-14 定案）
 //
 //   - 内建标量（i32/u64/f64 等）实现数字接口族：IInt / IUint / IFloat → INumber : ICompare
@@ -19,7 +21,7 @@ fn divmod(a: i32, b: i32) (i32, i32) {
     return (a / b, a % b);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 方法形式（a.add(b) ≡ a + b，双向一致）
     var a: i32 = 7;
     var b: i32 = 5;

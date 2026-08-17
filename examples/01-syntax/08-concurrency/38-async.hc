@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 38-async.hc — 异步编程（async/await + Future）
 //
 // Q19 定案（2026-08-13）：await 任何函数可用
@@ -17,7 +19,7 @@ async fn parse_json(data: &[u8]) !JsonValue {
     return json.parse(data);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 顺序 await：await 在任何函数可用（阻塞等待线程结果）
     var body = try await fetch_url(&io, "https://example.com", alloc);
     var value = try await parse_json(body);

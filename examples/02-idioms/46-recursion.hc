@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 46-recursion.hc — 递归与树算法
 //
 //   - 递归函数（fib）
@@ -26,7 +28,7 @@ tree Node {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     io.print("fib(10) = {}\n", fib(10));
 
     // tree 构建：Node.new 构造样板 + move 进 Vec（Q23 调用点显式 move）

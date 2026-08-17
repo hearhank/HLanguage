@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 32-collections.hc — 集合与字符串（修改数据）
 //
 // Q15 定案（2026-08-13）：集合/字符串构造
@@ -8,7 +10,7 @@
 //   - 复杂类型（分配器创建）除 Arena 外默认拥有——作用域退出自动销毁（无需显式 o/deinit）
 //   - String = u8[] 别名（Q3）：引用类型、赋值 = 编译错误（共享走指针、复制走显式 copy）
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // Vec：构造 + 追加（非 arena 分配器 → 默认拥有，作用域退出自动销毁）
     var v = Vec(i32).init(alloc);
     v.append(1);

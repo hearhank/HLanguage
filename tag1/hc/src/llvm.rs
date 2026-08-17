@@ -57,7 +57,16 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
     emit_preamble(&mut out, &strings, &module.continuous);
     emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
-        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs, &gidx);
+        emit_func(
+            &mut out,
+            f,
+            idx,
+            &strings,
+            errors,
+            &canon,
+            &module.funcs,
+            &gidx,
+        );
     }
     emit_main_wrapper(&mut out, module);
     out
@@ -77,7 +86,16 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
     emit_preamble(&mut out, &strings, &module.continuous);
     emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
-        emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs, &gidx);
+        emit_func(
+            &mut out,
+            f,
+            idx,
+            &strings,
+            errors,
+            &canon,
+            &module.funcs,
+            &gidx,
+        );
     }
     emit_test_runner(&mut out, module);
     out
@@ -117,7 +135,10 @@ fn collect_strings(module: &IrModule) -> Vec<String> {
         let slot_consts = build_slot_consts(f);
         for inst in &f.body {
             match inst {
-                IrInst::Const { val: IrConst::Str(s), .. } => push_str(s, &mut seen, &mut out),
+                IrInst::Const {
+                    val: IrConst::Str(s),
+                    ..
+                } => push_str(s, &mut seen, &mut out),
                 IrInst::Field { field, .. } | IrInst::StoreField { field, .. } => {
                     push_str(field, &mut seen, &mut out)
                 }
@@ -135,9 +156,7 @@ fn collect_strings(module: &IrModule) -> Vec<String> {
                     // 模式描述符需字符串全局：Ident（bool/null/枚举变体）与 Str 模式。
                     // Error 模式在 codegen 期解析为错误码，无需字符串。
                     match pattern {
-                        IrPattern::Ident(s) | IrPattern::Str(s) => {
-                            push_str(s, &mut seen, &mut out)
-                        }
+                        IrPattern::Ident(s) | IrPattern::Str(s) => push_str(s, &mut seen, &mut out),
                         _ => {}
                     }
                 }
@@ -239,32 +258,92 @@ struct Msg {
 }
 
 const MSGS: &[Msg] = &[
-    Msg { key: "overflow", text: "error.Overflow: integer overflow" },
-    Msg { key: "divzero", text: "error.DivisionByZero" },
-    Msg { key: "assert", text: "error.AssertFailed" },
-    Msg { key: "nofunc", text: "error.NoFunction" },
-    Msg { key: "typeerr", text: "error.TypeError" },
-    Msg { key: "badassign", text: "error.BadAssign" },
-    Msg { key: "unhandled", text: "error: unhandled error value reached entry point" },
+    Msg {
+        key: "overflow",
+        text: "error.Overflow: integer overflow",
+    },
+    Msg {
+        key: "divzero",
+        text: "error.DivisionByZero",
+    },
+    Msg {
+        key: "assert",
+        text: "error.AssertFailed",
+    },
+    Msg {
+        key: "nofunc",
+        text: "error.NoFunction",
+    },
+    Msg {
+        key: "typeerr",
+        text: "error.TypeError",
+    },
+    Msg {
+        key: "badassign",
+        text: "error.BadAssign",
+    },
+    Msg {
+        key: "unhandled",
+        text: "error: unhandled error value reached entry point",
+    },
     // Phase 2 聚合运行时硬错误（对齐 tree-walking RtError 名称）
-    Msg { key: "oom", text: "error.OutOfMemory" },
+    Msg {
+        key: "oom",
+        text: "error.OutOfMemory",
+    },
     // Phase 3 迭代/switch 硬错误
-    Msg { key: "notiter", text: "error.NotIterable" },
-    Msg { key: "indexoob", text: "error.IndexOutOfBounds" },
-    Msg { key: "badindex", text: "error.BadIndex" },
-    Msg { key: "notindexable", text: "error.NotIndexable" },
-    Msg { key: "nullunwrap", text: "error.NullUnwrap" },
-    Msg { key: "nofield", text: "error.NoField" },
-    Msg { key: "tuplearity", text: "error.TupleArity" },
+    Msg {
+        key: "notiter",
+        text: "error.NotIterable",
+    },
+    Msg {
+        key: "indexoob",
+        text: "error.IndexOutOfBounds",
+    },
+    Msg {
+        key: "badindex",
+        text: "error.BadIndex",
+    },
+    Msg {
+        key: "notindexable",
+        text: "error.NotIndexable",
+    },
+    Msg {
+        key: "nullunwrap",
+        text: "error.NullUnwrap",
+    },
+    Msg {
+        key: "nofield",
+        text: "error.NoField",
+    },
+    Msg {
+        key: "tuplearity",
+        text: "error.TupleArity",
+    },
     // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用/方法需原生 ABI 改造（Phase 7），
     // 当前响亮拒绝（error.NotCallable / error.NoMethod），禁止静默误编译
-    Msg { key: "notcallable", text: "error.NotCallable: closures/indirect calls not yet in native mode (Phase 7)" },
-    Msg { key: "nomethod", text: "error.NoMethod: method calls not yet in native mode (Phase 7)" },
+    Msg {
+        key: "notcallable",
+        text: "error.NotCallable: closures/indirect calls not yet in native mode (Phase 7)",
+    },
+    Msg {
+        key: "nomethod",
+        text: "error.NoMethod: method calls not yet in native mode (Phase 7)",
+    },
     // Phase 5 全局单元
-    Msg { key: "noglobal", text: "error.NoGlobal: undefined global" },
+    Msg {
+        key: "noglobal",
+        text: "error.NoGlobal: undefined global",
+    },
     // Phase 7 内建：未实现内建响亮拒绝（禁止静默 Void 误编译）
-    Msg { key: "builtin", text: "error.NotBuiltin: builtin not yet in native mode (Phase 7)" },
-    Msg { key: "intcast", text: "error.IntCastOverflow: @intCast overflow" },
+    Msg {
+        key: "builtin",
+        text: "error.NotBuiltin: builtin not yet in native mode (Phase 7)",
+    },
+    Msg {
+        key: "intcast",
+        text: "error.IntCastOverflow: @intCast overflow",
+    },
 ];
 
 // ---------- 导言 ----------
@@ -364,7 +443,11 @@ fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<Stri
     for m in MSGS {
         let n = m.text.len() + 1;
         let esc = llvm_escape(m.text.as_bytes());
-        let _ = writeln!(out, "@.msg_{} = private unnamed_addr constant [{n} x i8] c\"{esc}\\00\"", m.key);
+        let _ = writeln!(
+            out,
+            "@.msg_{} = private unnamed_addr constant [{n} x i8] c\"{esc}\\00\"",
+            m.key
+        );
     }
     out.push('\n');
 
@@ -372,7 +455,10 @@ fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<Stri
     for (i, s) in strings.iter().enumerate() {
         let n = s.len() + 1;
         let esc = llvm_escape(s.as_bytes());
-        let _ = writeln!(out, "@.str.{i} = private unnamed_addr constant [{n} x i8] c\"{esc}\\00\"");
+        let _ = writeln!(
+            out,
+            "@.str.{i} = private unnamed_addr constant [{n} x i8] c\"{esc}\\00\""
+        );
     }
     out.push('\n');
 
@@ -381,12 +467,18 @@ fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<Stri
     for m in MSGS {
         let n = m.text.len() + 1;
         let _ = writeln!(out, "define void @hc_abort_{}() {{", m.key);
-        let _ = writeln!(out, "  %p = getelementptr inbounds [{n} x i8], ptr @.msg_{}, i64 0, i64 0", m.key);
+        let _ = writeln!(
+            out,
+            "  %p = getelementptr inbounds [{n} x i8], ptr @.msg_{}, i64 0, i64 0",
+            m.key
+        );
         let _ = writeln!(out, "  call void @hc_abort(i8* %p)");
         out.push_str("  unreachable\n}\n\n");
     }
     // 切片外函数调用（运行时 NoFunction 硬错误）
-    out.push_str("define %Value @hc_no_function() {\n  call void @hc_abort_nofunc()\n  unreachable\n}\n\n");
+    out.push_str(
+        "define %Value @hc_no_function() {\n  call void @hc_abort_nofunc()\n  unreachable\n}\n\n",
+    );
 
     emit_arith_helpers(out);
     emit_bit_helpers(out);
@@ -558,15 +650,18 @@ fn emit_arith_helpers(out: &mut String) {
     ] {
         let fname = format!("@{fname}");
         let intr = format!("@{intr}");
-        out.push_str(&tpl(TPL_OVERFLOW, &[("@FNAME@", &fname), ("@INTRINSIC@", &intr), ("@FOP@", fop)]));
+        out.push_str(&tpl(
+            TPL_OVERFLOW,
+            &[("@FNAME@", &fname), ("@INTRINSIC@", &intr), ("@FOP@", fop)],
+        ));
         out.push('\n');
     }
-    for (fname, iop, fop) in [
-        ("hc_div", "sdiv", "fdiv"),
-        ("hc_mod", "srem", "frem"),
-    ] {
+    for (fname, iop, fop) in [("hc_div", "sdiv", "fdiv"), ("hc_mod", "srem", "frem")] {
         let fname = format!("@{fname}");
-        out.push_str(&tpl(TPL_DIVMOD, &[("@FNAME@", &fname), ("@IOP@", iop), ("@FOP@", fop)]));
+        out.push_str(&tpl(
+            TPL_DIVMOD,
+            &[("@FNAME@", &fname), ("@IOP@", iop), ("@FOP@", fop)],
+        ));
         out.push('\n');
     }
     out.push_str(TPL_EUCMOD);
@@ -1976,7 +2071,9 @@ fn emit_deep_copy_gate(out: &mut String, strings: &[String], continuous: &HashSe
     names.sort();
     // 无连续类：恒等门（`needs_deep_copy` 未发射指令，保守兜底），不引入递归 helper
     if names.is_empty() {
-        out.push_str("define %Value @hc_deep_copy_cont(%Value %v) {\nentry:\n  ret %Value %v\n}\n\n");
+        out.push_str(
+            "define %Value @hc_deep_copy_cont(%Value %v) {\nentry:\n  ret %Value %v\n}\n\n",
+        );
         return;
     }
     out.push_str(HC_DEEP_COPY);
@@ -1999,10 +2096,15 @@ fn emit_deep_copy_gate(out: &mut String, strings: &[String], continuous: &HashSe
         b.push_str(&format!(
             "  %g{i} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0\n"
         ));
-        b.push_str(&format!("  %c{i} = call i32 @strcmp(i8* %cname, i8* %g{i})\n"));
+        b.push_str(&format!(
+            "  %c{i} = call i32 @strcmp(i8* %cname, i8* %g{i})\n"
+        ));
         b.push_str(&format!("  %e{i} = icmp eq i32 %c{i}, 0\n"));
         if i + 1 < names.len() {
-            b.push_str(&format!("  br i1 %e{i}, label %copy, label %cmp{}\n", i + 1));
+            b.push_str(&format!(
+                "  br i1 %e{i}, label %copy, label %cmp{}\n",
+                i + 1
+            ));
         } else {
             b.push_str(&format!("  br i1 %e{i}, label %copy, label %id\n"));
         }
@@ -3243,10 +3345,22 @@ fn emit_scalar_builtin_helpers(out: &mut String) {
         out.push('\n');
     }
     // math.* 数值 helper（对齐 oracle call_math）
-    out.push_str(&math_unop_helper("hc_abs", "%r = call double @fabs(double %f)"));
-    out.push_str(&math_unop_helper("hc_floor", "%r = call double @floor(double %f)"));
-    out.push_str(&math_unop_helper("hc_ceil", "%r = call double @ceil(double %f)"));
-    out.push_str(&math_unop_helper("hc_round", "%r = call double @round(double %f)"));
+    out.push_str(&math_unop_helper(
+        "hc_abs",
+        "%r = call double @fabs(double %f)",
+    ));
+    out.push_str(&math_unop_helper(
+        "hc_floor",
+        "%r = call double @floor(double %f)",
+    ));
+    out.push_str(&math_unop_helper(
+        "hc_ceil",
+        "%r = call double @ceil(double %f)",
+    ));
+    out.push_str(&math_unop_helper(
+        "hc_round",
+        "%r = call double @round(double %f)",
+    ));
     out.push_str(&math_unop_helper("hc_pow", "%r = fmul double %f, %f"));
 }
 
@@ -3315,7 +3429,10 @@ fn emit_assert_helpers(out: &mut String) {
         let _ = writeln!(out, "ok:");
         let _ = writeln!(out, "  ret %Value {{ i32 0, i128 0 }}");
         let _ = writeln!(out, "fail:");
-        let _ = writeln!(out, "  %fail_msg = getelementptr inbounds [{an} x i8], ptr @.msg_assert, i64 0, i64 0");
+        let _ = writeln!(
+            out,
+            "  %fail_msg = getelementptr inbounds [{an} x i8], ptr @.msg_assert, i64 0, i64 0"
+        );
         let _ = writeln!(out, "  store i8* %fail_msg, i8** @hc_fail_msg");
         let _ = writeln!(out, "  ret %Value {{ i32 0, i128 0 }}");
         let _ = writeln!(out, "}}\n");
@@ -3471,7 +3588,10 @@ fn emit_func(
     let _ = writeln!(out, "define %Value @\"hc_fn{idx}\"({params}) {{");
     // 序言（槽数组 + 参数存槽）并入 entry 块（BodyEmitter 首个块即 entry）
     let mut be = BodyEmitter::new();
-    be.emit(format!("%slots = alloca [{} x %Value], align 16", f.n_slots));
+    be.emit(format!(
+        "%slots = alloca [{} x %Value], align 16",
+        f.n_slots
+    ));
     for i in 0..f.n_slots {
         be.emit(format!(
             "%sp.{i} = getelementptr inbounds [{n} x %Value], [{n} x %Value]* %slots, i32 0, i32 {i}",
@@ -3519,7 +3639,10 @@ fn emit_init_calls(out: &mut String, module: &IrModule) {
         let _ = writeln!(out, "  %_init{idx} = call %Value @\"hc_fn{idx}\"()");
         let _ = writeln!(out, "  %_tag{idx} = extractvalue %Value %_init{idx}, 0");
         let _ = writeln!(out, "  %_iserr{idx} = icmp eq i32 %_tag{idx}, 6");
-        let _ = writeln!(out, "  br i1 %_iserr{idx}, label %_initerr{idx}, label %_initok{idx}");
+        let _ = writeln!(
+            out,
+            "  br i1 %_iserr{idx}, label %_initerr{idx}, label %_initok{idx}"
+        );
         let _ = writeln!(out, "_initerr{idx}:");
         out.push_str("  call void @hc_abort_unhandled()\n  unreachable\n");
         let _ = writeln!(out, "_initok{idx}:");
@@ -3573,8 +3696,13 @@ fn emit_implicit_env_seed(out: &mut String, module: &IrModule) {
 
 fn emit_main_wrapper(out: &mut String, module: &IrModule) {
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
+    out.push_str("entry:\n");
     emit_implicit_env_seed(out, module);
-    emit_init_calls(out, module);
+    // A3（ADR-0010）：单参 main = args（Vec(String)——argv[0] = 程序名）。
+    // 从 argc/argv 构建：hc_make_arr(argc) + 逐元素 Str 值（对齐 run_ir）。
+    // 注意：args 循环必须在 entry 块内（init 调用之前）——emit_init_calls 以
+    // 分支终结 entry 块，循环放其后会使 phi 前驱错位（%entry 不再是前驱）。
+    let mut main_entry: Option<(usize, usize)> = None; // (idx, nparams)
     if let Some(idxs) = module.func_index.get("main") {
         // main 入口按 arity 精确取（无则首个——重载 main 不存在，安全兜底）
         let idx = idxs
@@ -3584,11 +3712,30 @@ fn emit_main_wrapper(out: &mut String, module: &IrModule) {
             .unwrap_or(idxs[0]);
         let nparams = module.funcs[idx].params.len();
         if nparams == 1 {
-            // Phase 7：单参 main 注入真实 Io 值（对齐 IrRuntime::call 的 io_value_ir）
-            out.push_str("  %argvoid = call %Value @hc_make_io()\n");
+            out.push_str("  %argc64 = sext i32 %argc to i64\n");
+            out.push_str("  %argvoid = call %Value @hc_make_arr(i64 %argc64)\n");
+            out.push_str("  br label %argloop\n");
+            out.push_str("argloop:\n");
+            out.push_str("  %argi = phi i64 [ 0, %entry ], [ %argnext, %argbody ]\n");
+            out.push_str("  %argdone = icmp uge i64 %argi, %argc64\n");
+            out.push_str("  br i1 %argdone, label %argdone_l, label %argbody\n");
+            out.push_str("argbody:\n");
+            out.push_str("  %argp = getelementptr inbounds i8*, i8** %argv, i64 %argi\n");
+            out.push_str("  %argstr = load i8*, i8** %argp\n");
+            out.push_str("  %argspi = ptrtoint i8* %argstr to i128\n");
+            out.push_str("  %argsv0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0\n");
+            out.push_str("  %argsv1 = insertvalue %Value %argsv0, i128 %argspi, 1\n");
+            out.push_str("  call void @hc_arr_set(%Value %argvoid, i64 %argi, %Value %argsv1)\n");
+            out.push_str("  %argnext = add i64 %argi, 1\n");
+            out.push_str("  br label %argloop\n");
+            out.push_str("argdone_l:\n");
         } else if nparams > 1 {
             out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
         }
+        main_entry = Some((idx, nparams));
+    }
+    emit_init_calls(out, module);
+    if let Some((idx, nparams)) = main_entry {
         let mut arglist = String::new();
         for _ in 0..nparams {
             if !arglist.is_empty() {
@@ -3657,7 +3804,10 @@ fn emit_test_runner(out: &mut String, module: &IrModule) {
         let _ = writeln!(out, "  %r_{idx} = call %Value @\"hc_fn{idx}\"({arglist})");
         let _ = writeln!(out, "  %tag_{idx} = extractvalue %Value %r_{idx}, 0");
         let _ = writeln!(out, "  %is_err_{idx} = icmp eq i32 %tag_{idx}, 6");
-        let _ = writeln!(out, "  br i1 %is_err_{idx}, label %fail_{idx}, label %ok_{idx}");
+        let _ = writeln!(
+            out,
+            "  br i1 %is_err_{idx}, label %fail_{idx}, label %ok_{idx}"
+        );
         let _ = writeln!(out, "fail_{idx}:");
         out.push_str("  call void @hc_abort_unhandled()\n  unreachable\n");
         let pass = format!("[PASS] {}", f.name);
@@ -3747,7 +3897,9 @@ impl BodyEmitter {
     fn abort_feature(&mut self, key: &str) {
         let l = self.fb();
         self.term(format!("br label %{l}"));
-        self.blocks.push(format!("{l}:\n  call void @hc_abort_{key}()\n  unreachable\n"));
+        self.blocks.push(format!(
+            "{l}:\n  call void @hc_abort_{key}()\n  unreachable\n"
+        ));
         self.cur = format!("{l}.cont:\n");
         self.terminated = false;
     }
@@ -3761,7 +3913,9 @@ impl BodyEmitter {
 
     fn build_store(&mut self, temp: usize, tag: i32, data: String) {
         let v0 = self.r();
-        self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {tag}, 0"));
+        self.emit(format!(
+            "{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {tag}, 0"
+        ));
         let v1 = self.r();
         self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {data}, 1"));
         self.emit(format!("store %Value {v1}, %Value* %sp.{temp}"));
@@ -3773,17 +3927,26 @@ impl BodyEmitter {
     }
 
     /// 常量 → `%Value` SSA 值（Str 取全局字符串地址；余下 tag+data 直接 insertvalue）
-    fn const_value(&mut self, val: &IrConst, strings: &[String], errors: &ErrorCodeTable) -> String {
+    fn const_value(
+        &mut self,
+        val: &IrConst,
+        strings: &[String],
+        errors: &ErrorCodeTable,
+    ) -> String {
         if let IrConst::Str(s) = val {
             let idx = strings.iter().position(|x| x == s).unwrap_or(0);
             let n = s.len() + 1;
             let p = self.r();
-            self.emit(format!("{p} = getelementptr inbounds [{n} x i8], ptr @.str.{idx}, i64 0, i64 0"));
+            self.emit(format!(
+                "{p} = getelementptr inbounds [{n} x i8], ptr @.str.{idx}, i64 0, i64 0"
+            ));
             let pi = self.r();
             self.emit(format!("{pi} = ptrtoint i8* {p} to i128"));
             // SSA 链：每个 insertvalue 用新名（同寄存器二次定义非法）
             let v0 = self.r();
-            self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_STR}, 0"));
+            self.emit(format!(
+                "{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_STR}, 0"
+            ));
             let v1 = self.r();
             self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {pi}, 1"));
             return v1;
@@ -3799,7 +3962,9 @@ impl BodyEmitter {
             IrConst::Str(_) => unreachable!(),
         };
         let v0 = self.r();
-        self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {tag}, 0"));
+        self.emit(format!(
+            "{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {tag}, 0"
+        ));
         let v1 = self.r();
         self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {data}, 1"));
         v1
@@ -3817,9 +3982,17 @@ impl BodyEmitter {
         let vb = self.r();
         self.emit(format!("{vb} = load %Value, %Value* %sp.{b}"));
         match op {
-            IrBinOp::Add | IrBinOp::Sub | IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod
-            | IrBinOp::EucMod | IrBinOp::BitAnd | IrBinOp::BitOr | IrBinOp::BitXor
-            | IrBinOp::Shl | IrBinOp::Shr => {
+            IrBinOp::Add
+            | IrBinOp::Sub
+            | IrBinOp::Mul
+            | IrBinOp::Div
+            | IrBinOp::Mod
+            | IrBinOp::EucMod
+            | IrBinOp::BitAnd
+            | IrBinOp::BitOr
+            | IrBinOp::BitXor
+            | IrBinOp::Shl
+            | IrBinOp::Shr => {
                 let helper = match op {
                     IrBinOp::Add => "hc_add",
                     IrBinOp::Sub => "hc_sub",
@@ -3835,7 +4008,9 @@ impl BodyEmitter {
                     _ => unreachable!(),
                 };
                 let res = self.r();
-                self.emit(format!("{res} = call %Value @{helper}(%Value {va}, %Value {vb})"));
+                self.emit(format!(
+                    "{res} = call %Value @{helper}(%Value {va}, %Value {vb})"
+                ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
             IrBinOp::Eq | IrBinOp::Ne | IrBinOp::Lt | IrBinOp::Le | IrBinOp::Gt | IrBinOp::Ge => {
@@ -3983,11 +4158,12 @@ impl BodyEmitter {
     /// helper（Int→f64 强制 / Float 直用）返回 Float。
     fn call_math(&mut self, field: &str, args: &[usize], temp: usize) {
         match field {
-            "nan" => {
-                self.build_store(temp, T_FLOAT, format!("{}", f64::NAN.to_bits() as u128))
-            }
-            "inf" => self
-                .build_store(temp, T_FLOAT, format!("{}", f64::INFINITY.to_bits() as u128)),
+            "nan" => self.build_store(temp, T_FLOAT, format!("{}", f64::NAN.to_bits() as u128)),
+            "inf" => self.build_store(
+                temp,
+                T_FLOAT,
+                format!("{}", f64::INFINITY.to_bits() as u128),
+            ),
             "inf_neg" => self.build_store(
                 temp,
                 T_FLOAT,
@@ -4183,7 +4359,9 @@ impl BodyEmitter {
         let vb = self.r();
         self.emit(format!("{vb} = load %Value, %Value* %sp.{}", args[1]));
         let res = self.r();
-        self.emit(format!("{res} = call %Value @{helper}(%Value {va}, %Value {vb})"));
+        self.emit(format!(
+            "{res} = call %Value @{helper}(%Value {va}, %Value {vb})"
+        ));
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
@@ -4206,7 +4384,9 @@ impl BodyEmitter {
                 "{g} = getelementptr inbounds [{tn} x i8], ptr @.str.{ti}, i64 0, i64 0"
             ));
             let res = self.r();
-            self.emit(format!("{res} = call %Value @hc_make_class(i8* {g}, i64 0)"));
+            self.emit(format!(
+                "{res} = call %Value @hc_make_class(i8* {g}, i64 0)"
+            ));
             self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             return;
         }
@@ -4249,9 +4429,15 @@ impl BodyEmitter {
                     self.emit(format!(
                         "{g} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"
                     ));
-                    self.emit(format!("call void @hc_write_bytes(i8* {g}, i64 {})", s.len()));
+                    self.emit(format!(
+                        "call void @hc_write_bytes(i8* {g}, i64 {})",
+                        s.len()
+                    ));
                 }
-                PrintSeg::Arg { slot: Some(slot), mode } => {
+                PrintSeg::Arg {
+                    slot: Some(slot),
+                    mode,
+                } => {
                     let v = self.r();
                     self.emit(format!("{v} = load %Value, %Value* %sp.{slot}"));
                     self.emit(format!("call void @hc_write_value(%Value {v}, i32 {mode})"));
@@ -4261,7 +4447,9 @@ impl BodyEmitter {
             }
         }
         // io.print 返回 Void
-        self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+        self.emit(format!(
+            "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+        ));
     }
 
     /// 实例方法分派：解引用基值 → 类名（%ClassObj 首字段）→ 链式 strcmp 匹配拥有者
@@ -4333,9 +4521,12 @@ impl BodyEmitter {
         // Class 分派：is_cls → disp（取类名链式 strcmp）/ notcls → abort
         let l_notcls = self.fb();
         let l_disp = self.fb();
-        self.term(format!("br i1 {is_cls}, label %{l_disp}, label %{l_notcls}"));
-        self.blocks
-            .push(format!("{l_notcls}:\n  call void @hc_abort_nomethod()\n  unreachable\n"));
+        self.term(format!(
+            "br i1 {is_cls}, label %{l_disp}, label %{l_notcls}"
+        ));
+        self.blocks.push(format!(
+            "{l_notcls}:\n  call void @hc_abort_nomethod()\n  unreachable\n"
+        ));
         self.cur = format!("{l_disp}:\n");
         self.terminated = false;
         let d1 = self.r();
@@ -4368,7 +4559,9 @@ impl BodyEmitter {
             if owner == "Io" && method == "print" {
                 self.call_print(args, temp, slot_consts, strings);
             } else {
-                self.call_method_user(owner, method, &dv, args, temp, canon, funcs, strings, errors);
+                self.call_method_user(
+                    owner, method, &dv, args, temp, canon, funcs, strings, errors,
+                );
             }
             self.term(format!("br label %{l_done}"));
 
@@ -4410,7 +4603,9 @@ impl BodyEmitter {
                 let ai = self.r();
                 self.emit(format!("{ai} = zext i64 {al} to i128"));
                 let v0 = self.r();
-                self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_INT}, 0"));
+                self.emit(format!(
+                    "{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_INT}, 0"
+                ));
                 let v1 = self.r();
                 self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {ai}, 1"));
                 self.emit(format!("store %Value {v1}, %Value* %sp.{temp}"));
@@ -4422,7 +4617,9 @@ impl BodyEmitter {
                 };
                 let v = load_arg(self, a0);
                 self.emit(format!("call void @hc_append(%Value {dv}, %Value {v})"));
-                self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+                self.emit(format!(
+                    "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+                ));
             }
             "append_u64" => {
                 let Some(&a0) = args.first() else {
@@ -4431,7 +4628,9 @@ impl BodyEmitter {
                 };
                 let v = load_arg(self, a0);
                 self.emit(format!("call void @hc_append_u64(%Value {dv}, %Value {v})"));
-                self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+                self.emit(format!(
+                    "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+                ));
             }
             "extend" => {
                 let Some(&a0) = args.first() else {
@@ -4440,7 +4639,9 @@ impl BodyEmitter {
                 };
                 let v = load_arg(self, a0);
                 self.emit(format!("call void @hc_extend(%Value {dv}, %Value {v})"));
-                self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+                self.emit(format!(
+                    "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+                ));
             }
             _ => {
                 self.abort_feature("nomethod");
@@ -4504,7 +4705,9 @@ impl BodyEmitter {
         let fb_fail = self.fb();
         let fb_ok = self.fb();
         self.term(format!("br i1 {has}, label %{fb_fail}, label %{fb_ok}"));
-        self.blocks.push(format!("{fb_fail}:\n  call void @hc_abort(i8* {f})\n  unreachable\n"));
+        self.blocks.push(format!(
+            "{fb_fail}:\n  call void @hc_abort(i8* {f})\n  unreachable\n"
+        ));
         self.cur = format!("{fb_ok}:\n");
         self.terminated = false;
         let v = self.r();
@@ -4520,7 +4723,9 @@ impl BodyEmitter {
         let fb_fail = self.fb();
         let fb_ok = self.fb();
         self.term(format!("br i1 {has}, label %{fb_fail}, label %{fb_ok}"));
-        self.blocks.push(format!("{fb_fail}:\n  call void @hc_abort(i8* {f})\n  unreachable\n"));
+        self.blocks.push(format!(
+            "{fb_fail}:\n  call void @hc_abort(i8* {f})\n  unreachable\n"
+        ));
         self.cur = format!("{fb_ok}:\n");
         self.terminated = false;
         self.term("ret %Value { i32 0, i128 0 }".to_string());
@@ -4628,9 +4833,13 @@ impl BodyEmitter {
                 self.emit(format!("{b} = load %Value, %Value* %sp.{base}"));
                 let (si, sn) = str_idx(strings, field);
                 let fg = self.r();
-                self.emit(format!("{fg} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"));
+                self.emit(format!(
+                    "{fg} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"
+                ));
                 let res = self.r();
-                self.emit(format!("{res} = call %Value @hc_field(%Value {b}, i8* {fg})"));
+                self.emit(format!(
+                    "{res} = call %Value @hc_field(%Value {b}, i8* {fg})"
+                ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
             IrInst::StoreField { base, field, value } => {
@@ -4640,8 +4849,12 @@ impl BodyEmitter {
                 self.emit(format!("{v} = load %Value, %Value* %sp.{value}"));
                 let (si, sn) = str_idx(strings, field);
                 let fg = self.r();
-                self.emit(format!("{fg} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"));
-                self.emit(format!("call void @hc_store_field(%Value {b}, i8* {fg}, %Value {v})"));
+                self.emit(format!(
+                    "{fg} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0"
+                ));
+                self.emit(format!(
+                    "call void @hc_store_field(%Value {b}, i8* {fg}, %Value {v})"
+                ));
             }
             IrInst::Index { temp, base, index } => {
                 let b = self.r();
@@ -4649,7 +4862,9 @@ impl BodyEmitter {
                 let i = self.r();
                 self.emit(format!("{i} = load %Value, %Value* %sp.{index}"));
                 let res = self.r();
-                self.emit(format!("{res} = call %Value @hc_index(%Value {b}, %Value {i})"));
+                self.emit(format!(
+                    "{res} = call %Value @hc_index(%Value {b}, %Value {i})"
+                ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
             IrInst::StoreIndex { base, index, value } => {
@@ -4659,7 +4874,9 @@ impl BodyEmitter {
                 self.emit(format!("{i} = load %Value, %Value* %sp.{index}"));
                 let v = self.r();
                 self.emit(format!("{v} = load %Value, %Value* %sp.{value}"));
-                self.emit(format!("call void @hc_store_index(%Value {b}, %Value {i}, %Value {v})"));
+                self.emit(format!(
+                    "call void @hc_store_index(%Value {b}, %Value {i}, %Value {v})"
+                ));
             }
             IrInst::SliceOf { temp, base, lo, hi } => {
                 let b = self.r();
@@ -4669,10 +4886,17 @@ impl BodyEmitter {
                 let hi_v = self.r();
                 self.emit(format!("{hi_v} = load %Value, %Value* %sp.{hi}"));
                 let res = self.r();
-                self.emit(format!("{res} = call %Value @hc_slice(%Value {b}, %Value {lo_v}, %Value {hi_v})"));
+                self.emit(format!(
+                    "{res} = call %Value @hc_slice(%Value {b}, %Value {lo_v}, %Value {hi_v})"
+                ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
-            IrInst::StoreSlice { base, lo, hi, value } => {
+            IrInst::StoreSlice {
+                base,
+                lo,
+                hi,
+                value,
+            } => {
                 let b = self.r();
                 self.emit(format!("{b} = load %Value, %Value* %sp.{base}"));
                 let lo_v = self.r();
@@ -4685,37 +4909,60 @@ impl BodyEmitter {
             }
             IrInst::MakeArr { temp, items } => {
                 let arr = self.r();
-                self.emit(format!("{arr} = call %Value @hc_make_arr(i64 {})", items.len()));
+                self.emit(format!(
+                    "{arr} = call %Value @hc_make_arr(i64 {})",
+                    items.len()
+                ));
                 for (i, it) in items.iter().enumerate() {
                     let v = self.r();
                     self.emit(format!("{v} = load %Value, %Value* %sp.{it}"));
-                    self.emit(format!("call void @hc_arr_set(%Value {arr}, i64 {i}, %Value {v})"));
+                    self.emit(format!(
+                        "call void @hc_arr_set(%Value {arr}, i64 {i}, %Value {v})"
+                    ));
                 }
                 self.emit(format!("store %Value {arr}, %Value* %sp.{temp}"));
             }
             IrInst::MakeClass { temp, ty, fields } => {
                 let (ti, tn) = str_idx(strings, ty);
                 let tyg = self.r();
-                self.emit(format!("{tyg} = getelementptr inbounds [{tn} x i8], ptr @.str.{ti}, i64 0, i64 0"));
+                self.emit(format!(
+                    "{tyg} = getelementptr inbounds [{tn} x i8], ptr @.str.{ti}, i64 0, i64 0"
+                ));
                 let cls = self.r();
-                self.emit(format!("{cls} = call %Value @hc_make_class(i8* {tyg}, i64 {})", fields.len()));
+                self.emit(format!(
+                    "{cls} = call %Value @hc_make_class(i8* {tyg}, i64 {})",
+                    fields.len()
+                ));
                 for (i, (fname, vslot)) in fields.iter().enumerate() {
                     let v = self.r();
                     self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
                     let (fi, flen) = str_idx(strings, fname);
                     let fg = self.r();
-                    self.emit(format!("{fg} = getelementptr inbounds [{flen} x i8], ptr @.str.{fi}, i64 0, i64 0"));
-                    self.emit(format!("call void @hc_class_set(%Value {cls}, i64 {i}, i8* {fg}, %Value {v})"));
+                    self.emit(format!(
+                        "{fg} = getelementptr inbounds [{flen} x i8], ptr @.str.{fi}, i64 0, i64 0"
+                    ));
+                    self.emit(format!(
+                        "call void @hc_class_set(%Value {cls}, i64 {i}, i8* {fg}, %Value {v})"
+                    ));
                 }
                 self.emit(format!("store %Value {cls}, %Value* %sp.{temp}"));
             }
-            IrInst::MakeEnum { temp, name, variant, payload } => {
+            IrInst::MakeEnum {
+                temp,
+                name,
+                variant,
+                payload,
+            } => {
                 let (ni, nn) = str_idx(strings, name);
                 let ng = self.r();
-                self.emit(format!("{ng} = getelementptr inbounds [{nn} x i8], ptr @.str.{ni}, i64 0, i64 0"));
+                self.emit(format!(
+                    "{ng} = getelementptr inbounds [{nn} x i8], ptr @.str.{ni}, i64 0, i64 0"
+                ));
                 let (vi, vn) = str_idx(strings, variant);
                 let vg = self.r();
-                self.emit(format!("{vg} = getelementptr inbounds [{vn} x i8], ptr @.str.{vi}, i64 0, i64 0"));
+                self.emit(format!(
+                    "{vg} = getelementptr inbounds [{vn} x i8], ptr @.str.{vi}, i64 0, i64 0"
+                ));
                 match payload {
                     Some(pslot) => {
                         let pv = self.r();
@@ -4728,12 +4975,16 @@ impl BodyEmitter {
                         self.emit(format!("{cell} = bitcast i8* {raw} to %Value*"));
                         self.emit(format!("store %Value {pv}, %Value* {cell}"));
                         let res = self.r();
-                        self.emit(format!("{res} = call %Value @hc_make_enum(i8* {ng}, i8* {vg}, %Value* {cell})"));
+                        self.emit(format!(
+                            "{res} = call %Value @hc_make_enum(i8* {ng}, i8* {vg}, %Value* {cell})"
+                        ));
                         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
                     }
                     None => {
                         let res = self.r();
-                        self.emit(format!("{res} = call %Value @hc_make_enum(i8* {ng}, i8* {vg}, %Value* null)"));
+                        self.emit(format!(
+                            "{res} = call %Value @hc_make_enum(i8* {ng}, i8* {vg}, %Value* null)"
+                        ));
                         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
                     }
                 }
@@ -4751,7 +5002,9 @@ impl BodyEmitter {
                 let l_arr = self.fb();
                 let l_tup = self.fb();
                 self.term(format!("br i1 {ia}, label %{l_arr}, label %{l_tup}"));
-                self.blocks.push(format!("{l_tup}:\n  call void @hc_abort_tuplearity()\n  unreachable\n"));
+                self.blocks.push(format!(
+                    "{l_tup}:\n  call void @hc_abort_tuplearity()\n  unreachable\n"
+                ));
                 self.cur = format!("{l_arr}:\n");
                 self.terminated = false;
                 let sd = self.r();
@@ -4769,13 +5022,17 @@ impl BodyEmitter {
                 let l_slots = self.fb();
                 let l_arity = self.fb();
                 self.term(format!("br i1 {le}, label %{l_slots}, label %{l_arity}"));
-                self.blocks.push(format!("{l_arity}:\n  call void @hc_abort_tuplearity()\n  unreachable\n"));
+                self.blocks.push(format!(
+                    "{l_arity}:\n  call void @hc_abort_tuplearity()\n  unreachable\n"
+                ));
                 self.cur = format!("{l_slots}:\n");
                 self.terminated = false;
                 for (i, s) in slots.iter().enumerate() {
                     if let Some(slot) = s {
                         let p = self.r();
-                        self.emit(format!("{p} = getelementptr %Value, %Value* {items}, i64 {i}"));
+                        self.emit(format!(
+                            "{p} = getelementptr %Value, %Value* {items}, i64 {i}"
+                        ));
                         let ev = self.r();
                         self.emit(format!("{ev} = load %Value, %Value* {p}"));
                         self.emit(format!("store %Value {ev}, %Value* %sp.{slot}"));
@@ -4795,7 +5052,11 @@ impl BodyEmitter {
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
             // ---- Phase 3 switch / 区间 / for ----
-            IrInst::MatchTest { temp, subject, pattern } => {
+            IrInst::MatchTest {
+                temp,
+                subject,
+                pattern,
+            } => {
                 let sv = self.r();
                 self.emit(format!("{sv} = load %Value, %Value* %sp.{subject}"));
                 // 模式描述符：0=Error(code) 1=Ident(str) 2=Int(data) 3=Float(bits) 4=Str(str,len) 5=Char(data)
@@ -4832,7 +5093,9 @@ impl BodyEmitter {
                 let hv = self.r();
                 self.emit(format!("{hv} = load %Value, %Value* %sp.{hi}"));
                 let res = self.r();
-                self.emit(format!("{res} = call %Value @hc_make_range(%Value {lv}, %Value {hv})"));
+                self.emit(format!(
+                    "{res} = call %Value @hc_make_range(%Value {lv}, %Value {hv})"
+                ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
             IrInst::EnumPayload { temp, a } => {
@@ -4849,7 +5112,12 @@ impl BodyEmitter {
                 self.emit(format!("{res} = call %Value @hc_iter_make(%Value {bv})"));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
-            IrInst::IterNext { has, iter, slot, read_only } => {
+            IrInst::IterNext {
+                has,
+                iter,
+                slot,
+                read_only,
+            } => {
                 // 捕获槽为按值 `%Value`：先拷贝项值入槽，循环体末尾由 IterWriteBack 写回。
                 // `read_only` 不影响 LLVM 布局（只读捕获槽无人写；Mut/Move 靠写回收敛）。
                 let _ = read_only;
@@ -4860,7 +5128,9 @@ impl BodyEmitter {
                 let itp = self.r();
                 self.emit(format!("{itp} = inttoptr i128 {ip} to %IterObj*"));
                 let res = self.r();
-                self.emit(format!("{res} = call %Value @hc_iter_next(%IterObj* {itp}, %Value* %sp.{slot})"));
+                self.emit(format!(
+                    "{res} = call %Value @hc_iter_next(%IterObj* {itp}, %Value* %sp.{slot})"
+                ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{has}"));
             }
             IrInst::IterWriteBack { iter, slot } => {
@@ -4870,10 +5140,21 @@ impl BodyEmitter {
                 self.emit(format!("{ip} = extractvalue %Value {iv}, 1"));
                 let itp = self.r();
                 self.emit(format!("{itp} = inttoptr i128 {ip} to %IterObj*"));
-                self.emit(format!("call void @hc_iter_write_back(%IterObj* {itp}, %Value* %sp.{slot})"));
+                self.emit(format!(
+                    "call void @hc_iter_write_back(%IterObj* {itp}, %Value* %sp.{slot})"
+                ));
             }
             IrInst::Call { name, args, temp } => {
-                self.call(name, args, *temp, canon, funcs, strings, errors, slot_consts);
+                self.call(
+                    name,
+                    args,
+                    *temp,
+                    canon,
+                    funcs,
+                    strings,
+                    errors,
+                    slot_consts,
+                );
             }
             IrInst::CallBuiltin { name, args, temp } => {
                 self.call_builtin(name, args, *temp, slot_consts, strings, errors)
@@ -4883,7 +5164,17 @@ impl BodyEmitter {
                 base,
                 method,
                 args,
-            } => self.call_method(*temp, *base, method, args, canon, funcs, strings, errors, slot_consts),
+            } => self.call_method(
+                *temp,
+                *base,
+                method,
+                args,
+                canon,
+                funcs,
+                strings,
+                errors,
+                slot_consts,
+            ),
             // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用需原生 ABI 改造（Phase 8），
             // 当前响亮拒绝（error.NotCallable），禁止静默误编译。
             // 方法调用已由 Phase 7 内建/用户类分派覆盖；闭包仍在 Phase 8。
@@ -4894,6 +5185,15 @@ impl BodyEmitter {
             IrInst::ReturnVoid => self.ret_void(),
             // Phase 5 全局单元：`@.h_globals` 数组寻址读写（声明序槽位）
             IrInst::LoadGlobal { temp, name } => {
+                // 可变隐式容器（G4，0acd0e5）：每次加载**合成新空容器**——对齐 run_ir
+                // `implicit_env_value`（每次新建）。共享全局槽 → append 重分配后全部
+                // Vec 字段别名同一容器 → 自引用递归段错误（31-class/46-recursion 回归）。
+                if matches!(name.as_str(), "Vec" | "Deque" | "Table") {
+                    let gv = self.r();
+                    self.emit(format!("{gv} = call %Value @hc_make_arr(i64 0)"));
+                    self.emit(format!("store %Value {gv}, %Value* %sp.{temp}"));
+                    return;
+                }
                 if let Some(&i) = gidx.get(name) {
                     let gp = self.r();
                     self.emit(format!(
@@ -4981,7 +5281,10 @@ mod tests {
     fn scalar_main_defines_and_wrapper() {
         let ll = gen("fn main() i32 { return 42; }");
         assert!(ll.contains("define %Value @\"hc_fn0\"()"), "{ll}");
-        assert!(ll.contains("define i32 @main(i32 %argc, i8** %argv)"), "{ll}");
+        assert!(
+            ll.contains("define i32 @main(i32 %argc, i8** %argv)"),
+            "{ll}"
+        );
         assert!(ll.contains("i128 42"), "{ll}");
         assert!(ll.contains("ret %Value"), "{ll}");
     }
@@ -4997,8 +5300,11 @@ mod tests {
     fn err_literal_uses_error_code() {
         let ll = gen("fn f() !i32 { return error.NotFound; }");
         assert!(ll.contains("i32 6"), "{ll}"); // err tag
-        // error.NotFound 码 = 0（包 ID 0 + 首个错误）
-        assert!(ll.contains("insertvalue %Value { i32 0, i128 0 }, i32 6, 0"), "{ll}");
+                                               // error.NotFound 码 = 0（包 ID 0 + 首个错误）
+        assert!(
+            ll.contains("insertvalue %Value { i32 0, i128 0 }, i32 6, 0"),
+            "{ll}"
+        );
     }
 
     #[test]
@@ -5048,7 +5354,9 @@ mod tests {
     #[test]
     fn pointer_eq_uses_identity_dispatch() {
         // 同目标指针相等 → hc_eq 分流到纯值比较（先 hc_deref 归一化）
-        let ll = gen("fn f() bool { var mut x: i32 = 5; var p = &mut x; var q = &mut x; return p == q; }");
+        let ll = gen(
+            "fn f() bool { var mut x: i32 = 5; var p = &mut x; var q = &mut x; return p == q; }",
+        );
         assert!(ll.contains("define i1 @hc_eq("), "{ll}");
         assert!(ll.contains("define i1 @hc_eq_plain("), "{ll}");
         assert!(ll.contains("call i1 @hc_eq_plain"), "{ll}");
@@ -5087,9 +5395,7 @@ mod tests {
     #[test]
     fn aggregate_array_index_emits_arr_helpers() {
         // MakeArr/Index/StoreIndex → hc_make_arr/hc_arr_set/hc_index/hc_store_index
-        let ll = gen(
-            "fn f() i32 { var a = [10, 20, 30]; a[1] = 99; return a[1]; }",
-        );
+        let ll = gen("fn f() i32 { var a = [10, 20, 30]; a[1] = 99; return a[1]; }");
         assert!(ll.contains("define %Value @hc_make_arr"), "{ll}");
         assert!(ll.contains("define void @hc_arr_set"), "{ll}");
         assert!(ll.contains("define %Value @hc_index"), "{ll}");
@@ -5151,9 +5457,7 @@ mod tests {
     #[test]
     fn aggregate_deep_eq_emits_hc_eq_agg() {
         // 类/数组/枚举深比较 → hc_eq_agg（hc_eq 分流）
-        let ll = gen(
-            "fn f() bool { var a = [1, 2, 3]; var b = [1, 2, 3]; return a == b; }",
-        );
+        let ll = gen("fn f() bool { var a = [1, 2, 3]; var b = [1, 2, 3]; return a == b; }");
         assert!(ll.contains("define i1 @hc_eq_agg"), "{ll}");
         assert!(ll.contains("call i1 @hc_eq_agg"), "{ll}");
         assert!(ll.contains("define %SeqInfo @hc_seq_info"), "{ll}");
@@ -5197,9 +5501,7 @@ mod tests {
     #[test]
     fn phase3_switch_emits_match_test_helper() {
         // MatchTest 指令 → @hc_match_test（模式描述符：tag/data/str/len）
-        let ll = gen(
-            "fn f(x: i32) i32 { switch (x) { 1 => return 10, else => return 99, } }",
-        );
+        let ll = gen("fn f(x: i32) i32 { switch (x) { 1 => return 10, else => return 99, } }");
         assert!(ll.contains("define %Value @hc_match_test"), "{ll}");
         assert!(ll.contains("call %Value @hc_match_test"), "{ll}");
         // switch 指令：i8 类型限定的 case 列表
@@ -5211,9 +5513,8 @@ mod tests {
     #[test]
     fn phase3_switch_string_pattern_collected() {
         // Str/Ident 模式字符串进入字符串表（@.str.N 全局）
-        let ll = gen(
-            r#"fn pick(s: String) i32 { switch (s) { "hi" => return 1, else => return 0, } }"#,
-        );
+        let ll =
+            gen(r#"fn pick(s: String) i32 { switch (s) { "hi" => return 1, else => return 0, } }"#);
         assert!(ll.contains("@hc_match_test"), "{ll}");
         assert!(ll.contains("c\"hi\\00\""), "{ll}");
     }
@@ -5255,7 +5556,9 @@ mod tests {
     #[test]
     fn phase3_iter_notiter_message_present() {
         // NotIterable 硬错误消息：@.msg_notiter 全局 + hc_abort_notiter helper
-        let ll = gen("fn f() i32 { var a = [1]; var mut s: i32 = 0; for (a) |x| { s += x; } return s; }");
+        let ll = gen(
+            "fn f() i32 { var a = [1]; var mut s: i32 = 0; for (a) |x| { s += x; } return s; }",
+        );
         assert!(ll.contains("@.msg_notiter"), "{ll}");
         assert!(ll.contains("define void @hc_abort_notiter"), "{ll}");
     }
@@ -5281,9 +5584,8 @@ mod tests {
     #[test]
     fn phase7_alloc_init_emits_make_class() {
         // alloc.init(ABC) → MakeClass 默认字段 → @hc_make_class(ABC 类型名全局, i64 1)（1 字段）
-        let ll = gen(
-            "class ABC { x: i32, } fn main() i32 { var abc = alloc.init(ABC); return abc.x; }",
-        );
+        let ll =
+            gen("class ABC { x: i32, } fn main() i32 { var abc = alloc.init(ABC); return abc.x; }");
         assert!(ll.contains("call %Value @hc_make_class(i8*"), "{ll}");
         assert!(ll.contains("i64 1)"), "{ll}");
         assert!(ll.contains("c\"ABC\\00\""), "{ll}");
@@ -5293,14 +5595,12 @@ mod tests {
     fn phase7_math_builtins_emit_nan_and_helpers() {
         // math.nan(f64) 类型名参数 → 忽略，直接发 NaN 位模式 Float；
         // math.sqrt/abs/pow → 一元 helper 调用；helper 定义进 preamble。
-        let ll = gen(
-            r#"fn main(io: Io) !void {
+        let ll = gen(r#"fn main(io: Io) !void {
     var nan = math.nan(f64);
     var s = math.sqrt(4.0);
     var p = math.pow(3.0);
     io.print("{} {} {}\n", nan, s, p);
-}"#,
-        );
+}"#);
         // f64::NAN.to_bits() = 0x7FF8000000000000
         assert!(ll.contains("i32 3, 0"), "{ll}");
         assert!(ll.contains("i128 9221120237041090560"), "{ll}");
@@ -5317,15 +5617,13 @@ mod tests {
     fn phase7_user_method_dispatch_emits_strcmp_chain() {
         // abc.print(&io)：运行时分派——解引用基值 → 类名 strcmp 匹配 "ABC" →
         // 调 hc_fn{k} 且 self（解引用后值）注入首参。
-        let ll = gen(
-            r#"class ABC {
+        let ll = gen(r#"class ABC {
     pub fn print(self: *Self, io: *Io) { io.print("m\n"); }
 }
 fn main(io: Io) !void {
     var abc = alloc.init(ABC);
     abc.print(&io);
-}"#,
-        );
+}"#);
         assert!(ll.contains("call i32 @strcmp"), "{ll}");
         assert!(ll.contains("c\"ABC\\00\""), "{ll}");
         assert!(ll.contains("call %Value @hc_deref"), "{ll}");
@@ -5337,8 +5635,7 @@ fn main(io: Io) !void {
     #[test]
     fn phase7_scalar_builtins_emit_helpers() {
         // 标量 @ 内建 + 自由内建 → 各自 helper 调用（不再静默 Void）
-        let ll = gen(
-            r#"fn main() !void {
+        let ll = gen(r#"fn main() !void {
     try expect_eq(@sizeOf(i32), 4);
     try expect_eq(@intCast(i32, 7), 7);
     try expect_eq(@typeOf(42), "i128");
@@ -5346,8 +5643,7 @@ fn main(io: Io) !void {
     try expect_eq(max(3, 9), 9);
     var p = box(42);
     try expect_eq(p.*, 42);
-}"#,
-        );
+}"#);
         assert!(ll.contains("call %Value @hc_intcast"), "{ll}");
         assert!(ll.contains("call %Value @hc_typeof"), "{ll}");
         assert!(ll.contains("call %Value @hc_min"), "{ll}");
@@ -5361,8 +5657,7 @@ fn main(io: Io) !void {
     fn continuous_class_copy_emits_deep_copy_gate() {
         // P11d：连续类 var 声明 → DeepCopy 指令 → `hc_deep_copy_cont` 运行时门 +
         // 递归 `hc_deep_copy` helper；连续类名进字符串表供 strcmp 链匹配。
-        let ll = gen(
-            r#"[continuous]
+        let ll = gen(r#"[continuous]
 class Point {
     x: f32,
     y: f32,
@@ -5372,8 +5667,7 @@ fn f() f32 {
     var p2: Point = p;
     p2.x = 99.0;
     return p.x;
-}"#,
-        );
+}"#);
         assert!(ll.contains("define %Value @hc_deep_copy_cont"), "{ll}");
         assert!(ll.contains("define %Value @hc_deep_copy"), "{ll}");
         assert!(ll.contains("call %Value @hc_deep_copy_cont"), "{ll}");
@@ -5385,16 +5679,14 @@ fn f() f32 {
     fn non_continuous_class_no_deep_copy_inst() {
         // 非连续类 var 声明不发射 DeepCopy 指令（引用类型，按值赋值被语义层拒绝）；
         // 无连续类模块的门为恒等（仍定义，但无调用）。
-        let ll = gen(
-            r#"class Blob {
+        let ll = gen(r#"class Blob {
     x: i32,
     y: i32,
 }
 fn f() i32 {
     var b = Blob{ x = 1, y = 2 };
     return b.x;
-}"#,
-        );
+}"#);
         // 无连续类 → 恒等门（不含递归 helper/strcmp 链），且无 DeepCopy 调用
         assert!(!ll.contains("call %Value @hc_deep_copy_cont"), "{ll}");
         assert!(!ll.contains("define %Value @hc_deep_copy("), "{ll}");
@@ -5404,11 +5696,9 @@ fn f() i32 {
     fn implicit_env_pi_seeded_in_entry() {
         // P11d：30-interface 的 Circle.area 读 `pi`——原生 LoadGlobal 此前为 Void → 0.0；
         // main/test 入口播种 Float(PI) 常量到 `@.h_globals` 槽位（对齐 IrRuntime::init）。
-        let ll = gen(
-            r#"fn area(r: f64) f64 {
+        let ll = gen(r#"fn area(r: f64) f64 {
     return pi * r * r;
-}"#,
-        );
+}"#);
         // Float tag=3 + PI 位模式常量；对 @.h_globals 数组 GEP 后 store
         assert!(
             ll.contains("store %Value { i32 3, i128 4614256656552045848 }"),

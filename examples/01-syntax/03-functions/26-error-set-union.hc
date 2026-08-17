@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 26-error-set-union.hc — 错误集组合（12.15）
 //
 //   - 错误集联合：error{A} || error{B}（Zig 式）
@@ -12,7 +14,7 @@ fn load_config(io: *T, path: &[u8]) CombinedError!Config where T: Io {
     return Config.from_json(data) catch return error.InvalidFormat;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var cfg = load_config(&io, "app.json") catch |err| {
         io.print("failed: {}\n", err);
         return;
@@ -22,5 +24,5 @@ fn main(io: Io) !void {
 
 [test] fn error_set_union() !void {
     // CombinedError = FileError || ParseError（组合契约）；真实 IO：文件缺失 → NotFound
-    try expect_error(error.NotFound, load_config(test_io, "app.json"));
+    try expect_error(error.NotFound, load_config(io, "app.json"));
 }

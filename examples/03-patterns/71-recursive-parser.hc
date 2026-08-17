@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 71-recursive-parser.hc — 递归下降解析器（综合示例）
 //
 //   - 综合：切片 + 递归 + enum + error union + arena 回收
@@ -42,7 +44,7 @@ fn eval(n: *Node) i64 {
     };
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var arena = Arena.init(alloc);
     var pos = 0;
 
@@ -53,12 +55,12 @@ fn main(io: Io) !void {
 [test] fn recursive_parser() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
-    var node = try parse(&test_io, "(5)", &pos, &arena);
+    var node = try parse(&io, "(5)", &pos, &arena);
     try expect_eq(eval(node), 5);
 }
 
 [test] fn parse_error() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
-    try expect_error(error.UnexpectedToken, parse(&test_io, ")", &pos, &arena));
+    try expect_error(error.UnexpectedToken, parse(&io, ")", &pos, &arena));
 }

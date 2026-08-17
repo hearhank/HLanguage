@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 74-state-machine-adv.hc — 带数据的状态机（enum 负载 + switch 表达式）
 //
 //   - enum 变体带负载（12.13）；switch 穷举 + 负载捕获（Q27）
@@ -21,7 +23,7 @@ fn describe(state: HttpState) &[u8] {
     };
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var state = HttpState{connecting = 3};
     io.print("{}\n", describe(state));
 

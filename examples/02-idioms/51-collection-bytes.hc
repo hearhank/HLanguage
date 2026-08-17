@@ -1,10 +1,12 @@
+import H.std.{io};
+
 // 51-collection-bytes.hc — 集合二进制序列化（Q38 定案 2026-08-13）
 //
 //   - 内建泛型：v.to_bytes() —— 长度前缀（u64 LE）+ 元素字节序列
 //   - 字节序固定小端（LE，跨平台一致）；元素递归用内建转换
 //   - 定制格式（压缩/加密/版本化）走脚本生成覆盖（Q38 C）
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var v = Vec(i32).init(alloc);
     v.append(1);
     v.append(2);

@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 61-json-walk.hc — JSON 值遍历（enum 递归，54 延伸）
 //
 //   - JsonValue：enum 负载递归（数组/对象元素也是 JsonValue）
@@ -40,7 +42,7 @@ fn count_strings(v: *JsonValue) i32 {
     };
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 构造一个简单 JSON：{"a": "x", "list": [1, "y"]}
     var arr = Vec(JsonValue).init(alloc);
     arr.append(JsonValue{number = 1.0});

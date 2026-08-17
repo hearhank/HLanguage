@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 73-rate-limit.hc — 令牌桶限流（算术 + class 状态）
 //
 //   - 令牌桶：每毫秒补令牌，容量上限
@@ -26,7 +28,7 @@ class TokenBucket {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var bucket: o TokenBucket = TokenBucket.new(3, io.time.now());
     for (0..5) |_| {
         io.print("allowed = {}\n", bucket.allow(&io));
@@ -34,10 +36,10 @@ fn main(io: Io) !void {
 }
 
 [test] fn token_bucket() !void {
-    var bucket: o TokenBucket = TokenBucket.new(3, test_io.time.now());
+    var bucket: o TokenBucket = TokenBucket.new(3, io.time.now());
     var allowed = 0;
     for (0..5) |_| {
-        if (bucket.allow(&test_io)) {
+        if (bucket.allow(&io)) {
             allowed += 1;
         }
     }

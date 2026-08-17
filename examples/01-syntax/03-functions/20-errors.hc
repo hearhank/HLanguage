@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 20-errors.hc — 错误处理（error union / error set / try / catch）
 //
 // Q11 定案（2026-08-13）：Zig 式
@@ -18,7 +20,7 @@ fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     return io.fs.read_all(f, alloc);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var data = read_config(&io, "config.txt") catch |err| {
         io.print("config error: {}\n", err);
         return;
@@ -28,5 +30,5 @@ fn main(io: Io) !void {
 
 [test] fn read_config_missing_not_found() !void {
     // 真实 IO（Q-T4）：随机文件名保证不存在 → 期望 NotFound
-    try expect_error(error.NotFound, read_config(test_io, "config_missing_42.txt"));
+    try expect_error(error.NotFound, read_config(io, "config_missing_42.txt"));
 }

@@ -124,11 +124,15 @@ fn run_cli() -> ExitCode {
                     eprintln!("error: `hc run --ir` requires a file path");
                     return ExitCode::from(2);
                 };
-                run_file_ir(Path::new(p))
+                // 程序参数：`hc run --ir <file> <args...>` → [程序名] + args（0 号 = 程序名）
+                let prog_args = program_args(&args[4..], p);
+                run_file_ir(Path::new(p), &prog_args)
             } else if is_hbc2(Path::new(path)) {
-                run_file_bytecode(Path::new(path))
+                let prog_args = program_args(&args[3..], path);
+                run_file_bytecode(Path::new(path), &prog_args)
             } else {
-                run_file(Path::new(path))
+                let prog_args = program_args(&args[3..], path);
+                run_file(Path::new(path), &prog_args)
             }
         }
         "test" => {
@@ -304,7 +308,11 @@ fn package_programs(path: &Path) -> Result<(String, hc::Program, Vec<hc::Program
             ExitCode::FAILURE
         })?;
         let p = hc::parse_source(&src).map_err(|d| {
-            eprintln!("{} 兄弟文件解析失败 {}:", paint(err_color(), "31", "[FAIL]"), s.display());
+            eprintln!(
+                "{} 兄弟文件解析失败 {}:",
+                paint(err_color(), "31", "[FAIL]"),
+                s.display()
+            );
             for dg in &d {
                 eprintln!("  {}", dg.message);
             }
@@ -683,7 +691,14 @@ fn check_file(path: &Path) -> Result<(), ExitCode> {
     }
 }
 
-fn run_file(path: &Path) -> ExitCode {
+/// A3（ADR-0010）：程序参数 = [程序名] + 文件后参数（0 号 = 程序名）
+fn program_args<'a>(after_file: &'a [String], file: &str) -> Vec<String> {
+    std::iter::once(file.to_string())
+        .chain(after_file.iter().cloned())
+        .collect()
+}
+
+fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
     let source = match read_program(path) {
         Ok(s) => s,
         Err(c) => return c,
@@ -696,6 +711,8 @@ fn run_file(path: &Path) -> ExitCode {
         }
     };
     let mut interp = Interp::new(&source);
+    // A3：程序 args（[程序名] + 文件后参数）；io.args() 已取消
+    interp.args = prog_args.to_vec();
     // M1.4：同包兄弟文件（同目录 .hc）先登记符号
     if let Err(code) = load_siblings_into(&mut interp, path) {
         return code;
@@ -753,6 +770,11 @@ enum IrRunOutcome {
 /// 打印的文本（诊断渲染 / `error.{name}: {message}` + 切片外特性提示）。
 /// 不依赖文件系统与退出码——仅 `hc run --ir` 使用，默认路径不受影响。
 fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
+    run_ir_source_with_args(source, &[])
+}
+
+/// 同 [`run_ir_source`]，带程序参数（A3：`main(args)`——0 号 = 程序名）。
+fn run_ir_source_with_args(source: &str, prog_args: &[String]) -> Result<IrRunOutcome, String> {
     // 1) 解析（失败渲染诊断）
     let program = match hc::parse_source(source) {
         Ok(p) => p,
@@ -770,7 +792,7 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
         Ok(m) => m,
         Err(e) => return Err(format!("error.{}: {}", e.name, e.message)),
     };
-    execute_ir(&module)
+    execute_ir(&module, prog_args)
 }
 
 /// 执行已降级的 IR 模块入口 `main`，结果归一化为 [`IrRunOutcome`]。
@@ -778,14 +800,14 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
 /// `hc run --ir`（`lower` 后）与字节码 VM（`decode` 后）共用——ADR-0004 唯一语义源。
 /// 走 [`IrRuntime`]（共享堆 + 全局 cell + `@__init__` 一次性初始化 + 隐式环境注入），
 /// 运行后冲刷 `io.print` 缓冲（`ctx.out`）到 stdout。
-fn execute_ir(module: &hc::ir::IrModule) -> Result<IrRunOutcome, String> {
+fn execute_ir(module: &hc::ir::IrModule, prog_args: &[String]) -> Result<IrRunOutcome, String> {
     // 入口 main 必须存在（NoMain——先查表，避免 call 的 NoFunction 误导为子集外）
     if !module.func_index.contains_key("main") {
         return Err("error.NoMain: 入口函数 `main` 未定义".into());
     }
     let mut rt = hc::ir::IrRuntime::new();
-    // io.args：对齐 oracle `Interp::new`（interp.rs:234）——进程实参（跳过二进制本身）
-    rt.ctx.args = std::env::args().skip(1).map(|a| a.into_bytes()).collect();
+    // A3（ADR-0010）：程序 args（[程序名] + 文件后参数）；io.args() 已取消
+    rt.ctx.args = prog_args.iter().map(|a| a.clone().into_bytes()).collect();
     let result = rt.call(module, "main", &[]);
     // G5/§8.3 Debug 泄漏检测：IR 侧程序退出时报告泄漏清单（不改变退出码）
     report_leaks("<ir>", &rt.ctx.leak_report());
@@ -832,16 +854,16 @@ fn ir_exit(outcome: Result<IrRunOutcome, String>) -> ExitCode {
 }
 
 /// `hc run --ir file.hc`：只读文件 + 调用 `run_ir_source` + 映射退出码。
-fn run_file_ir(path: &Path) -> ExitCode {
+fn run_file_ir(path: &Path, prog_args: &[String]) -> ExitCode {
     let source = match read_program(path) {
         Ok(s) => s,
         Err(c) => return c,
     };
-    ir_exit(run_ir_source(&source))
+    ir_exit(run_ir_source_with_args(&source, prog_args))
 }
 
 /// `hc run file.hbc`：装载 HBC2 字节码 + `execute_ir` + 映射退出码（M3.2 字节码 VM）。
-fn run_file_bytecode(path: &Path) -> ExitCode {
+fn run_file_bytecode(path: &Path, prog_args: &[String]) -> ExitCode {
     let bytes = match read_bytecode(path) {
         Ok(b) => b,
         Err(c) => return c,
@@ -853,7 +875,7 @@ fn run_file_bytecode(path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    ir_exit(execute_ir(&module))
+    ir_exit(execute_ir(&module, prog_args))
 }
 
 /// 同目录兄弟 .hc 文件（M1.4：目录 = 包；build.zon 文件清单解析归 M7.2）
@@ -902,7 +924,12 @@ fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> 
     }
     let refs: Vec<&hc::Program> = programs.iter().collect();
     interp.load_siblings(&refs).map_err(|e| {
-        eprintln!("{} 兄弟文件装载: {} {}", paint(err_color(), "31", "[FAIL]"), e.name, e.message);
+        eprintln!(
+            "{} 兄弟文件装载: {} {}",
+            paint(err_color(), "31", "[FAIL]"),
+            e.name,
+            e.message
+        );
         ExitCode::FAILURE
     })
 }
@@ -966,7 +993,11 @@ fn load_deps_into(
         let dep_manifest = match buildzon::load_from_dir(&canon) {
             Ok(Some(m)) => m,
             Ok(None) => {
-                eprintln!("[warn] 依赖 {} 目录 {} 无 build.zon", dep.name, canon.display());
+                eprintln!(
+                    "[warn] 依赖 {} 目录 {} 无 build.zon",
+                    dep.name,
+                    canon.display()
+                );
                 continue;
             }
             Err(e) => {
@@ -1000,7 +1031,13 @@ fn load_deps_into(
         if !programs.is_empty() {
             let refs: Vec<&hc::Program> = programs.iter().collect();
             if let Err(e) = interp.load_dep(&dep.name, &refs) {
-                eprintln!("{} 依赖 {} 装载: {} {}", paint(err_color(), "31", "[FAIL]"), dep.name, e.name, e.message);
+                eprintln!(
+                    "{} 依赖 {} 装载: {} {}",
+                    paint(err_color(), "31", "[FAIL]"),
+                    dep.name,
+                    e.name,
+                    e.message
+                );
                 return Err(ExitCode::FAILURE);
             }
         }
@@ -1122,7 +1159,11 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                     Err(diags) => {
                         bad.push((f.clone(), "parse error".into()));
                         for d in &diags {
-                            eprintln!("{} {name}: {}", paint(err_color(), "31", "[FAIL]"), d.message);
+                            eprintln!(
+                                "{} {name}: {}",
+                                paint(err_color(), "31", "[FAIL]"),
+                                d.message
+                            );
                         }
                     }
                 },
@@ -1151,7 +1192,12 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                 .collect();
             if !siblings.is_empty() {
                 if let Err(e) = interp.load_siblings(&siblings) {
-                    eprintln!("{} {name} (sibling load: {} {})", paint(err_color(), "31", "[FAIL]"), e.name, e.message);
+                    eprintln!(
+                        "{} {name} (sibling load: {} {})",
+                        paint(err_color(), "31", "[FAIL]"),
+                        e.name,
+                        e.message
+                    );
                     total_f += 1;
                     all_ok = false;
                     continue;
@@ -1164,7 +1210,11 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                 continue;
             }
             if let Err(e) = interp.load(program) {
-                eprintln!("{} {name} (load error: {})", paint(err_color(), "31", "[FAIL]"), e.name);
+                eprintln!(
+                    "{} {name} (load error: {})",
+                    paint(err_color(), "31", "[FAIL]"),
+                    e.name
+                );
                 total_f += 1;
                 all_ok = false;
                 continue;
@@ -1220,6 +1270,11 @@ fn collect_hc_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            // 设计草图目录（`examples/study/`）不计入示例回归基线——09 组 A6
+            // （示例全量迁移 main(args) + import）时再纳入。
+            if path.file_name().map_or(false, |n| n == "study") {
+                continue;
+            }
             collect_hc_files(&path, out);
         } else if path.extension().map_or(false, |e| e == "hc") {
             out.push(path);
@@ -1359,10 +1414,9 @@ fn main() i32 {
     #[test]
     fn merge_modules_exports_qualified_only() {
         // 入口 + 兄弟：兄弟顶层函数扁平名文件私有；命名空间函数限定名导出、索引偏移正确
-        let entry = hc::ir::lower(
-            &hc::parse_source("fn main() i32 { return Math.square(4); }\n").unwrap(),
-        )
-        .unwrap();
+        let entry =
+            hc::ir::lower(&hc::parse_source("fn main() i32 { return Math.square(4); }\n").unwrap())
+                .unwrap();
         let sib = hc::ir::lower(
             &hc::parse_source(
                 "fn load_config(x: i32) i32 { return x; }\nnamespace Math { fn square(x: i32) i32 { return x * x; } }\n",
@@ -1401,23 +1455,16 @@ fn main() i32 {
         assert_eq!(
             merged.globals,
             vec![
-                "app",
-                "alloc",
-                "io",
-                "test_io",
-                "stdout",
-                "stderr",
-                "pi",
-                "Vec",
-                "Deque",
-                "Map",
-                "Table",
-                "lib",
-                "shared",
+                "app", "alloc", "io", "test_io", "stdout", "stderr", "pi", "Vec", "Deque", "Map",
+                "Table", "lib", "shared",
             ]
         );
         // 各模块 `@__init__` 全部保留（funcs 序依次执行）
-        let init_count = merged.funcs.iter().filter(|f| f.name == "@__init__").count();
+        let init_count = merged
+            .funcs
+            .iter()
+            .filter(|f| f.name == "@__init__")
+            .count();
         assert_eq!(init_count, 3);
     }
 

@@ -71,7 +71,7 @@ fn dep_pub_fn_in_namespace_via_prefix() {
     // pub namespace 内 pub 函数：`jsonlib.util.triple(...)` 限定访问
     let dep = parse(
         r#"
-pub namespace util {
+pub namespace Util {
     pub fn triple(x: i32) i32 { return x * 3; }
     fn secret(x: i32) i32 { return x; }
 }
@@ -80,7 +80,7 @@ pub namespace util {
     let main = parse(
         r#"
 [test] fn dep_pub_fn_in_namespace_via_prefix() !void {
-    var a = jsonlib.util.triple(5);
+    var a = jsonlib.Util.triple(5);
     try expect_eq(a, 15);
 }
 "#,

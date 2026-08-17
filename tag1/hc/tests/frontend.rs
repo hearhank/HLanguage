@@ -1,5 +1,6 @@
 //! hc 编译器前端单元测试（M1/M2 验收：词法、解析、诊断）
 
+use hc::ast::Decl;
 use hc::lexer::lex;
 use hc::parse_source;
 use hc::token::TokenKind;
@@ -469,8 +470,9 @@ fn m14_using_alias_qualified_call() {
     // using NS as M：M.member 限定调用（语义可解析）
     let ext = parse_source("namespace Math { pub fn square(x: i32) i32 { return x * x; } }\n")
         .expect("parse ext");
-    let main = parse_source("using Math as M;\n[test] fn t() !void {\n    var r = M.square(5);\n}\n")
-        .expect("parse main");
+    let main =
+        parse_source("using Math as M;\n[test] fn t() !void {\n    var r = M.square(5);\n}\n")
+            .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
     assert!(
         !diags.iter().any(|d| d.is_error()),
@@ -485,6 +487,225 @@ fn m14_single_file_unchanged() {
     check_clean("fn square(x: i32) i32 { return x * x; }\n[test] fn t() !void {\n    try expect_eq(square(5), 25);\n}\n");
 }
 
+// ---------- ADR-0010：import 语句（A1：词法与解析） ----------
+
+#[test]
+fn a1_lex_import_keyword() {
+    let toks = lex("import H.std.{io as my};");
+    assert!(matches!(toks[0].kind, TokenKind::KwImport));
+}
+
+#[test]
+fn a1_parse_import_symbol_selection() {
+    // 符号选择 + as 别名：`import H.std.{io as my};`
+    let program = parse_source("import H.std.{io as my};").expect("parse");
+    let Decl::Import {
+        path,
+        alias,
+        select,
+        ..
+    } = &program.decls[0]
+    else {
+        panic!("预期 Decl::Import，实际 {:?}", program.decls[0]);
+    };
+    assert_eq!(path, &vec!["H".to_string(), "std".to_string()]);
+    assert_eq!(alias, &None);
+    assert_eq!(
+        select,
+        &Some(vec![("io".to_string(), Some("my".to_string()))])
+    );
+}
+
+#[test]
+fn a1_parse_import_multi_symbol_no_alias() {
+    // 多符号（无别名）：`import H.std.net.{http, tcp};`
+    let program = parse_source("import H.std.net.{http, tcp};").expect("parse");
+    let Decl::Import { path, select, .. } = &program.decls[0] else {
+        panic!("预期 Decl::Import");
+    };
+    assert_eq!(
+        path,
+        &vec!["H".to_string(), "std".to_string(), "net".to_string()]
+    );
+    assert_eq!(
+        select,
+        &Some(vec![("http".to_string(), None), ("tcp".to_string(), None),])
+    );
+}
+
+#[test]
+fn a1_parse_import_whole_module() {
+    // 整模块：`import pkg.mod;`
+    let program = parse_source("import pkg.mod;").expect("parse");
+    let Decl::Import {
+        path,
+        alias,
+        select,
+        ..
+    } = &program.decls[0]
+    else {
+        panic!("预期 Decl::Import");
+    };
+    assert_eq!(path, &vec!["pkg".to_string(), "mod".to_string()]);
+    assert_eq!(alias, &None);
+    assert_eq!(select, &None);
+}
+
+#[test]
+fn a1_parse_import_whole_module_alias() {
+    // 整模块 + 别名：`import pkg.mod as m;`
+    let program = parse_source("import pkg.mod as m;").expect("parse");
+    let Decl::Import {
+        path,
+        alias,
+        select,
+        ..
+    } = &program.decls[0]
+    else {
+        panic!("预期 Decl::Import");
+    };
+    assert_eq!(path, &vec!["pkg".to_string(), "mod".to_string()]);
+    assert_eq!(alias, &Some("m".to_string()));
+    assert_eq!(select, &None);
+}
+
+#[test]
+fn a1_parse_study_example() {
+    // study.hc 全例可解析（ADR-0010 形态）
+    let src = r#"
+import H.std.{io as my};
+import H.std.net.{http,tcp};
+
+fn main(args: o Vec(String)) !void {
+    my.print("hello, world\n");
+    io.print("x = {}, y = {}\n", 42, 3.14);
+    http.print();
+}
+"#;
+    let program = parse_source(src).expect("parse study.hc");
+    // 2 import + 1 fn（+ 忽略 [test] 仅注释形态）
+    assert!(matches!(program.decls[0], Decl::Import { .. }));
+    assert!(matches!(program.decls[1], Decl::Import { .. }));
+    assert!(matches!(&program.decls[2], Decl::Fn { name, .. } if name == "main"));
+}
+
+#[test]
+fn a1_parse_import_missing_semi_is_error() {
+    // 缺分号 → 解析失败
+    assert!(parse_source("import pkg.mod").is_err());
+}
+
+// ---------- ADR-0010：import 语义（A2a——符号登记/冲突/模块识别前置） ----------
+
+#[test]
+fn a2_sem_import_io_alias_no_error() {
+    // `import H.std.{io as my}; my.print(...)`——io 族环境模块 → 别名绑定，语义无错
+    let program =
+        parse_source("import H.std.{io as my};\nfn main() !void {\n    my.print(\"hi\\n\");\n}\n")
+            .expect("parse");
+    let diags = hc::check_semantics(&program);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "import io 别名语义不应报错: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a2_sem_import_whole_module_no_error() {
+    // `import H.std.io;` 整模块——绑定名 = 末段 `io`，语义无错
+    let program =
+        parse_source("import H.std.io;\nfn main() !void {\n    io.print(\"hi\\n\");\n}\n")
+            .expect("parse");
+    let diags = hc::check_semantics(&program);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "import 整模块语义不应报错: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a2_sem_import_user_pkg_selection() {
+    // 用户包符号选择：`import jsonlib.{double as dbl}; dbl(21)`——语义无错
+    let dep = parse_source("pub fn double(x: i32) i32 { return x * 2; }\n").expect("parse dep");
+    let main = parse_source(
+        "import jsonlib.{double as dbl};\n[test] fn t() !void {\n    var a = dbl(21);\n    try expect_eq(a, 42);\n}\n",
+    )
+    .expect("parse main");
+    let diags = hc::check_semantics_deps(&main, &[("jsonlib", &dep)]);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "import 用户包符号选择语义不应报错: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a2_sem_import_user_pkg_whole_module() {
+    // 用户包整模块 + 别名：`import jsonlib as j; j.double(21)`——语义无错
+    let dep = parse_source("pub fn double(x: i32) i32 { return x * 2; }\n").expect("parse dep");
+    let main = parse_source(
+        "import jsonlib as j;\n[test] fn t() !void {\n    var a = j.double(21);\n    try expect_eq(a, 42);\n}\n",
+    )
+    .expect("parse main");
+    let diags = hc::check_semantics_deps(&main, &[("jsonlib", &dep)]);
+    assert!(
+        !diags.iter().any(|d| d.is_error()),
+        "import 用户包整模块语义不应报错: {:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+// ---------- A2b：模块识别（[module]）+ 命名规范（PascalCase） ----------
+
+#[test]
+fn a2b_parse_module_trait() {
+    // `[module] namespace` → is_module=true
+    let program = parse_source("[module] namespace Orders { pub fn f() i32 { return 1; } }\n")
+        .expect("parse");
+    let Decl::Namespace {
+        name, is_module, ..
+    } = &program.decls[0]
+    else {
+        panic!("预期 Decl::Namespace: {:?}", program.decls[0]);
+    };
+    assert_eq!(name, "Orders");
+    assert!(*is_module, "[module] 标注应置 is_module");
+}
+
+#[test]
+fn a2b_sem_pascal_case_class_error() {
+    // 类型名 PascalCase：class 首字母小写 → 编译期诊断
+    check_has_error("class point { x: i32 }\n", "必须首字母大写");
+}
+
+#[test]
+fn a2b_sem_pascal_case_enum_error() {
+    // 类型名 PascalCase：enum 首字母小写 → 编译期诊断
+    check_has_error("enum color { red, green }\n", "必须首字母大写");
+}
+
+#[test]
+fn a2b_sem_pascal_case_namespace_error() {
+    // 命名空间名 PascalCase：首字母小写 → 编译期诊断
+    check_has_error(
+        "namespace math { fn f() i32 { return 1; } }\n",
+        "必须首字母大写",
+    );
+}
+
+#[test]
+fn a2b_sem_pascal_case_ok() {
+    // 合规命名（类型/命名空间 PascalCase）不报错
+    check_clean(
+        "class Point { x: f32 }\nenum Color { red }\nnamespace Math { fn square(x: i32) i32 { return x * x; } }\n",
+    );
+}
+
+// 注：模块隔离（`[module]` 成员仅限定名、扁平访问失败）由**运行时**落实——
+// 语义检查器对未知符号保守放行（准确优先），见 hc-rt/tests/import.rs a2b_* 运行时用例。
+
 #[test]
 fn m14_sibling_top_level_fn_is_file_private() {
     // 兄弟文件顶层函数文件私有：不污染主文件重载池（25/26 各自 load_config 不误报 ambiguous）
@@ -495,7 +716,9 @@ fn m14_sibling_top_level_fn_is_file_private() {
     .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
     assert!(
-        !diags.iter().any(|d| d.is_error() && d.message.contains("ambiguous")),
+        !diags
+            .iter()
+            .any(|d| d.is_error() && d.message.contains("ambiguous")),
         "兄弟文件同名顶层函数不应误报歧义: {:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );

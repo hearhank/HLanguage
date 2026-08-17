@@ -1,9 +1,11 @@
+import H.std.{io};
+
 // 83-wordcount.hc — 综合工具：词频统计（四大支柱实战）
 //
 //   - 读文件（保存/IO）→ 分词（String split）→ 统计（Map）→ 输出
 //   - 综合：io.fs / String / Map / 迭代器
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 读文件
     var data = try io.fs.read_file("input.txt", alloc);
 

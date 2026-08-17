@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 67-callbacks.hc — 事件回调（闭包作处理器，12.9）
 //
 //   - 闭包 = 数据对象：注册回调、事件分发
@@ -17,7 +19,7 @@ class EventBus {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var bus: o EventBus = alloc.init(EventBus);   // 无参构造（C1'）
     var mut count = 0;
 

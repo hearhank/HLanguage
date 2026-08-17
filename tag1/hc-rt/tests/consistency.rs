@@ -291,14 +291,14 @@ fn qualified_namespace_calls() {
 namespace Math {
     fn square(x: i32) i32 { return x * x; }
 }
-namespace io {
-    namespace net {
+namespace Svc {
+    namespace Net {
         fn double(x: i32) i32 { return x * 2; }
     }
 }
 [test] fn qualified() void {
     expect_eq(Math.square(4), 16);
-    expect_eq(io.net.double(21), 42);
+    expect_eq(Svc.Net.double(21), 42);
 }
 "#,
     );

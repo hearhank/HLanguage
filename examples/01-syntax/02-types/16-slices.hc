@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 16-slices.hc — 切片与数组（12.11）
 //
 // Q24 定案（2026-08-13）：越界检查按模式
@@ -20,7 +22,7 @@ fn zero_out(s: &mut [i32]) void {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var arr = [1, 2, 3, 4, 5];
 
     // 只读切片视图（不拥有数据，无 o）

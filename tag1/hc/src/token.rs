@@ -60,6 +60,7 @@ pub enum TokenKind {
     KwWhere,
     KwNamespace,
     KwUsing,
+    KwImport,
     KwPub,
     KwO,
     KwMove,

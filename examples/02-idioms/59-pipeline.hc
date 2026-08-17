@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 59-pipeline.hc — 数据管道（读 → 变换 → 写）
 //
 //   - 函数链：数据流经管道（每步一个函数）
@@ -19,7 +21,7 @@ fn transform(nums: &Vec(i32)) Vec(i32) {
     return nums.iter().filter(|n| n % 2 == 0).map(|n| n * 10);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 管道：读 → 变换 → 汇总
     var nums = try read_numbers(&io, "data.txt");
     var evens = transform(&nums);

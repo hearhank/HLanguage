@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 12-bitops.hc — 位运算实战（12.2）
 //
 //   - & | ^ ~ << >>（符号式位运算）
@@ -7,7 +9,7 @@ const FLAG_READ = 0b001;
 const FLAG_WRITE = 0b010;
 const FLAG_EXEC = 0b100;
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 标志位组合
     var flags = FLAG_READ | FLAG_WRITE;     // 0b011
     io.print("readable = {}\n", (flags & FLAG_READ) != 0);

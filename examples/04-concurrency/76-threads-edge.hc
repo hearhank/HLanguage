@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 76-threads-edge.hc — 线程边缘语义（12.21/12.24）
 //
 //   - Thread 接口：join（消耗所有权）/ cancel / is_done / detach
@@ -12,7 +14,7 @@ async fn async_add(b: *i32, n: i32) i32 {
     return b.* + n;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // Thread 接口：is_done / join（消耗所有权，返回 !T）
     var t: o Thread(i32) = spawn(worker, 9);
     io.print("is_done = {}\n", t.is_done());

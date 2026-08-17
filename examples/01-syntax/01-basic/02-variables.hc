@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 02-variables.hc — 变量声明与所有权三形态
 //
 // 形态 1：非 Arena 分配默认拥有（作用域注册，退出自动销毁；o 冗余标注，仅复杂类型）
@@ -12,7 +14,7 @@
 
 global APP_NAME: &[u8] = "h";        // 形态 3：global（静态，不可 move）
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 形态 1：复杂类型默认拥有（非 Arena，作用域注册，退出自动销毁）——标量无所有权概念（Q15）
     var mut count: i32 = 0;
     count += 1;

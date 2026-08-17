@@ -1,9 +1,11 @@
+import H.std.{io};
+
 // 55-time.hc — 时间模块（12.18 stdlib time）
 //
 //   - io.time：时间戳/计时/延时（io 显式传递，Q35 同款）
 //   - 场景：计时、延时
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 计时
     var start = io.time.now();
     // ... 工作
@@ -16,8 +18,8 @@ fn main(io: Io) !void {
 }
 
 [test] fn time_elapsed() !void {
-    var start = test_io.time.now();
-    test_io.time.sleep(10);
-    var elapsed = test_io.time.now() - start;
+    var start = io.time.now();
+    io.time.sleep(10);
+    var elapsed = io.time.now() - start;
     try expect(elapsed >= 10);
 }

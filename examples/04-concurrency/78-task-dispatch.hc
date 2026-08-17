@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 78-task-dispatch.hc — 多线程任务分发（四模式类型）
 //
 //   - 任务队列：ManyToOne(i32)（单写者分发 + 多读者 worker）
@@ -10,7 +12,7 @@ fn worker(tasks: *ManyToOne(i32), out: *OneToMany(i32)) void {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var tasks = ManyToOne(i32).init(alloc);
     var out = OneToMany(i32).init(alloc);
 

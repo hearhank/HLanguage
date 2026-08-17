@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 75-transaction.hc — 事务模式（defer/errdefer 组合，22 延伸）
 //
 //   - 成功提交 / 失败回滚（errdefer 仅错误路径）
@@ -23,7 +25,7 @@ fn transfer(io: *T, from: &[u8], to: &[u8], amount: i64) !void where T: Io {
     // 成功路径：errdefer 不执行
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     try transfer(&io, "alice.bal", "bob.bal", 10);
     io.print("done\n");
 }

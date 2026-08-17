@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 56-csv-parse.hc — CSV 处理（String split + class）
 //
 //   - split / trim 组合；行 → class（定义数据）
@@ -26,7 +28,7 @@ fn parse_csv(data: &[u8]) CsvError!Vec(Row) {
     return rows;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var csv = "alice,30\nbob,25";
     var rows = try parse_csv(csv);
     for (rows) |row| {

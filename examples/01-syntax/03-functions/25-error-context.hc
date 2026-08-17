@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 25-error-context.hc — 错误返回追踪（Zig 式 error return traces）
 //
 //   - try 传播时记录调用链（Debug）；错误带各层调用位置
@@ -10,7 +12,7 @@ fn load_config(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     return Config.from_json(data) catch return error.InvalidFormat;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var cfg = load_config(&io, "app.json") catch |err| {
         // Debug：err 携带返回追踪（各 try/catch 位置）
         io.print("config failed: {}\n", err);
@@ -21,5 +23,5 @@ fn main(io: Io) !void {
 
 [test] fn error_return_trace() !void {
     // 真实 IO（Q-T4）：app.json 不存在 → NotFound（Debug 下错误带返回追踪）
-    try expect_error(error.NotFound, load_config(test_io, "app.json"));
+    try expect_error(error.NotFound, load_config(io, "app.json"));
 }

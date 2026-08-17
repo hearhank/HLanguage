@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 39-evented.hc — 事件循环（Evented 可选运行时，12.23）
 //
 // Q35 定案（2026-08-13）：入口 io 显式创建/切换
@@ -10,7 +12,7 @@ async fn fetch(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     return String.from(body, alloc);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 显式选择 Evented 运行时（协作调度，脚本模式库选项）
     var ev_io = Io.evented(alloc);
 

@@ -1,9 +1,11 @@
+import H.std.{io};
+
 // 48-iterator-chain.hc — 迭代器链与集合变换（12.8）
 //
 //   - 立即求值：每步变换产生新数据对象（TS 式）
 //   - filter → map 链；迭代器是数据对象（可传递）
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var scores = [92, 45, 78, 61, 88, 30];
 
     // 过滤 + 映射（立即求值，产生新集合）

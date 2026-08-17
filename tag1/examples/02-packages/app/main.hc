@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 02-packages/app/main.hc — 跨包依赖演示
 //
 //   - app/build.zon 声明本地依赖 jsonlib（path = "../jsonlib"）
@@ -6,7 +8,7 @@
 
 using jsonlib;
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var n = jsonlib.parse("{}");
     io.print("jsonlib.parse = {}\n", n);
 }

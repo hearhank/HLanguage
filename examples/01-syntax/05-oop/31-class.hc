@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 31-class.hc — class/tree 复杂类型（12.20）
 //
 // Q22 定案（2026-08-13）：class 成员与 struct 完全一致
@@ -33,7 +35,7 @@ tree Node {                              // 递归组合
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // class：堆上、默认拥有（非 arena 分配器，Q16）；构造 = alloc.init（C1'）
     var c: o Counter = alloc.init(Counter);
     c.inc();

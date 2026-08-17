@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 65-composition.hc — 组合（12.20：组合优于继承，无继承）
 //
 //   - class 组合：字段持有其它复杂类型（默认拥有，Q16）
@@ -40,7 +42,7 @@ class Document: IDrawable, ISaveable {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var doc: o Document = alloc.init(Document);   // 无参构造（C1'）
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));

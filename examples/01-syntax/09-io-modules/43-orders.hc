@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 43-orders.hc — 多文件项目（using 引入同包命名空间）
 
 using Pricing;

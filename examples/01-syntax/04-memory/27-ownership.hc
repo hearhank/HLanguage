@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 27-ownership.hc — 所有权深潜（move / 借用 / 分配器）
 //
 // Q23 定案（2026-08-13）：调用点显式 move
@@ -19,7 +21,7 @@ fn borrow(io: *T, v: *String) void where T: Io {
     io.print("borrowed: {}\n", v);        // 借用：调用方保留所有权
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // move 进函数（调用点显式；销毁责任转移，原绑定仍可访问——悬垂由用户负责）
     var s1 = String.from("hello", alloc);
     take(&io, move s1);
@@ -38,7 +40,7 @@ fn main(io: Io) !void {
 
 [test] fn move_into_function() !void {
     var s1 = String.from("hello", alloc);
-    take(&test_io, move s1);   // 销毁责任转移；原绑定仍可访问（悬垂/冲突由用户负责）
+    take(&io, move s1);   // 销毁责任转移；原绑定仍可访问（悬垂/冲突由用户负责）
 }
 
 [test] fn move_return() !void {
@@ -48,6 +50,6 @@ fn main(io: Io) !void {
 
 [test] fn borrow_keeps_ownership() !void {
     var s2 = String.from("borrow", alloc);
-    borrow(&test_io, &s2);
+    borrow(&io, &s2);
     try expect_eq(s2.len, 6);   // 借用后仍可用
 }

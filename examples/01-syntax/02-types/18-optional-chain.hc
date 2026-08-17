@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 18-optional-chain.hc — 可选值链（12.3/12.2）
 //
 //   - orelse 默认值 / .? 断言 / if (opt) |v| 捕获（20 已示基础）
@@ -12,7 +14,7 @@ fn lookup_port(name: &[u8]) ?i32 {
     return null;   // 草图：查找失败返回 null（optional 显式）
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 字段类型 ?T 时值自动装箱；null 字面量；构造 = alloc.init（C1'）
     var cfg = alloc.init(Config{host = null, port = 8080});
 

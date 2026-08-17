@@ -204,6 +204,7 @@ pub fn check_with_extern_deps(
         collect_infer_ret: false,
         infer_ret: None,
         infer_ret_conflict: false,
+        imported: HashSet::new(),
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -216,6 +217,7 @@ pub fn check_with_extern_deps(
     }
     checker.collect(program);
     checker.apply_usings(program);
+    checker.apply_imports(program);
     checker.validate_continuous();
     checker.validate_interface_impls(program);
     checker.check_program(program);
@@ -250,6 +252,9 @@ struct Checker {
     infer_ret: Option<SType>,
     /// M2.3：已报过多路径推断冲突（避免重复报错）
     infer_ret_conflict: bool,
+    /// ADR-0010：import 登记过的符号（限定名）——整模块导入冲突检测用
+    /// （通配/整模块遇同名冲突 → 编译错误；文件自身定义优先，不被导入覆盖）
+    imported: HashSet<String>,
     diags: Vec<Diagnostic>,
 }
 
@@ -383,8 +388,20 @@ impl Checker {
                 traits,
                 fields,
                 methods,
+                span,
                 ..
             } => {
+                // 命名规范（Q22）：类型名 PascalCase（首字母大写）
+                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "class `{name}` 命名必须首字母大写（PascalCase，如 `{}{}`）",
+                            name[..1].to_uppercase(),
+                            &name[1..]
+                        ),
+                    ));
+                }
                 let continuous = traits.iter().any(|t| matches!(t, Trait::Continuous));
                 let info = TypeInfo {
                     kind: TypeKind::Class {
@@ -414,7 +431,23 @@ impl Checker {
                     }
                 }
             }
-            Decl::Enum { name, variants, .. } => {
+            Decl::Enum {
+                name,
+                variants,
+                span,
+                ..
+            } => {
+                // 命名规范（Q22）：类型名 PascalCase（首字母大写）
+                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "enum `{name}` 命名必须首字母大写（PascalCase，如 `{}{}`）",
+                            name[..1].to_uppercase(),
+                            &name[1..]
+                        ),
+                    ));
+                }
                 let info = TypeInfo {
                     kind: TypeKind::Enum {
                         variants: variants.clone(),
@@ -479,7 +512,8 @@ impl Checker {
                     // register_fn_decl_prefixed_filter 的 skip_entry 规则）；命名空间函数
                     // 只登记限定名（扁平名由 `using` 导入）。
                     if !(skip_entry && (name == "main" || prefix.is_empty())) {
-                        if !skip_entry {
+                        // 模块隔离（A2b）：`[module]` 成员不登记扁平名（仅限定名，供 import 复制）
+                        if !skip_entry && !skip_flat {
                             self.funcs
                                 .entry(name.clone())
                                 .or_default()
@@ -519,17 +553,50 @@ impl Checker {
                     }
                 }
             }
-            Decl::Namespace { name, decls, .. } => {
-                if skip_flat {
+            Decl::Namespace {
+                name,
+                decls,
+                is_module,
+                span,
+                ..
+            } => {
+                // 命名规范（Q22）：命名空间名 PascalCase（首字母大写）
+                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "namespace `{name}` 命名必须首字母大写（PascalCase，如 `{}{}`）",
+                            name[..1].to_uppercase(),
+                            &name[1..]
+                        ),
+                    ));
+                }
+                if *is_module {
+                    // `[module]` 隔离（2026-08-17 定案）：模块名不登记入命名空间——
+                    // 裸限定访问（`M.f`）不可达，仅经 `import` 授予访问；
+                    // 成员仅登记限定名（`M.f`，供 import_whole_module 复制）。
+                    let np = format!("{prefix}{name}.");
+                    for inner in decls {
+                        self.collect_decl_prefixed_filter(inner, &np, true, pub_only, skip_entry);
+                    }
+                } else if skip_flat {
                     if !prefix.is_empty() {
                         self.namespaces.insert(format!("{prefix}{name}"));
                     }
+                    let np = format!("{prefix}{name}.");
+                    for inner in decls {
+                        self.collect_decl_prefixed_filter(
+                            inner, &np, skip_flat, pub_only, skip_entry,
+                        );
+                    }
                 } else {
                     self.namespaces.insert(name.clone());
-                }
-                let np = format!("{prefix}{name}.");
-                for inner in decls {
-                    self.collect_decl_prefixed_filter(inner, &np, skip_flat, pub_only, skip_entry);
+                    let np = format!("{prefix}{name}.");
+                    for inner in decls {
+                        self.collect_decl_prefixed_filter(
+                            inner, &np, skip_flat, pub_only, skip_entry,
+                        );
+                    }
                 }
             }
             _ => {}
@@ -611,6 +678,172 @@ impl Checker {
         }
     }
 
+    // ---------- ADR-0010：import 语义（A2a） ----------
+
+    /// 文件级 `import` 语句语义——符号登记（前缀 + 别名）与冲突规则。
+    /// 三种形态（06-08-modules.md §import）：
+    /// - `import pkg.mod;`：整模块导入——绑定名 = 末段（或 `as` 别名），
+    ///   全部成员以 `{绑定}.{member}` 复制（命名空间前缀 + 限定名可用）
+    /// - `import pkg.mod as m;`：整模块 + 别名
+    /// - `import pkg.mod.{a, b as c};`：符号选择——函数/类型/全局直接可用；
+    ///   命名空间成员以前缀绑定（`my.print` 形态）
+    ///
+    /// 冲突规则（06-08）：显式符号选择（非通配）优先于通配；整模块导入遇
+    /// 同名冲突 → 编译错误；文件自身定义优先（不被导入覆盖）。
+    fn apply_imports(&mut self, program: &Program) {
+        for d in &program.decls {
+            self.collect_import_decl(d);
+        }
+    }
+
+    fn collect_import_decl(&mut self, d: &Decl) {
+        match d {
+            Decl::Import {
+                path,
+                alias,
+                select,
+                span,
+            } => {
+                let target_prefix = format!("{}.", path.join("."));
+                match select {
+                    Some(syms) => {
+                        // 显式符号选择（优先级高于通配）
+                        for (sym, sym_alias) in syms {
+                            let bound = sym_alias.clone().unwrap_or_else(|| sym.clone());
+                            self.import_explicit_symbol(&target_prefix, sym, &bound, span);
+                        }
+                    }
+                    None => {
+                        let bound = alias
+                            .clone()
+                            .unwrap_or_else(|| path.last().cloned().unwrap_or_default());
+                        self.import_whole_module(&target_prefix, &bound, span);
+                    }
+                }
+            }
+            Decl::Namespace { decls, .. } => {
+                for inner in decls {
+                    self.collect_import_decl(inner);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 显式符号选择导入：`import pkg.mod.{sym as bound}`——
+    /// 函数/类型/全局复制到绑定名（直接可用）；命名空间成员 → 前缀绑定。
+    fn import_explicit_symbol(&mut self, target_prefix: &str, sym: &str, bound: &str, span: &Span) {
+        let q = format!("{target_prefix}{sym}");
+        // 命名空间成员（有子成员或内建命名空间）→ 前缀绑定（`my.print` 形态）
+        let is_ns = self.namespaces.contains(&q)
+            || self.funcs.keys().any(|k| k.starts_with(&format!("{q}.")))
+            || self.types.keys().any(|k| k.starts_with(&format!("{q}.")))
+            || is_builtin_ns(&q)
+            || is_builtin_ns(sym);
+        if is_ns {
+            self.namespaces.insert(bound.to_string());
+        }
+        // 函数符号 → 绑定名直调（`sq(4)`）
+        if let Some(defs) = self.funcs.get(&q) {
+            if !defs.is_empty() && !self.funcs.contains_key(bound) {
+                self.funcs.insert(bound.to_string(), defs.clone());
+                self.imported.insert(bound.to_string());
+            }
+        }
+        // 类型符号 → 绑定名直接引用（`Line{...}`）
+        if let Some(info) = self.types.get(&q) {
+            if !self.types.contains_key(bound) {
+                self.types.insert(bound.to_string(), info.clone());
+                self.imported.insert(bound.to_string());
+            }
+        }
+        // 全局符号 → 绑定名
+        if let Some(t) = self.globals.get(&q) {
+            if !self.globals.contains_key(bound) {
+                self.globals.insert(bound.to_string(), t.clone());
+                self.imported.insert(bound.to_string());
+            }
+        }
+        // 未解析符号：保守放行（库/兄弟文件未知，运行时诊断）——不报错
+        let _ = span;
+    }
+
+    /// 整模块导入：`import pkg.mod;`——绑定名前缀登记 + 全部成员复制为 `{bound}.{member}`。
+    /// 冲突：同名成员已被另一整模块导入登记 → 编译错误（通配冲突，06-08）。
+    fn import_whole_module(&mut self, target_prefix: &str, bound: &str, span: &Span) {
+        self.namespaces.insert(bound.to_string());
+        // 函数成员（跳过方法：成员名不含 `.`；含嵌套子命名空间 → 整体前缀替换）
+        let fkeys: Vec<String> = self
+            .funcs
+            .keys()
+            .filter(|k| k.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        for k in fkeys {
+            let member = &k[target_prefix.len()..];
+            let flat = format!("{bound}.{member}");
+            if self.funcs.contains_key(&flat) {
+                // 同名已被整模块导入 → 通配冲突（文件自身定义优先，不覆盖）
+                if self.imported.contains(&flat) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("import 冲突：整模块导入 `{bound}` 的成员 `{member}` 与已导入符号重名（用 `as 别名` 显式改名）"),
+                    ));
+                }
+                continue;
+            }
+            let defs = self.funcs.get(&k).cloned().unwrap_or_default();
+            if !defs.is_empty() {
+                self.funcs.insert(flat.clone(), defs);
+                self.imported.insert(flat);
+            }
+        }
+        // 类型成员
+        let tkeys: Vec<String> = self
+            .types
+            .keys()
+            .filter(|k| k.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        for k in tkeys {
+            let member = &k[target_prefix.len()..];
+            let flat = format!("{bound}.{member}");
+            if self.types.contains_key(&flat) {
+                if self.imported.contains(&flat) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "import 冲突：整模块导入 `{bound}` 的类型 `{member}` 与已导入类型重名"
+                        ),
+                    ));
+                }
+                continue;
+            }
+            if let Some(info) = self.types.get(&k) {
+                self.types.insert(flat.clone(), info.clone());
+                self.imported.insert(flat);
+            }
+        }
+        // 全局成员
+        let gkeys: Vec<String> = self
+            .globals
+            .keys()
+            .filter(|k| k.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        for k in gkeys {
+            let member = &k[target_prefix.len()..];
+            let flat = format!("{bound}.{member}");
+            if self.globals.contains_key(&flat) {
+                continue;
+            }
+            if let Some(t) = self.globals.get(&k) {
+                self.globals.insert(flat.clone(), t.clone());
+                self.imported.insert(flat);
+            }
+        }
+    }
+
     fn make_sig(
         &self,
         params: Vec<Param>,
@@ -689,7 +922,8 @@ impl Checker {
                     Type::Named(n, _) => n.clone(),
                     _ => continue,
                 };
-                let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut visited: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 self.check_iface_impl(name, &iname, methods, span, &mut visited);
             }
         }
@@ -769,7 +1003,9 @@ impl Checker {
             Type::Named(n, args) if n == "Self" => Type::Named(class_name.to_string(), vec![]),
             Type::Named(n, args) => Type::Named(
                 n.clone(),
-                args.iter().map(|x| self.subst_self_ty(x, class_name)).collect(),
+                args.iter()
+                    .map(|x| self.subst_self_ty(x, class_name))
+                    .collect(),
             ),
             Type::Ptr(inner, m) => Type::Ptr(Box::new(self.subst_self_ty(inner, class_name)), *m),
             Type::Slice(inner, m) => {
@@ -779,13 +1015,18 @@ impl Checker {
                 Type::Optional(Box::new(self.subst_self_ty(inner, class_name)))
             }
             Type::ErrorUnion(e, inner) => Type::ErrorUnion(
-                e.as_ref().map(|x| Box::new(self.subst_self_ty(x, class_name))),
+                e.as_ref()
+                    .map(|x| Box::new(self.subst_self_ty(x, class_name))),
                 Box::new(self.subst_self_ty(inner, class_name)),
             ),
             Type::Tuple(ts) => Type::Tuple(
-                ts.iter().map(|x| self.subst_self_ty(x, class_name)).collect(),
+                ts.iter()
+                    .map(|x| self.subst_self_ty(x, class_name))
+                    .collect(),
             ),
-            Type::Array(n, inner) => Type::Array(*n, Box::new(self.subst_self_ty(inner, class_name))),
+            Type::Array(n, inner) => {
+                Type::Array(*n, Box::new(self.subst_self_ty(inner, class_name)))
+            }
             other => other.clone(),
         }
     }
@@ -798,7 +1039,12 @@ impl Checker {
             .map(|p| format!("{}: {}", p.name, self.ty_display(&p.ty)))
             .collect();
         match &m.ret {
-            Some(r) => format!("{}({}) -> {}", m.name, params.join(", "), self.ty_display(r)),
+            Some(r) => format!(
+                "{}({}) -> {}",
+                m.name,
+                params.join(", "),
+                self.ty_display(r)
+            ),
             None => format!("{}({})", m.name, params.join(", ")),
         }
     }
@@ -942,13 +1188,10 @@ impl Checker {
                     // self 参数注入：按声明形态（*Self 只读 / *mut Self 可写 / Self 值）
                     let self_ty = match m.params.first() {
                         Some(p) if p.name == "self" => match p.ty.strip() {
-                            Type::Ptr(_, mut_) => SType::Ptr(
-                                Box::new(SType::Named(name.clone(), vec![])),
-                                *mut_,
-                            ),
-                            Type::Named(n, _) if n == "Self" => {
-                                SType::Named(name.clone(), vec![])
+                            Type::Ptr(_, mut_) => {
+                                SType::Ptr(Box::new(SType::Named(name.clone(), vec![])), *mut_)
                             }
+                            Type::Named(n, _) if n == "Self" => SType::Named(name.clone(), vec![]),
                             _ => SType::Ptr(Box::new(SType::Named(name.clone(), vec![])), false),
                         },
                         _ => SType::Ptr(Box::new(SType::Named(name.clone(), vec![])), false),
@@ -2066,7 +2309,9 @@ impl Checker {
             }
             _ => None,
         };
-        let Some(base) = base else { return; };
+        let Some(base) = base else {
+            return;
+        };
         let bt = self.expr_ty(base, scopes, None);
         if let Some(SType::Ptr(inner, mut_)) = &bt {
             if !*mut_ {
@@ -2912,18 +3157,19 @@ impl Checker {
                     SType::Named(n, args) if n == "Vec" || n == "String" || n == "Deque" => {
                         // 整体匹配优先（&Vec(i32) 形参）；失败则元素级（&[u8] 形参收 Vec(u8)）
                         let whole = self.param_rank(inner, a, map);
-                        let elem = self.param_rank(
-                            inner,
-                            args.first().unwrap_or(&SType::Unknown),
-                            map,
-                        );
+                        let elem =
+                            self.param_rank(inner, args.first().unwrap_or(&SType::Unknown), map);
                         whole.max(elem)
                     }
                     _ => self.param_rank(inner, a, map),
                 },
-                SType::Str => {
-                    self.param_rank(inner, &SType::Int { width: IntWidth::U8 }, map)
-                }
+                SType::Str => self.param_rank(
+                    inner,
+                    &SType::Int {
+                        width: IntWidth::U8,
+                    },
+                    map,
+                ),
                 // 集合实参可作切片（Vec/String/Deque → 元素视图）
                 SType::Named(n, args) if n == "Vec" || n == "String" || n == "Deque" => {
                     self.param_rank(inner, args.first().unwrap_or(&SType::Unknown), map)
@@ -3093,15 +3339,18 @@ impl Checker {
             }
             (SType::Tuple(a), SType::Tuple(b)) => {
                 a.len() == b.len()
-                    && a.iter().zip(b.iter()).all(|(x, y)| self.ret_infer_unifies(x, y))
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(x, y)| self.ret_infer_unifies(x, y))
             }
-            (SType::Array(na, a), SType::Array(nb, b)) => {
-                na == nb && self.ret_infer_unifies(a, b)
-            }
+            (SType::Array(na, a), SType::Array(nb, b)) => na == nb && self.ret_infer_unifies(a, b),
             (SType::Named(na, aa), SType::Named(nb, bb)) => {
                 na == nb
                     && aa.len() == bb.len()
-                    && aa.iter().zip(bb.iter()).all(|(x, y)| self.ret_infer_unifies(x, y))
+                    && aa
+                        .iter()
+                        .zip(bb.iter())
+                        .all(|(x, y)| self.ret_infer_unifies(x, y))
             }
             _ => false,
         }
@@ -3697,7 +3946,9 @@ fn collect_fn_table<'a>(
 ) {
     for d in decls {
         match d {
-            Decl::Fn { name, ret, body, .. } => {
+            Decl::Fn {
+                name, ret, body, ..
+            } => {
                 let key = format!("{prefix}{name}");
                 form.insert(key.clone(), fn_error_form(ret));
                 bodies.insert(key, body);

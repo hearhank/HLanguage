@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 42-pricing.hc — 多文件项目（命名空间跨文件，Q21）
 //
 //   - namespace 块可跨文件、一文件多组（C# 式）

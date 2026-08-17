@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 09-arrays.hc — 数组类型（12.3/B3/Q4/Q42）
 //
 //   - 一维字面量 [1, 2, 3]（Q4 推断式）
@@ -12,7 +14,7 @@ fn sum_row(row: &[i32]) i32 {
     return total;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 一维（推断式，Q4）
     var flat = [1, 2, 3];
 

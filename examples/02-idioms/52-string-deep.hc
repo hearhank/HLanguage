@@ -1,9 +1,11 @@
+import H.std.{io};
+
 // 52-string-deep.hc — String 方法集（= u8[] 别名，Q3；concat 等返回新 String）
 //
 //   - 拼接 concat（Q28 无运算符）；比较 == 内容（Q16）
 //   - split / join / find / substring / replace
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var csv = String.from("a,b,c,d", alloc);
 
     // split：按分隔符切分 → Vec(String)

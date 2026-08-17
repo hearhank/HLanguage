@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 66-builder-chain.hc — 方法链式调用（builder 模式）
 //
 //   - 方法返回 self（*mut Self）→ 链式调用
@@ -18,7 +20,7 @@ class Query {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var mut q: o Query = alloc.init(Query);   // 无参构造（C1'）
 
     // 链式调用：where().limit()（*mut 链不复制——资格随链传递）

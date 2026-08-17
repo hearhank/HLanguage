@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 62-custom-sort.hc — 自定义比较器排序（闭包作比较器，12.9）
 //
 //   - sort 接受比较器闭包（返回 i32 序）
@@ -8,7 +10,7 @@ class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上
     age: i32,
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var people = Vec(Person).init(alloc);
     people.append(alloc.init(Person{name = String.from("alice", alloc), age = 30}));   // 带参构造（C1'）
     people.append(alloc.init(Person{name = String.from("bob", alloc), age = 25}));

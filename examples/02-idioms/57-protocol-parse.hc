@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 57-protocol-parse.hc — 二进制协议解析（长度前缀帧）
 //
 //   - 帧格式：[u64 长度][payload bytes]
@@ -24,7 +26,7 @@ fn decode(data: &[u8]) !Message {
     return Message.from_bytes(data[8 .. 8 + len]);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var msg = Message{ id = 7, kind = 1 };
     var frame = encode(&msg);
     io.print("frame len = {}\n", frame.len);   // 8 + 8 = 16

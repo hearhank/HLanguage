@@ -21,11 +21,7 @@ fn zig_cc_available() -> bool {
 /// 唯一临时目录（进程 ID + 自增序号，避免并行测试冲突）
 fn temp_dir() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "hc_native_test_{}_{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("hc_native_test_{}_{}", std::process::id(), n));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
@@ -64,10 +60,7 @@ fn compile_and_run(src: &str) -> std::process::ExitStatus {
     );
 
     // 3) 运行，返回退出状态
-    Command::new(&exe_path)
-        .output()
-        .expect("run exe")
-        .status
+    Command::new(&exe_path).output().expect("run exe").status
 }
 
 /// 测试驱动编译运行：源码（含 `test fn`）→ `codegen_tests` → `zig cc` → 运行 → 退出状态。
@@ -100,10 +93,7 @@ fn compile_tests_and_run(src: &str) -> std::process::ExitStatus {
         "zig cc 失败: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    Command::new(&exe_path)
-        .output()
-        .expect("run exe")
-        .status
+    Command::new(&exe_path).output().expect("run exe").status
 }
 
 #[test]
@@ -891,4 +881,31 @@ fn main() i32 {
 "#;
     let st = compile_and_run(src);
     assert!(st.success(), "exit: {st}");
+}
+
+#[test]
+fn tree_vec_field_append_recursion_native() {
+    // G4 回归（0acd0e5）：`Vec` 字段默认值共享全局槽 → append 全局污染 + 自引用
+    // 递归段错误（31-class/46-recursion 原生崩溃）。修复：LoadGlobal("Vec")
+    // 每次合成新空容器（对齐 run_ir implicit_env_value）。
+    let st = compile_tests_and_run(
+        "tree Node {\n\
+             value: i32,\n\
+             children: Vec(Node),\n\
+             fn total(self: *Self) i32 {\n\
+                 var sum = self.value;\n\
+                 for (self.children) |child| {\n\
+                     sum += child.total();\n\
+                 }\n\
+                 return sum;\n\
+             }\n\
+         }\n\
+         [test] fn tree_recursive_composition() !void {\n\
+             var root: o Node = Node.new(1, alloc);\n\
+             root.children.append(Node.new(2, alloc));\n\
+             root.children.append(Node.new(3, alloc));\n\
+             try expect_eq(root.total(), 6);\n\
+         }\n",
+    );
+    assert!(st.success(), "树 + Vec.append + 递归 total 原生应退出 0");
 }

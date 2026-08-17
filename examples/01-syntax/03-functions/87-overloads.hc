@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 87-overloads.hc — 函数重载与可选参数（2026-08-14 定案）
 //
 //   - 签名 = 函数名 + 参数类型列表 + 返回类型（共同决定）
@@ -47,7 +49,7 @@ fn sum(items: &[i32]) i32 {   // 具体重载与泛型并存
     return total;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     io.print("{}\n", describe(42));         // int（i32 精确匹配）
     io.print("{}\n", describe("hi"));       // bytes
     io.print("{}\n", describe(1.5));        // float（f64 精确匹配）

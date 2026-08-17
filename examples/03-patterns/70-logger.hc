@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 70-logger.hc — 日志工具（枚举级别 + 格式输出）
 //
 //   - 枚举级别 + switch 表达式排序（Q27）
@@ -29,7 +31,7 @@ class Logger {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var logger: o Logger = alloc.init(Logger);   // 无参构造（C1'）
     logger.min_level = Level.info;
 

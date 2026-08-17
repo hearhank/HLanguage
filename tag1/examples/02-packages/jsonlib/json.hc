@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 02-packages/jsonlib/json.hc — 依赖包：pub 边界演示
 //
 //   - pub fn parse：跨包可见（app 经 `using jsonlib;` / `jsonlib.parse(...)` 访问）

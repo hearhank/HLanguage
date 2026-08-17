@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 36-script-boilerplate.hc — 脚本生成样板（Q23 定案后形态）——**E1 示例（第三块，最小集不实现）**
 //
 //   - script 块就地替换（Q17）；脚本 = H 核心子集（B1，无运行时环境 H5）
@@ -18,7 +20,7 @@ script {
     //   fn user_to_bytes(u: *User) o Vec(u8) { ... }   // 递归序列化（含 String 字段）
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var u = alloc.init(User{name = String.from("alice", alloc), age = 30, email = null});   // 带参构造（C1'）
 
     try user_validate(&u);         // 脚本生成的校验（E1）

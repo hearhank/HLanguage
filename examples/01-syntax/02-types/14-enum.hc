@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 14-enum.hc — 枚举与 switch（定义数据）
 //
 // Q9 定案（2026-08-13）：枚举实例化
@@ -12,7 +14,7 @@ enum Value {
     none,
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var v: Value = Value{int = 42};
 
     switch (v) {

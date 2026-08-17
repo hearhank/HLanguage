@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 72-observer.hc — 发布/订阅（观察者模式，67 延伸）
 //
 //   - 主题 + 订阅者列表（闭包回调）
@@ -17,7 +19,7 @@ class Subject {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var subject: o Subject = alloc.init(Subject);   // 无参构造（C1'）
 
     subject.subscribe(|event, payload| io.print("[{}] {}\n", event, payload));

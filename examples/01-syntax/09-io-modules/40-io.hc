@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 40-io.hc — 文件与 IO（保存数据支柱，12.18）
 //
 // Q20 定案（2026-08-13）：文件 IO 双语
@@ -6,7 +8,7 @@
 //   - 关闭：defer f.close()（F1，作用域退出保证）
 //   - io 显式传递（12.18）；错误一律 error union；字节为中心 + UTF-8 函数
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 写：方法形态
     var fw = try io.fs.open("out.txt");
     defer fw.close();

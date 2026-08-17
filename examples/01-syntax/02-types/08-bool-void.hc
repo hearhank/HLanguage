@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 08-bool-void.hc — bool 与 void（12.3）
 //
 // Q41 定案（2026-08-13）：
@@ -9,7 +11,7 @@ fn is_valid(x: i32, y: i32) bool {
     return (x != 0) and (100 / x > 1) and (y > 0);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var ok: bool = true;
     var ready = (1 > 0) or (2 > 5);    // or：左边为 true 则右边不求值
     var neg = !ok;

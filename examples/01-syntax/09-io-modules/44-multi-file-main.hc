@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 44-multi-file-main.hc — 多文件项目入口
 //
 //   - build.zon 声明包内文件（Q26）
@@ -6,7 +8,7 @@
 using Orders;
 using Pricing;
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var lines = Vec(Orders.Line).init(alloc);
     lines.append(Orders.Line{ item = String.from("apple", alloc), price = 3.0 });
     lines.append(Orders.Line{ item = String.from("banana", alloc), price = 2.0 });

@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 69-config-load.hc — 配置加载综合（optional + error + 默认值）
 //
 //   - 文件缺失 → 默认配置（catch 返回默认值）
@@ -27,14 +29,14 @@ fn load_config(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     });
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var cfg = try load_config(&io, "config.json");
     io.print("{}:{}\n", cfg.host, cfg.port);
 }
 
 [test] fn config_load_defaults() !void {
     // 真实 IO（Q-T4）：config 文件缺失 → catch 返回默认配置
-    var cfg = try load_config(&test_io, "config_missing_42.json");
+    var cfg = try load_config(&io, "config_missing_42.json");
     try expect_eq(cfg.port, 8080);
     try expect_eq_slices(cfg.host.as_slice(), "localhost");
 }

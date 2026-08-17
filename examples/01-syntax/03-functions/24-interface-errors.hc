@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 24-interface-errors.hc — 接口与错误（Q34 定案 2026-08-13）
 //
 //   - 接口方法错误返回 = anyerror（Zig 式任意错误类型，契约不约束具体错误集）
@@ -22,7 +24,7 @@ class CsvParser: IParse {   // 无字段（连续）；实现 IParse
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var json_p = JsonParser{};   // 连续类型（空字段）：字面量构造
     var csv_p = CsvParser{};
 

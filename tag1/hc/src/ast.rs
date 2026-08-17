@@ -67,11 +67,30 @@ pub enum Decl {
         name: String,
         decls: Vec<Decl>,
         pub_: bool,
+        /// `[module]` 特性标注（2026-08-17）：模块——内容与其它命名空间隔离
+        is_module: bool,
         span: Span,
     },
     Using {
         path: Vec<String>,
         alias: Option<String>,
+        span: Span,
+    },
+    /// `import` 语句（ADR-0010：取代 `using`；导入对象 = 模块 `[module]` 标注的命名空间/包）
+    ///
+    /// 三种形态：
+    /// ```hc
+    /// import pkg.mod;                    // 整模块导入（绑定名 = 末段 `mod`）
+    /// import pkg.mod as m;               // 整模块导入 + 别名（绑定名 = `m`）
+    /// import pkg.mod.{a, b as c};        // 符号选择（多符号 + as 重命名）
+    /// ```
+    Import {
+        /// 完整路径（`H.std` / `pkg.mod` / `H.std.net`）
+        path: Vec<String>,
+        /// 整模块导入别名（`import pkg.mod as m;`）；None = 用路径末段
+        alias: Option<String>,
+        /// 符号选择：`(原名, 别名)`；None = 整模块导入
+        select: Option<Vec<(String, Option<String>)>>,
         span: Span,
     },
     Script {
@@ -91,7 +110,7 @@ impl Decl {
             | Decl::Enum { pub_, .. }
             | Decl::Interface { pub_, .. }
             | Decl::Namespace { pub_, .. } => *pub_,
-            Decl::Using { .. } | Decl::Script { .. } => false,
+            Decl::Using { .. } | Decl::Import { .. } | Decl::Script { .. } => false,
         }
     }
 }
@@ -103,6 +122,9 @@ pub enum Trait {
     Test {
         name: Option<String>,
     },
+    /// `[module]`（2026-08-17 定案）：命名空间 = 模块——内容与其它命名空间隔离
+    /// （不参与同包共享命名空间），需要其它库的数据经上下文（init 参数列表）注入
+    Module,
 }
 
 impl std::fmt::Debug for Trait {
@@ -111,6 +133,7 @@ impl std::fmt::Debug for Trait {
             Trait::Continuous => write!(f, "[continuous]"),
             Trait::Pad => write!(f, "[pad]"),
             Trait::Align(s) => write!(f, "[align({s})]"),
+            Trait::Module => write!(f, "[module]"),
             Trait::Test { name } => match name {
                 Some(n) => write!(f, "[test({n:?})]"),
                 None => write!(f, "[test]"),
@@ -125,9 +148,8 @@ impl Clone for Trait {
             Trait::Continuous => Trait::Continuous,
             Trait::Pad => Trait::Pad,
             Trait::Align(s) => Trait::Align(s.clone()),
-            Trait::Test { name } => Trait::Test {
-                name: name.clone(),
-            },
+            Trait::Module => Trait::Module,
+            Trait::Test { name } => Trait::Test { name: name.clone() },
         }
     }
 }
@@ -556,7 +578,10 @@ fn visit_stmt(s: &Stmt, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
             visit_block(body, scopes, fv);
         }
         Stmt::For(ForStmt {
-            iter, capture_name, body, ..
+            iter,
+            capture_name,
+            body,
+            ..
         }) => {
             visit_expr(iter, scopes, fv);
             let mut scope = HashSet::new();

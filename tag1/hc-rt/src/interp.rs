@@ -12,7 +12,7 @@ use hc::ast::*;
 use hc::token::Span;
 
 use crate::value::{
-    ArenaAllocErr, ArenaState, BoxedData, ClosureData, LeakRecord, MapData, VecData, Value,
+    ArenaAllocErr, ArenaState, BoxedData, ClosureData, LeakRecord, MapData, Value, VecData,
 };
 
 pub const MAX_CALL_DEPTH: usize = 1000;
@@ -233,6 +233,8 @@ pub struct Interp {
     extern_programs: Vec<Program>,
     /// M7.2：依赖包（包名 + 程序；跨包语义检查 + pub 过滤装载用）
     dep_programs: Vec<(String, Program)>,
+    /// ADR-0010：import 环境别名（bound → io 族环境键；`import H.std.{io as my}` → my → io）
+    import_env: HashMap<String, String>,
 }
 
 impl Interp {
@@ -258,7 +260,7 @@ impl Interp {
             next_net_fd: 1,
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
-            tracked: std::collections::HashSet::new(),
+            tracked: Default::default(),
             debug_dangling: true,
             alloc_tracker: Rc::new(RefCell::new(Vec::new())),
             readonly_caps: Vec::new(),
@@ -266,6 +268,7 @@ impl Interp {
             error_names: Vec::new(),
             extern_programs: Vec::new(),
             dep_programs: Vec::new(),
+            import_env: HashMap::new(),
         }
     }
 
@@ -390,6 +393,8 @@ impl Interp {
         }
         // 第四遍：`using NS;` 别名解析（M1.4/Q21）——限定名 → 扁平名导入
         self.apply_usings(program);
+        // ADR-0010：`import` 语句运行时绑定（A2a——镜像语义层 apply_imports）
+        self.apply_imports(program);
         Ok(())
     }
 
@@ -470,6 +475,166 @@ impl Interp {
         }
     }
 
+    /// ADR-0010：文件级 `import` 语句运行时绑定——镜像语义层 `apply_imports`
+    /// （semantic.rs）。三种形态（06-08 §import）：
+    /// - `import pkg.mod;`：整模块——绑定名 = 末段/别名；io 族环境模块 → import_env
+    ///   别名；用户命名空间/包成员复制为 `{绑定}.{member}`（限定名可用）
+    /// - `import pkg.mod as m;`：整模块 + 别名
+    /// - `import pkg.mod.{a, b as c};`：符号选择——函数/类型/全局复制到绑定名（直接可用）；
+    ///   命名空间成员以前缀绑定（`my.print` 形态）
+    fn apply_imports(&mut self, program: &Program) {
+        for d in &program.decls {
+            self.collect_import(d);
+        }
+    }
+
+    /// io 族环境模块名（对象形态内建：eval Ident 注入 `io_value()`）
+    fn env_module(name: &str) -> Option<&'static str> {
+        match name {
+            "io" | "stdout" | "stderr" => Some("io"),
+            _ => None,
+        }
+    }
+
+    fn collect_import(&mut self, d: &Decl) {
+        match d {
+            Decl::Import {
+                path,
+                alias,
+                select,
+                ..
+            } => {
+                let target_prefix = format!("{}.{}", path.join("."), "");
+                let module = path.last().cloned().unwrap_or_default();
+                match select {
+                    Some(syms) => {
+                        for (sym, sym_alias) in syms {
+                            let bound = sym_alias.clone().unwrap_or_else(|| sym.clone());
+                            // io 族环境模块符号 → 别名绑定（`my.print` 走对象分发）
+                            if let Some(env) = Self::env_module(sym) {
+                                self.import_env.insert(bound, env.to_string());
+                                continue;
+                            }
+                            let q = format!("{target_prefix}{sym}");
+                            self.bind_imported_symbol(&q, &bound);
+                        }
+                    }
+                    None => {
+                        let bound = alias.clone().unwrap_or_else(|| module.clone());
+                        if let Some(env) = Self::env_module(&module) {
+                            self.import_env.insert(bound, env.to_string());
+                            return;
+                        }
+                        self.import_whole_module(&target_prefix, &bound);
+                    }
+                }
+            }
+            Decl::Namespace { decls, .. } => {
+                for inner in decls {
+                    self.collect_import(inner);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 符号选择绑定：q（`pkg.mod.sym`）→ 绑定名直调/直引；命名空间成员 → 子成员前缀复制
+    /// （`n.f` 限定访问；文件自身定义优先，不覆盖）
+    fn bind_imported_symbol(&mut self, q: &str, bound: &str) {
+        // 命名空间成员（有子成员）→ 子成员前缀复制
+        let qp = format!("{q}.");
+        let sub: Vec<String> = self
+            .funcs
+            .keys()
+            .filter(|k| k.starts_with(&qp))
+            .cloned()
+            .collect();
+        for k in sub {
+            let member = &k[qp.len()..];
+            let flat = format!("{bound}.{member}");
+            if !self.funcs.contains_key(&flat) {
+                let defs = self.funcs.get(&k).cloned().unwrap_or_default();
+                if !defs.is_empty() {
+                    self.funcs.insert(flat, defs);
+                }
+            }
+        }
+        // 函数符号 → 绑定名直调（`sq(4)`）
+        if let Some(defs) = self.funcs.get(q) {
+            if !defs.is_empty() && !self.funcs.contains_key(bound) {
+                self.funcs.insert(bound.to_string(), defs.clone());
+            }
+        }
+        // 类型符号 → 绑定名直接引用（`Line{...}`）
+        if let Some(info) = self.types.get(q) {
+            if !self.types.contains_key(bound) {
+                self.types.insert(bound.to_string(), info.clone());
+            }
+        }
+        // 全局符号 → 绑定名
+        if let Some(t) = self.globals.get(q) {
+            if !self.globals.contains_key(bound) {
+                self.globals.insert(bound.to_string(), t.clone());
+            }
+        }
+        // 未解析符号：保守放行（库/兄弟文件未知，运行时诊断）——不报错
+    }
+
+    /// 整模块导入：绑定名前缀登记 + 全部成员复制为 `{bound}.{member}`（镜像语义层
+    /// import_whole_module；文件自身定义优先，不覆盖）
+    fn import_whole_module(&mut self, target_prefix: &str, bound: &str) {
+        // 函数成员（跳过方法：成员名不含 `.`；含嵌套子命名空间 → 整体前缀替换）
+        let fkeys: Vec<String> = self
+            .funcs
+            .keys()
+            .filter(|k| k.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        for k in fkeys {
+            let member = &k[target_prefix.len()..];
+            let flat = format!("{bound}.{member}");
+            if self.funcs.contains_key(&flat) {
+                continue;
+            }
+            let defs = self.funcs.get(&k).cloned().unwrap_or_default();
+            if !defs.is_empty() {
+                self.funcs.insert(flat, defs);
+            }
+        }
+        // 类型成员
+        let tkeys: Vec<String> = self
+            .types
+            .keys()
+            .filter(|k| k.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        for k in tkeys {
+            let member = &k[target_prefix.len()..];
+            let flat = format!("{bound}.{member}");
+            if !self.types.contains_key(&flat) {
+                if let Some(info) = self.types.get(&k) {
+                    self.types.insert(flat, info.clone());
+                }
+            }
+        }
+        // 全局成员
+        let gkeys: Vec<String> = self
+            .globals
+            .keys()
+            .filter(|k| k.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        for k in gkeys {
+            let member = &k[target_prefix.len()..];
+            let flat = format!("{bound}.{member}");
+            if !self.globals.contains_key(&flat) {
+                if let Some(t) = self.globals.get(&k) {
+                    self.globals.insert(flat, t.clone());
+                }
+            }
+        }
+    }
+
     /// M1.4：加载同包兄弟文件声明（符号登记），跳过其 test 与 main（入口/测试归属目标文件）
     pub fn load_siblings(&mut self, programs: &[&Program]) -> Result<()> {
         // M1.4：记录外部符号（跨文件语义检查用）
@@ -509,7 +674,7 @@ impl Interp {
         }
         for p in programs {
             for d in &p.decls {
-                self.register_fn_decl_prefixed_filter(d, name, true, true)?;
+                self.register_fn_decl_prefixed_filter(d, name, true, true, false)?;
             }
         }
         for p in programs {
@@ -605,14 +770,26 @@ impl Interp {
                     self.types.insert(format!("{prefix}.{name}"), type_def);
                 }
             }
-            Decl::Namespace { name, decls, .. } => {
+            Decl::Namespace {
+                name,
+                decls,
+                is_module,
+                ..
+            } => {
                 let new_prefix = if prefix.is_empty() {
                     name.clone()
                 } else {
                     format!("{prefix}.{name}")
                 };
+                // 模块隔离（A2b）：`[module]` 成员不登记扁平名
+                let inner_flat = skip_flat || *is_module;
                 for inner in decls {
-                    self.register_type_decl_prefixed_filter(inner, &new_prefix, skip_flat, pub_only)?;
+                    self.register_type_decl_prefixed_filter(
+                        inner,
+                        &new_prefix,
+                        inner_flat,
+                        pub_only,
+                    )?;
                 }
             }
             _ => {}
@@ -626,14 +803,14 @@ impl Interp {
 
     /// 兄弟文件函数注册：跳过 [test] fn 与 main（M1.4 包加载）
     fn register_fn_decl_skip_entry(&mut self, d: &Decl) -> Result<()> {
-        self.register_fn_decl_prefixed_filter(d, "", true, false)
+        self.register_fn_decl_prefixed_filter(d, "", true, false, false)
     }
 
     /// 函数注册（Q21 命名空间）：扁平名 + 限定名双注册。
     /// 扁平名（`square`）供 `using Math;` 后直接调用；限定名（`Math.square`）
     /// 供 `Math.square(5)` 静态调用（eval_call Dot 分支经 funcs 命中）。
     fn register_fn_decl_prefixed(&mut self, d: &Decl, prefix: &str) -> Result<()> {
-        self.register_fn_decl_prefixed_filter(d, prefix, false, false)
+        self.register_fn_decl_prefixed_filter(d, prefix, false, false, false)
     }
 
     fn register_fn_decl_prefixed_filter(
@@ -642,6 +819,7 @@ impl Interp {
         prefix: &str,
         skip_entry: bool,
         pub_only: bool,
+        skip_flat: bool,
     ) -> Result<()> {
         if pub_only && !d.is_pub() {
             return Ok(());
@@ -677,7 +855,8 @@ impl Interp {
                     method_of: None,
                     span: span.clone(),
                 };
-                if !skip_entry {
+                // 模块隔离（A2b）：`[module]` 成员不登记扁平名（仅限定名，供 import 复制）
+                if !skip_entry && !skip_flat {
                     self.funcs
                         .entry(name.clone())
                         .or_default()
@@ -688,14 +867,26 @@ impl Interp {
                     self.funcs.entry(qname).or_default().push(fdef);
                 }
             }
-            Decl::Namespace { name, decls, .. } => {
+            Decl::Namespace {
+                name,
+                decls,
+                is_module,
+                ..
+            } => {
                 let new_prefix = if prefix.is_empty() {
                     name.clone()
                 } else {
                     format!("{prefix}.{name}")
                 };
+                let inner_flat = skip_flat || *is_module;
                 for inner in decls {
-                    self.register_fn_decl_prefixed_filter(inner, &new_prefix, skip_entry, pub_only)?;
+                    self.register_fn_decl_prefixed_filter(
+                        inner,
+                        &new_prefix,
+                        skip_entry,
+                        pub_only,
+                        inner_flat,
+                    )?;
                 }
             }
             _ => {}
@@ -1706,13 +1897,19 @@ impl Interp {
                 // 隐式环境注入
                 match name.as_str() {
                     "alloc" => return Ok(Value::Alloc),
-                    "test_io" | "io" => return Ok(self.io_value()),
+                    "io" => return Ok(self.io_value()),
                     "stdout" | "stderr" => return Ok(self.io_value()),
                     "pi" => return Ok(Value::Float(std::f64::consts::PI)),
                     "Vec" | "Deque" => return Ok(Value::vec(vec![], Value::Alloc)),
                     "Map" => return Ok(Value::map(HashMap::new(), Value::Alloc)),
                     "Table" => return Ok(Value::vec(vec![], Value::Alloc)),
                     _ => {}
+                }
+                // ADR-0010：import 环境别名（`import H.std.{io as my}` → `my` = io 环境）
+                if let Some(env) = self.import_env.get(name.as_str()) {
+                    if env == "io" {
+                        return Ok(self.io_value());
+                    }
                 }
                 match self.lookup(name) {
                     Some(cell) => Ok(cell.borrow().clone()),
@@ -4082,9 +4279,7 @@ impl Interp {
                 m.borrow_mut().fields.remove(&key);
                 Ok(Some(Value::Void))
             }
-            (Value::Map(m), "len") => {
-                Ok(Some(Value::Int(m.borrow().fields.len() as i128)))
-            }
+            (Value::Map(m), "len") => Ok(Some(Value::Int(m.borrow().fields.len() as i128))),
             (
                 Value::Slice {
                     data: _,
@@ -4286,10 +4481,7 @@ impl Interp {
                     }
                 }
             }
-            // M5.4 程序环境：io.args() / io.env(name)
-            (Value::Class(c), "args") if c.borrow().name == "Io" => Ok(Some(Value::arr(
-                self.args.iter().map(|a| Value::str(a)).collect(),
-            ))),
+            // M5.4 程序环境：io.env(name)
             (Value::Class(c), "env") if c.borrow().name == "Io" => {
                 let name = self.eval_str_arg(args, 0, span)?;
                 match std::env::var(String::from_utf8_lossy(&name).as_ref()) {
@@ -5565,7 +5757,14 @@ impl Interp {
     }
 
     /// 连续字段 → 字节（写入 out[off..off+size]；标量 / 嵌套连续 / 元组递归）
-    fn write_field_bytes(&self, out: &mut [u8], off: usize, size: usize, ty: &Type, v: &Value) -> Result<()> {
+    fn write_field_bytes(
+        &self,
+        out: &mut [u8],
+        off: usize,
+        size: usize,
+        ty: &Type,
+        v: &Value,
+    ) -> Result<()> {
         match ty.strip() {
             Type::Named(n, _) if Self::is_scalar_name(n) => {
                 self.write_scalar(&mut out[off..off + size], n, v);
@@ -5673,7 +5872,9 @@ impl Interp {
                 let b = bytes
                     .get(..4)
                     .ok_or_else(|| RtError::msg("InvalidBytes", "truncated byte data"))?;
-                Ok(Value::Float(f32::from_le_bytes(b.try_into().unwrap()) as f64))
+                Ok(Value::Float(
+                    f32::from_le_bytes(b.try_into().unwrap()) as f64
+                ))
             }
             "f64" | "f16" | "f128" => {
                 let b = bytes
@@ -5908,7 +6109,9 @@ impl Interp {
     fn parse_json_number(&self, s: &str) -> Result<(Value, usize)> {
         let b = s.as_bytes();
         let mut i = 0usize;
-        while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], b'-' | b'+' | b'.' | b'e' | b'E')) {
+        while i < b.len()
+            && (b[i].is_ascii_digit() || matches!(b[i], b'-' | b'+' | b'.' | b'e' | b'E'))
+        {
             i += 1;
         }
         let text = &s[..i];
@@ -6111,21 +6314,25 @@ impl Interp {
             self.in_main = false;
             return Err(RtError::msg("NoMain", "no `main` entry point"));
         }
-        // main(io: Io) !void——单参数 io 版本或零参版本。
-        // 注意 pick_fn 在候选唯一时短路返回、不校验参数个数（见 pick_fn），
-        // 零参 main 若仍走 `pick_fn("main", &[io])` 会拿到零参定义，再被
-        // call_fn 判 ArityMismatch。故按参数个数精确选：1 参 → 传 io；否则传 []。
+        // main(args: o Vec(String))——单参数 = 命令行参数（0 号 = 程序名）；或零参版本。
+        // 2026-08-17 定案（ADR-0010）：main 不再注入 io（io 经 `import H.std.{io}` 引入）。
+        let args_val = Value::vec(
+            self.args.iter().map(|a| Value::str(a)).collect(),
+            Value::Alloc,
+        );
+        // pick_fn 候选唯一时短路返回、不校验参数个数；故按参数个数精确选：
+        // 1 参 → 传 args；否则传 []。
         let main_def = if self
             .funcs
             .get("main")
             .map_or(false, |fns| fns.iter().any(|f| f.params.len() == 1))
         {
-            self.pick_fn("main", &[io.clone()])?
+            self.pick_fn("main", &[args_val.clone()])?
         } else {
             self.pick_fn("main", &[])?
         };
         let main_args = if main_def.params.len() == 1 {
-            vec![io.clone()]
+            vec![args_val]
         } else {
             vec![]
         };
@@ -6171,16 +6378,14 @@ impl Interp {
         let (mut passed, mut failed, mut skipped) = (0, 0, 0);
         for t in tests {
             self.push_scope();
-            self.bind("test_io", self.io_value());
+            // A3/ADR-0010：测试环境绑定 io（import H.std.{io} 等价；`&io` 传参走作用域 cell）
+            self.bind("io", self.io_value());
             self.bind("alloc", Value::Alloc);
             self.fail_info = None;
             let r = self.exec_fn_body(&t.body, &[]);
             let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
             // 显示名：名称 ?? 函数名
-            let display = t
-                .test_name
-                .clone()
-                .unwrap_or_else(|| t.name.clone());
+            let display = t.test_name.clone().unwrap_or_else(|| t.name.clone());
             match r {
                 Ok(Value::Err { name, .. }) => {
                     // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL（不中止其它测试，Q-T2）

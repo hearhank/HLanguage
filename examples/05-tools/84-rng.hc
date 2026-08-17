@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 84-rng.hc — 伪随机数发生器（位运算 + 算术，12.2）
 //
 //   - xorshift64：位运算实战（12 延伸）
@@ -19,7 +21,7 @@ class Rng {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var rng: o Rng = Rng.new(0x1234_5678_9abc_def0);
 
     // 骰子模拟（1..6）

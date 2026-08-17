@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 41-namespaces.hc — 命名空间与引入（12.14）
 //
 // Q21 定案（2026-08-13）：C# 式命名空间
@@ -7,7 +9,7 @@
 
 using Math;
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     io.print("{}\n", Math.square(5));   // 限定访问
     io.print("{}\n", square(5));        // using 后直接使用
 }

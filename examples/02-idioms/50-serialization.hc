@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 50-serialization.hc — 数据序列化分层（2026-08-13 定案；2026-08-14 修订）
 //
 //   - 连续类型 ↔ byte 数组：内建 to_bytes()/from_bytes()（零拷贝视图，Q36）
@@ -15,7 +17,7 @@ class Order {
     mut amount: f64,
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 连续类型 → bytes：内建方法（零拷贝视图）
     var p = Point{ x = 1.0, y = 2.0 };
     var bytes: &[u8] = p.to_bytes();

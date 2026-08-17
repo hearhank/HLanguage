@@ -1,9 +1,11 @@
+import H.std.{io};
+
 // 47-sort-search.hc — 切片算法（修改数据支柱）
 //
 //   - 原地排序：sort(&mut arr)（可写切片）
 //   - 只读查找：binary_search(&arr, v) → ?usize
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var mut arr = [5, 2, 8, 1, 9, 3];
 
     sort(&mut arr);                    // 可写切片（唯一写者）

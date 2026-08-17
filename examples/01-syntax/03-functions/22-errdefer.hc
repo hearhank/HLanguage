@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 22-errdefer.hc — 错误路径清理（12.18）
 //
 //   - defer：作用域退出始终执行
@@ -16,7 +18,7 @@ fn write_config(io: *T, path: &[u8], data: &[u8]) !void where T: Io {
     try io.fs.rename("tmp.tmp", path);  // 成功：原子替换
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     try write_config(&io, "config.json", "{}");
     io.print("written\n");
 }

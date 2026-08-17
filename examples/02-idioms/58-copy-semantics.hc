@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 58-copy-semantics.hc — 复制语义（B3/Q16/Q1'）
 //
 //   - 标量/Continuous：赋值即复制（值语义）
@@ -10,7 +12,7 @@ class Point {   // 连续内存值类型（H1 特性标注）
     y: f32,
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 标量：赋值即复制
     var a: i32 = 5;
     var b = a;

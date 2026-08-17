@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 34-generics.hc — comptime 泛型（12.16）
 //
 //   - 泛型 = 编译期函数：fn List(T: type) type（类型即值）
@@ -18,7 +20,7 @@ fn Pair(T: type) type {
     };
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     io.print("{}\n", max_value(3, 5));       // anytype：整数
     io.print("{}\n", max_value(3.5, 2.0));   // anytype：浮点
 

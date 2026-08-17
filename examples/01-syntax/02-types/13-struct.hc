@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 13-struct.hc — 类型定义：class + Continuous（定义数据，2026-08-14 合并定案）
 //
 // Q5 定案（2026-08-13）：方法调用双语
@@ -28,7 +30,7 @@ class Point {
     }
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var q: Point = Point{x = 4.0, y = 6.0};
 

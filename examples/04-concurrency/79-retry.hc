@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 79-retry.hc — 重试模式（async + 指数退避）
 //
 //   - if (expr) |v| else |err| 双向捕获（成功/错误分支）
@@ -18,7 +20,7 @@ async fn fetch_with_retry(io: *T, url: &[u8], alloc: Allocator, max_retries: i32
     return error.Exhausted;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var body = try await fetch_with_retry(&io, "https://example.com", alloc, 3);
     io.print("got {} bytes\n", body.len);
 }

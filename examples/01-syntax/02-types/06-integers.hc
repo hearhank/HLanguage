@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 06-integers.hc — 整数类型（12.3）
 //
 // Q39 定案（2026-08-13）：惰性宽度默认 + 显式后缀并存
@@ -5,7 +7,7 @@
 //   - 后缀（42i32 / 255u8）立即定型：anytype/泛型上下文需要
 //   - 宽度：i8–i128 / u8–u128 + isize/usize
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // 惰性宽度：标注类型处定型
     var a: i32 = 42;
     var b: u8 = 255;

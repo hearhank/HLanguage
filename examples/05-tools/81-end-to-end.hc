@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 81-end-to-end.hc — 端到端：TCP 服务（四大支柱验收基准）
 //
 // Q25 定案（2026-08-13）：TCP 服务形态
@@ -49,7 +51,7 @@ fn handle_order(io: *T, conn: *TcpConn) !void where T: Io {
     try f.append(resp);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var server = try io.net.listen(8080);
     defer server.close();
     io.print("listening on 8080\n");

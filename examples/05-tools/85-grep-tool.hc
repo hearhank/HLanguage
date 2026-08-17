@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 85-grep-tool.hc — grep 工具（目录遍历 + 行搜索，综合）
 //
 //   - 57 目录遍历 + 行读取 + find（47）
@@ -18,7 +20,7 @@ fn search_file(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     return hits;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var needle = "fn ";
     var dir = try io.fs.open_dir(".");
     defer dir.close();

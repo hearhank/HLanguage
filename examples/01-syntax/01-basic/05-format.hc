@@ -1,9 +1,11 @@
+import H.std.{io};
+
 // 05-format.hc — 格式串说明符（Q45 定案 2026-08-13）
 //
 //   - comptime 校验（Q2）：说明符与参数类型不匹配编译报错
 //   - Zig 式说明符：{} 默认 / {d} / {x} / {b} / {e} / {s} / 宽度/精度/对齐
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     io.print("{}\n", 255);          // 默认（comptime 定型）
     io.print("{d}\n", 255);         // 十进制
     io.print("{x}\n", 255);         // 十六进制小写：ff
@@ -17,5 +19,6 @@ fn main(io: Io) !void {
 
 [test("格式化输入运行")]
 fn format_entry_runs() !void {
-    try main(test_io);   // S2：格式串全部合法，运行不抛错
+    var a: o Vec(String) = [];
+    try main(a);   // S2：格式串全部合法，运行不抛错
 }

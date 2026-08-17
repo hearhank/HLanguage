@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 21-closures.hc — 闭包与迭代
 //
 // Q13 定案（2026-08-13）：函数是唯一处理逻辑
@@ -9,7 +11,7 @@ fn apply(f: Fn1(i32) i32, x: i32) i32 {
     return f(x);
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var a = 10;
 
     var double = |v| v * 2;              // 无环境捕获

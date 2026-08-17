@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 35-comptime-branch.hc — comptime 编译期逻辑（12.16/§7）
 //
 //   - 类型级函数：fn ArrayLen(T: type, n: comptime_int) type（类型即值）
@@ -12,7 +14,7 @@ fn max_value(a: anytype, b: anytype) anytype {
     return if (a > b) a else b;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     // comptime 类型应用：ArrayLen(i32, 3) = [3]i32
     var arr: ArrayLen(i32, 3) = [1, 2, 3];
     io.print("len = {}\n", arr.len);

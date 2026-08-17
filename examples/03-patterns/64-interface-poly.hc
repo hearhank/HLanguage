@@ -1,3 +1,5 @@
+import H.std.{io};
+
 // 64-interface-poly.hc — 接口使用形态（Q22/Q22b 定案 2026-08-13）
 //
 //   - 静态路径（主）：fn describe(shape: *T) where T: IShape——单态化无虚表
@@ -35,7 +37,7 @@ fn total_area(shapes: &Vec(*IShape)) f32 {
     return total;
 }
 
-fn main(io: Io) !void {
+fn main(args: o Vec(String)) !void {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
 

@@ -75,7 +75,10 @@ pub enum IrConst {
     Void,
     Null,
     /// error.Name（错误值 = 普通值，走值通道；code = M2.6 编译期错误码）
-    Err { name: String, code: u32 },
+    Err {
+        name: String,
+        code: u32,
+    },
     /// 开区间切片 `arr[a..]` 的上界哨兵（Phase 2）
     End,
 }
@@ -454,7 +457,10 @@ fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
                 ..
             } => {
                 let ci = ClassInfo {
-                    fields: fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect(),
+                    fields: fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect(),
                     methods: methods.iter().map(|m| m.name.clone()).collect(),
                     continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
                 };
@@ -521,7 +527,14 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     }
     // Phase 5：合成 `@__init__` 函数（声明序初始化 global/const；多文件合并 = 各模块
     // 自带 init，运行时按 funcs 序依次执行）。不登记 func_index（不可被用户调用）。
-    if let Some(init) = lower_init_func(program, &errors, &types, &funcs, &globals, &mut module.closures)? {
+    if let Some(init) = lower_init_func(
+        program,
+        &errors,
+        &types,
+        &funcs,
+        &globals,
+        &mut module.closures,
+    )? {
         module.funcs.push(init);
     }
     let mut ordered = globals_set_to_ordered(program);
@@ -608,7 +621,11 @@ fn collect_fn_names(decls: &[Decl], names: &mut HashSet<String>, path: &[String]
                     names.insert(q);
                 }
             }
-            Decl::Namespace { name, decls: nested, .. } => {
+            Decl::Namespace {
+                name,
+                decls: nested,
+                ..
+            } => {
                 let mut p = path.to_vec();
                 p.push(name.clone());
                 collect_fn_names(nested, names, &p);
@@ -657,14 +674,33 @@ fn lower_decl(
             is_test,
             ..
         } => {
-            let func = lower_func(name, params, body, *is_test, errors, types, funcs, globals, &mut module.closures)?;
+            let func = lower_func(
+                name,
+                params,
+                body,
+                *is_test,
+                errors,
+                types,
+                funcs,
+                globals,
+                &mut module.closures,
+            )?;
             register_func(module, name, func);
         }
         Decl::Namespace { name, decls, .. } => {
             // namespace 内函数：扁平名 + 限定名双注册（与运行时/语义一致）；
             // 多级 namespace（io.net.connect）注册全限定名
             let mut inner: Vec<(String, String, IrFunc)> = Vec::new();
-            collect_ns_funcs(decls, &[name.clone()], &mut inner, errors, types, funcs, globals, &mut module.closures)?;
+            collect_ns_funcs(
+                decls,
+                &[name.clone()],
+                &mut inner,
+                errors,
+                types,
+                funcs,
+                globals,
+                &mut module.closures,
+            )?;
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
                 module.funcs.push(func);
@@ -684,7 +720,17 @@ fn lower_decl(
         Decl::Class { name, methods, .. } => {
             for m in methods {
                 let fname = format!("{name}.{}", m.name);
-                if let Ok(func) = lower_func(&fname, &m.params, &m.body, false, errors, types, funcs, globals, &mut module.closures) {
+                if let Ok(func) = lower_func(
+                    &fname,
+                    &m.params,
+                    &m.body,
+                    false,
+                    errors,
+                    types,
+                    funcs,
+                    globals,
+                    &mut module.closures,
+                ) {
                     register_func(module, &fname, func);
                 }
             }
@@ -692,6 +738,7 @@ fn lower_decl(
         Decl::Enum { .. }
         | Decl::Interface { .. }
         | Decl::Using { .. }
+        | Decl::Import { .. }
         | Decl::Script { .. } => {}
     }
     Ok(())
@@ -719,7 +766,9 @@ fn collect_ns_funcs(
             } if !*is_test => {
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
-                let func = lower_func(name, params, body, false, errors, types, funcs, globals, closures)?;
+                let func = lower_func(
+                    name, params, body, false, errors, types, funcs, globals, closures,
+                )?;
                 out.push((name.clone(), qn.join("."), func));
             }
             Decl::Namespace {
@@ -744,7 +793,11 @@ fn register_func(module: &mut IrModule, name: &str, func: IrFunc) {
     let idx = module.funcs.len();
     module.funcs.push(func);
     // 重载/可选参数：同名多候选按声明序追加（对齐 oracle funcs: HashMap<String, Vec<FnDef>>）
-    module.func_index.entry(name.to_string()).or_default().push(idx);
+    module
+        .func_index
+        .entry(name.to_string())
+        .or_default()
+        .push(idx);
 }
 
 fn lower_func(
@@ -782,7 +835,11 @@ fn lower_func(
     let param_defaults: Vec<bool> = params.iter().map(|p| p.default.is_some()).collect();
     let defaults: Vec<Option<IrConst>> = params
         .iter()
-        .map(|p| p.default.as_ref().and_then(|d| lower_default_const(d, errors)))
+        .map(|p| {
+            p.default
+                .as_ref()
+                .and_then(|d| lower_default_const(d, errors))
+        })
         .collect();
     Ok(IrFunc {
         name: name.to_string(),
@@ -1056,7 +1113,10 @@ impl<'a> LowerCtx<'a> {
                 // `return e`：按运行期值分派——错误 → 全 defers；否则仅非 errdefer
                 let l_err = self.new_label();
                 let l_done = self.new_label();
-                self.push(IrInst::JumpIfErr { temp: v, label: l_err });
+                self.push(IrInst::JumpIfErr {
+                    temp: v,
+                    label: l_err,
+                });
                 for i in (depth..n).rev() {
                     let rec = self.defers[i].clone();
                     if rec.errdefer {
@@ -1184,7 +1244,10 @@ impl<'a> LowerCtx<'a> {
                 // 函数名作为值（FnRef：apply(square, 5) / var f = square）——对齐 oracle
                 // interp.rs:1530-1535
                 None if self.funcs.contains(name) => {
-                    self.push(IrInst::FnRef { temp: t, name: name.clone() });
+                    self.push(IrInst::FnRef {
+                        temp: t,
+                        name: name.clone(),
+                    });
                 }
                 // 全局/常量引用（Phase 5）：`LoadGlobal`——cell 由 IrRuntime::init 预分配
                 None if self.globals.contains(name) => {
@@ -1347,7 +1410,11 @@ impl<'a> LowerCtx<'a> {
                     slot: res_slot,
                 });
             }
-            Expr::Call { callee, args, span: _ } => {
+            Expr::Call {
+                callee,
+                args,
+                span: _,
+            } => {
                 // `@` 内建的类型位置参数（@sizeOf(i32) 等）在调用点编码为 `Const Str(type_name)`，
                 // 运行时按名解析——对齐 oracle 从 `Expr::Ident` 读类型名。
                 // 限定名调用（alloc.init(ABC) 等）展平为 `"alloc.init"` 后同样适用。
@@ -1603,7 +1670,10 @@ impl<'a> LowerCtx<'a> {
                 });
             }
             Expr::Assign {
-                target, op, value, span,
+                target,
+                op,
+                value,
+                span,
             } => match self.lower_assign(*op, target, value) {
                 // 赋值表达式（while 续步 i += 1 等）：值 = 新值（对齐 eval_assign）
                 Some(stored) => self.push(IrInst::Load {
@@ -1617,7 +1687,10 @@ impl<'a> LowerCtx<'a> {
             // 数组/元组字面量：运行时等价（Arr），逐元素求值 + 独立共享 cell
             Expr::ArrayLit(items, _) | Expr::TupleLit(items, _) => {
                 let item_ts: Vec<usize> = items.iter().map(|e| self.lower_expr(e)).collect();
-                self.push(IrInst::MakeArr { temp: t, items: item_ts });
+                self.push(IrInst::MakeArr {
+                    temp: t,
+                    items: item_ts,
+                });
             }
             Expr::NamedLit { ty, fields, span } => {
                 // struct 字面量 → MakeClass；枚举字面量（恰一个变体）→ MakeEnum（对齐 oracle）
@@ -1626,7 +1699,11 @@ impl<'a> LowerCtx<'a> {
                         .iter()
                         .map(|(k, v)| (k.clone(), self.lower_expr(v)))
                         .collect();
-                    self.push(IrInst::MakeClass { temp: t, ty: ty.clone(), fields: f });
+                    self.push(IrInst::MakeClass {
+                        temp: t,
+                        ty: ty.clone(),
+                        fields: f,
+                    });
                 } else if self.types.enums.contains_key(ty) {
                     if fields.len() != 1 {
                         self.fail_void(t, "多字段枚举字面量（应为单变体）", span);
@@ -1657,7 +1734,8 @@ impl<'a> LowerCtx<'a> {
                         });
                         return t;
                     }
-                    if self.types.enums.contains_key(bname) || self.types.classes.contains_key(bname)
+                    if self.types.enums.contains_key(bname)
+                        || self.types.classes.contains_key(bname)
                     {
                         self.push(IrInst::MakeEnum {
                             temp: t,
@@ -1684,24 +1762,45 @@ impl<'a> LowerCtx<'a> {
                     return t;
                 }
                 let b = self.lower_expr(base);
-                self.push(IrInst::Field { temp: t, base: b, field: field.clone() });
+                self.push(IrInst::Field {
+                    temp: t,
+                    base: b,
+                    field: field.clone(),
+                });
             }
             Expr::Field { base, field, .. } => {
                 let b = self.lower_expr(base);
-                self.push(IrInst::Field { temp: t, base: b, field: field.clone() });
+                self.push(IrInst::Field {
+                    temp: t,
+                    base: b,
+                    field: field.clone(),
+                });
             }
-            Expr::Index { base, indices, span } => {
+            Expr::Index {
+                base,
+                indices,
+                span,
+            } => {
                 let b = self.lower_expr(base);
                 if indices.len() == 1 {
                     if let Expr::Binary(BinOp::Range, lo, hi, _) = &indices[0] {
                         // 切片 `base[lo..hi]`（hi 可为 `__end__` 开区间哨兵）
                         let lo_t = self.lower_expr(lo);
                         let hi_t = self.lower_slice_end(hi);
-                        self.push(IrInst::SliceOf { temp: t, base: b, lo: lo_t, hi: hi_t });
+                        self.push(IrInst::SliceOf {
+                            temp: t,
+                            base: b,
+                            lo: lo_t,
+                            hi: hi_t,
+                        });
                         return t;
                     }
                     let idx = self.lower_expr(&indices[0]);
-                    self.push(IrInst::Index { temp: t, base: b, index: idx });
+                    self.push(IrInst::Index {
+                        temp: t,
+                        base: b,
+                        index: idx,
+                    });
                 } else {
                     self.fail_void(t, "多索引访问（Table 行/列）", span);
                 }
@@ -1719,7 +1818,10 @@ impl<'a> LowerCtx<'a> {
                     // 全局/常量（Phase 5）：`&global` 别名 cell——`IrRuntime::init` 已
                     // 预分配 cell，`Deref`/`StorePtr` 写穿回全局（对齐 oracle lookup→globals）
                     None if self.globals.contains(name) => {
-                        self.push(IrInst::GlobalAddr { temp: t, name: name.clone() });
+                        self.push(IrInst::GlobalAddr {
+                            temp: t,
+                            name: name.clone(),
+                        });
                     }
                     None => self.fail_void(t, "未知标识符取址", span),
                 },
@@ -1732,7 +1834,11 @@ impl<'a> LowerCtx<'a> {
                 let a = self.lower_expr(inner);
                 self.push(IrInst::Unwrap { temp: t, a });
             }
-            Expr::SwitchExpr { subject, arms, span } => {
+            Expr::SwitchExpr {
+                subject,
+                arms,
+                span,
+            } => {
                 let has_else = arms
                     .iter()
                     .any(|a| a.patterns.iter().any(|p| matches!(p, SwitchPattern::Else)));
@@ -1753,12 +1859,18 @@ impl<'a> LowerCtx<'a> {
                         self.push(IrInst::Load { temp: t, slot: v });
                     }
                 } else {
-                    self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                    self.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Void,
+                    });
                 }
                 self.pop_scope();
             }
             Expr::FnRef(name, _span) => {
-                self.push(IrInst::FnRef { temp: t, name: name.clone() });
+                self.push(IrInst::FnRef {
+                    temp: t,
+                    name: name.clone(),
+                });
             }
             // 元组解构：源求值 + Destructure（运行时 arity 检查 + 逐元素克隆绑定）
             Expr::TupleDestructure(names, e, _) => {
@@ -1774,7 +1886,10 @@ impl<'a> LowerCtx<'a> {
                     }
                 }
                 self.push(IrInst::Destructure { value: v, slots });
-                self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                self.push(IrInst::Const {
+                    temp: t,
+                    val: IrConst::Void,
+                });
             }
             Expr::Move(inner, _) => {
                 let a = self.lower_expr(inner);
@@ -1901,7 +2016,10 @@ impl<'a> LowerCtx<'a> {
         if let Expr::IntLit { text, .. } = hi {
             if text == "__end__" {
                 let t = self.alloc_slot();
-                self.push(IrInst::Const { temp: t, val: IrConst::End });
+                self.push(IrInst::Const {
+                    temp: t,
+                    val: IrConst::End,
+                });
                 return t;
             }
         }
@@ -1974,7 +2092,10 @@ impl<'a> LowerCtx<'a> {
                 let v = self.lower_expr(value);
                 return Some(match op {
                     AssignOp::Set => {
-                        self.push(IrInst::StorePtr { target: p, value: v });
+                        self.push(IrInst::StorePtr {
+                            target: p,
+                            value: v,
+                        });
                         v
                     }
                     _ => {
@@ -1987,7 +2108,10 @@ impl<'a> LowerCtx<'a> {
                             a: cur,
                             b: v,
                         });
-                        self.push(IrInst::StorePtr { target: p, value: r });
+                        self.push(IrInst::StorePtr {
+                            target: p,
+                            value: r,
+                        });
                         r
                     }
                 });
@@ -2067,7 +2191,11 @@ impl<'a> LowerCtx<'a> {
             }
             // 索引赋值：单索引 → StoreIndex（复合 = 读 cur + binop + 写回）；
             // 区间 → StoreSlice（仅 Set；复合/开区间 → 运行时错误）
-            Expr::Index { base, indices, span } => {
+            Expr::Index {
+                base,
+                indices,
+                span,
+            } => {
                 if indices.len() != 1 {
                     self.fail("多索引赋值（Table 行/列）", span);
                     return None;
@@ -2232,33 +2360,60 @@ impl<'a> LowerCtx<'a> {
             Type::Named(n, _) => match n.as_str() {
                 "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
                 | "u128" | "usize" => {
-                    self.push(IrInst::Const { temp: t, val: IrConst::Int(0) });
+                    self.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Int(0),
+                    });
                 }
                 "f32" | "f64" | "f16" | "f128" => {
-                    self.push(IrInst::Const { temp: t, val: IrConst::Float(0.0) });
+                    self.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Float(0.0),
+                    });
                 }
                 "bool" => {
-                    self.push(IrInst::Const { temp: t, val: IrConst::Bool(false) });
+                    self.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Bool(false),
+                    });
                 }
                 "void" => {
-                    self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                    self.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Void,
+                    });
                 }
                 "String" | "&[u8]" => {
-                    self.push(IrInst::Const { temp: t, val: IrConst::Str(String::new()) });
+                    self.push(IrInst::Const {
+                        temp: t,
+                        val: IrConst::Str(String::new()),
+                    });
                 }
                 // G4：集合默认值 = 隐式环境空容器（持全局 alloc）
                 "Vec" | "Deque" | "Table" => {
-                    self.push(IrInst::LoadGlobal { temp: t, name: "Vec".into() });
+                    self.push(IrInst::LoadGlobal {
+                        temp: t,
+                        name: "Vec".into(),
+                    });
                 }
                 "Map" => {
-                    self.push(IrInst::LoadGlobal { temp: t, name: "Map".into() });
+                    self.push(IrInst::LoadGlobal {
+                        temp: t,
+                        name: "Map".into(),
+                    });
                 }
                 _ => {
                     // Vec(T) / Map(K,V) 泛型集合形态
                     if n == "Vec" || n == "Deque" {
-                        self.push(IrInst::LoadGlobal { temp: t, name: "Vec".into() });
+                        self.push(IrInst::LoadGlobal {
+                            temp: t,
+                            name: "Vec".into(),
+                        });
                     } else if n == "Map" {
-                        self.push(IrInst::LoadGlobal { temp: t, name: "Map".into() });
+                        self.push(IrInst::LoadGlobal {
+                            temp: t,
+                            name: "Map".into(),
+                        });
                     } else if let Some(ci) = self.types.classes.get(n) {
                         // 命名 class：递归默认字段（先克隆字段表释放 `self.types` 借用）
                         let cls_fields = ci.fields.clone();
@@ -2267,7 +2422,11 @@ impl<'a> LowerCtx<'a> {
                             let v = self.lower_default_value(fty);
                             fields.push((fname.clone(), v));
                         }
-                        self.push(IrInst::MakeClass { temp: t, ty: n.clone(), fields });
+                        self.push(IrInst::MakeClass {
+                            temp: t,
+                            ty: n.clone(),
+                            fields,
+                        });
                     } else {
                         // 未知命名类型（enum 等）：空变体（对齐 oracle default_value Enum 臂）
                         self.push(IrInst::MakeEnum {
@@ -2280,16 +2439,28 @@ impl<'a> LowerCtx<'a> {
                 }
             },
             Type::Optional(_) => {
-                self.push(IrInst::Const { temp: t, val: IrConst::Null });
+                self.push(IrInst::Const {
+                    temp: t,
+                    val: IrConst::Null,
+                });
             }
             Type::Ptr(_, _) | Type::Infer | Type::Owned(_) => {
-                self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                self.push(IrInst::Const {
+                    temp: t,
+                    val: IrConst::Void,
+                });
             }
             Type::Slice(_, _) => {
-                self.push(IrInst::Const { temp: t, val: IrConst::Str(String::new()) });
+                self.push(IrInst::Const {
+                    temp: t,
+                    val: IrConst::Str(String::new()),
+                });
             }
             _ => {
-                self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                self.push(IrInst::Const {
+                    temp: t,
+                    val: IrConst::Void,
+                });
             }
         }
         t
@@ -2329,7 +2500,10 @@ impl<'a> LowerCtx<'a> {
                 self.push(IrInst::Store { slot, temp: t });
             }
             Stmt::Expr(Expr::Assign {
-                target, op, value, span,
+                target,
+                op,
+                value,
+                span,
             }) => {
                 // 语句级赋值：副作用即可；目标不在 IR 范围（字段/索引/解构）→ 硬错误
                 if self.lower_assign(*op, target, value).is_none() {
@@ -2564,7 +2738,10 @@ impl<'a> LowerCtx<'a> {
         self.pending = prev;
         // 2) 体含控制流指令 → 硬错误（带 label 指令重复发射冲突；对齐「硬错误 > 静默误编译」）
         if body.iter().any(|i| is_control_flow_inst(i)) {
-            self.fail("`defer`/`errdefer` 体不允许控制流（如 `defer try f()`）", span);
+            self.fail(
+                "`defer`/`errdefer` 体不允许控制流（如 `defer try f()`）",
+                span,
+            );
             body.clear(); // 避免污染退出点发射
         }
         // 3) 主流登记
@@ -2610,11 +2787,7 @@ impl<'a> LowerCtx<'a> {
                 subject: s,
                 pattern: p.clone(),
             });
-            let l_next = if i + 1 < n {
-                self.new_label()
-            } else {
-                l_fb
-            };
+            let l_next = if i + 1 < n { self.new_label() } else { l_fb };
             self.push(IrInst::JumpIfNot {
                 temp: t_pat,
                 label: l_next,
@@ -2648,17 +2821,15 @@ impl<'a> LowerCtx<'a> {
     }
 
     /// 发射单臂体：捕获绑定（EnumPayload 负载或 subject 本身）+ 臂体。
-    fn emit_switch_arm_body(
-        &mut self,
-        arm: &SwitchArm,
-        subject: usize,
-        value_slot: Option<usize>,
-    ) {
+    fn emit_switch_arm_body(&mut self, arm: &SwitchArm, subject: usize, value_slot: Option<usize>) {
         // 对齐 oracle `exec_switch_arm`：push_scope → bind capture → exec body → pop_scope
         self.push_scope();
         if let Some((_, name)) = &arm.capture {
             let cap = self.alloc_slot();
-            self.push(IrInst::EnumPayload { temp: cap, a: subject });
+            self.push(IrInst::EnumPayload {
+                temp: cap,
+                a: subject,
+            });
             self.bind(name, cap);
         }
         match value_slot {
@@ -2840,7 +3011,10 @@ pub enum IrValue {
     /// 可选值（`null` = `Opt(None)`，对齐 tree-walking `Value::Opt`）
     Opt(Option<Box<IrValue>>),
     /// 错误值（M4.2：码 + 名字；码 = M2.6 编译期错误码表，全局唯一）
-    Err { name: String, code: u32 },
+    Err {
+        name: String,
+        code: u32,
+    },
     /// 指针：共享堆 cell 索引（别名装置——对齐 tree-walking `Value::Ptr(Rc<RefCell>)`）
     Ptr(usize),
     /// 装箱/接口胖指针（G3：三字宽 data + vtbl + alloc；指向 `Cell::Boxed`）
@@ -2902,10 +3076,7 @@ pub enum Cell {
     /// 迭代器（Phase 3）：`iter_items` 展开结果 + 前进游标。
     /// `items[i].cell` 为第 i 项的共享源 cell（Arr/Slice）或新 cell（Map/Str/用户迭代）；
     /// `is_ref` 表示是否与源容器共享（Mut/Move 捕获可写穿）。
-    Iter {
-        items: Vec<IterItem>,
-        next: usize,
-    },
+    Iter { items: Vec<IterItem>, next: usize },
     /// Arena 分配器状态（G1：真实 bump + 块链表；deinit 批量归还 backing）
     Arena(ArenaStateIr),
     /// 装箱/接口胖指针（G3：data + vtbl + alloc 三字宽；对齐 tree-walking `BoxedData`）。
@@ -2918,10 +3089,7 @@ pub enum Cell {
     },
     /// 集合 Vec（G4：`arr` 恒为 `IrValue::Arr(items_cell)`——deref peel 共享底层
     /// `Cell::Elems`；`alloc` = 构造 `init(alloc)` 时携带的分配器引用）
-    Vec {
-        arr: IrValue,
-        alloc: IrValue,
-    },
+    Vec { arr: IrValue, alloc: IrValue },
     /// 集合 Map（G4：键 → 字段 cell 索引；`alloc` = 构造时携带的分配器引用）
     Map {
         fields: HashMap<String, usize>,
@@ -2978,7 +3146,9 @@ impl ArenaStateIr {
             let size = n.max(ARENA_BLOCK_SIZE_IR);
             let mut block = Vec::new();
             // 优雅失败（`vec![0u8; size]` 对超大 size 会中止进程）
-            block.try_reserve_exact(size).map_err(|_| ArenaAllocErrIr::Oom)?;
+            block
+                .try_reserve_exact(size)
+                .map_err(|_| ArenaAllocErrIr::Oom)?;
             block.resize(size, 0u8);
             self.blocks.push(block);
             self.cursor = 0;
@@ -3184,9 +3354,7 @@ fn match_pattern(subject: &IrValue, pat: &IrPattern) -> bool {
         (IrValue::Str(st), IrPattern::Str(s)) => *st == s.as_bytes(),
         (IrValue::Int(c), IrPattern::Char(pc)) => *c == *pc as i128,
         (IrValue::Err { name, .. }, IrPattern::Error(pe)) => name == pe,
-        (IrValue::Bool(b), IrPattern::Ident(s)) => {
-            (*b && s == "true") || (!*b && s == "false")
-        }
+        (IrValue::Bool(b), IrPattern::Ident(s)) => (*b && s == "true") || (!*b && s == "false"),
         (IrValue::Opt(None), IrPattern::Ident(s)) => s == "null",
         _ => false,
     }
@@ -3210,38 +3378,54 @@ fn enum_payload(ctx: &Ctx, v: &IrValue) -> R<IrValue> {
 /// - 其它 Class：用户 IIterable——循环调用 `{Type}.next(self)` 至 `Opt(None)`/`Void`
 /// - Str：字节 Int 新 cell，`is_ref=false`
 /// - 其余 → NotIterable
-fn make_iter(
-    ctx: &mut Ctx,
-    module: &IrModule,
-    v: &IrValue,
-    depth: usize,
-) -> R<Vec<IterItem>> {
+fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<Vec<IterItem>> {
     let v = deref_value(ctx, v).clone();
     match v {
         IrValue::Arr(c) => match &ctx.cells[c] {
             Cell::Elems(e) => Ok(e
                 .iter()
-                .map(|ec| IterItem { cell: *ec, is_ref: true })
+                .map(|ec| IterItem {
+                    cell: *ec,
+                    is_ref: true,
+                })
                 .collect()),
-            _ => Err(IrError::msg("NotIterable", "array cell is not an element list")),
+            _ => Err(IrError::msg(
+                "NotIterable",
+                "array cell is not an element list",
+            )),
         },
         // 集合（G4）：Vec 句柄遍历（Ptr(Vec) 一层 deref 后为 Vec——共享 Elems）
         IrValue::Vec(c) => match &ctx.cells[c] {
-            Cell::Vec { arr: IrValue::Arr(ac), .. } => match &ctx.cells[*ac] {
+            Cell::Vec {
+                arr: IrValue::Arr(ac),
+                ..
+            } => match &ctx.cells[*ac] {
                 Cell::Elems(e) => Ok(e
                     .iter()
-                    .map(|ec| IterItem { cell: *ec, is_ref: true })
+                    .map(|ec| IterItem {
+                        cell: *ec,
+                        is_ref: true,
+                    })
                     .collect()),
-                _ => Err(IrError::msg("NotIterable", "vec cell is not an element list")),
+                _ => Err(IrError::msg(
+                    "NotIterable",
+                    "vec cell is not an element list",
+                )),
             },
             _ => Err(IrError::msg("NotIterable", "vec cell is corrupt")),
         },
         IrValue::Slice { data, start, len } => match &ctx.cells[data] {
             Cell::Elems(e) => Ok(e[start..start + len]
                 .iter()
-                .map(|ec| IterItem { cell: *ec, is_ref: true })
+                .map(|ec| IterItem {
+                    cell: *ec,
+                    is_ref: true,
+                })
                 .collect()),
-            _ => Err(IrError::msg("NotIterable", "slice data is not an element list")),
+            _ => Err(IrError::msg(
+                "NotIterable",
+                "slice data is not an element list",
+            )),
         },
         IrValue::Class(c) => {
             // 先克隆字段表，释放 `ctx.cells` 借用（Map 分支内需可变借用 ctx.alloc）
@@ -3264,7 +3448,10 @@ fn make_iter(
                             name: "KV".into(),
                             fields: fs,
                         });
-                        IterItem { cell: kv, is_ref: false }
+                        IterItem {
+                            cell: kv,
+                            is_ref: false,
+                        }
                     })
                     .collect();
                 Ok(items)
@@ -3295,7 +3482,7 @@ fn make_iter(
                 }
                 Ok(items)
             }
-        },
+        }
         // 集合（G4）：Map 句柄遍历 → KV 条目（key/value 字段，value 共享源字段 cell）
         IrValue::Map(c) => {
             let fields = match &ctx.cells[c] {
@@ -3315,7 +3502,10 @@ fn make_iter(
                         name: "KV".into(),
                         fields: fs,
                     });
-                    IterItem { cell: kv, is_ref: false }
+                    IterItem {
+                        cell: kv,
+                        is_ref: false,
+                    }
                 })
                 .collect();
             Ok(items)
@@ -3557,8 +3747,9 @@ fn map_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
         return false;
     }
     af.iter().all(|(k, fc)| {
-        bf.get(k)
-            .map_or(false, |bc| ctx.cell_value(*fc).value_eq(ctx, ctx.cell_value(*bc)))
+        bf.get(k).map_or(false, |bc| {
+            ctx.cell_value(*fc).value_eq(ctx, ctx.cell_value(*bc))
+        })
     })
 }
 
@@ -3572,8 +3763,9 @@ fn map_class_eq(ctx: &Ctx, m: usize, c: usize) -> bool {
         return false;
     }
     fm.iter().all(|(k, mc)| {
-        fc.get(k)
-            .map_or(false, |cc| ctx.cell_value(*mc).value_eq(ctx, ctx.cell_value(*cc)))
+        fc.get(k).map_or(false, |cc| {
+            ctx.cell_value(*mc).value_eq(ctx, ctx.cell_value(*cc))
+        })
     })
 }
 
@@ -3591,8 +3783,9 @@ fn class_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
         return false;
     }
     af.iter().all(|(k, fc)| {
-        bf.get(k)
-            .map_or(false, |bc| ctx.cell_value(*fc).value_eq(ctx, ctx.cell_value(*bc)))
+        bf.get(k).map_or(false, |bc| {
+            ctx.cell_value(*fc).value_eq(ctx, ctx.cell_value(*bc))
+        })
     })
 }
 
@@ -3666,8 +3859,10 @@ impl IrValue {
             },
             IrValue::Arr(c) => match &ctx.cells[*c] {
                 Cell::Elems(e) => {
-                    let items: Vec<String> =
-                        e.iter().map(|ec| ctx.cell_value(*ec).display(ctx)).collect();
+                    let items: Vec<String> = e
+                        .iter()
+                        .map(|ec| ctx.cell_value(*ec).display(ctx))
+                        .collect();
                     format!("[{}]", items.join(", "))
                 }
                 _ => "[]".into(),
@@ -3681,9 +3876,7 @@ impl IrValue {
                 Cell::Map { fields, .. } => {
                     let items: Vec<String> = fields
                         .iter()
-                        .map(|(k, fc)| {
-                            format!("{k} = {}", ctx.cell_value(*fc).display(ctx))
-                        })
+                        .map(|(k, fc)| format!("{k} = {}", ctx.cell_value(*fc).display(ctx)))
                         .collect();
                     format!("Map {{ {} }}", items.join(", "))
                 }
@@ -3703,9 +3896,7 @@ impl IrValue {
                 Cell::Class { name, fields } => {
                     let items: Vec<String> = fields
                         .iter()
-                        .map(|(k, fc)| {
-                            format!("{k} = {}", ctx.cell_value(*fc).display(ctx))
-                        })
+                        .map(|(k, fc)| format!("{k} = {}", ctx.cell_value(*fc).display(ctx)))
                         .collect();
                     format!("{name} {{ {} }}", items.join(", "))
                 }
@@ -3764,9 +3955,16 @@ impl IrValue {
             },
             // 集合（G4）：Vec 按内容比较（委托 Arr）；Map 按键值表比较（含 Class("Map")）
             (IrValue::Vec(a), IrValue::Vec(b)) => match (&ctx.cells[*a], &ctx.cells[*b]) {
-                (Cell::Vec { arr: IrValue::Arr(aa), .. }, Cell::Vec { arr: IrValue::Arr(bb), .. }) => {
-                    arr_eq(ctx, *aa, *bb)
-                }
+                (
+                    Cell::Vec {
+                        arr: IrValue::Arr(aa),
+                        ..
+                    },
+                    Cell::Vec {
+                        arr: IrValue::Arr(bb),
+                        ..
+                    },
+                ) => arr_eq(ctx, *aa, *bb),
                 _ => a == b,
             },
             (IrValue::Vec(a), b) => match &ctx.cells[*a] {
@@ -3815,26 +4013,36 @@ impl IrValue {
                     Cell::Elems(x) => x.clone(),
                     _ => return false,
                 };
-                let (a_e, b_e) = (d, match &ctx.cells[*b] {
-                    Cell::Elems(x) => x.clone(),
-                    _ => return false,
-                });
+                let (a_e, b_e) = (
+                    d,
+                    match &ctx.cells[*b] {
+                        Cell::Elems(x) => x.clone(),
+                        _ => return false,
+                    },
+                );
                 *len == b_e.len()
-                    && (0..*len)
-                        .all(|i| ctx.cell_value(a_e[*start + i]).value_eq(ctx, ctx.cell_value(b_e[i])))
+                    && (0..*len).all(|i| {
+                        ctx.cell_value(a_e[*start + i])
+                            .value_eq(ctx, ctx.cell_value(b_e[i]))
+                    })
             }
             (IrValue::Arr(a), IrValue::Slice { data, start, len }) => {
                 let d = match &ctx.cells[*data] {
                     Cell::Elems(x) => x.clone(),
                     _ => return false,
                 };
-                let (a_e, d_e) = (match &ctx.cells[*a] {
-                    Cell::Elems(x) => x.clone(),
-                    _ => return false,
-                }, d);
+                let (a_e, d_e) = (
+                    match &ctx.cells[*a] {
+                        Cell::Elems(x) => x.clone(),
+                        _ => return false,
+                    },
+                    d,
+                );
                 a_e.len() == *len
-                    && (0..*len)
-                        .all(|i| ctx.cell_value(a_e[i]).value_eq(ctx, ctx.cell_value(d_e[*start + i])))
+                    && (0..*len).all(|i| {
+                        ctx.cell_value(a_e[i])
+                            .value_eq(ctx, ctx.cell_value(d_e[*start + i]))
+                    })
             }
             (IrValue::Class(a), IrValue::Class(b)) => class_eq(ctx, *a, *b),
             (
@@ -3918,15 +4126,22 @@ impl IrRuntime {
     /// 调用模块函数（自动先初始化全局）。
     pub fn call(&mut self, module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
         self.init(module)?;
-        // main(io: Io) !void——单参数 io 版本或零参版本（对齐 oracle `run_main`
-        // interp.rs:5663-5675：候选池内有 1 参 main 时注入 io，否则传空）。
+        // main(args: o Vec(String))——单参数 = 命令行参数（0 号 = 程序名）；或零参版本。
+        // 2026-08-17 定案（ADR-0010）：main 不再注入 io（io 经 `import H.std.{io}` 引入）。
         let mut args = args.to_vec();
         if entry == "main" && args.is_empty() {
             let has_1p = module.func_index.get("main").map_or(false, |v| {
                 v.iter().any(|&i| module.funcs[i].params.len() == 1)
             });
             if has_1p {
-                args.push(io_value_ir(&mut self.ctx));
+                let items = self
+                    .ctx
+                    .args
+                    .iter()
+                    .map(|a| IrValue::Str(a.clone()))
+                    .collect();
+                let alloc = implicit_env_value(&mut self.ctx, "alloc");
+                args.push(make_vec_with(&mut self.ctx, items, alloc));
             }
         }
         let idx = pick_func(&self.ctx, module, entry, &args)
@@ -4143,11 +4358,7 @@ fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
         // 装箱胖指针：data 深拷贝（新 cell），vtbl/alloc 原样携带
         IrValue::Boxed(c) => {
             let (data, vtbl, alloc) = match &ctx.cells[c] {
-                Cell::Boxed {
-                    data,
-                    vtbl,
-                    alloc,
-                } => (*data, vtbl.clone(), alloc.clone()),
+                Cell::Boxed { data, vtbl, alloc } => (*data, vtbl.clone(), alloc.clone()),
                 _ => return IrValue::Boxed(c),
             };
             let cv = ctx.cell_value(data).clone();
@@ -4257,7 +4468,13 @@ fn const_val(c: &IrConst) -> IrValue {
 
 /// 执行一个函数：堆/单元模型（Phase 1）。每槽分配共享 cell，`&x` = `Ptr(cell)`
 /// 可跨帧存活（传入函数后写穿调用方槽——别名语义对齐 tree-walking `Rc<RefCell>`）。
-fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], depth: usize) -> R<IrValue> {
+fn exec_func(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    idx: usize,
+    args: &[IrValue],
+    depth: usize,
+) -> R<IrValue> {
     if depth >= MAX_CALL_DEPTH {
         return Err(IrError::msg("StackOverflow", "maximum call depth exceeded"));
     }
@@ -4332,7 +4549,13 @@ fn call_closure_ir(
 }
 
 /// 执行函数/闭包体（共享循环；当前函数体在 `func`，模块其余函数在 `module.funcs`）
-fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, depth: usize) -> R<IrValue> {
+fn exec_body(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    func: &IrFunc,
+    frame: Frame,
+    depth: usize,
+) -> R<IrValue> {
     let mut frame = frame;
     let mut pc = 0usize;
     let mut fail: Option<String> = None;
@@ -4345,19 +4568,23 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
         }
         match &func.body[pc] {
             IrInst::Const { temp, val } => {
-                ctx.set(&frame, *temp, match val {
-                    IrConst::Int(i) => IrValue::Int(*i),
-                    IrConst::Float(f) => IrValue::Float(*f),
-                    IrConst::Bool(b) => IrValue::Bool(*b),
-                    IrConst::Str(s) => IrValue::Str(s.clone().into_bytes()),
-                    IrConst::Void => IrValue::Void,
-                    IrConst::Null => IrValue::Opt(None),
-                    IrConst::Err { name, code } => IrValue::Err {
-                        name: name.clone(),
-                        code: *code,
+                ctx.set(
+                    &frame,
+                    *temp,
+                    match val {
+                        IrConst::Int(i) => IrValue::Int(*i),
+                        IrConst::Float(f) => IrValue::Float(*f),
+                        IrConst::Bool(b) => IrValue::Bool(*b),
+                        IrConst::Str(s) => IrValue::Str(s.clone().into_bytes()),
+                        IrConst::Void => IrValue::Void,
+                        IrConst::Null => IrValue::Opt(None),
+                        IrConst::Err { name, code } => IrValue::Err {
+                            name: name.clone(),
+                            code: *code,
+                        },
+                        IrConst::End => IrValue::End,
                     },
-                    IrConst::End => IrValue::End,
-                });
+                );
             }
             IrInst::Load { temp, slot } => {
                 let v = ctx.get(&frame, *slot).clone();
@@ -4382,18 +4609,22 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
             }
             IrInst::Un { op, temp, a } => {
                 let av = ctx.get(&frame, *a).clone();
-                ctx.set(&frame, *temp, match op {
-                    IrUnOp::Neg => match av {
-                        IrValue::Int(i) => IrValue::Int(-i),
-                        IrValue::Float(f) => IrValue::Float(-f),
-                        _ => return Err(IrError::msg("TypeError", "unary -")),
+                ctx.set(
+                    &frame,
+                    *temp,
+                    match op {
+                        IrUnOp::Neg => match av {
+                            IrValue::Int(i) => IrValue::Int(-i),
+                            IrValue::Float(f) => IrValue::Float(-f),
+                            _ => return Err(IrError::msg("TypeError", "unary -")),
+                        },
+                        IrUnOp::Not => IrValue::Bool(!av.as_bool()),
+                        IrUnOp::BitNot => match av {
+                            IrValue::Int(i) => IrValue::Int(!i),
+                            _ => return Err(IrError::msg("TypeError", "~")),
+                        },
                     },
-                    IrUnOp::Not => IrValue::Bool(!av.as_bool()),
-                    IrUnOp::BitNot => match av {
-                        IrValue::Int(i) => IrValue::Int(!i),
-                        _ => return Err(IrError::msg("TypeError", "~")),
-                    },
-                });
+                );
             }
             IrInst::Jump { label } => {
                 pc = find_label(func, *label)?;
@@ -4454,9 +4685,8 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                         continue;
                     }
                 }
-                let callee_idx = pick_func(ctx, module, name, &arg_vals).ok_or_else(|| {
-                    IrError::msg("NoFunction", format!("no function `{name}`"))
-                })?;
+                let callee_idx = pick_func(ctx, module, name, &arg_vals)
+                    .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
                 let v = exec_func(ctx, module, callee_idx, &arg_vals, depth + 1)?;
                 ctx.set(&frame, *temp, v);
             }
@@ -4561,7 +4791,12 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 let v = slice_of(ctx, &bv, lo_i, hi_i, open)?;
                 ctx.set(&frame, *temp, v);
             }
-            IrInst::StoreSlice { base, lo, hi, value } => {
+            IrInst::StoreSlice {
+                base,
+                lo,
+                hi,
+                value,
+            } => {
                 let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
                 let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
                 let lo_i = as_index(ctx, &lo_v)?;
@@ -4596,7 +4831,12 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 });
                 ctx.set(&frame, *temp, IrValue::Class(c));
             }
-            IrInst::MakeEnum { temp, name, variant, payload } => {
+            IrInst::MakeEnum {
+                temp,
+                name,
+                variant,
+                payload,
+            } => {
                 let p = match payload {
                     Some(pt) => Some(Box::new(ctx.get(&frame, *pt).clone())),
                     None => None,
@@ -4616,7 +4856,9 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 let elems = match v {
                     IrValue::Arr(c) => match &ctx.cells[c] {
                         Cell::Elems(e) => e.clone(),
-                        _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
+                        _ => {
+                            return Err(IrError::msg("TupleArity", "expected tuple in destructure"))
+                        }
                     },
                     _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
                 };
@@ -4656,7 +4898,11 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 ctx.set(&frame, *temp, r);
             }
             // ---- Phase 3 switch / 区间 / for ----
-            IrInst::MatchTest { temp, subject, pattern } => {
+            IrInst::MatchTest {
+                temp,
+                subject,
+                pattern,
+            } => {
                 let sv = deref_value(ctx, ctx.get(&frame, *subject)).clone();
                 ctx.set(&frame, *temp, IrValue::Bool(match_pattern(&sv, pattern)));
             }
@@ -4665,12 +4911,7 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 let hi_v = deref_value(ctx, ctx.get(&frame, *hi)).clone();
                 let (lo_i, hi_i) = match (lo_v, hi_v) {
                     (IrValue::Int(a), IrValue::Int(b)) => (a, b),
-                    _ => {
-                        return Err(IrError::msg(
-                            "TypeError",
-                            "range bounds must be integers",
-                        ))
-                    }
+                    _ => return Err(IrError::msg("TypeError", "range bounds must be integers")),
                 };
                 let mut cells = Vec::new();
                 let mut i = lo_i;
@@ -4692,7 +4933,12 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 let c = ctx.alloc(Cell::Iter { items, next: 0 });
                 ctx.set(&frame, *temp, IrValue::Iter(c));
             }
-            IrInst::IterNext { has, iter, slot, read_only } => {
+            IrInst::IterNext {
+                has,
+                iter,
+                slot,
+                read_only,
+            } => {
                 let iter_c = match ctx.get(&frame, *iter) {
                     IrValue::Iter(c) => *c,
                     _ => return Err(IrError::msg("NotIterable", "expected iterator")),
@@ -4805,7 +5051,9 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                         captures,
                         is_mut,
                         ..
-                    } => call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, depth + 1)?,
+                    } => {
+                        call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, depth + 1)?
+                    }
                     other => {
                         return Err(IrError::msg(
                             "NotCallable",
@@ -4892,8 +5140,7 @@ const IMPLICIT_ENV: &[&str] = &[
 /// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from、math.*、
 /// Arena.init）
 fn is_dotted_implicit_root(root: &str) -> bool {
-    IMPLICIT_ENV.contains(&root)
-        || matches!(root, "json" | "csv" | "String" | "math" | "Arena")
+    IMPLICIT_ENV.contains(&root) || matches!(root, "json" | "csv" | "String" | "math" | "Arena")
 }
 
 /// 错误值（码 = 编译期错误码表；内建产生的错误与 `error.X` 字面量同码）
@@ -4947,15 +5194,14 @@ fn make_vec_with(ctx: &mut Ctx, items: Vec<IrValue>, alloc: IrValue) -> IrValue 
         IrValue::Arr(c) => c,
         _ => unreachable!("make_arr 恒返回 Arr"),
     };
-    IrValue::Vec(ctx.alloc(Cell::Vec { arr: IrValue::Arr(inner), alloc }))
+    IrValue::Vec(ctx.alloc(Cell::Vec {
+        arr: IrValue::Arr(inner),
+        alloc,
+    }))
 }
 
 /// 集合 Map（G4）：键 → 字段 cell；`alloc` = 构造时携带的分配器引用
-fn make_map_with(
-    ctx: &mut Ctx,
-    fields: HashMap<String, usize>,
-    alloc: IrValue,
-) -> IrValue {
+fn make_map_with(ctx: &mut Ctx, fields: HashMap<String, usize>, alloc: IrValue) -> IrValue {
     IrValue::Map(ctx.alloc(Cell::Map { fields, alloc }))
 }
 
@@ -5021,7 +5267,10 @@ fn arr_items(ctx: &mut Ctx, v: &IrValue) -> R<Vec<IrValue>> {
         },
         // 集合（G4）：Vec 句柄（Ptr(Vec) 一层 deref 后为 Vec）——共享 Elems 元素
         IrValue::Vec(c) => match &ctx.cells[c] {
-            Cell::Vec { arr: IrValue::Arr(ac), .. } => match &ctx.cells[*ac] {
+            Cell::Vec {
+                arr: IrValue::Arr(ac),
+                ..
+            } => match &ctx.cells[*ac] {
                 Cell::Elems(e) => Ok(e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect()),
                 _ => Err(IrError::msg("TypeError", "bad vec")),
             },
@@ -5369,18 +5618,21 @@ fn call_scalar_method_ir(
         let b = deref_value(ctx, &args[0]);
         if let (IrValue::Int(a), IrValue::Int(b)) = (self_v, b) {
             let v = match field {
-                "add" => Some(IrValue::Int(
-                    a.checked_add(*b)
-                        .ok_or_else(|| IrError::msg("Overflow", "integer overflow"))?,
-                )),
-                "sub" => Some(IrValue::Int(
-                    a.checked_sub(*b)
-                        .ok_or_else(|| IrError::msg("Overflow", "integer overflow"))?,
-                )),
-                "mul" => Some(IrValue::Int(
-                    a.checked_mul(*b)
-                        .ok_or_else(|| IrError::msg("Overflow", "integer overflow"))?,
-                )),
+                "add" => {
+                    Some(IrValue::Int(a.checked_add(*b).ok_or_else(|| {
+                        IrError::msg("Overflow", "integer overflow")
+                    })?))
+                }
+                "sub" => {
+                    Some(IrValue::Int(a.checked_sub(*b).ok_or_else(|| {
+                        IrError::msg("Overflow", "integer overflow")
+                    })?))
+                }
+                "mul" => {
+                    Some(IrValue::Int(a.checked_mul(*b).ok_or_else(|| {
+                        IrError::msg("Overflow", "integer overflow")
+                    })?))
+                }
                 "div" => {
                     if *b == 0 {
                         return Err(IrError::msg("DivisionByZero", "division by zero"));
@@ -5552,7 +5804,9 @@ fn call_parser_builtin_ir(
             while i < data.len() && data[i].is_ascii_digit() {
                 i += 1;
             }
-            let n: i128 = String::from_utf8_lossy(&data[start..i]).parse().unwrap_or(0);
+            let n: i128 = String::from_utf8_lossy(&data[start..i])
+                .parse()
+                .unwrap_or(0);
             ctx.set_cell(pc, IrValue::Int(i as i128));
             Ok(Some(IrValue::Int(n)))
         }
@@ -5875,11 +6129,7 @@ fn call_file_method_ir(
     }
 }
 
-fn call_time_method_ir(
-    ctx: &mut Ctx,
-    field: &str,
-    args: &[IrValue],
-) -> R<Option<IrValue>> {
+fn call_time_method_ir(ctx: &mut Ctx, field: &str, args: &[IrValue]) -> R<Option<IrValue>> {
     match field {
         "now" => {
             let ms = std::time::SystemTime::now()
@@ -6236,7 +6486,10 @@ fn call_alloc_method_ir(
                     fields: HashMap::new(),
                 })))),
                 IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
-                _ => Err(IrError::msg("TypeError", "alloc.init expects type name or literal")),
+                _ => Err(IrError::msg(
+                    "TypeError",
+                    "alloc.init expects type name or literal",
+                )),
             }
         }
         "alloc" => {
@@ -6298,9 +6551,10 @@ fn call_arena_method_ir(
                         };
                         Ok(Some(str_bytes_val(region)))
                     }
-                    Err(ArenaAllocErrIr::Deinit) => {
-                        Err(IrError::msg("ArenaDeinitialized", "arena.alloc after deinit"))
-                    }
+                    Err(ArenaAllocErrIr::Deinit) => Err(IrError::msg(
+                        "ArenaDeinitialized",
+                        "arena.alloc after deinit",
+                    )),
                     Err(ArenaAllocErrIr::Oom) => Ok(Some(err_val(module, "OutOfMemory"))),
                 }
             } else {
@@ -6444,7 +6698,10 @@ fn parse_json_object_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
         let (val, vlen) = parse_json_value_ir(ctx, &s[pos..])?;
         pos += vlen;
         if let IrValue::Str(ks) = key {
-            fields.insert(String::from_utf8_lossy(&ks).to_string(), ctx.alloc(Cell::Value(val)));
+            fields.insert(
+                String::from_utf8_lossy(&ks).to_string(),
+                ctx.alloc(Cell::Value(val)),
+            );
         }
         while pos < b.len() && b[pos].is_ascii_whitespace() {
             pos += 1;
@@ -6526,8 +6783,7 @@ fn parse_json_string_ir(s: &str) -> R<(IrValue, usize)> {
 fn parse_json_number_ir(s: &str) -> R<(IrValue, usize)> {
     let b = s.as_bytes();
     let mut i = 0usize;
-    while i < b.len()
-        && (b[i].is_ascii_digit() || matches!(b[i], b'-' | b'+' | b'.' | b'e' | b'E'))
+    while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], b'-' | b'+' | b'.' | b'e' | b'E'))
     {
         i += 1;
     }
@@ -6598,7 +6854,8 @@ fn call_builtin_method(
         (IrValue::Str(s), "split") => {
             let sep_v = deref_value(
                 ctx,
-                args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "split"))?,
+                args.get(0)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "split"))?,
             )
             .clone();
             let sep = match sep_v {
@@ -6633,7 +6890,8 @@ fn call_builtin_method(
         (IrValue::Str(s), "find") => {
             let needle_v = deref_value(
                 ctx,
-                args.get(0).ok_or_else(|| IrError::msg("ArityMismatch", "find"))?,
+                args.get(0)
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "find"))?,
             )
             .clone();
             let needle_bytes: Vec<u8> = match needle_v {
@@ -7336,7 +7594,10 @@ fn call_builtin(
                         variant: v.clone(),
                         payload: None,
                     }),
-                    None => Err(IrError::msg("IndexOutOfBounds", "@enumFromInt: index out of bounds")),
+                    None => Err(IrError::msg(
+                        "IndexOutOfBounds",
+                        "@enumFromInt: index out of bounds",
+                    )),
                 },
                 None => Err(IrError::msg(
                     "UnknownType",
@@ -7420,7 +7681,10 @@ fn call_builtin(
             } else {
                 deref_value(ctx, &args[0]).display(ctx)
             };
-            Err(IrError::msg("CompileError", format!("@compileError: {msg}")))
+            Err(IrError::msg(
+                "CompileError",
+                format!("@compileError: {msg}"),
+            ))
         }
         "@addWithOverflow" | "@subWithOverflow" | "@mulWithOverflow" => {
             // 返回 (T, bool) 元组；tag1 Int = i128 无溢出（标志恒 false）
@@ -7437,10 +7701,7 @@ fn call_builtin(
                 "@subWithOverflow" => a.wrapping_sub(b),
                 _ => a.wrapping_mul(b),
             };
-            Ok(make_arr(
-                ctx,
-                vec![IrValue::Int(r), IrValue::Bool(false)],
-            ))
+            Ok(make_arr(ctx, vec![IrValue::Int(r), IrValue::Bool(false)]))
         }
         // ---------- 数值工具 ----------
         "sqrt" => {
@@ -7532,12 +7793,8 @@ fn call_builtin(
                         .collect();
                     items.sort_by(|x, y| match &cmp_f {
                         Some(f) => {
-                            let r = call_closure_value_ir(
-                                ctx,
-                                module,
-                                f,
-                                &[x.1.clone(), y.1.clone()],
-                            );
+                            let r =
+                                call_closure_value_ir(ctx, module, f, &[x.1.clone(), y.1.clone()]);
                             match r {
                                 Ok(IrValue::Int(i)) if i < 0 => std::cmp::Ordering::Less,
                                 Ok(IrValue::Int(i)) if i > 0 => std::cmp::Ordering::Greater,
@@ -7578,7 +7835,12 @@ fn call_builtin(
                         .collect(),
                     _ => return Err(IrError::msg("TypeError", "binary_search expects slice")),
                 },
-                _ => return Err(IrError::msg("TypeError", "binary_search expects array or slice")),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "binary_search expects array or slice",
+                    ))
+                }
             };
             let mut lo = 0usize;
             let mut hi = items.len();
@@ -7671,7 +7933,9 @@ fn call_builtin(
                     Ok(IrValue::Void)
                 }
                 (IrValue::Err { name: w, .. }, IrValue::Err { name: g, .. }) => {
-                    *fail = Some(format!("expect_error failed: expected error.{w}, got error.{g}"));
+                    *fail = Some(format!(
+                        "expect_error failed: expected error.{w}, got error.{g}"
+                    ));
                     Ok(IrValue::Void)
                 }
                 (_, g) => {
