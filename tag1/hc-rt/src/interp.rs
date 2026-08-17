@@ -235,6 +235,9 @@ pub struct Interp {
     dep_programs: Vec<(String, Program)>,
     /// ADR-0010：import 环境别名（bound → io 族环境键；`import H.std.{io as my}` → my → io）
     import_env: HashMap<String, String>,
+    /// E2.2 根回收队列：未 join/未 detach 的 Thread 在作用域退出时提升到根作用域，
+    /// 程序（main / 全部测试）结束时运行到完成（副作用发生；无隐式阻塞）
+    root_threads: Vec<Value>,
 }
 
 impl Interp {
@@ -269,6 +272,7 @@ impl Interp {
             extern_programs: Vec::new(),
             dep_programs: Vec::new(),
             import_env: HashMap::new(),
+            root_threads: Vec::new(),
         }
     }
 
@@ -998,6 +1002,10 @@ impl Interp {
         );
         let defer_err = self.run_defers(&defers, err_path);
         let scope = self.scopes.pop().expect("scope stack underflow");
+        // E2.2 根提升：作用域退出时未 join/未 detach 的 Thread 提升到根回收队列
+        // （程序结束才运行；无隐式阻塞）。须在 Debug 悬垂标记之前——标记会把 cell
+        // 内容替换为 Dangling，提升需要读到原始 Class。
+        self.promote_unfinished_threads(&scope);
         // M2.5/M4.7 Debug 悬垂标记：作用域退出 = 目标销毁（LIFO）→ 把被取过地址的
         // 目标 cell 内容标记为 Dangling（有指针持有的 cell 不释放、地址唯一——
         // 无地址碰撞误判；Release 关闭时不标记）
@@ -1027,6 +1035,39 @@ impl Interp {
         match err {
             Some(e) => Err(e),
             None => Ok(()),
+        }
+    }
+
+    /// E2.2：作用域退出回收——未 join/未 detach 的 Thread 提升到根回收队列
+    /// （程序结束时运行到完成，副作用发生；同 Rc 去重防重复入队）。
+    /// 嵌套持有（Thread 存于数组/类字段等）不在此扫描范围——仅作用域直接绑定。
+    fn promote_unfinished_threads(&mut self, scope: &Scope) {
+        for (_name, cell) in &scope.vars {
+            let v = cell.borrow();
+            if let Value::Class(c) = &*v {
+                let d = c.borrow();
+                if d.name == "Thread" {
+                    let done = matches!(d.fields.get("done"), Some(Value::Bool(true)));
+                    let detached = matches!(d.fields.get("detached"), Some(Value::Bool(true)));
+                    if !done && !detached
+                        && !self
+                            .root_threads
+                            .iter()
+                            .any(|t| matches!(t, Value::Class(rc) if Rc::ptr_eq(rc, c)))
+                    {
+                        self.root_threads.push(Value::Class(c.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    /// E2.2：程序结束（main 返回 / 全部测试完成）时运行根回收队列中的线程到完成。
+    /// 错误丢弃（副作用已发生；无隐式阻塞、不改变测试通过判定）。
+    fn drain_root_threads(&mut self) {
+        let pending = std::mem::take(&mut self.root_threads);
+        for t in pending {
+            let _ = self.thread_run(&t, &Span::new(0, 0, 0, 0));
         }
     }
 
@@ -4579,8 +4620,10 @@ impl Interp {
         match m {
             "join" => Ok(Some(self.thread_run(self_v, span)?)),
             "detach" => {
-                // 运行到完成并丢弃结果（副作用发生；根作用域回收）
+                // 运行到完成并丢弃结果（副作用发生；置 detached 标记——
+                // 已运行完成，作用域退出根提升扫描跳过）
                 let _ = self.thread_run(self_v, span)?;
+                self.thread_set_bool(self_v, "detached", true);
                 Ok(Some(Value::Void))
             }
             "is_done" => {
@@ -6695,6 +6738,8 @@ impl Interp {
         };
         let r = self.call_fn(&main_def, &main_args, &Span::new(0, 0, 0, 0));
         self.in_main = false;
+        // E2.2 根回收：main 返回后运行未 join/未 detach 的线程到完成（副作用发生）
+        self.drain_root_threads();
         match r {
             // 未处理错误到达根作用域（值通道）：记录错误名位置后 panic 式中止
             Ok(Value::Err { name, code }) => {
@@ -6780,6 +6825,8 @@ impl Interp {
                 }
             }
         }
+        // E2.2 根回收：未 join/未 detach 的线程在全部测试结束后运行到完成
+        self.drain_root_threads();
         (passed, failed, skipped)
     }
 
@@ -6794,6 +6841,11 @@ impl Interp {
         }
         names.sort();
         names
+    }
+
+    /// 读取全局变量当前值（测试观察用，尤其 run_tests 之后检查根回收线程的副作用）
+    pub fn global_value(&self, name: &str) -> Option<Value> {
+        self.globals.get(name).map(|cell| cell.borrow().clone())
     }
 }
 
