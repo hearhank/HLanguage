@@ -45,6 +45,7 @@ script { ... }  /  comptime { ... }                   // 元编程双轨（第�
 | `06-08-modules.md` | 模块与包（namespace/using/pub/build.zon） | M1 模块 |
 | `06-09-meta.md` | 元编程（script / comptime） | 第三块 E1 |
 | `06-10-concurrency.md` | 并发与异步（四模式、线程、Future） | 第三块 E2 |
+| `06-13-project-structure.md` | 项目结构与代码管理约定（hc init / 源码测试依赖约定） | 第二部分组 H |
 
 ## 历史章节号迁移（2026-08-14 拆分）
 

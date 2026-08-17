@@ -6,6 +6,7 @@
 //! - `hc test [file.hc|dir]`：收集并运行 `test fn`，输出 [PASS]/[FAIL]/[SKIP] + 汇总
 //! - `hc build <file.hc>`：原生编译（M3.3 LLVM 后端，emit-.ll + `zig cc`）
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
+//! - `hc init <name>`：创建新项目骨架（build.zon + main.hc，组 H1）
 
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -64,6 +65,7 @@ USAGE:
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
     hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
+    hc init <name>             创建新项目骨架（build.zon + main.hc，组 H1）
     hc --version
     hc --help
 ";
@@ -214,6 +216,14 @@ fn run_cli() -> ExitCode {
                 return ExitCode::from(2);
             };
             build_file(Path::new(path), dll)
+        }
+        "init" => {
+            // H1：`hc init <name>`——创建新项目骨架（build.zon + main.hc）
+            let Some(name) = args.get(2) else {
+                eprintln!("error: `hc init` requires a project name\n\n{USAGE}");
+                return ExitCode::from(2);
+            };
+            init_project(name)
         }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
@@ -866,6 +876,85 @@ fn build_file(path: &Path, dll: bool) -> ExitCode {
     println!("  字节码    : {}", hbc_path.display());
     println!("  启动器    : {}", launcher.display());
     println!("运行方式：{}", launcher.display());
+    ExitCode::SUCCESS
+}
+
+/// H1：`hc init <name>`——在当前目录生成最小项目骨架（`build.zon` + `main.hc`）。
+///
+/// 约定见 `docs/SPEC/06-13-project-structure.md`：目录 = 包、源码位于包根、
+/// 测试 = `[test]` 标注函数与源码同文件、依赖经 build.zon deps。脚手架即
+/// 最小可运行示例——`hc run <name>` / `hc test <name>` 全绿（CLI 测试保证）。
+/// 安全：目录已存在且非空 → 拒绝覆盖（不触碰现有文件）。
+fn init_project(name: &str) -> ExitCode {
+    // 名称校验：合法目录名（字母/数字/`-`/`_`；非空、非 `.`/`..`）
+    if name.is_empty()
+        || name == "." || name == ".."
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        eprintln!("error: `hc init` 名称 `{name}` 非法（允许字母/数字/`-`/`_`）");
+        return ExitCode::from(2);
+    }
+    let dir = Path::new(name);
+    if dir.exists() {
+        let non_empty = std::fs::read_dir(dir)
+            .map(|mut it| it.next().is_some())
+            .unwrap_or(true);
+        if non_empty {
+            eprintln!("error: 目录 `{name}` 已存在且非空——拒绝覆盖（请换用空目录或新名）");
+            return ExitCode::FAILURE;
+        }
+    }
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("error: 创建目录 `{name}` 失败: {e}");
+        return ExitCode::FAILURE;
+    }
+    let zon = format!(
+        "// build.zon — {name} 包清单（hc init 脚手架）\n\
+         //\n\
+         // 清单即数据：const build = Build{{ ... }}（H 数据字面量，Q26）\n\
+         //   - name/version/kind：包标识与形态（exe = 应用，含 main 入口）\n\
+         //   - files：包内文件清单（源码位于包根，见 06-13-project-structure.md）\n\
+         //   - deps：依赖声明（本地依赖带 path；`hc pkg add <name> --path <dir>` 写入）\n\
+         \n\
+         const build = Build{{\n\
+         \x20   name = \"{name}\",\n\
+         \x20   version = \"0.1.0\",\n\
+         \x20   kind = Kind.exe,\n\
+         \x20   files = [ \"main.hc\", ],\n\
+         \x20   deps = [],\n\
+         }};\n"
+    );
+    let main_hc = format!(
+        "import H.std.{{io}};\n\
+         \n\
+         // {name}/main.hc — 项目入口（hc init 脚手架）\n\
+         //\n\
+         //   - 源码约定：`.hc` 文件位于包根（目录 = 包，M1.4）\n\
+         //   - 测试约定：`[test]` 标注函数与源码同文件（Q-T1）\n\
+         //   - 运行：`hc run {name}`   测试：`hc test {name}`\n\
+         \n\
+         fn main(args: o Vec(String)) !void {{\n\
+         \x20   io.print(\"hello, {name}!\\n\");\n\
+         }}\n\
+         \n\
+         [test] fn scaffold_smoke() !void {{\n\
+         \x20   try expect_eq(1 + 1, 2);\n\
+         }}\n"
+    );
+    if let Err(e) = std::fs::write(dir.join("build.zon"), &zon) {
+        eprintln!("error: 写入 {} 失败: {e}", dir.join("build.zon").display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = std::fs::write(dir.join("main.hc"), &main_hc) {
+        eprintln!("error: 写入 {} 失败: {e}", dir.join("main.hc").display());
+        return ExitCode::FAILURE;
+    }
+    println!("创建项目 `{name}`：");
+    println!("  {name}/build.zon");
+    println!("  {name}/main.hc");
+    println!("运行：hc run {name}   测试：hc test {name}");
     ExitCode::SUCCESS
 }
 

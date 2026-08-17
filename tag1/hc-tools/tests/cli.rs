@@ -406,3 +406,90 @@ fn run_io_stdin_reads_line() {
     );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+#[test]
+fn init_creates_runnable_scaffold() {
+    // H1：`hc init <name>` → build.zon + main.hc → `hc run` / `hc test` 全绿
+    let dir = std::env::temp_dir().join(format!(
+        "hc_cli_init_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(41) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = Command::new(hc_bin())
+        .arg("init")
+        .arg("demo")
+        .current_dir(&dir)
+        .output()
+        .expect("run hc init");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "hc init 应成功: {stdout}{stderr}");
+    let proj = dir.join("demo");
+    assert!(proj.join("build.zon").exists(), "应生成 build.zon");
+    assert!(proj.join("main.hc").exists(), "应生成 main.hc");
+    let zon = std::fs::read_to_string(proj.join("build.zon")).expect("读 build.zon");
+    assert!(zon.contains("name = \"demo\""), "清单应含项目名: {zon}");
+    let main = std::fs::read_to_string(proj.join("main.hc")).expect("读 main.hc");
+    assert!(main.contains("fn main(args: o Vec(String)) !void"), "应含标准入口: {main}");
+
+    // 脚手架运行绿（目录 = 包，入口 main.hc）
+    let run = Command::new(hc_bin())
+        .arg("run")
+        .arg(&proj)
+        .output()
+        .expect("run scaffold");
+    let rs = String::from_utf8_lossy(&run.stdout).to_string();
+    assert!(run.status.success(), "脚手架 run 应成功: {rs}");
+    assert!(rs.contains("hello, demo!"), "应输出问候语: {rs}");
+
+    // 脚手架测试绿（[test] 冒烟测试）
+    let test = Command::new(hc_bin())
+        .arg("test")
+        .arg(&proj)
+        .output()
+        .expect("test scaffold");
+    let ts = String::from_utf8_lossy(&test.stdout).to_string();
+    assert!(test.status.success(), "脚手架 test 应成功: {ts}");
+    assert!(ts.contains("1 passed, 0 failed"), "应 1 passed 0 failed: {ts}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn init_refuses_nonempty_dir_and_bad_name() {
+    // H1 安全：目录已存在且非空 → 拒绝覆盖（不触碰现有文件）
+    let dir = std::env::temp_dir().join(format!(
+        "hc_cli_init_bad_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(53) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("demo")).unwrap();
+    std::fs::write(dir.join("demo/keep.txt"), "keep").unwrap();
+    let out = Command::new(hc_bin())
+        .arg("init")
+        .arg("demo")
+        .current_dir(&dir)
+        .output()
+        .expect("run hc init existing");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!out.status.success(), "非空目录应拒绝");
+    assert!(stderr.contains("拒绝覆盖"), "应提示拒绝覆盖: {stderr}");
+    assert!(
+        std::fs::read_to_string(dir.join("demo/keep.txt")).ok().as_deref() == Some("keep"),
+        "不应触碰现有文件"
+    );
+
+    // 非法名 → 用法错误退出码 2
+    let out = Command::new(hc_bin())
+        .arg("init")
+        .arg("bad/name")
+        .current_dir(&dir)
+        .output()
+        .expect("run hc init bad name");
+    assert_eq!(out.status.code(), Some(2), "非法名应为用法错误");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
