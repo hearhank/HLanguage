@@ -909,3 +909,22 @@ fn tree_vec_field_append_recursion_native() {
     );
     assert!(st.success(), "树 + Vec.append + 递归 total 原生应退出 0");
 }
+
+#[test]
+fn fmt_int_float_native() {
+    // D3：fmt_int/fmt_float 原生 codegen——数字 → String（63-template-render 占位符替换）。
+    // hc_fmt_int 十进制 i128；hc_fmt_float sprintf 格式（整值 %.1f，否则 %.15g）。
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    let st = compile_tests_and_run(
+        "[test] fn fmt_builtins() !void {\n\
+             try expect_eq(fmt_int(30), \"30\");\n\
+             try expect_eq(fmt_int(-7), \"-7\");\n\
+             try expect_eq(fmt_float(3.5), \"3.5\");\n\
+             try expect_eq(fmt_float(3.0), \"3.0\");\n\
+         }\n",
+    );
+    assert!(st.success(), "fmt_int/fmt_float 原生应运行并断言通过");
+}

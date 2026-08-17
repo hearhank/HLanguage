@@ -3564,6 +3564,25 @@ impl Interp {
                 };
                 Ok(Some(if take_a { a } else { b }))
             }
+            // 格式辅助（M5.3 serialize）：fmt_int/fmt_float → String
+            // （63-template-render 占位符替换；float 用 display 格式——整值补 `.0`）
+            "fmt_int" => {
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::Int(i) => Ok(Some(Value::str(&i.to_string()))),
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            "fmt_float" => {
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::Float(f) => Ok(Some(Value::str(&Value::Float(f).display()))),
+                    Value::Int(i) => Ok(Some(Value::str(&Value::Float(i as f64).display()))),
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
             // read_u64_le(slice)：8 字节小端 → i64（57-protocol-parse 长度前缀帧）
             "read_u64_le" => {
                 let v = self.eval(&args[0])?;

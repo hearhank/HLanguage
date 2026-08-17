@@ -490,8 +490,10 @@ fn emit_preamble(
     out.push_str("declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)\n");
     out.push_str("declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)\n");
     out.push_str("declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)\n");
-    // Phase 7 io.print / 数值显示辅助（libc 可变参 printf；fmod/fabs 判浮点整值）
+    // Phase 7 io.print / 数值显示辅助（libc 可变参 printf；fmod/fabs 判浮点整值；
+    // sprintf 供 hc_fmt_float 数字→字符串）
     out.push_str("declare i32 @printf(i8*, ...)\n");
+    out.push_str("declare i32 @sprintf(i8*, ...)\n");
     out.push_str("declare double @fmod(double, double)\n");
     out.push_str("declare double @fabs(double)\n");
     out.push_str("declare double @sqrt(double)\n");
@@ -3384,6 +3386,92 @@ abort:
 }
 "#;
 
+/// fmt_int(i32) String：i128 → 十进制 → 堆缓冲 Str 值（对齐 oracle display）
+const HC_FMT_INT: &str = r#"define %Value @hc_fmt_int(%Value %v) {
+entry:
+  %d = extractvalue %Value %v, 1
+  %is_neg = icmp slt i128 %d, 0
+  %negv = sub i128 0, %d
+  %mag = select i1 %is_neg, i128 %negv, i128 %d
+  %buf = alloca [64 x i8], align 1
+  br label %loop
+loop:
+  %val = phi i128 [ %mag, %entry ], [ %quot, %loop ]
+  %pos = phi i64 [ 63, %entry ], [ %dec, %loop ]
+  %quot = udiv i128 %val, 10
+  %rem = urem i128 %val, 10
+  %rem64 = trunc i128 %rem to i64
+  %ch64 = add i64 %rem64, 48
+  %ch = trunc i64 %ch64 to i8
+  %dst = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %pos
+  store i8 %ch, i8* %dst
+  %dec = sub i64 %pos, 1
+  %is0 = icmp eq i128 %quot, 0
+  br i1 %is0, label %done, label %loop
+done:
+  %dcount = sub i64 64, %pos
+  %extra = select i1 %is_neg, i64 1, i64 0
+  %nbytes = add i64 %dcount, %extra
+  %allocn = add i64 %nbytes, 1
+  %bufh = call i8* @hc_alloc(i64 %allocn)
+  %dp = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %pos
+  %dstd = getelementptr i8, i8* %bufh, i64 %extra
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dstd, i8* %dp, i64 %dcount, i1 false)
+  %nuloff = add i64 %dcount, %extra
+  %nulp = getelementptr i8, i8* %bufh, i64 %nuloff
+  store i8 0, i8* %nulp
+  br i1 %is_neg, label %sig, label %mk
+sig:
+  store i8 45, i8* %bufh
+  br label %mk
+mk:
+  %pi = ptrtoint i8* %bufh to i128
+  %x0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %x1 = insertvalue %Value %x0, i128 %pi, 1
+  ret %Value %x1
+}
+"#;
+
+/// fmt_float(f64) String：sprintf 格式（整值 `%.1f`，否则 `%.15g`，对齐 oracle display）；
+/// 接受 Int 实参（对齐 interp/IR 的数值提升）
+const HC_FMT_FLOAT: &str = r#"define %Value @hc_fmt_float(%Value %v) {
+entry:
+  %tag = extractvalue %Value %v, 0
+  %d = extractvalue %Value %v, 1
+  %is_int = icmp eq i32 %tag, 2
+  %as_double = sitofp i128 %d to double
+  %dt = trunc i128 %d to i64
+  %fbits = bitcast i64 %dt to double
+  %fv = select i1 %is_int, double %as_double, double %fbits
+  %buf = alloca [64 x i8], align 1
+  %fr = call double @fmod(double %fv, double 1.0)
+  %fz = fcmp oeq double %fr, 0.0
+  %fa = call double @fabs(double %fv)
+  %fl = fcmp olt double %fa, 1.0e15
+  %whole = and i1 %fz, %fl
+  br i1 %whole, label %whole_f, label %frac_f
+whole_f:
+  %p1 = getelementptr inbounds [5 x i8], ptr @.fmt_one, i64 0, i64 0
+  call i32 (i8*, ...) @sprintf(i8* %buf, i8* %p1, double %fv)
+  br label %mk
+frac_f:
+  %pg = getelementptr inbounds [6 x i8], ptr @.fmt_g15, i64 0, i64 0
+  call i32 (i8*, ...) @sprintf(i8* %buf, i8* %pg, double %fv)
+  br label %mk
+mk:
+  %len = call i64 @strlen(i8* %buf)
+  %allocn = add i64 %len, 1
+  %bufh = call i8* @hc_alloc(i64 %allocn)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %bufh, i8* %buf, i64 %len, i1 false)
+  %nulp = getelementptr i8, i8* %bufh, i64 %len
+  store i8 0, i8* %nulp
+  %pi = ptrtoint i8* %bufh to i128
+  %x0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %x1 = insertvalue %Value %x0, i128 %pi, 1
+  ret %Value %x1
+}
+"#;
+
 const HC_ADD_OVERFLOW: &str = r#"define %Value @hc_add_overflow(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0
@@ -3472,6 +3560,8 @@ fn emit_scalar_builtin_helpers(out: &mut String) {
         HC_INTCAST,
         HC_TYPEOF,
         HC_READ_U64_LE,
+        HC_FMT_INT,
+        HC_FMT_FLOAT,
         HC_ADD_OVERFLOW,
         HC_SUB_OVERFLOW,
         HC_MUL_OVERFLOW,
@@ -4521,6 +4611,14 @@ impl BodyEmitter {
             }
             "read_u64_le" => {
                 self.emit_unop_helper("hc_read_u64_le", args, temp);
+                return;
+            }
+            "fmt_int" => {
+                self.emit_unop_helper("hc_fmt_int", args, temp);
+                return;
+            }
+            "fmt_float" => {
+                self.emit_unop_helper("hc_fmt_float", args, temp);
                 return;
             }
             _ => {}
@@ -5848,6 +5946,23 @@ fn main(io: Io) !void {
         assert!(ll.contains("call %Value @hc_box"), "{ll}");
         // @sizeOf 编译期常量折叠 → i32 槽直接存 4（非 helper 调用）
         assert!(ll.contains("store %Value"), "{ll}");
+    }
+
+    #[test]
+    fn phase7_fmt_builtins_emit_str_helpers() {
+        // D3：fmt_int/fmt_float 自由内建 → hc_fmt_int/hc_fmt_float helper 调用；
+        // helper 定义进 preamble（hc_alloc 堆缓冲 Str 值）。
+        let ll = gen(r#"fn main() !void {
+    var s1 = fmt_int(30);
+    var s2 = fmt_float(3.5);
+    io.print("{} {}\n", s1, s2);
+}"#);
+        assert!(ll.contains("call %Value @hc_fmt_int(%Value"), "{ll}");
+        assert!(ll.contains("call %Value @hc_fmt_float(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_fmt_int(%Value"), "{ll}");
+        assert!(ll.contains("define %Value @hc_fmt_float(%Value"), "{ll}");
+        // sprintf 声明（hc_fmt_float 数字→字符串用）
+        assert!(ll.contains("declare i32 @sprintf(i8*, ...)"), "{ll}");
     }
 
     #[test]

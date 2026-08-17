@@ -278,6 +278,14 @@ fn ex62_custom_sort() {
 }
 
 #[test]
+fn ex63_template_render() {
+    // D1：fmt_int 格式辅助——63-template-render 占位符替换（从 E1 失败池移出）
+    let (p, f, _) = run_tests_in(&format!("{EXAMPLES}/02-idioms/63-template-render.hc"));
+    assert_eq!(f, 0, "fmt_int 缺失时 failed={f}");
+    assert!(p >= 1);
+}
+
+#[test]
 fn ex64_interface_poly() {
     let (p, f, _) = run_tests_in(&format!("{EXAMPLES}/03-patterns/64-interface-poly.hc"));
     assert_eq!(f, 0);

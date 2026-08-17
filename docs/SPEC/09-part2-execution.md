@@ -122,6 +122,10 @@
 | D2 | `serialize` 库封装：解析辅助组（parse_int/parse_float/json.parse/csv.parse/parse_number/skip_space/peek/advance/is_digit/expect）组织为 `serialize` 命名空间 + 直测补全 | serialize 测试绿 | D1 | 2h |
 | D3 | 原生侧：`fmt_int`/`fmt_float` 原生 codegen（若 compile 门禁需要） | native 测试绿 | D1 | 2h |
 
+> ✅ **D1 已完成（2026-08-17）**：`fmt_int`/`fmt_float` 落地 interp + IR `call_builtin`（含 `is_free_builtin` 登记 → bytecode 路径复用）。interp：`Value::Int(i)` → `i.to_string()`；`fmt_float` 接受 Float/Int（Int 转 f64），display 语义与 IR 一致（整数值 → `{:.1}`，否则 `to_string()`）。`ex63_template_render` 加入 examples.rs（D1 前失败于 `fmt_int` 缺失，现绿）。
+>
+> ✅ **D3 已完成（2026-08-17）**：原生 `hc_fmt_int`/`hc_fmt_float` LLVM helper（emit_scalar_builtin_helpers 注册；`fmt_int` 为 i128→十进制→`hc_alloc` 堆串 tag5，带符号处理；`fmt_float` 用 `sprintf`（`%.1f` 整数值 / `%.15g` 小数），接受 Int 输入 `sitofp`），llvm 单测 + native.rs `fmt_int_float_native` 绿。**已知限制**：63-template-render 的 compile 模式仍 mismatch——阻塞来自 `String.from`/`String.replace`/`String.find` 原生未实现（预先存在的原生子集缺口，非 D3 范围；compile 门禁预算内）。
+
 ### E. arena.init(T) typed 构造（依赖：M5.1 已落地）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |

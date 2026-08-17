@@ -3082,6 +3082,8 @@ fn is_free_builtin(name: &str) -> bool {
         "box" | "copy"
             // 数值工具
             | "sqrt" | "min" | "max"
+            // 格式辅助（M5.3 serialize）
+            | "fmt_int" | "fmt_float"
             // 字节工具
             | "read_u64_le"
             // 算法
@@ -7947,6 +7949,22 @@ fn call_builtin(
                 _ => return Err(IrError::msg("TypeError", "min/max expects numbers")),
             };
             Ok(if take_a { a } else { b })
+        }
+        // ---------- 格式辅助（M5.3 serialize）：fmt_int/fmt_float → String ----------
+        "fmt_int" => {
+            let v = deref_value(ctx, &args[0]);
+            match v {
+                IrValue::Int(i) => Ok(str_val(&i.to_string())),
+                _ => Err(IrError::msg("TypeError", "fmt_int expects integer")),
+            }
+        }
+        "fmt_float" => {
+            let v = deref_value(ctx, &args[0]);
+            match v {
+                IrValue::Float(f) => Ok(str_val(&IrValue::Float(*f).display(ctx))),
+                IrValue::Int(i) => Ok(str_val(&IrValue::Float(*i as f64).display(ctx))),
+                _ => Err(IrError::msg("TypeError", "fmt_float expects float")),
+            }
         }
         // ---------- 字节/算法 ----------
         "read_u64_le" => {
