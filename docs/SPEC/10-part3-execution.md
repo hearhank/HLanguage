@@ -85,6 +85,8 @@
 
 ### B. E1.1 script 块（依赖 A3；元编程基础）
 
+> ✅ **组 B 已完成（2026-08-18）**：B1–B5 实现（`hc-tools/src/scriptgen.rs` 装载期展开 + `types` 元数据 + 受限子集 + 三后端一致装载），B6 示例转绿。**计划标误修正**：B6 原列「34/35 转绿」有误——34/35 属 **组 D comptime**（`T: type`/`anytype`），非本组；本组实际示例 = 33/36/81（script 示例，由 stub 转为真实生成；81 修复展开回归）。依赖包 script 默认禁用（ADR-0013 §5，装载器跳过 `Decl::Script`），build.zon 信任声明归 I4。
+
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
 | B1 | `script { ... }` 词法/解析/AST（声明级）：块体 = 表达式序列（字符串拼接）；与 `comptime` 区分 | parse 单测绿；study.hc 可解析 | A3 | 2h |
@@ -92,7 +94,7 @@
 | B3 | 产物 = 代码字符串就地替换（声明级文本区间替换，脚本块位置为锚）+ 错误机制统一（失败 = 编译错误带块内 + 所属块位置） | 生成端到端绿（脚本生成 → 编译产物可解析） | B2 | 2h |
 | B4 | 构建时执行安全：脚本 = H 核心子集（受限分配器/IO）；build.zon 指纹校验（供应链，评审 C3） | 安全负例测试绿（越界 IO/分配拒绝） | B3 | 1.5h |
 | B5 | 三后端对齐：IR/字节码/native 对 script 产物的一致装载（产物在降级前替换，后端无感知） | consistency + ir 测试绿 | B3 | 1.5h |
-| B6 | 示例转绿：34/35 从失败池移出 + 新示例 | 示例回归绿（34/35 MATCH） | B4/B5 | 1h |
+| B6 | 示例转绿：33/36/81 script 示例 stub → 真实生成；81 修复展开回归（34/35 属组 D，非本组） | 示例回归绿（132/10/1，脚本示例全 PASS） | B4/B5 | 1h |
 
 ### C. E1.3 序列化定制（依赖 B；脚本生成样板通道）
 
@@ -192,7 +194,7 @@
 ## 4. 验收与门禁
 
 - **功能点级**：`cargo test` 相关套件绿 + 文档同步（本文件 §5 清单对应项）
-- **组级**：示例回归基线——现 interpret 132/10/1 + compile 55 mismatch；**B6 落地后 34/35 转绿**（interpret 134/8）、**E4 落地后 37/38/39 转绿**（137/5）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动）
+- **组级**：示例回归基线——现 interpret 132/10/1 + compile 55 mismatch；**B 落地后 33/36/81 script 示例全绿**（132/10/1 保持；B6 原列 34/35 属组 D，D 落地后 34/35 转绿 → 134/8）、**E4 落地后 37/38/39 转绿**（137/5）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动）
 - **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**留后续执行**（当前范围至 K4，K5/K6 不排程）
 
 ## 5. 文档同步清单
@@ -210,3 +212,18 @@
 | `05-open-questions-and-risks.md` | 开放问题逐项关闭 | A/J 组 |
 | `07-bootstrap-plan.md` | 实现状态表与测试基线更新 | 各组完成时 |
 | `CONTEXT.md` | 术语（comptime/script/异步/原子/裸机） | 各组完成时 |
+
+---
+
+## 6. 完成注记
+
+### 组 B（E1.1 script 块，2026-08-18）
+
+**已落地**：
+- **B1/B3**：`script { }` 声明级解析（`Decl::Script` 携带 `close_end` = 块闭合 `}` 之后字节偏移，parser 从 `tokens[pos-1].span.end` 精确捕获）。`hc-tools/src/scriptgen.rs` 装载期展开：解析 → 求值首个 script 块 → 产物字符串**替换块文本区间** → 重解析，循环至无 script 块（上限 1000 轮防自引用死循环）；无 script 块时零开销快速路径。失败 = 编译错误（`diag::render` + 产物非字符串提示值种类）。
+- **B2**：`types` 元数据对象（受限脚本模式注入）：`fields(name)` → `[["字段名","类型串"],...]`（class 字段 / enum 变体，经 `fmt_type_str` 渲染）；`all` → 可见类型清单；`type` → 当前类型名（顶层 = ""）。`types.type` 需 parser 放行关键字作点号字段名（`expect_name_or_keyword` 增 `KwType`）。
+- **B4**：受限 H 核心子集 = 复用解释器 + `script_mode` 门控（io/alloc/stdout/stderr → `error.ScriptForbidden`）；依赖包 script **默认禁用**（装载器 `exec_decl_top` 跳过 `Decl::Script`），build.zon 信任声明归 I4。
+- **B5**：三后端一致——展开在降级前完成（IR/字节码/native 对展开后 AST 无感知）；`run`/`run --ir`/`build`（native）/`check`/`test`/`errors` 全部走 `parse_with_scripts`。验证：interpret `hc run` 与 `hc run --ir` 同输出；native 产物（`hc build` + 运行）同输出。
+- **B6**：示例 33/36 由 stub 转为真实生成（types.fields 驱动生成字段计数函数，测试断言联动）；81 修复展开回归（脚本块补字符串产物占位）。**计划标误**：34/35 属组 D（comptime），非本组。
+
+**测试**：`hc-tools/tests/scriptgen.rs` 10 项（生成端到端 / types 元数据 / 多轮展开 / check / --ir / test 模式 / io·alloc 负例 / 非字符串产物）。`cargo test --workspace` 全绿；示例回归 132/10/1（基线 ≥125/≤11），compile 55 mismatch（基线 ≤55）。

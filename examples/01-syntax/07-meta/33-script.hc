@@ -1,6 +1,6 @@
 import H.std.{io};
 
-// 33-script.hc — 脚本生成样板（数据定义 → 序列化）——**E1 示例（第三块，最小集不实现）**
+// 33-script.hc — 脚本生成（数据定义 → 代码，E1 就地替换）
 //
 // Q17 定案（2026-08-13）：就地替换
 //   - script { ... } 块在编译前被生成结果整体替换（H5：编译前执行、模板生成）
@@ -14,23 +14,24 @@ class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上
     age: i32,
 }
 
-// 数据定义 → 生成序列化样板（就地替换本块）
+// 数据定义 → 生成「字段清单函数」（就地替换本块；产物 = 代码字符串）
 script {
-    var fields = types.fields("Person");   // [["name", "String"], ["age", "i32"]]
-    // 遍历 fields 拼接生成（示意）：
-    //   fn person_to_json(p: *Person) String { ... }
-    //   fn person_from_json(data: &[u8]) !Person { ... }
-    //   fn person_to_bytes(p: *Person, alloc: Allocator) o Vec(u8) { ... }
+    var count = 0;
+    var out = "";
+    for (types.fields("Person")) |f| {
+        count = count + 1;
+        out = out.concat("// field ").concat(f[0]).concat(": ").concat(f[1]).concat("\n");
+    }
+    out.concat("fn person_field_count() i32 { return ").concat(String.from(count)).concat("; }");
 }
 
 fn main(args: o Vec(String)) !void {
     var p = alloc.init(Person{name = String.from("alice", alloc), age = 30});   // 带参构造（C1'）
-    var json = person_to_json(&p);   // 脚本生成的函数（E1）
-    io.print("{}\n", json);
+    io.print("person_field_count = {}\n", person_field_count());
 }
 
 [test] fn script_generation_demo() !void {
-    // S4 演示型（Q-T6）：person_to_json 由脚本生成（Q23 types 元数据），
-    // 示例中未展开实现；生成物验证在 M3 脚本生成测试套件中覆盖
-    try expect(true);
+    // S4 演示型（Q-T6）：person_field_count 由脚本生成（Q23 types 元数据），
+    // 由本块的声明文本区间就地替换（Q17）
+    try expect(person_field_count() == 2);
 }

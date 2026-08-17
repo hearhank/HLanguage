@@ -95,6 +95,8 @@ pub enum Decl {
     },
     Script {
         body: Block,
+        /// 块闭合 `}` 之后字节偏移（E1 script 装载期文本替换的替换终点）
+        close_end: usize,
         span: Span,
     },
 }

@@ -24,6 +24,7 @@ static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 mod buildzon;
 mod docgen;
+mod scriptgen;
 
 /// ANSI 颜色开关：仅当目标流为终端且未设置 NO_COLOR 时启用。
 /// 重定向/管道（CI、check-examples.sh 捕获）下自动关闭，保证 grep 解析不受污染。
@@ -350,13 +351,14 @@ fn lower_err(e: hc::ir::IrError) -> String {
     format!("error.{}: {}", e.name, e.message)
 }
 
-/// 源码 → HBC2 字节码（解析 → 语义检查 → `lower` → `encode`）。
+/// 源码 → HBC2 字节码（script 展开 → 解析 → 语义检查 → `lower` → `encode`）。
 /// 失败返回可直接打印的诊断文本（与 `programs_to_ll` 同前置检查）。
 fn source_to_bytecode(source: &str) -> Result<Vec<u8>, String> {
-    let program = hc::parse_source(source).map_err(|d| diag::render(&d, source))?;
+    // E1（ADR-0013）：装载期 script 展开（无 script 块时零开销快速路径）
+    let (expanded, program) = scriptgen::parse_with_scripts(source)?;
     let errs = hc::check_semantics(&program);
     if errs.iter().any(|d| d.is_error()) {
-        return Err(diag::render(&errs, source));
+        return Err(diag::render(&errs, &expanded));
     }
     let module = hc::ir::lower(&program).map_err(lower_err)?;
     Ok(hc::bytecode::encode(&module))
@@ -371,11 +373,12 @@ fn write_bytecode_artifact(dir: &Path, stem: &str, bytes: &[u8]) -> Result<PathB
 }
 
 /// M7.1：解析入口文件 + 同目录全部兄弟 `.hc`（目录 = 包）。
-/// 返回（入口源码, 入口程序, 兄弟程序）。入口解析失败渲染诊断；兄弟解析失败报错退出。
+/// 返回（入口展开后源码, 入口程序, 兄弟程序）。入口解析失败渲染诊断；兄弟解析失败报错退出。
+/// E1（ADR-0013）：入口与兄弟均做装载期 script 展开。
 fn package_programs(path: &Path) -> Result<(String, hc::Program, Vec<hc::Program>), ExitCode> {
     let source = read_program(path)?;
-    let entry = hc::parse_source(&source).map_err(|d| {
-        eprint!("{}", diag::render(&d, &source));
+    let (source, entry) = scriptgen::parse_with_scripts(&source).map_err(|msg| {
+        eprintln!("{msg}");
         ExitCode::FAILURE
     })?;
     let mut siblings = Vec::new();
@@ -384,17 +387,18 @@ fn package_programs(path: &Path) -> Result<(String, hc::Program, Vec<hc::Program
             eprintln!("error: 读取 {} 失败: {e}", s.display());
             ExitCode::FAILURE
         })?;
-        let p = hc::parse_source(&src).map_err(|d| {
-            eprintln!(
-                "{} 兄弟文件解析失败 {}:",
-                paint(err_color(), "31", "[FAIL]"),
-                s.display()
-            );
-            for dg in &d {
-                eprintln!("  {}", dg.message);
+        let p = match scriptgen::parse_with_scripts(&src) {
+            Ok((_, p)) => p,
+            Err(msg) => {
+                eprintln!(
+                    "{} 兄弟文件解析失败 {}:\n{}",
+                    paint(err_color(), "31", "[FAIL]"),
+                    s.display(),
+                    msg
+                );
+                return Err(ExitCode::FAILURE);
             }
-            ExitCode::FAILURE
-        })?;
+        };
         siblings.push(p);
     }
     Ok((source, entry, siblings))
@@ -1289,10 +1293,10 @@ fn errors_file(path: &Path) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let program = match hc::parse_source(&source) {
-        Ok(p) => p,
-        Err(diags) => {
-            eprint!("{}", diag::render(&diags, &source));
+    let (_, program) = match scriptgen::parse_with_scripts(&source) {
+        Ok((s, p)) => (s, p),
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
@@ -1324,8 +1328,8 @@ fn errors_file(path: &Path) -> ExitCode {
 
 fn check_file(path: &Path) -> Result<(), ExitCode> {
     let source = read_source(path)?;
-    match hc::parse_source(&source) {
-        Ok(program) => {
+    match scriptgen::parse_with_scripts(&source) {
+        Ok((source, program)) => {
             let mut interp = Interp::new(&source);
             // M1.4：同包兄弟文件先登记符号（解析失败仅告警）
             if let Err(code) = load_siblings_into(&mut interp, path) {
@@ -1341,8 +1345,8 @@ fn check_file(path: &Path) -> Result<(), ExitCode> {
             })?;
             Ok(())
         }
-        Err(diags) => {
-            eprint!("{}", diag::render(&diags, &source));
+        Err(msg) => {
+            eprintln!("{msg}");
             Err(ExitCode::FAILURE)
         }
     }
@@ -1360,10 +1364,11 @@ fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let program = match hc::parse_source(&source) {
-        Ok(p) => p,
-        Err(diags) => {
-            eprint!("{}", diag::render(&diags, &source));
+    // E1（ADR-0013）：装载期 script 展开——interp 与程序均基于展开后源码
+    let (source, program) = match scriptgen::parse_with_scripts(&source) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
@@ -1435,16 +1440,13 @@ fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
 
 /// 同 [`run_ir_source`]，带程序参数（A3：`main(args)`——0 号 = 程序名）。
 fn run_ir_source_with_args(source: &str, prog_args: &[String]) -> Result<IrRunOutcome, String> {
-    // 1) 解析（失败渲染诊断）
-    let program = match hc::parse_source(source) {
-        Ok(p) => p,
-        Err(diags) => return Err(diag::render(&diags, source)),
-    };
+    // 0) E1（ADR-0013）：装载期 script 展开 + 解析
+    let (expanded, program) = scriptgen::parse_with_scripts(source)?;
     // 2) 语义检查（准确优先：能精确判定才报错——与 tree-walking load 内建检查对齐；
     //    有错误则渲染诊断返回失败）
     let errs = hc::check_semantics(&program);
     if errs.iter().any(|d| d.is_error()) {
-        return Err(diag::render(&errs, source));
+        return Err(diag::render(&errs, &expanded));
     }
     // 3) 降级为线性 IR，交给共享执行器（`hc run --ir` 与字节码 VM 同语义源）；
     //    子集外特性 → 硬错误（不静默丢弃）
@@ -1595,13 +1597,10 @@ fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> 
     let mut programs = Vec::new();
     for s in &sibs {
         match std::fs::read_to_string(s) {
-            Ok(src) => match hc::parse_source(&src) {
-                Ok(p) => programs.push(p),
-                Err(diags) => {
-                    eprintln!("[warn] 兄弟文件解析失败 {}:", s.display());
-                    for d in &diags {
-                        eprintln!("  {}", d.message);
-                    }
+            Ok(src) => match scriptgen::parse_with_scripts(&src) {
+                Ok((_, p)) => programs.push(p),
+                Err(msg) => {
+                    eprintln!("[warn] 兄弟文件解析失败 {}:\n{}", s.display(), msg);
                 }
             },
             Err(e) => eprintln!("[warn] 跳过 {}: {e}", s.display()),
@@ -1873,17 +1872,15 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                 .to_string_lossy()
                 .to_string();
             match std::fs::read_to_string(f) {
-                Ok(src) => match hc::parse_source(&src) {
-                    Ok(p) => parsed.push((f.clone(), src, p)),
-                    Err(diags) => {
-                        bad.push((f.clone(), "parse error".into()));
-                        for d in &diags {
-                            eprintln!(
-                                "{} {name}: {}",
-                                paint(err_color(), "31", "[FAIL]"),
-                                d.message
-                            );
-                        }
+                Ok(src) => match scriptgen::parse_with_scripts(&src) {
+                    Ok((expanded, p)) => parsed.push((f.clone(), expanded, p)),
+                    Err(msg) => {
+                        bad.push((f.clone(), "parse/script error".into()));
+                        eprintln!(
+                            "{} {name}: {}",
+                            paint(err_color(), "31", "[FAIL]"),
+                            msg
+                        );
                     }
                 },
                 Err(e) => bad.push((f.clone(), format!("io: {e}"))),

@@ -119,9 +119,9 @@ graph TD
 
 ## 四、第一部分（最小功能集）明确不实现的功能
 
-> **脚本生成在第三块实现——最小功能集明确不实现（最小例子不必实现）**。注意区分：**脚本模式（`hc run` 解释执行）= 双模式核心承诺，属第一块语言系统 M3.2（必须实现）**；**脚本生成（`script` 块元编程）= 第三块 E1（最小集不实现）**；**并发/异步 = 第三块 E2**；**线程生命周期（仅 spawn/join/cancel/is_done/detach）= 2026-08-17 定案提前进第二部分（`09-part2-execution.md` 组 G）**。
+> **脚本生成在第三块实现——最小功能集明确不实现（最小例子不必实现）**。注意区分：**脚本模式（`hc run` 解释执行）= 双模式核心承诺，属第一块语言系统 M3.2（必须实现）**；**脚本生成（`script` 块元编程）= 第三块 E1（2026-08-18 组 B 已提前落地；comptime 完整仍待组 D）**；**并发/异步 = 第三块 E2**；**线程生命周期（仅 spawn/join/cancel/is_done/detach）= 2026-08-17 定案提前进第二部分（`09-part2-execution.md` 组 G）**。
 
-- **脚本生成（`script` 块）**：types 元数据/就地替换/实时预览——第三块 E1 实现；第一部分仅泛型 where 基础（comptime 泛型）
+- **脚本生成（`script` 块）**：types 元数据/就地替换/受限子集——**2026-08-18 组 B 已落地**（`scriptgen.rs` 装载期展开 + `types.fields/type/all` + io/alloc 拒绝；实时预览留 I3、指纹校验留 I4）；comptime 泛型（组 D）仍待实现
 - **comptime 完整**：`comptime { ... }` 块、类型即值/惰性实例化——第三块 E1
 - **多线程/并发/异步**：四模式类型、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2；**线程生命周期（E2.2：spawn/join/cancel/is_done/detach + Q8 每线程 alloc + Q18/Q19 捕获规则）已于 2026-08-17 提前落地**（`09-part2-execution.md` 组 G 全完成；三后端 interp/IR/字节码一致，**原生为子集边界**——spawn 需函数引用，原生 ABI 留 Phase 8，`error.NotCallable` 响亮拒绝；四模式/async/@atomic/mutex 仍留第三块）
 - **标准库扩展**：UDP/HTTP、ipc、storage/archive、text、time 完整、rng、FFI（`extern fn`/`@cImport`/`hc cc`）
@@ -140,7 +140,7 @@ graph TD
 
 | 模块 | 功能 | 详细说明 |
 |---|---|---|
-| E1.1 script 块 | 脚本生成 | `script { ... }`：隐式 `types` 元数据对象（`types.fields/type/all`，Q23）；产物 = 代码字符串就地替换；编辑器实时预览与校验；**错误机制统一**（脚本块失败 = 编译错误，带块内 + 所属块位置）；供应链指纹校验 |
+| ✅ E1.1 script 块 | 脚本生成 | `script { ... }`：隐式 `types` 元数据对象（`types.fields/type/all`，Q23）；产物 = 代码字符串就地替换（声明级文本区间，装载期展开 + 重解析）；**错误机制统一**（脚本块失败 = 编译错误，带块内 + 所属块位置）；脚本 = H 核心受限子集（io/alloc 拒绝）——**2026-08-18 组 B 提前落地**；编辑器实时预览留 I3（`hc lsp`）、供应链指纹校验留 I4（build.zon 信任声明） |
 | E1.2 comptime 完整 | 编译期求值 | `comptime { ... }` 块、泛型实例化完整（`fn List(T: type) type`）、类型即值、`anytype`、comptime_int/float 完整语义 |
 | E1.3 序列化定制 | 脚本定制通道 | 脚本生成序列化/校验/存储样板（数据定义 → 样板，Q37/Q38） |
 

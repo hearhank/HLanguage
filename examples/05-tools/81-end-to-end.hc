@@ -26,6 +26,8 @@ script {
     //   fn order_to_bytes(o: *Order) o Vec(u8) { ... }
     //   fn order_from_bytes(data: &[u8]) !Order { ... }
     //   fn order_validate(o: *Order) !void { ... }
+    // E1（ADR-0013）：产物必须为字符串；定制通道生成物在组 C（E1.3）展开，此处以注释占位
+    "// script-generated: order_to_bytes/from_bytes/validate（组 C 展开）";
 }
 
 fn handle_order(io: *T, conn: *TcpConn) !void where T: Io {

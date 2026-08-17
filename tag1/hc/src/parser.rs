@@ -246,12 +246,16 @@ impl Parser {
                 })
             }
             TokenKind::KwScript => {
-                // E1：第三块实现；tag1 解析为占位
+                // E1（ADR-0013）：script 块——解析为声明级占位，装载期求值替换。
+                // `close_end` = 块闭合 `}` 之后字节偏移：`parse_block` 消费 `}` 后 pos 指向
+                // 其后 token（EOF 恒为末 token 哨兵），故 `tokens[pos-1]` 即 `}` 本身。
                 self.advance();
                 let body = self.parse_block()?;
+                let close_end = self.tokens[self.pos - 1].span.end;
                 let end = self.span();
                 Ok(Decl::Script {
                     body,
+                    close_end,
                     span: start.merge(&end),
                 })
             }
@@ -2236,6 +2240,11 @@ impl Parser {
             TokenKind::KwScript => {
                 self.advance();
                 Ok("script".to_string())
+            }
+            // E1（ADR-0013）：`types.type`（当前类型名元数据）——type 为关键字，点号后作名称放行
+            TokenKind::KwType => {
+                self.advance();
+                Ok("type".to_string())
             }
             other => Err(Diagnostic::error(
                 self.span(),

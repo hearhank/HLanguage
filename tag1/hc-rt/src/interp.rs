@@ -33,6 +33,46 @@ fn alloc_zeroed_bytes(n: i128) -> Option<Vec<u8>> {
     Some(v)
 }
 
+/// 渲染类型为源码串（E1 `types.fields` 元数据 + 诊断用）——对齐 06-02 类型语法
+fn fmt_type_str(t: &Type) -> String {
+    match t.strip() {
+        Type::Named(n, args) => {
+            if args.is_empty() {
+                n.clone()
+            } else {
+                let inner: Vec<String> = args.iter().map(fmt_type_str).collect();
+                format!("{n}({})", inner.join(", "))
+            }
+        }
+        Type::Ptr(inner, mut_) => {
+            if *mut_ {
+                format!("*mut {}", fmt_type_str(inner))
+            } else {
+                format!("*{}", fmt_type_str(inner))
+            }
+        }
+        Type::Slice(inner, mut_) => {
+            if *mut_ {
+                format!("&mut [{}]", fmt_type_str(inner))
+            } else {
+                format!("&[{}]", fmt_type_str(inner))
+            }
+        }
+        Type::Optional(inner) => format!("?{}", fmt_type_str(inner)),
+        Type::ErrorUnion(err, ok) => match err {
+            Some(e) => format!("{}!{}", fmt_type_str(e), fmt_type_str(ok)),
+            None => format!("!{}", fmt_type_str(ok)),
+        },
+        Type::Tuple(items) => {
+            let inner: Vec<String> = items.iter().map(fmt_type_str).collect();
+            format!("({})", inner.join(", "))
+        }
+        Type::Array(n, inner) => format!("[{n}]{}", fmt_type_str(inner)),
+        Type::Infer => "_".to_string(),
+        Type::Owned(inner) => fmt_type_str(inner),
+    }
+}
+
 /// 运行时错误（tag1：错误名 + 位置；错误码表 M2.6 后续）
 #[derive(Debug, Clone)]
 pub struct RtError {
@@ -238,6 +278,10 @@ pub struct Interp {
     /// E2.2 根回收队列：未 join/未 detach 的 Thread 在作用域退出时提升到根作用域，
     /// 程序（main / 全部测试）结束时运行到完成（副作用发生；无隐式阻塞）
     root_threads: Vec<Value>,
+    /// E1（ADR-0013）：受限脚本模式——`script { }` 块装载期求值用。置位后
+    /// io/alloc/stdout/stderr/argv/网络不可用（受限 H 核心子集），仅注入 `types`
+    /// 元数据对象（Q23）。
+    script_mode: bool,
 }
 
 impl Interp {
@@ -273,7 +317,15 @@ impl Interp {
             dep_programs: Vec::new(),
             import_env: HashMap::new(),
             root_threads: Vec::new(),
+            script_mode: false,
         }
+    }
+
+    /// E1（ADR-0013）：进入受限脚本模式——`script { }` 块装载期求值。
+    /// 置位后 io/alloc/stdout/stderr/argv/网络不可用，注入 `types` 元数据对象。
+    pub fn set_script_mode(&mut self, on: bool) -> &mut Self {
+        self.script_mode = on;
+        self
     }
 
     /// M2.5/M4.7：Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
@@ -1308,6 +1360,68 @@ impl Interp {
         Value::class("Io", f)
     }
 
+    /// E1（ADR-0013/Q23）：`types` 元数据对象——受限脚本模式的类型信息输入。
+    /// 字段：`fields(name)` → `[["字段名", "类型串"], ...]`（class = 字段表；
+    /// enum = 变体表）；`all` → 可见类型清单；`type` → 当前所在类型名（顶层 = ""）。
+    fn types_meta(&mut self, field: &str, args: &[Expr]) -> Result<Value> {
+        match field {
+            "fields" => {
+                let span = args
+                    .first()
+                    .map(|a| a.span())
+                    .unwrap_or_else(|| Span::new(0, 0, 0, 0));
+                let name = self.eval_str_arg(args, 0, &span)?;
+                let name = String::from_utf8_lossy(&name).into_owned();
+                match self.types.get(&name) {
+                    Some(TypeDef::Class { fields, .. }) => {
+                        let mut out = Vec::new();
+                        for fd in fields {
+                            out.push(Value::arr(vec![
+                                Value::str(&fd.name),
+                                Value::str(&fmt_type_str(&fd.ty)),
+                            ]));
+                        }
+                        Ok(Value::arr(out))
+                    }
+                    Some(TypeDef::Enum { variants }) => {
+                        let mut out = Vec::new();
+                        for v in variants {
+                            let payload = v
+                                .payload
+                                .as_ref()
+                                .map(fmt_type_str)
+                                .unwrap_or_default();
+                            out.push(Value::arr(vec![
+                                Value::str(&v.name),
+                                Value::str(&payload),
+                            ]));
+                        }
+                        Ok(Value::arr(out))
+                    }
+                    _ => Err(RtError::msg(
+                        "UnknownType",
+                        format!("types.fields: 未知类型 `{name}`"),
+                    )),
+                }
+            }
+            "all" => {
+                let mut names: Vec<String> = self.types.keys().cloned().collect();
+                names.sort();
+                Ok(Value::arr(
+                    names.into_iter().map(|s| Value::str(&s)).collect(),
+                ))
+            }
+            "type" => {
+                // script 块所在作用域的类型名；顶层/命名空间 = ""（随块位置收窄待补定）
+                Ok(Value::str(""))
+            }
+            other => Err(RtError::msg(
+                "ScriptForbidden",
+                format!("types.{other}: 未知元数据字段（fields / all / type）"),
+            )),
+        }
+    }
+
     fn default_value(&self, ty: Option<&Type>) -> Result<Value> {
         match ty {
             None => Ok(Value::Void),
@@ -1938,6 +2052,13 @@ impl Interp {
                 // 隐式环境注入
                 match name.as_str() {
                     "alloc" => {
+                        // E1（ADR-0013）：受限脚本模式——分配不可用（无运行时环境）
+                        if self.script_mode {
+                            return Err(RtError::msg(
+                                "ScriptForbidden",
+                                "script 块中 alloc 不可用（受限 H 核心子集）",
+                            ));
+                        }
                         // Q8：alloc 先查作用域（线程子任务可绑定每线程 alloc 实例），
                         // 否则回退全局哨兵（根作用域已绑定 Value::Alloc，行为不变）
                         if let Some(cell) = self.lookup(name) {
@@ -1945,8 +2066,24 @@ impl Interp {
                         }
                         return Ok(Value::Alloc);
                     }
-                    "io" => return Ok(self.io_value()),
-                    "stdout" | "stderr" => return Ok(self.io_value()),
+                    "io" => {
+                        if self.script_mode {
+                            return Err(RtError::msg(
+                                "ScriptForbidden",
+                                "script 块中 io 不可用（受限 H 核心子集）",
+                            ));
+                        }
+                        return Ok(self.io_value());
+                    }
+                    "stdout" | "stderr" => {
+                        if self.script_mode {
+                            return Err(RtError::msg(
+                                "ScriptForbidden",
+                                "script 块中 io 不可用（受限 H 核心子集）",
+                            ));
+                        }
+                        return Ok(self.io_value());
+                    }
                     "pi" => return Ok(Value::Float(std::f64::consts::PI)),
                     "Vec" | "Deque" => return Ok(Value::vec(vec![], Value::Alloc)),
                     "Map" => return Ok(Value::map(HashMap::new(), Value::Alloc)),
@@ -1956,6 +2093,12 @@ impl Interp {
                 // ADR-0010：import 环境别名（`import H.std.{io as my}` → `my` = io 环境）
                 if let Some(env) = self.import_env.get(name.as_str()) {
                     if env == "io" {
+                        if self.script_mode {
+                            return Err(RtError::msg(
+                                "ScriptForbidden",
+                                "script 块中 io 不可用（受限 H 核心子集）",
+                            ));
+                        }
                         return Ok(self.io_value());
                     }
                 }
@@ -2012,6 +2155,15 @@ impl Interp {
                 }
             }
             Expr::Dot { base, field, .. } => {
+                // E1（ADR-0013）：`types` 元数据对象（仅受限脚本模式）——
+                // `types.all` / `types.type` 非调用形态取值
+                if self.script_mode {
+                    if let Expr::Ident(bname, _) = base.as_ref() {
+                        if bname == "types" {
+                            return self.types_meta(field, &[]);
+                        }
+                    }
+                }
                 // ExitType 内建枚举（L3/M4.2）：ExitType.Exit / ExitType.Error
                 if let Expr::Ident(bname, _) = base.as_ref() {
                     if bname == "ExitType" {
@@ -2897,6 +3049,10 @@ impl Interp {
         match callee {
             Expr::Dot { base, field, .. } => {
                 if let Expr::Ident(bname, _) = base.as_ref() {
+                    // E1（ADR-0013）：`types.fields(name)` 元数据查询（受限脚本模式）
+                    if bname == "types" && self.script_mode {
+                        return self.types_meta(field, args);
+                    }
                     // math.sqrt / math.nan
                     if let Some(v) = self.call_math(bname, field, args, span)? {
                         return Ok(v);
