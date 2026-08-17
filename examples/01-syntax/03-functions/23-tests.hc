@@ -40,8 +40,7 @@ fn parse_strict(s: &[u8]) !i32 {
 
 [test] fn skip_example() !void {
     // 跳过（Q-T3）：return error.SkipTest;  → 统计为 SKIP
-    // if (某种不支持的条件) return error.SkipTest;
-    // 本测试永远通过（演示写法，不实际跳过）
+    if (1 > 0) return error.SkipTest;   // F1：触发式 SKIP 分支（双后端：值通道/原生错误码均识别）
     try expect(true);
 }
 

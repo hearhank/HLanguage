@@ -6579,6 +6579,12 @@ impl Interp {
             // 显示名：名称 ?? 函数名
             let display = t.test_name.clone().unwrap_or_else(|| t.name.clone());
             match r {
+                Ok(Value::Err { name, .. }) if name == "SkipTest" => {
+                    // Q-T3：`return error.SkipTest` 到达测试根 → 统计为 SKIP（值通道；
+                    // 与下方 Err(RtError::SkipTest) 抛出通道同义，见 23-tests.hc）
+                    self.test_out.push(format!("[SKIP] {}", display));
+                    skipped += 1;
+                }
                 Ok(Value::Err { name, .. }) => {
                     // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL（不中止其它测试，Q-T2）
                     self.test_out

@@ -146,9 +146,11 @@ fn ex21_closures() {
 
 #[test]
 fn ex23_tests() {
-    let (p, f, _) = run_tests_in(&format!("{EXAMPLES}/01-syntax/03-functions/23-tests.hc"));
+    let (p, f, s) = run_tests_in(&format!("{EXAMPLES}/01-syntax/03-functions/23-tests.hc"));
     assert_eq!(f, 0);
-    assert!(p >= 6);
+    // F1：skip_example 触发 error.SkipTest → 统计为 SKIP（s >= 1），其余 5 项通过
+    assert!(p >= 5);
+    assert!(s >= 1);
 }
 
 #[test]

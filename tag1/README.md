@@ -126,7 +126,7 @@ hc --help
 
 补充：
 
-- **示例回归**（CLI `hc test examples/`）：**126/136 通过**；10 项失败属第三块（第二部分）特性 —— E1 元编程（35/34）、E2 并发/异步（37/38/39/76–80），均非本阶段范围（63-template-render 已随 D1 `fmt_int` 落地转绿）。
+- **示例回归**（CLI `hc test examples/`）：**125/136 通过 + 1 跳过**；10 项失败属第三块（第二部分）特性 —— E1 元编程（35/34）、E2 并发/异步（37/38/39/76–80），均非本阶段范围（63-template-render 已随 D1 `fmt_int` 落地转绿；23-tests 的 `skip_example` 自 F1 起实际触发 `error.SkipTest` → 统计为 SKIP，双后端一致）。
 - **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 52 项 mismatch —— 均为未实现原生内建/方法/降级缺口（`error.NotBuiltin`/`error.NoMethod`/`error.Unsupported` 响亮运行时中止，原生 ABI 留后续阶段全标准库），按文件粒度正确标记（defer/errdefer/带标签、global/const、io.print/alloc.init/标量 @ 内建/用户类方法/math.* 等降级期失败点已于 Phase 6/7 消除；连续类值语义已于 P11d 经 `DeepCopy` 指令 + 运行时门落地——`13-struct`/`58-copy-semantics` 的连续复制 AssertFailed 修复；隐式环境全局原生播种已于 P11d 经 `emit_implicit_env_seed` 落地——`pi`/Vec/Deque/Table/io 族 30-interface 转 MATCH；`alloc.init`/`Type.new` 构造降级已于 P11d 落地——`31-class`/`46-recursion` 类树构造 + 原生 `Vec.append`（Arr 接收者内建集合方法 `hc_append`/`hc_append_u64`/`hc_extend`）转 MATCH）。
 
 CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥125 passed / ≤11 failed + compile ≤53 mismatch，低于基线即失败）。compile 基线 52→53 的 +1 为 D1 副作用：interpret 侧 `fmt_int` 落地使 63-template-render 转绿，但原生侧 `String.from/replace/find` 仍缺（预先存在的原生子集缺口，D3 注）——该例由「双失败」转为「interpret 绿 / 原生红」的 mismatch。

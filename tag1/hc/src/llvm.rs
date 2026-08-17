@@ -207,7 +207,7 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
         );
     }
     emit_ext_decls(&mut out, &ext_decls);
-    emit_test_runner(&mut out, module);
+    emit_test_runner(&mut out, module, errors);
     out
 }
 
@@ -4012,18 +4012,25 @@ fn emit_main_wrapper(out: &mut String, module: &IrModule) {
 
 /// 原生测试跑器（Q-T5）：按声明序调用每个 `test fn`，全部通过 `ret 0`。
 /// 断言失败在测试函数 ret 路径 abort(exit 1)；`return error.X` 由跑器检测 error tag 后
-/// abort(exit 1)。因断言失败即 abort，逐测试续跑需重做 assert→返回码通路——故
-/// `hc test --mode=compile` 为文件粒度交叉验证（全绿 vs 有失败）。
-fn emit_test_runner(out: &mut String, module: &IrModule) {
-    let tests: Vec<(usize, &IrFunc)> = module
+/// abort(exit 1)，`error.SkipTest` 特判（错误码载荷匹配）→ 打印 [SKIP] 续跑下一个测试
+/// （F1，对齐 oracle run_tests 值通道）。因断言失败即 abort，逐测试续跑需重做
+/// assert→返回码通路——故 `hc test --mode=compile` 为文件粒度交叉验证（全绿 vs 有失败）。
+fn emit_test_runner(out: &mut String, module: &IrModule, errors: &ErrorCodeTable) {
+    // 注意：测试函数索引未必连续（@__init__ 等普通函数穿插），标签须用实际 func 索引
+    let tests: Vec<usize> = module
         .funcs
         .iter()
         .enumerate()
         .filter(|(_, f)| f.is_test)
+        .map(|(i, _)| i)
         .collect();
+    // F1：error.SkipTest 在原生侧以「错误码载荷 == SkipTest 码」识别 → [SKIP] 续跑，
+    // 对齐 oracle run_tests 值通道（return error.SkipTest → skipped+=1）
+    let skip_code = errors.code_of("SkipTest");
 
-    // 每个 [test] fn 的运行/通过标记字符串（模块级全局）
-    for (idx, f) in &tests {
+    // 每个 [test] fn 的运行/通过/跳过标记字符串（模块级全局）
+    for &idx in &tests {
+        let f = &module.funcs[idx];
         let run = format!("[RUN] {}", f.name);
         let pass = format!("[PASS] {}", f.name);
         let _ = writeln!(
@@ -4038,13 +4045,35 @@ fn emit_test_runner(out: &mut String, module: &IrModule) {
             pass.len() + 1,
             llvm_escape(pass.as_bytes())
         );
+        if skip_code.is_some() {
+            let skip = format!("[SKIP] {}", f.name);
+            let _ = writeln!(
+                out,
+                "@.test.{idx}.skip = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+                skip.len() + 1,
+                llvm_escape(skip.as_bytes())
+            );
+        }
     }
 
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
+    if tests.is_empty() {
+        // 无 [test] 的库文件编译：跑器直接成功退出，不引用不存在的标签
+        out.push_str("  ret i32 0\n}\n");
+        return;
+    }
     out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
     emit_implicit_env_seed(out, module);
     emit_init_calls(out, module);
-    for (idx, f) in &tests {
+    let _ = writeln!(out, "  br label %t{}", tests[0]);
+    for (k, &idx) in tests.iter().enumerate() {
+        let f = &module.funcs[idx];
+        let next_label = if k + 1 < tests.len() {
+            format!("t{}", tests[k + 1])
+        } else {
+            "tend".to_string()
+        };
+        let _ = writeln!(out, "t{idx}:");
         let run = format!("[RUN] {}", f.name);
         let rn = run.len() + 1;
         let _ = writeln!(
@@ -4061,20 +4090,43 @@ fn emit_test_runner(out: &mut String, module: &IrModule) {
         let _ = writeln!(out, "  %is_err_{idx} = icmp eq i32 %tag_{idx}, 6");
         let _ = writeln!(
             out,
-            "  br i1 %is_err_{idx}, label %fail_{idx}, label %ok_{idx}"
+            "  br i1 %is_err_{idx}, label %err_{idx}, label %pass_{idx}"
         );
+        // err_{idx}：error.SkipTest（码匹配）→ [SKIP] 续跑；其余未处理错误 → abort(exit 1)
+        let _ = writeln!(out, "err_{idx}:");
+        if let Some(sc) = skip_code {
+            let _ = writeln!(out, "  %code_{idx} = extractvalue %Value %r_{idx}, 1");
+            let _ = writeln!(out, "  %skip_{idx} = icmp eq i128 %code_{idx}, {sc}");
+            let _ = writeln!(
+                out,
+                "  br i1 %skip_{idx}, label %skp_{idx}, label %fail_{idx}"
+            );
+            let _ = writeln!(out, "skp_{idx}:");
+            let skip = format!("[SKIP] {}", f.name);
+            let sn = skip.len() + 1;
+            let _ = writeln!(
+                out,
+                "  %skipp_{idx} = getelementptr inbounds [{sn} x i8], ptr @.test.{idx}.skip, i64 0, i64 0"
+            );
+            let _ = writeln!(out, "  call i32 @puts(i8* %skipp_{idx})");
+            let _ = writeln!(out, "  br label %{next_label}");
+        } else {
+            let _ = writeln!(out, "  br label %fail_{idx}");
+        }
         let _ = writeln!(out, "fail_{idx}:");
         out.push_str("  call void @hc_abort_unhandled()\n  unreachable\n");
+        // pass_{idx}：[PASS] 续跑下一个测试
+        let _ = writeln!(out, "pass_{idx}:");
         let pass = format!("[PASS] {}", f.name);
         let pn = pass.len() + 1;
-        let _ = writeln!(out, "ok_{idx}:");
         let _ = writeln!(
             out,
             "  %passp_{idx} = getelementptr inbounds [{pn} x i8], ptr @.test.{idx}.pass, i64 0, i64 0"
         );
         let _ = writeln!(out, "  call i32 @puts(i8* %passp_{idx})");
+        let _ = writeln!(out, "  br label %{next_label}");
     }
-    out.push_str("  ret i32 0\n}\n");
+    out.push_str("tend:\n  ret i32 0\n}\n");
 }
 
 // ---------- 函数体发射（线性 IR → 基本块 CFG） ----------
