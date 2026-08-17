@@ -3,7 +3,7 @@
 #
 # 两部分（基线随功能扩增而更新，见 tag1/README.md）：
 #   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（125/136）
-#   2) compile：`hc test --mode=compile examples/` 断言 <= 58 mismatch
+#   2) compile：`hc test --mode=compile examples/` 断言 <= 57 mismatch
 #      （未实现原生内建/方法 → error.NotBuiltin/NoMethod 响亮中止；子集扩增时该数下降，属改进）
 #
 # 用法：bash tag1/scripts/check-examples.sh（工作目录不限，脚本自定位到 tag1/）
@@ -39,8 +39,8 @@ if [ -z "$mismatch" ]; then
     echo "::error::无法解析 compile mismatch 汇总（可能缺少 zig cc）"
     exit 1
 fi
-if [ "$mismatch" -gt 58 ]; then
-    echo "::error::编译交叉验证回归：$mismatch mismatch（基线 <=58）"
+if [ "$mismatch" -gt 57 ]; then
+    echo "::error::编译交叉验证回归：$mismatch mismatch（基线 <=57）"
     exit 1
 fi
 echo "compile OK: $mismatch mismatch"

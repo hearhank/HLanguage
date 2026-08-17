@@ -1140,3 +1140,32 @@ fn f() i32 {
 "#;
     assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(1));
 }
+
+#[test]
+fn continuous_class_copy_on_var_decl() {
+    // P11d：连续类 var 声明即深拷贝（DeepCopy 指令）。
+    // - 标注类型：`var p2: Point = p` → 声明类型连续 → DeepCopy
+    // - 未标注 + 标识符初始化：`var p2 = p1` → 运行时门按实际类名判定
+    // 两模式（tree-walk/IR）均复制独立副本：改 p2 不影响 p1。
+    let src = r#"
+[continuous]
+class Point {
+    x: f32,
+    y: f32,
+}
+fn f() f32 {
+    var p: Point = Point{ x = 1.0, y = 2.0 };
+    var p2: Point = p;
+    p2.x = 99.0;
+    return p.x;
+}
+fn g() f32 {
+    var p1 = Point{ x = 1.0, y = 2.0 };
+    var mut p2 = p1;
+    p2.x = 99.0;
+    return p1.x;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Float(1.0));
+    assert_eq!(run(src, "g", &[]).unwrap(), IrValue::Float(1.0));
+}

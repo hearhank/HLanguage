@@ -943,6 +943,38 @@ fn closure_precise_capture_consistency() {
     );
 }
 
+// ---------- P11d：连续类（Continuous）值语义——var 声明即复制 ----------
+
+#[test]
+fn continuous_class_value_semantics_consistency() {
+    // 对齐 oracle `interp.rs:926-949`：声明的类型为 Named 且连续（`[continuous]`
+    // 类），或未标注类型且初始值为标识符（运行时按值实际类名判定）→ 深拷贝。
+    // （非连续类为引用类型，语义层禁止按值赋值——`copy(&x)` 显式深拷贝；非本测试范围。）
+    assert_all_pass(
+        r#"
+[continuous]
+class Point {
+    x: f32,
+    y: f32,
+}
+[test] fn declared_type_continuous_copy() void {
+    var p: Point = Point{x = 1.0, y = 2.0};
+    var p2: Point = p;           // 连续类 var 声明即复制（独立副本）
+    p2.x = 99.0;
+    expect_eq(p.x, 1.0);         // 原值未变
+    expect_eq(p2.x, 99.0);
+}
+[test] fn untyped_ident_continuous_copy() void {
+    var p1 = Point{x = 1.0, y = 2.0};
+    var mut p2 = p1;             // 未标注类型 + 标识符初始化 → 运行时门按类名复制
+    p2.x = 99.0;
+    expect_eq(p1.x, 1.0);        // 原值未变
+    expect_eq(p2.x, 99.0);
+}
+"#,
+    );
+}
+
 #[test]
 fn closure_non_mut_cannot_rebind_capture_consistency() {
     // is_mut 只读强制：非 `mut` 闭包内重绑定被捕获变量 → ReadonlyCapture

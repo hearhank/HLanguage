@@ -18,7 +18,7 @@
 
 use crate::errorcodes::ErrorCodeTable;
 use crate::ir::{IrBinOp, IrConst, IrFunc, IrInst, IrModule, IrPattern, IrUnOp};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 // ---------- 值 tag 常量（与 IrValue 动态分派对应） ----------
@@ -54,7 +54,7 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .collect();
     let gidx = globals_index(module);
     let mut out = String::new();
-    emit_preamble(&mut out, &strings);
+    emit_preamble(&mut out, &strings, &module.continuous);
     emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
         emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs, &gidx);
@@ -74,7 +74,7 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .collect();
     let gidx = globals_index(module);
     let mut out = String::new();
-    emit_preamble(&mut out, &strings);
+    emit_preamble(&mut out, &strings, &module.continuous);
     emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
         emit_func(&mut out, f, idx, &strings, errors, &canon, &module.funcs, &gidx);
@@ -165,6 +165,10 @@ fn collect_strings(module: &IrModule) -> Vec<String> {
                 _ => {}
             }
         }
+    }
+    // [continuous] 类名（P11d）：`hc_deep_copy_cont` 门 strcmp 链目标
+    for c in &module.continuous {
+        push_str(c, &mut seen, &mut out);
     }
     out
 }
@@ -265,7 +269,7 @@ const MSGS: &[Msg] = &[
 
 // ---------- 导言 ----------
 
-fn emit_preamble(out: &mut String, strings: &[String]) {
+fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<String>) {
     out.push_str("; H M3.3 LLVM 原生后端（自动生成；`zig cc file.ll -o file.exe`）\n\n");
     out.push_str("%Value = type { i32, i128 }\n");
     // Phase 2 聚合堆对象（聚合 `%Value` 的 data = 堆对象指针）
@@ -396,6 +400,7 @@ fn emit_preamble(out: &mut String, strings: &[String]) {
     emit_print_helpers(out);
     emit_scalar_builtin_helpers(out);
     emit_io_helper(out);
+    emit_deep_copy_gate(out, strings, continuous);
 }
 
 // ---------- 算术 helper（加/减/乘/除/模/欧几里得模） ----------
@@ -1733,6 +1738,140 @@ ret_true:
   ret i1 true
 }
 "#;
+
+/// P11d [continuous] 递归深拷贝（对齐 oracle `deep_copy` `interp.rs:5651-5695`）：
+/// Arr/Class 逐元素/字段递归拷贝；Ptr 新建 cell 拷贝所指值；Str 原生为不可变全局
+/// 字符串（拷贝指针即等价，无 Rc 生命周期），恒等。Closure 原生不存在
+/// （`MakeClosure` 硬拒绝），其余（标量/枚举/End 等）按值恒等。
+const HC_DEEP_COPY: &str = r#"define %Value @hc_deep_copy(%Value %v) {
+entry:
+  %t = extractvalue %Value %v, 0
+  %is_arr = icmp eq i32 %t, 8
+  br i1 %is_arr, label %arr, label %chk_cls
+chk_cls:
+  %is_cls = icmp eq i32 %t, 10
+  br i1 %is_cls, label %cls, label %chk_str
+chk_str:
+  %is_str = icmp eq i32 %t, 5
+  br i1 %is_str, label %id, label %chk_ptr
+chk_ptr:
+  %is_ptr = icmp eq i32 %t, 7
+  br i1 %is_ptr, label %ptr, label %id
+arr:
+  %ad = extractvalue %Value %v, 1
+  %aop = inttoptr i128 %ad to %ArrObj*
+  %ao = load %ArrObj, %ArrObj* %aop
+  %alen = extractvalue %ArrObj %ao, 0
+  %abase = extractvalue %ArrObj %ao, 1
+  %anew = call %Value @hc_make_arr(i64 %alen)
+  br label %aloop
+aloop:
+  %i = phi i64 [ 0, %arr ], [ %i2, %anext ]
+  %idone = icmp uge i64 %i, %alen
+  br i1 %idone, label %aret, label %abody
+abody:
+  %ap = getelementptr %Value, %Value* %abase, i64 %i
+  %av = load %Value, %Value* %ap
+  %ac = call %Value @hc_deep_copy(%Value %av)
+  call void @hc_arr_set(%Value %anew, i64 %i, %Value %ac)
+  br label %anext
+anext:
+  %i2 = add i64 %i, 1
+  br label %aloop
+aret:
+  ret %Value %anew
+cls:
+  %cd = extractvalue %Value %v, 1
+  %cop = inttoptr i128 %cd to %ClassObj*
+  %co = load %ClassObj, %ClassObj* %cop
+  %cn = extractvalue %ClassObj %co, 0
+  %ccnt = extractvalue %ClassObj %co, 1
+  %cfs = extractvalue %ClassObj %co, 2
+  %cnew = call %Value @hc_make_class(i8* %cn, i64 %ccnt)
+  br label %cloop
+cloop:
+  %j = phi i64 [ 0, %cls ], [ %j2, %cnext ]
+  %jdone = icmp uge i64 %j, %ccnt
+  br i1 %jdone, label %cret, label %cbody
+cbody:
+  %fp = getelementptr %Field, %Field* %cfs, i64 %j
+  %f = load %Field, %Field* %fp
+  %fname = extractvalue %Field %f, 0
+  %fval = extractvalue %Field %f, 1
+  %fcp = call %Value @hc_deep_copy(%Value %fval)
+  call void @hc_class_set(%Value %cnew, i64 %j, i8* %fname, %Value %fcp)
+  br label %cnext
+cnext:
+  %j2 = add i64 %j, 1
+  br label %cloop
+cret:
+  ret %Value %cnew
+ptr:
+  %pd = extractvalue %Value %v, 1
+  %pop = inttoptr i128 %pd to %Value*
+  %pv = load %Value, %Value* %pop
+  %pc = call %Value @hc_deep_copy(%Value %pv)
+  %sz = ptrtoint %Value* getelementptr (%Value, %Value* null, i32 1) to i64
+  %raw = call i8* @hc_alloc(i64 %sz)
+  %ncell = bitcast i8* %raw to %Value*
+  store %Value %pc, %Value* %ncell
+  %np = ptrtoint %Value* %ncell to i128
+  %nv0 = insertvalue %Value { i32 0, i128 0 }, i32 7, 0
+  %nv1 = insertvalue %Value %nv0, i128 %np, 1
+  ret %Value %nv1
+id:
+  ret %Value %v
+}
+"#;
+
+/// P11d [continuous] DeepCopy 运行时门 `hc_deep_copy_cont`：值非 Class 恒等；
+/// Class 名 ∈ `module.continuous` → `hc_deep_copy` 递归拷贝；否则恒等
+/// （对齐 oracle `type_is_continuous` 仅对 Named 连续类生效，非连续类/数组 = 引用别名）。
+/// LLVM 18 禁止常量表达式 GEP 于全局初始化器——名检查以 strcmp 链内联（同方法分派模式）。
+fn emit_deep_copy_gate(out: &mut String, strings: &[String], continuous: &HashSet<String>) {
+    let mut names: Vec<&String> = continuous.iter().collect();
+    names.sort();
+    // 无连续类：恒等门（`needs_deep_copy` 未发射指令，保守兜底），不引入递归 helper
+    if names.is_empty() {
+        out.push_str("define %Value @hc_deep_copy_cont(%Value %v) {\nentry:\n  ret %Value %v\n}\n\n");
+        return;
+    }
+    out.push_str(HC_DEEP_COPY);
+    out.push('\n');
+    let mut b = String::new();
+    b.push_str("define %Value @hc_deep_copy_cont(%Value %v) {\n");
+    b.push_str("entry:\n");
+    b.push_str("  %t = extractvalue %Value %v, 0\n");
+    b.push_str("  %is_cls = icmp eq i32 %t, 10\n");
+    b.push_str("  br i1 %is_cls, label %getname, label %id\n");
+    b.push_str("getname:\n");
+    b.push_str("  %d = extractvalue %Value %v, 1\n");
+    b.push_str("  %op = inttoptr i128 %d to %ClassObj*\n");
+    b.push_str("  %co = load %ClassObj, %ClassObj* %op\n");
+    b.push_str("  %cname = extractvalue %ClassObj %co, 0\n");
+    b.push_str("  br label %cmp0\n");
+    for (i, name) in names.iter().enumerate() {
+        let (si, sn) = str_idx(strings, name);
+        b.push_str(&format!("cmp{i}:\n"));
+        b.push_str(&format!(
+            "  %g{i} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0\n"
+        ));
+        b.push_str(&format!("  %c{i} = call i32 @strcmp(i8* %cname, i8* %g{i})\n"));
+        b.push_str(&format!("  %e{i} = icmp eq i32 %c{i}, 0\n"));
+        if i + 1 < names.len() {
+            b.push_str(&format!("  br i1 %e{i}, label %copy, label %cmp{}\n", i + 1));
+        } else {
+            b.push_str(&format!("  br i1 %e{i}, label %copy, label %id\n"));
+        }
+    }
+    b.push_str("copy:\n");
+    b.push_str("  %c = call %Value @hc_deep_copy(%Value %v)\n");
+    b.push_str("  ret %Value %c\n");
+    b.push_str("id:\n");
+    b.push_str("  ret %Value %v\n");
+    b.push_str("}\n\n");
+    out.push_str(&b);
+}
 
 fn emit_aggregate_helpers(out: &mut String) {
     // 聚合 tag 常量与模板字符串内的字面量保持一致（标记使用，防 dead-code 告警）。
@@ -4117,6 +4256,15 @@ impl BodyEmitter {
                 self.emit(format!("{v} = load %Value, %Value* %sp.{temp}"));
                 self.emit(format!("store %Value {v}, %Value* %sp.{slot}"));
             }
+            // P11d [continuous] 值语义：运行时门（值实际类名 ∈ module.continuous）→
+            // `hc_deep_copy` 递归拷贝；否则恒等（标量/数组/非连续类 = 引用别名）
+            IrInst::DeepCopy { temp, a } => {
+                let v = self.r();
+                self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
+                let c = self.r();
+                self.emit(format!("{c} = call %Value @hc_deep_copy_cont(%Value {v})"));
+                self.emit(format!("store %Value {c}, %Value* %sp.{temp}"));
+            }
             IrInst::Bin { op, temp, a, b } => self.bin(*op, *temp, *a, *b),
             IrInst::Un { op, temp, a } => self.un(*op, *temp, *a),
             IrInst::Jump { label } => {
@@ -4896,5 +5044,48 @@ fn main(io: Io) !void {
         assert!(ll.contains("call %Value @hc_box"), "{ll}");
         // @sizeOf 编译期常量折叠 → i32 槽直接存 4（非 helper 调用）
         assert!(ll.contains("store %Value"), "{ll}");
+    }
+
+    #[test]
+    fn continuous_class_copy_emits_deep_copy_gate() {
+        // P11d：连续类 var 声明 → DeepCopy 指令 → `hc_deep_copy_cont` 运行时门 +
+        // 递归 `hc_deep_copy` helper；连续类名进字符串表供 strcmp 链匹配。
+        let ll = gen(
+            r#"[continuous]
+class Point {
+    x: f32,
+    y: f32,
+}
+fn f() f32 {
+    var p: Point = Point{ x = 1.0, y = 2.0 };
+    var p2: Point = p;
+    p2.x = 99.0;
+    return p.x;
+}"#,
+        );
+        assert!(ll.contains("define %Value @hc_deep_copy_cont"), "{ll}");
+        assert!(ll.contains("define %Value @hc_deep_copy"), "{ll}");
+        assert!(ll.contains("call %Value @hc_deep_copy_cont"), "{ll}");
+        assert!(ll.contains("c\"Point\\00\""), "{ll}"); // 连续类名进字符串表
+        assert!(ll.contains("call i32 @strcmp"), "{ll}"); // 门 strcmp 链
+    }
+
+    #[test]
+    fn non_continuous_class_no_deep_copy_inst() {
+        // 非连续类 var 声明不发射 DeepCopy 指令（引用类型，按值赋值被语义层拒绝）；
+        // 无连续类模块的门为恒等（仍定义，但无调用）。
+        let ll = gen(
+            r#"class Blob {
+    x: i32,
+    y: i32,
+}
+fn f() i32 {
+    var b = Blob{ x = 1, y = 2 };
+    return b.x;
+}"#,
+        );
+        // 无连续类 → 恒等门（不含递归 helper/strcmp 链），且无 DeepCopy 调用
+        assert!(!ll.contains("call %Value @hc_deep_copy_cont"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_deep_copy("), "{ll}");
     }
 }

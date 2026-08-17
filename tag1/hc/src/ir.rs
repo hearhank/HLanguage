@@ -44,6 +44,9 @@ pub struct IrModule {
     /// 枚举名（扁平 + 全限定）→ 变体名（声明序；Phase 7 `@intFromEnum`/`@enumFromInt`
     /// 运行时分派按序求索引，对齐 oracle `TypeDef::Enum`）。
     pub enum_variants: HashMap<String, Vec<String>>,
+    /// [continuous] 类名（扁平 + 全限定）：`DeepCopy` 指令运行时门——仅连续类值
+    /// 语义深拷贝，标量/数组/非连续类恒等（引用别名）。由 `TypeTable.classes` 汇集。
+    pub continuous: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -378,6 +381,16 @@ pub enum IrInst {
     PopDefer {
         id: usize,
     },
+    // ---- P11d [continuous] 值语义 ----
+    /// temp = deep_copy(a)（[continuous] 连续类赋值即复制：`var p2: Point = p`
+    /// 复制独立副本而非共享 cell 别名）。运行时仅当 a 为连续类（类名 ∈
+    /// [`IrModule::continuous`]）才深拷贝，否则恒等（标量/数组/非连续类 = 引用别名，
+    /// 与 tree-walking 一致——数组 var 复制仍共享底层）。对齐 oracle VarDecl
+    /// `interp.rs:926-949` + `deep_copy`。
+    DeepCopy {
+        temp: usize,
+        a: usize,
+    },
 }
 
 /// switch 模式（对齐 AST [`crate::ast::SwitchPattern`]；`Else` 不发射 MatchTest——
@@ -410,6 +423,9 @@ pub struct TypeTable {
 pub struct ClassInfo {
     pub fields: Vec<String>,
     pub methods: Vec<String>,
+    /// [continuous] 连续内存值类型（H1 特性标注）：赋值即复制（值语义），非别名。
+    /// 驱动 `Stmt::VarDecl` 降级发射 `DeepCopy`（对齐 oracle `type_is_continuous`）。
+    pub continuous: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -430,6 +446,7 @@ fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
         match d {
             Decl::Class {
                 name,
+                traits,
                 fields,
                 methods,
                 ..
@@ -437,6 +454,7 @@ fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
                 let ci = ClassInfo {
                     fields: fields.iter().map(|f| f.name.clone()).collect(),
                     methods: methods.iter().map(|m| m.name.clone()).collect(),
+                    continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
                 };
                 tt.classes.insert(name.clone(), ci);
                 if !path.is_empty() {
@@ -489,6 +507,12 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     // 枚举变体序（Phase 7）：`@intFromEnum`/`@enumFromInt` 运行时分派
     for (n, ei) in &types.enums {
         module.enum_variants.insert(n.clone(), ei.variants.clone());
+    }
+    // [continuous] 类名集（扁平 + 全限定）：DeepCopy 指令运行时门
+    for (n, ci) in &types.classes {
+        if ci.continuous {
+            module.continuous.insert(n.clone());
+        }
     }
     for d in &program.decls {
         lower_decl(d, &mut module, &errors, &types, &funcs, &globals)?;
@@ -2054,9 +2078,28 @@ impl<'a> LowerCtx<'a> {
         None
     }
 
+    /// [continuous] 值语义判定（P11d，对齐 oracle VarDecl `interp.rs:926-949`）：
+    /// 声明类型 `ty` 为连续类（`Type::Named` 且 `TypeTable.continuous`），或
+    /// 未标注类型且初始值为标识符（`var p2 = p`——运行时门按值实际类名判定，
+    /// 标量/数组/非连续类恒等 = 引用别名）。
+    fn needs_deep_copy(&self, ty: Option<&Type>, init: Option<&Expr>) -> bool {
+        if let Some(t) = ty {
+            return match t.strip() {
+                Type::Named(tn, _) => self
+                    .types
+                    .classes
+                    .get(tn)
+                    .map(|c| c.continuous)
+                    .unwrap_or(false),
+                _ => false,
+            };
+        }
+        matches!(init, Some(Expr::Ident(..)))
+    }
+
     fn lower_stmt(&mut self, s: &Stmt) {
         match s {
-            Stmt::VarDecl { name, init, .. } => {
+            Stmt::VarDecl { name, init, ty, .. } => {
                 // 遮蔽时分配新槽（词法作用域，块退出恢复外层绑定）
                 let slot = self.alloc_slot();
                 self.bind(name, slot);
@@ -2071,7 +2114,15 @@ impl<'a> LowerCtx<'a> {
                         t
                     }
                 };
-                self.push(IrInst::Store { slot, temp: t });
+                // [continuous] 值语义（P11d）：声明类型为连续类，或未标注类型且初始
+                // 值为标识符 → 赋值前 DeepCopy（后者由运行时门判定，仅连续类深拷贝）。
+                if self.needs_deep_copy(ty.as_ref(), init.as_ref()) {
+                    let t2 = self.alloc_slot();
+                    self.push(IrInst::DeepCopy { temp: t2, a: t });
+                    self.push(IrInst::Store { slot, temp: t2 });
+                } else {
+                    self.push(IrInst::Store { slot, temp: t });
+                }
             }
             Stmt::ConstDecl { name, init, .. } => {
                 let slot = self.alloc_slot();
@@ -3538,6 +3589,15 @@ fn class_name(ctx: &Ctx, cell: usize) -> String {
     }
 }
 
+/// 值是否为连续类（[`IrModule::continuous`] 运行时门；`DeepCopy` 指令判定）。
+/// 非 Class 值（标量/数组/切片/枚举/指针等）恒 false——恒等 = 引用别名。
+fn is_continuous_class(ctx: &Ctx, module: &IrModule, v: &IrValue) -> bool {
+    match v {
+        IrValue::Class(c) => module.continuous.contains(&class_name(ctx, *c)),
+        _ => false,
+    }
+}
+
 /// 深拷贝（move 捕获；对齐 oracle `deep_copy` `interp.rs:5539-5562`）：
 /// Arr/Class/Ptr/Opt(Some) 递归拷贝，其余按值克隆（Str 本身是不可变字节串）。
 fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
@@ -4007,6 +4067,16 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
             }
             IrInst::Move { temp, a } => {
                 let v = ctx.get(&frame, *a).clone();
+                ctx.set(&frame, *temp, v);
+            }
+            IrInst::DeepCopy { temp, a } => {
+                let v = ctx.get(&frame, *a).clone();
+                // 运行时门：仅连续类深拷贝（标量/数组/非连续类恒等 = 引用别名）
+                let v = if is_continuous_class(ctx, module, &v) {
+                    deep_copy(ctx, v)
+                } else {
+                    v
+                };
                 ctx.set(&frame, *temp, v);
             }
             IrInst::Unwrap { temp, a } => {

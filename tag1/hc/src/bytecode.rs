@@ -18,16 +18,18 @@
 //!   · u32 n_insts · { opcode u8 · 操作数 }*
 //! 闭包表（Phase 4）: u32 n_closures · 函数 × n_closures（同上格式）
 //! 全局表（Phase 5，还原 IrModule.globals）: u32 n_globals · { name } × n_globals
+//! 枚举变体表（Phase 7）: u32 n_enums · { name · u32 n_var · {str}* }*
+//! [continuous] 类名表（P11d）: u32 n_cont · { name }*（DeepCopy 指令运行时门）
 //! ```
 //! 常量载荷保留全精度：`i128` 16 字节、`f64` 8 字节、字符串长度前缀。
 
 use crate::ast::Type;
 use crate::ir::{run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrPattern, IrUnOp, IrValue};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
-/// v3：Phase 5 增全局表 + LoadGlobal/StoreGlobal/GlobalAddr opcode（41-43）。
-pub const VERSION: u32 = 5;
+/// v6：P11d 增 [continuous] 类名表（DeepCopy 指令运行时门）+ opcode 47。
+pub const VERSION: u32 = 6;
 
 // ---------- 常量 / 运算符 / 指令 标签 ----------
 
@@ -155,6 +157,14 @@ pub fn encode(module: &IrModule) -> Vec<u8> {
         for v in variants {
             push_str(&mut out, v);
         }
+    }
+    // [continuous] 类名表（P11d，还原 IrModule.continuous——DeepCopy 运行时门）；
+    // 排序保证编码确定性（HashSet 迭代顺序随机）。
+    let mut cont: Vec<&String> = module.continuous.iter().collect();
+    cont.sort();
+    push_u32(&mut out, cont.len() as u32);
+    for name in cont {
+        push_str(&mut out, name);
     }
     out
 }
@@ -567,6 +577,12 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
             out.push(46);
             push_u32(out, *id as u32);
         }
+        // P11d [continuous] 值语义：opcode 47
+        IrInst::DeepCopy { temp, a } => {
+            out.push(47);
+            push_u32(out, *temp as u32);
+            push_u32(out, *a as u32);
+        }
     }
 }
 
@@ -697,6 +713,12 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
         }
         enum_variants.insert(name, variants);
     }
+    // [continuous] 类名表（P11d）：DeepCopy 指令运行时门
+    let n_cont = r.u32()? as usize;
+    let mut continuous = HashSet::with_capacity(n_cont);
+    for _ in 0..n_cont {
+        continuous.insert(r.str()?);
+    }
     Ok(IrModule {
         funcs,
         closures,
@@ -704,6 +726,7 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
         globals,
         error_codes,
         enum_variants,
+        continuous,
     })
 }
 
@@ -1053,6 +1076,10 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
         46 => IrInst::PopDefer {
             id: r.u32()? as usize,
         },
+        47 => IrInst::DeepCopy {
+            temp: r.u32()? as usize,
+            a: r.u32()? as usize,
+        },
         _ => return Err(format!("未知指令 opcode {op}")),
     })
 }
@@ -1334,6 +1361,8 @@ mod tests {
                 IrInst::PushDefer { id: 0 },
                 IrInst::JumpIfNotDefer { id: 0, label: 3 },
                 IrInst::PopDefer { id: 0 },
+                // P11d [continuous] 值语义
+                IrInst::DeepCopy { temp: 7, a: 0 },
             ],
         };
         let f1 = IrFunc {
@@ -1371,6 +1400,7 @@ mod tests {
             globals: vec!["g_counter".to_string(), "g_name".to_string()],
             error_codes,
             enum_variants,
+            continuous: HashSet::from(["Point".to_string()]),
         }
     }
 
@@ -1402,6 +1432,9 @@ mod tests {
         assert_eq!(d.funcs[0].body.len(), m.funcs[0].body.len());
         assert_eq!(d.funcs[1].params, Vec::<usize>::new());
         assert_eq!(d.closures[0].name, "<closure>");
+        // [continuous] 类名表（P11d）往返
+        assert_eq!(d.continuous, m.continuous);
+        assert!(d.continuous.contains("Point"));
     }
 
     #[test]
