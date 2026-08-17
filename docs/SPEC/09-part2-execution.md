@@ -231,3 +231,16 @@
 |---|---|---|
 | `08-mem-allocator-design.md` | arena.init(T) 状态勾选 | 组 E 完成时 |
 | `07-bootstrap-plan.md` | 实现状态表与测试基线更新 | 各组完成时 |
+
+## 6. 完成注记（2026-08-18）
+
+> ✅ **第二部分全部完成（2026-08-18）**：A–H 八组共 36 任务全部落地并逐组提交（A 14 / B 4.5 / C 7 / D 6 / E 3 / F 3.5 / G 10.5 / H 9）。
+>
+> **验收状态（最终）**：
+> - **功能点级**：`cargo test --workspace` 全绿 **623**（580 单元/集成 + 43 示例回归）
+> - **组级门禁**：`check-examples.sh` 通过——interpret **132 passed / 10 failed / 1 skipped**（基线 ≥125/≤11）、compile **55 mismatch**（基线 ≤55，贴线）；10 项失败均为第三块特性（E1 元编程 34/35、E2 并发/异步 37/38/39/76–80）
+> - **总验收三项**（07 §三）：`hc build`/`hc run`/`hc test` 完整可用 ✅；示例套件双模式一致 ✅；测试全绿 ✅
+>
+> **§5 待同步清单已清空**：`08-mem-allocator-design.md` arena.init(T) 状态勾选（组 E 完成时）✅；`07-bootstrap-plan.md` 实现状态表与测试基线（各组完成时）✅。
+>
+> **遗留已知项（第三块/后续归口）**：compile 55 mismatch 中原生子集缺口（原生 ABI 函数值/闭包留 Phase 8；跨包全局链接；IR 参考解释器跨包调用 NoFunction；`tag1/examples` 早期遗留目录与真实套件 `H2/examples` 的 `examples_dir()` 指向差异）——第三块执行见 `10-part3-execution.md`。
