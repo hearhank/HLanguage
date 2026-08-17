@@ -99,30 +99,37 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **458 项测试**（417 单元/集成 + 41 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **575 项测试**（533 单元/集成 + 42 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
-| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 40 |
+| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 41 |
 | hc | `tests/bytecode.rs`（VM == 参考解释器一致性，opcode 0–46 往返） | 27 |
-| hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
+| hc | `tests/frontend.rs`（lexer/parser/semantic） | 51 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
-| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化） | 69 |
+| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化） | 93 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
-| hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8） | 63 |
+| hc-rt | `tests/errors.rs`（错误码/传播 + io.exit/ExitType） | 22 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8） | 68 |
+| hc-rt | `tests/arena.rs`（arena.init typed 构造） | 13 |
+| hc-rt | `tests/box.rs`（box 内建） | 6 |
+| hc-rt | `tests/collection.rs`（collections） | 8 |
+| hc-rt | `tests/leak.rs`（G5 Debug 泄漏检测） | 5 |
+| hc-rt | `tests/import.rs`（A 入口/import 全量） | 11 |
 | hc-rt | `tests/inference.rs`（类型推断） | 11 |
 | hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 10 |
 | hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
 | hc-rt | `tests/closures.rs`（闭包，含 Phase 8 捕获精确化） | 12 |
 | hc-rt | `tests/deque.rs`（Deque） | 4 |
 | hc-rt | `tests/iter.rs`（迭代内建） | 4 |
-| hc-rt | `tests/serialize.rs`（序列化内建） | 4 |
+| hc-rt | `tests/serialize.rs`（序列化内建 + serialize 命名空间） | 7 |
 | hc-rt | `tests/dep.rs`（M7.2 跨包/pub 边界） | 3 |
 | hc-rt | `tests/scalar.rs`（标量接口族） | 2 |
-| hc-rt | `tests/examples.rs`（41 示例回归） | 41 ✅ |
-| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules） | 20 |
-| hc-tools | `tests/native.rs`（M3.3 原生端到端，含 Phase 6 defer/errdefer/带标签，zig 缺失自动 SKIP） | 36 |
+| hc-rt | `tests/examples.rs`（42 示例回归） | 42 ✅ |
+| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules + IR 退出码） | 23 |
+| hc-tools | `tests/cli.rs`（C1 包目录运行 + C3/C4 库形态 + F2 io.exit 端到端） | 10 |
+| hc-tools | `tests/harness.rs`（F3 测试基建自测：收集/退出码/注入/汇总） | 5 |
+| hc-tools | `tests/native.rs`（M3.3 原生端到端，含 Phase 6 defer/errdefer/带标签，zig 缺失自动 SKIP） | 38 |
 
 补充：
 
