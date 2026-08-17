@@ -3334,6 +3334,9 @@ pub struct Ctx {
     pub out: Vec<u8>,
     /// 程序参数（io.args()；由 `hc run`/`hc test` 注入，对齐 oracle `Interp.args`）
     pub args: Vec<Vec<u8>>,
+    /// io.exit 请求的退出码（F2：对齐 oracle `Interp.exit_code`；`execute_ir` 遇
+    /// ExitRequested 时读取并映射进程退出码）
+    pub exit_code: Option<u8>,
     /// io.fs 真实文件句柄表（Phase 7）：File 值 = `Class{_fd}`，fd 索引本表。
     pub files: HashMap<i64, std::fs::File>,
     /// 下一文件描述符（自增分配）
@@ -6854,7 +6857,8 @@ fn call_io_method_ir(
             call_io_print_ir(ctx, args)?;
             Ok(Some(IrValue::Void))
         }
-        // io.exit(ExitType, code)：正常退出信号（execute_ir 视 ExitRequested 为成功）
+        // io.exit(ExitType, code)：正常退出信号（execute_ir 读 ctx.exit_code 映射退出码，
+        // F2——与 oracle Interp.exit_code 对齐）
         "exit" => {
             if args.len() != 2 {
                 return Err(IrError::msg("ArityMismatch", "io.exit expects 2 args"));
@@ -6868,6 +6872,7 @@ fn call_io_method_ir(
             if is_error {
                 eprintln!("error: program exited with code {code}");
             }
+            ctx.exit_code = Some(code);
             Err(IrError::msg("ExitRequested", format!("code {code}")))
         }
         "stdin" => {

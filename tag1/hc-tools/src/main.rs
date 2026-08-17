@@ -1003,6 +1003,8 @@ fn report_leaks(name: &str, leaks: &str) {
 enum IrRunOutcome {
     /// main 正常返回（非错误值）——退出码 0
     Success,
+    /// main 经 io.exit 请求退出（F2：进程退出码 = 请求码；对齐 oracle Interp.exit_code）
+    Exited(u8),
     /// main 返回未处理的 error 值（值通道到达入口，panic 式失败，无恢复）
     UnhandledError(String),
 }
@@ -1064,9 +1066,9 @@ fn execute_ir(module: &hc::ir::IrModule, prog_args: &[String]) -> Result<IrRunOu
         Ok(hc::ir::IrValue::Err { name, .. }) => Ok(IrRunOutcome::UnhandledError(name)),
         Ok(_) => Ok(IrRunOutcome::Success),
         Err(e) => {
-            // io.exit(code)：正常退出信号（对齐 oracle run_main——按 code 归零）
+            // io.exit(code)：正常退出信号（对齐 oracle run_main——退出码 = 请求码，F2）
             if e.name == "ExitRequested" {
-                return Ok(IrRunOutcome::Success);
+                return Ok(IrRunOutcome::Exited(rt.ctx.exit_code.unwrap_or(0)));
             }
             let mut msg = format!("error.{}: {}", e.name, e.message);
             // NoFunction/TypeError 常来自接口类型参/裸指针等 IR 子集外特性：追加提示
@@ -1086,6 +1088,8 @@ fn execute_ir(module: &hc::ir::IrModule, prog_args: &[String]) -> Result<IrRunOu
 fn ir_exit(outcome: Result<IrRunOutcome, String>) -> ExitCode {
     match outcome {
         Ok(IrRunOutcome::Success) => ExitCode::SUCCESS,
+        Ok(IrRunOutcome::Exited(0)) => ExitCode::SUCCESS,
+        Ok(IrRunOutcome::Exited(c)) => ExitCode::from(c),
         Ok(IrRunOutcome::UnhandledError(name)) => {
             eprintln!("error.{name} 到达入口（未处理）");
             ExitCode::FAILURE
@@ -1612,6 +1616,21 @@ fn main() i32 {
         match run_ir_source(src) {
             Ok(IrRunOutcome::UnhandledError(name)) => assert_eq!(name, "NotFound"),
             other => panic!("预期未处理错误，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn ir_io_exit_maps_code() {
+        // F2：io.exit 在 IR 侧映射退出码（Exited(code)，对齐 oracle Interp.exit_code）
+        let src = "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.exit(ExitType.Error, 3); }\n";
+        match run_ir_source(src) {
+            Ok(IrRunOutcome::Exited(3)) => {}
+            other => panic!("预期 Exited(3)，实际：{other:?}"),
+        }
+        let ok = "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.exit(ExitType.Exit, 0); }\n";
+        match run_ir_source(ok) {
+            Ok(IrRunOutcome::Exited(0)) => {}
+            other => panic!("预期 Exited(0)，实际：{other:?}"),
         }
     }
 

@@ -1,10 +1,30 @@
 //! C1 CLI 测试：`hc run <目录>` 包加载形态——入口 `main.hc` 优先/首个 `.hc`、
 //! 兄弟文件合并 + build.zon 依赖装载（复用 run_file 路径，无需 zig）。
+//! F2：`io.exit`/`ExitType` 端到端——静默/打印/退出码（interpret 与 --ir 路径）。
 //!
 //! 用 `hc` 二进制（CARGO_BIN_EXE_hc-tools）驱动 CLI，断言输出与退出码。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static EXIT_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// F2：临时 .hc 文件（独立子目录，避免临时目录中其它 .hc 触发兄弟文件扫描噪音）
+fn temp_hc_file(tag: &str, src: &str) -> PathBuf {
+    let n = EXIT_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "hc_cli_exit_{}_{}_{}",
+        std::process::id(),
+        tag,
+        n
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.hc");
+    std::fs::write(&path, src).unwrap();
+    path
+}
 
 fn hc_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hc"))
@@ -251,4 +271,100 @@ fn build_lib_with_main_is_diagnosed() {
         "应诊断库含 main: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn run_exit_success_is_silent_and_aborts() {
+    // F2：ExitType.Exit——静默（无错误输出）、退出码 0、exit 后代码不执行
+    let path = temp_hc_file(
+        "ok",
+        "import H.std.{io};\n\
+         fn main(args: o Vec(String)) !void {\n\
+             io.print(\"before\\n\");\n\
+             io.exit(ExitType.Exit, 0);\n\
+             io.print(\"after\\n\");\n\
+         }\n",
+    );
+    let out = Command::new(hc_bin())
+        .arg("run")
+        .arg(&path)
+        .output()
+        .expect("run hc");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "exit 0 应成功: {stdout}{stderr}");
+    assert!(stdout.contains("before"), "exit 前代码应执行: {stdout}");
+    assert!(!stdout.contains("after"), "exit 后代码不应执行: {stdout}");
+    assert!(!stderr.contains("error:"), "Exit 应静默无错误输出: {stderr}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn run_exit_nonzero_code_is_silent() {
+    // F2：ExitType.Exit 非零码——静默、进程退出码 = 请求码
+    let path = temp_hc_file(
+        "code5",
+        "import H.std.{io};\n\
+         fn main(args: o Vec(String)) !void {\n\
+             io.exit(ExitType.Exit, 5);\n\
+         }\n",
+    );
+    let out = Command::new(hc_bin())
+        .arg("run")
+        .arg(&path)
+        .output()
+        .expect("run hc");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_eq!(out.status.code(), Some(5), "Exit 非零码应映射进程退出码: {stderr}");
+    assert!(!stderr.contains("error:"), "Exit 应静默无错误输出: {stderr}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn run_exit_error_prints_and_codes() {
+    // F2：ExitType.Error——打印错误消息、进程退出码 = 请求码
+    let path = temp_hc_file(
+        "err",
+        "import H.std.{io};\n\
+         fn main(args: o Vec(String)) !void {\n\
+             io.exit(ExitType.Error, 3);\n\
+         }\n",
+    );
+    let out = Command::new(hc_bin())
+        .arg("run")
+        .arg(&path)
+        .output()
+        .expect("run hc");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_eq!(out.status.code(), Some(3), "Error 非零码应映射进程退出码: {stderr}");
+    assert!(
+        stderr.contains("error: program exited with code 3"),
+        "Error 应打印错误消息: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn run_ir_exit_propagates_code() {
+    // F2：`hc run --ir` 同语义——Error 打印 + 退出码传播（此前 IR 侧恒为 0）
+    let path = temp_hc_file(
+        "ir_err",
+        "import H.std.{io};\n\
+         fn main(args: o Vec(String)) !void {\n\
+             io.exit(ExitType.Error, 3);\n\
+         }\n",
+    );
+    let out = Command::new(hc_bin())
+        .arg("run")
+        .arg("--ir")
+        .arg(&path)
+        .output()
+        .expect("run hc --ir");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_eq!(out.status.code(), Some(3), "IR 侧 Error 退出码应传播: {stderr}");
+    assert!(
+        stderr.contains("error: program exited with code 3"),
+        "IR 侧 Error 应打印错误消息: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

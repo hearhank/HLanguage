@@ -107,6 +107,27 @@ fn io_exit_error_code() {
 }
 
 #[test]
+fn io_exit_exit_nonzero_sets_code() {
+    // F2：ExitType.Exit 非零码——静默请求退出，exit_code 记录该码（进程层映射在 CLI）
+    let src = "fn main(io: Io) !void { io.exit(ExitType.Exit, 7); }\n";
+    let program = hc::parse_source(src).expect("parse");
+    let mut interp = Interp::new(src);
+    interp.load(&program).expect("load");
+    interp.run_main().expect("exit should be captured");
+    assert_eq!(interp.exit_code, Some(7));
+}
+
+#[test]
+fn io_exit_args_arity_checked() {
+    // F2：io.exit 双参数（ExitType, code）——少参/非 Int 码 → 运行期错误
+    let program = hc::parse_source("fn main(io: Io) !void { io.exit(ExitType.Exit); }\n").expect("parse");
+    let mut interp = Interp::new("fn main(io: Io) !void { io.exit(ExitType.Exit); }");
+    interp.load(&program).expect("load");
+    let e = interp.run_main().expect_err("少参应报错");
+    assert_eq!(e.name, "ArityMismatch");
+}
+
+#[test]
 fn zero_arg_main_runs() {
     // 零参 main：入口按参数个数选版本（不应误传 io 实参 → ArityMismatch）
     let src = "fn main() i32 { return 42; }\n";

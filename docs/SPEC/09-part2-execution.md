@@ -67,7 +67,7 @@
 ### 2.3 测试空白
 
 - ~~`[SKIP]` 分支（`error.SkipTest`）零覆盖（23-tests.hc 中为注释）→ F1~~ ✅ F1 已完成（2026-08-17，见 §3 组 F 注）
-- `io.exit`/`ExitType` 零覆盖 → F2
+- ~~`io.exit`/`ExitType` 零覆盖 → F2~~ ✅ F2 已完成（2026-08-17，见 §3 组 F 注）
 - 测试基建自身（退出码/注入/汇总）无独立测试文件 → F3
 - fs 余项（append/rename/remove/list_dir/read_int/write_int）、`io.stdin`、`parse_int/parse_float` 无直测 → F4
 
@@ -149,6 +149,8 @@
 | F4 | 直测补全：fs 余项（append/rename/remove/list_dir/read_int/write_int）+ `io.stdin` + parse_int/parse_float | io.rs/parse 测试绿 | A5b | 1.5h |
 
 > ✅ **F1 已完成（2026-08-17）**：`[SKIP]` 分支触发——23-tests.hc 的 `skip_example` 自注释恢复为实际 `return error.SkipTest;`。interp `run_tests` 值通道在通用 FAIL 臂前增 `Ok(Value::Err{name:"SkipTest"})` → 统计 SKIP（输出 `[SKIP]`，不计 passed/failed）；原生跑器 `emit_test_runner` 传入 `ErrorCodeTable`，`error.SkipTest` 经「错误码载荷 == SkipTest 码」识别 → 打印 `[SKIP]` 续跑下一测试（其余错误仍 `hc_abort_unhandled` abort），并修正跑器为按实际 func 索引命名标签（`@__init__` 穿插时原 `t0`/`t{i+1}` 假设失效）。回归：ex23_tests 断言 `s>=1`；interp 汇总 125 passed/1 skipped、compile 23-tests.hc 仍 MATCH、门禁 53 mismatch 不变。
+>
+> ✅ **F2 已完成（2026-08-17）**：`io.exit`/`ExitType` 测试（Exit 静默/Error 打印/退出码）。CLI 端到端（cli.rs 4 项）：Exit code0 静默成功且 exit 后代码不执行、Exit code5 进程退出码 5 静默、Error code3 打印 `error: program exited with code 3` + 进程退出码 3、`--ir` 同语义。interp 直测（errors.rs 3 项）：Exit 非零码 exit_code 记录、少参 ArityMismatch。**顺带修复 IR 侧退出码丢失**：`IrRuntime.ctx` 增 `exit_code` 字段，`call_io_method_ir("exit")` 记录请求码；`IrRunOutcome` 增 `Exited(u8)`，`execute_ir`/`ir_exit` 映射进程退出码（此前 `hc run --ir` 打印错误消息却恒退出 0，违背四后端同语义）。main.rs 单测 `ir_io_exit_maps_code` 锁定。
 
 ### G. 线程生命周期（依赖：M5 运行时 + 每线程 alloc（Q8）；捕获规则 02 E2.2 既有定义）
 
