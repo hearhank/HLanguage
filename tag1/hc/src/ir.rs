@@ -421,7 +421,9 @@ pub struct TypeTable {
 
 #[derive(Debug, Default, Clone)]
 pub struct ClassInfo {
-    pub fields: Vec<String>,
+    /// 字段（名 + 类型，声明序）——`alloc.init(T)` 默认字段构造用（对齐 oracle
+    /// `default_value`：无参构造 = 类型空实例，字段逐默认值）。
+    pub fields: Vec<(String, Type)>,
     pub methods: Vec<String>,
     /// [continuous] 连续内存值类型（H1 特性标注）：赋值即复制（值语义），非别名。
     /// 驱动 `Stmt::VarDecl` 降级发射 `DeepCopy`（对齐 oracle `type_is_continuous`）。
@@ -452,7 +454,7 @@ fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
                 ..
             } => {
                 let ci = ClassInfo {
-                    fields: fields.iter().map(|f| f.name.clone()).collect(),
+                    fields: fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect(),
                     methods: methods.iter().map(|m| m.name.clone()).collect(),
                     continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
                 };
@@ -1376,11 +1378,34 @@ impl<'a> LowerCtx<'a> {
                     }
                     _ => None,
                 };
+                // `Type.new(args, alloc)` 构造器（对齐 oracle `call_new_builtin` interp.rs:
+                // 4661-4695）：已知 class 类型名 → MakeClass 按字段声明序填位置参数，alloc
+                // first/last 跳过，缺省字段落默认值。用户静态函数 `Type.new` 优先。
+                if let Some(qn) = &callee_name {
+                    if let Some((ns, method)) = qn.rsplit_once('.') {
+                        if method == "new"
+                            && !self.funcs.contains(qn)
+                            && self.types.classes.contains_key(ns)
+                        {
+                            return self.lower_new_constructor(ns, args);
+                        }
+                    }
+                }
                 let arg_ts: Vec<usize> = args
                     .iter()
                     .enumerate()
                     .map(|(i, a)| {
                         if let Some(cn) = &callee_name {
+                            // alloc.init(SomeClass)：已知 class 类型名 → 默认字段 MakeClass
+                            // （对齐 oracle 无参构造 = 类型空实例，字段逐默认值；未知/枚举
+                            // 类型名回退 Const Str——运行时建空实例）。
+                            if cn == "alloc.init" && i == 0 {
+                                if let Expr::Ident(n, _) = a {
+                                    if self.types.classes.contains_key(n) {
+                                        return self.lower_alloc_init_defaults(n);
+                                    }
+                                }
+                            }
                             if is_type_arg_pos(cn, i) {
                                 let name = match a {
                                     Expr::Ident(n, _) => Some(n.clone()),
@@ -1967,10 +1992,26 @@ impl<'a> LowerCtx<'a> {
                     }
                 });
             }
-            // 字段赋值：`p.x = v`（仅 Class 目标；非 Class → TypeError——对齐 eval_assign Field 臂）
+            // 字段赋值：`p.x = v`（仅 Class 目标；非 Class → TypeError——对齐 eval_assign Field 臂）。
+            // 复合（`p.x += v`）：cur = 字段读 + binop + 写回（对齐 oracle eval_assign 先
+            // eval(target) 求当前值再 binop；base 双求值语义与 oracle 一致）。
             Expr::Field { base, field, .. } => {
                 let b = self.lower_expr(base);
-                let v = self.lower_expr(value);
+                let v = match op {
+                    AssignOp::Set => self.lower_expr(value),
+                    _ => {
+                        let cur = self.lower_expr(target);
+                        let rhs = self.lower_expr(value);
+                        let r = self.alloc_slot();
+                        self.push(IrInst::Bin {
+                            op: to_assign_binop(op),
+                            temp: r,
+                            a: cur,
+                            b: rhs,
+                        });
+                        r
+                    }
+                };
                 self.push(IrInst::StoreField {
                     base: b,
                     field: field.clone(),
@@ -2001,7 +2042,22 @@ impl<'a> LowerCtx<'a> {
                     }
                 }
                 let b = self.lower_expr(base);
-                let v = self.lower_expr(value);
+                let v = match op {
+                    AssignOp::Set => self.lower_expr(value),
+                    // 复合（`p.x += v`）：cur = 字段读 + binop + 写回（对齐 eval_assign）
+                    _ => {
+                        let cur = self.lower_expr(target);
+                        let rhs = self.lower_expr(value);
+                        let r = self.alloc_slot();
+                        self.push(IrInst::Bin {
+                            op: to_assign_binop(op),
+                            temp: r,
+                            a: cur,
+                            b: rhs,
+                        });
+                        r
+                    }
+                };
                 self.push(IrInst::StoreField {
                     base: b,
                     field: field.clone(),
@@ -2095,6 +2151,147 @@ impl<'a> LowerCtx<'a> {
             };
         }
         matches!(init, Some(Expr::Ident(..)))
+    }
+
+    /// `alloc.init(SomeClass)` 的默认字段构造：MakeClass + 逐字段默认值（对齐 oracle
+    /// 无参构造 `alloc.init(T)` interp.rs:3912-3919——字段逐 `default_value`）。
+    /// 运行时 `call_alloc_method_ir("init")` 对 `IrValue::Class` 实参原样返回，语义等价。
+    fn lower_alloc_init_defaults(&mut self, ty_name: &str) -> usize {
+        // 先克隆字段表释放 `self.types` 借用，再可变借用 `self` 递归降级默认值。
+        let fields: Vec<(String, Type)> = self
+            .types
+            .classes
+            .get(ty_name)
+            .map(|c| c.fields.clone())
+            .unwrap_or_default();
+        let mut field_temps = Vec::with_capacity(fields.len());
+        for (fname, fty) in &fields {
+            let v = self.lower_default_value(fty);
+            field_temps.push((fname.clone(), v));
+        }
+        let t = self.alloc_slot();
+        self.push(IrInst::MakeClass {
+            temp: t,
+            ty: ty_name.to_string(),
+            fields: field_temps,
+        });
+        t
+    }
+
+    /// `Type.new(args, alloc)` 构造器降级（对齐 oracle `call_new_builtin` interp.rs:
+    /// 4661-4695）：位置参数按字段声明序填充，alloc-first/alloc-last 跳过分配器实参，
+    /// 缺省字段落默认值（Vec 字段 → 空 Arr，余同 `lower_default_value`）。发射 `MakeClass`
+    /// —— run_ir/字节码/LLVM 三后端经既有指令语义对齐 tree-walking oracle。
+    fn lower_new_constructor(&mut self, ty_name: &str, args: &[Expr]) -> usize {
+        // 先克隆字段表释放 `self.types` 借用，再可变借用 `self` 递归降级默认值。
+        let fields: Vec<(String, Type)> = self
+            .types
+            .classes
+            .get(ty_name)
+            .map(|c| c.fields.clone())
+            .unwrap_or_default();
+        let (vals_start, vals_end) = if args.len() > 1 {
+            let is_alloc_first = matches!(&args[0], Expr::Ident(n, _) if n == "alloc");
+            let is_alloc_last = matches!(args.last(), Some(Expr::Ident(n, _)) if n == "alloc");
+            if is_alloc_first {
+                (1usize, args.len())
+            } else if is_alloc_last {
+                (0usize, args.len() - 1)
+            } else {
+                (0usize, args.len())
+            }
+        } else {
+            (0usize, args.len())
+        };
+        let mut ai = vals_start;
+        let mut field_temps = Vec::with_capacity(fields.len());
+        for (fname, fty) in &fields {
+            if ai < vals_end {
+                let t = self.lower_expr(&args[ai]);
+                field_temps.push((fname.clone(), t));
+                ai += 1;
+            } else {
+                let t = self.lower_default_value(fty);
+                field_temps.push((fname.clone(), t));
+            }
+        }
+        let t = self.alloc_slot();
+        self.push(IrInst::MakeClass {
+            temp: t,
+            ty: ty_name.to_string(),
+            fields: field_temps,
+        });
+        t
+    }
+
+    /// 类型默认值（对齐 oracle `default_value` interp.rs:1036-1080）：标量零值 /
+    /// 空字符串 / 空集合 / `?T`→Opt(None) / 命名 class 递归默认字段 / 枚举空变体。
+    fn lower_default_value(&mut self, ty: &Type) -> usize {
+        let t = self.alloc_slot();
+        match ty.strip() {
+            Type::Named(n, _) => match n.as_str() {
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "u128" | "usize" => {
+                    self.push(IrInst::Const { temp: t, val: IrConst::Int(0) });
+                }
+                "f32" | "f64" | "f16" | "f128" => {
+                    self.push(IrInst::Const { temp: t, val: IrConst::Float(0.0) });
+                }
+                "bool" => {
+                    self.push(IrInst::Const { temp: t, val: IrConst::Bool(false) });
+                }
+                "void" => {
+                    self.push(IrInst::Const { temp: t, val: IrConst::Void });
+                }
+                "String" | "&[u8]" => {
+                    self.push(IrInst::Const { temp: t, val: IrConst::Str(String::new()) });
+                }
+                "Vec" | "Deque" => {
+                    self.push(IrInst::MakeArr { temp: t, items: vec![] });
+                }
+                "Map" => {
+                    self.push(IrInst::MakeClass { temp: t, ty: "Map".into(), fields: vec![] });
+                }
+                _ => {
+                    // Vec(T) / Map(K,V) 泛型集合形态
+                    if n == "Vec" {
+                        self.push(IrInst::MakeArr { temp: t, items: vec![] });
+                    } else if n == "Map" {
+                        self.push(IrInst::MakeClass { temp: t, ty: "Map".into(), fields: vec![] });
+                    } else if let Some(ci) = self.types.classes.get(n) {
+                        // 命名 class：递归默认字段（先克隆字段表释放 `self.types` 借用）
+                        let cls_fields = ci.fields.clone();
+                        let mut fields = Vec::with_capacity(cls_fields.len());
+                        for (fname, fty) in &cls_fields {
+                            let v = self.lower_default_value(fty);
+                            fields.push((fname.clone(), v));
+                        }
+                        self.push(IrInst::MakeClass { temp: t, ty: n.clone(), fields });
+                    } else {
+                        // 未知命名类型（enum 等）：空变体（对齐 oracle default_value Enum 臂）
+                        self.push(IrInst::MakeEnum {
+                            temp: t,
+                            name: n.clone(),
+                            variant: "__none__".into(),
+                            payload: None,
+                        });
+                    }
+                }
+            },
+            Type::Optional(_) => {
+                self.push(IrInst::Const { temp: t, val: IrConst::Null });
+            }
+            Type::Ptr(_, _) | Type::Infer | Type::Owned(_) => {
+                self.push(IrInst::Const { temp: t, val: IrConst::Void });
+            }
+            Type::Slice(_, _) => {
+                self.push(IrInst::Const { temp: t, val: IrConst::Str(String::new()) });
+            }
+            _ => {
+                self.push(IrInst::Const { temp: t, val: IrConst::Void });
+            }
+        }
+        t
     }
 
     fn lower_stmt(&mut self, s: &Stmt) {

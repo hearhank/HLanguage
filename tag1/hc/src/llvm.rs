@@ -4041,8 +4041,10 @@ impl BodyEmitter {
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
-    /// alloc.init(T)：无字段类空实例（Phase 7 子集；字段默认值布局留待 Phase 9 全量）。
-    /// 类型名在 slot_consts 以 Const Str 存在（is_type_arg_pos arg0），与 MakeClass 同址。
+    /// alloc.init(T)：P11d 起已知 class 类型名在 lowering 已降级为默认字段 MakeClass
+    /// （`lower_alloc_init_defaults`），实参即类实例 → 原样返回（对齐 run_ir
+    /// `call_alloc_method_ir` "init" 的 `IrValue::Class` 分支）。
+    /// 仅非类名类型（Const Str 仍在 slot_consts）落入旧路径：无字段空实例（Phase 7 子集）。
     fn call_alloc_init(
         &mut self,
         args: &[usize],
@@ -4050,18 +4052,26 @@ impl BodyEmitter {
         slot_consts: &HashMap<usize, IrConst>,
         strings: &[String],
     ) {
-        let Some(ty) = const_str_arg(slot_consts, args.first()) else {
+        if let Some(ty) = const_str_arg(slot_consts, args.first()) {
+            // 类型名字符串（非类名，如内建类型）→ 空实例（旧路径）
+            let (ti, tn) = str_idx(strings, &ty);
+            let g = self.r();
+            self.emit(format!(
+                "{g} = getelementptr inbounds [{tn} x i8], ptr @.str.{ti}, i64 0, i64 0"
+            ));
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @hc_make_class(i8* {g}, i64 0)"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
+        // 实参已是类实例（lower_alloc_init_defaults 的 MakeClass 结果）→ 原样返回
+        let Some(&vslot) = args.first() else {
             self.abort_feature("builtin");
             return;
         };
-        let (ti, tn) = str_idx(strings, &ty);
-        let g = self.r();
-        self.emit(format!(
-            "{g} = getelementptr inbounds [{tn} x i8], ptr @.str.{ti}, i64 0, i64 0"
-        ));
-        let res = self.r();
-        self.emit(format!("{res} = call %Value @hc_make_class(i8* {g}, i64 0)"));
-        self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+        let v = self.r();
+        self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+        self.emit(format!("store %Value {v}, %Value* %sp.{temp}"));
     }
 
     /// `io.print(fmt, args...)`（含静态形态 `Call{"io.print"}` 与实例 `CallMethod`）。
@@ -5016,12 +5026,12 @@ mod tests {
 
     #[test]
     fn phase7_alloc_init_emits_make_class() {
-        // alloc.init(ABC) → @hc_make_class(ABC 类型名全局, i64 0)（无字段类子集）
+        // alloc.init(ABC) → MakeClass 默认字段 → @hc_make_class(ABC 类型名全局, i64 1)（1 字段）
         let ll = gen(
             "class ABC { x: i32, } fn main() i32 { var abc = alloc.init(ABC); return abc.x; }",
         );
         assert!(ll.contains("call %Value @hc_make_class(i8*"), "{ll}");
-        assert!(ll.contains("i64 0)"), "{ll}");
+        assert!(ll.contains("i64 1)"), "{ll}");
         assert!(ll.contains("c\"ABC\\00\""), "{ll}");
     }
 
