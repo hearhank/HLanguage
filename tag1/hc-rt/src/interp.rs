@@ -1896,7 +1896,14 @@ impl Interp {
             Expr::Ident(name, span) => {
                 // 隐式环境注入
                 match name.as_str() {
-                    "alloc" => return Ok(Value::Alloc),
+                    "alloc" => {
+                        // Q8：alloc 先查作用域（线程子任务可绑定每线程 alloc 实例），
+                        // 否则回退全局哨兵（根作用域已绑定 Value::Alloc，行为不变）
+                        if let Some(cell) = self.lookup(name) {
+                            return Ok(cell.borrow().clone());
+                        }
+                        return Ok(Value::Alloc);
+                    }
                     "io" => return Ok(self.io_value()),
                     "stdout" | "stderr" => return Ok(self.io_value()),
                     "pi" => return Ok(Value::Float(std::f64::consts::PI)),
@@ -3819,6 +3826,34 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
+            // E2.2 线程生命周期（组 G，协作式延迟执行）：spawn(f, args...) o Thread(T)
+            // 立即返回句柄但不并发运行——join/detach/程序结束时才执行到完成（真并行留第三块 E2）。
+            "spawn" => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let callee = self.eval(&args[0])?;
+                let callee = self.deref_value(callee);
+                match &callee {
+                    Value::Fn(_) | Value::Closure(_) => {}
+                    _ => return Err(RtError::new("NotCallable", Some(span.clone()))),
+                }
+                let mut arg_vals = Vec::new();
+                for a in &args[1..] {
+                    arg_vals.push(self.eval(a)?);
+                }
+                // Q8：每线程独立 alloc 实例（全新 Arena；子任务执行时绑定为 alloc）
+                let alloc_v = Value::Arena(Rc::new(RefCell::new(ArenaState::new())));
+                let mut f = HashMap::new();
+                f.insert("fn".to_string(), callee);
+                f.insert("args".to_string(), Value::arr(arg_vals));
+                f.insert("alloc".to_string(), alloc_v);
+                f.insert("cancel".to_string(), Value::Bool(false));
+                f.insert("done".to_string(), Value::Bool(false));
+                f.insert("detached".to_string(), Value::Bool(false));
+                f.insert("result".to_string(), Value::Void);
+                Ok(Some(Value::class("Thread", f)))
+            }
             _ => Ok(None),
         }
     }
@@ -4518,7 +4553,137 @@ impl Interp {
                     Err(_) => Ok(Some(Value::Opt(None))),
                 }
             }
+            // E2.2 线程生命周期（组 G）：Thread 类方法 join/cancel/is_done/detach
+            (Value::Class(c), m) if c.borrow().name == "Thread" => {
+                let v = Value::Class(c.clone());
+                self.call_thread_method(&v, m, args, span)
+            }
             _ => Ok(None),
+        }
+    }
+
+    // ---------- E2.2 线程生命周期（协作式延迟执行） ----------
+
+    /// Thread 类方法分派：`join() !T`（运行到完成返回结果）/ `cancel() !void`（协作标志）/
+    /// `is_done() bool` / `detach()`（运行并弃结果）。
+    fn call_thread_method(
+        &mut self,
+        self_v: &Value,
+        m: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        if !args.is_empty() {
+            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+        }
+        match m {
+            "join" => Ok(Some(self.thread_run(self_v, span)?)),
+            "detach" => {
+                // 运行到完成并丢弃结果（副作用发生；根作用域回收）
+                let _ = self.thread_run(self_v, span)?;
+                Ok(Some(Value::Void))
+            }
+            "is_done" => {
+                let done = self.thread_field_bool(self_v, "done");
+                Ok(Some(Value::Bool(done)))
+            }
+            "cancel" => {
+                // 协作式：置标志；运行点（join/detach）检查后跳过执行 → error.Cancelled
+                self.thread_set_bool(self_v, "cancel", true);
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// 运行线程到完成（协作式延迟执行）：
+    /// - 已运行（done）→ 返回缓存 result；
+    /// - 已取消（cancel 且未运行）→ 置 done、缓存 `error.Cancelled`、返回 Cancelled；
+    /// - 否则在子任务作用域（alloc 绑定线程独立实例 Q8）中调用 fn，缓存 result 并置 done。
+    /// 硬错误（StackOverflow/ExitRequested 等）不缓存、直接传播。
+    fn thread_run(&mut self, thread: &Value, span: &Span) -> Result<Value> {
+        let tv = self.deref_value(thread.clone());
+        let (callee, args, alloc_v, cancelled, done) = match tv {
+            Value::Class(c) => {
+                let d = c.borrow();
+                let callee = d.fields.get("fn").cloned().unwrap_or(Value::Void);
+                let args = match d.fields.get("args") {
+                    Some(Value::Arr(a)) => a
+                        .borrow()
+                        .iter()
+                        .map(|c| c.borrow().clone())
+                        .collect::<Vec<_>>(),
+                    _ => vec![],
+                };
+                let alloc_v = d.fields.get("alloc").cloned().unwrap_or(Value::Alloc);
+                let cancelled = matches!(d.fields.get("cancel"), Some(Value::Bool(true)));
+                let done = matches!(d.fields.get("done"), Some(Value::Bool(true)));
+                (callee, args, alloc_v, cancelled, done)
+            }
+            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+        };
+        if done {
+            return self.thread_result(thread, span);
+        }
+        if cancelled {
+            let err_v = self.err_val("Cancelled");
+            self.thread_set_bool(thread, "done", true);
+            self.thread_set_value(thread, "result", err_v);
+            return self.thread_result(thread, span);
+        }
+        // Q8：子任务作用域绑定每线程 alloc 实例
+        self.push_scope();
+        self.bind("alloc", alloc_v);
+        let r = (|| -> Result<Value> {
+            match callee {
+                Value::Fn(fname) => {
+                    let fdef = self.pick_fn(&fname, &args)?;
+                    self.call_fn(&fdef, &args, span)
+                }
+                Value::Closure(cl) => self.call_closure(&cl, &args, span),
+                _ => Err(RtError::new("NotCallable", Some(span.clone()))),
+            }
+        })();
+        let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
+        let result = match r {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        };
+        self.thread_set_bool(thread, "done", true);
+        self.thread_set_value(thread, "result", result.clone());
+        Ok(result)
+    }
+
+    /// 读取线程缓存结果（done 或已取消时有效）
+    fn thread_result(&self, thread: &Value, span: &Span) -> Result<Value> {
+        let tv = self.deref_value(thread.clone());
+        if let Value::Class(c) = tv {
+            let d = c.borrow();
+            if let Some(v) = d.fields.get("result") {
+                return Ok(v.clone());
+            }
+        }
+        Err(RtError::new("TypeError", Some(span.clone())))
+    }
+
+    fn thread_set_bool(&self, thread: &Value, key: &str, v: bool) {
+        if let Value::Class(c) = thread {
+            c.borrow_mut().fields.insert(key.to_string(), Value::Bool(v));
+        }
+    }
+
+    fn thread_field_bool(&self, thread: &Value, key: &str) -> bool {
+        if let Value::Class(c) = thread {
+            if let Some(Value::Bool(b)) = c.borrow().fields.get(key) {
+                return *b;
+            }
+        }
+        false
+    }
+
+    fn thread_set_value(&self, thread: &Value, key: &str, v: Value) {
+        if let Value::Class(c) = thread {
+            c.borrow_mut().fields.insert(key.to_string(), v);
         }
     }
 

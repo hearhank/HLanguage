@@ -285,6 +285,7 @@ fn is_builtin_fn(name: &str) -> bool {
                 | "sqrt"
                 | "fmt_int"
                 | "fmt_float"
+                | "spawn"
         )
 }
 
@@ -2860,6 +2861,9 @@ impl Checker {
                 width: IntWidth::USize,
             })),
             "min" | "max" | "sort" | "fmt_int" | "fmt_float" => SType::Unknown,
+            // G1：`spawn(f, args...) o Thread(T)` 返回线程句柄（协作式延迟执行）。
+            // G3 精化：提取 callee 返回类型 T 作泛型实参并加捕获/冻结窗口检查。
+            "spawn" => SType::Named("Thread".to_string(), vec![]),
             _ => SType::Void,
         }
     }

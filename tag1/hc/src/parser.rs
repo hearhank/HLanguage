@@ -1586,6 +1586,19 @@ impl Parser {
                 let e = self.parse_unary()?;
                 Ok(Expr::Try(Box::new(e), start))
             }
+            TokenKind::KwSpawn => {
+                // E2.2：`spawn(f, args...) o Thread(T)`——以普通调用形态解析
+                // （callee = Ident("spawn")），语义层按内建处理（is_builtin_fn "spawn"）。
+                // 第三块 E2 的 async/await/spawn 并发语法不在此列，保持 out-of-scope。
+                self.advance();
+                let args = self.parse_call_args()?;
+                let end = self.span();
+                Ok(Expr::Call {
+                    callee: Box::new(Expr::Ident("spawn".to_string(), start.clone())),
+                    args,
+                    span: start.merge(&end),
+                })
+            }
             TokenKind::KwMove => {
                 // move |v| ... = move 捕获闭包；否则 move x（所有权转移标记，M2.4——
                 // 保留供语义检查器验证唯一约束 = 拥有所有权；原绑定仍可访问，悬垂/冲突由用户负责）
