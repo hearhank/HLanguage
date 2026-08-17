@@ -1,9 +1,12 @@
 //! 组 E E2：`await` ≡ `join()`——async fn 调用点返回 `Future(R)`（延迟执行），
 //! await 运行体到完成（协作式，复用 G 组 Thread 机制）；协作式取消。
+//! 组 E E3：`Io.threaded()`/`Io.evented()` 单线程事件循环——`runtime` 字段标识
+//! 运行时形态；`io.poll()` 排空根回收队列（evented）驱动待处理任务，threaded 恒 0。
 //!
 //! tree-walking interp 侧验证：async fn 调用不立即运行体（延迟）、await 运行到完成并
 //! 返回结果、错误 union 传播（`Future(!R)`）、cancel 协作标志（await 前取消 →
 //! `error.Cancelled`）、is_done 状态转移、内联 `await async_fn()`、await 幂等缓存。
+//! E3：Io 构造器返回运行时字段正确、poll 排空事件队列（未 join 线程 → 运行到完成）。
 //! 一致性（interp == IR）见 hc-rt/tests/consistency.rs `e2_async_await_consistent`。
 
 use hc_rt::Interp;
@@ -133,6 +136,87 @@ async fn outer(n: i32) i32 { return await inner(n) + 1; }
 [test] fn t() !void {
     var r = await outer(10);
     try expect_eq(r, 21);
+}
+"#,
+    );
+}
+
+// ===== E3：Io.threaded()/Io.evented() 单线程事件循环 + 事件队列轮询 =====
+
+#[test]
+fn io_runtime_constructors() {
+    // E3：Io.threaded(alloc)/Io.evented(alloc) 返回带 runtime 字段的 Io 值；
+    // 两种运行时 poll() 空队列均返回 0（无待处理任务）
+    run_ok(
+        r#"
+[test] fn t() !void {
+    var ev = Io.evented(alloc);
+    var th = Io.threaded(alloc);
+    try expect_eq(th.poll(), 0);
+    try expect_eq(ev.poll(), 0);
+}
+"#,
+    );
+}
+
+#[test]
+fn evented_poll_drains_pending_tasks() {
+    // E3：evented 事件循环 poll() 排空根回收队列（作用域退出提升的未 join 线程），
+    // 返回本次运行的任务数并运行体到完成；threaded poll 恒为 0（无事件循环）
+    run_ok(
+        r#"
+global g: i32 = 0;
+fn bump() void { g = g + 1; }
+[test] fn t() !void {
+    var ev = Io.evented(alloc);
+    var th = Io.threaded(alloc);
+    {
+        var thd = spawn(bump);
+    }
+    try expect_eq(g, 0);
+    try expect_eq(th.poll(), 0);
+    try expect_eq(g, 0);
+    try expect_eq(ev.poll(), 1);
+    try expect_eq(g, 1);
+    try expect_eq(ev.poll(), 0);
+}
+"#,
+    );
+}
+
+#[test]
+fn runtime_field_reflects_constructor() {
+    // E3：runtime 字段由构造器决定（Io.evented → "evented"；Io.threaded → "threaded"；
+    // 默认 io → "threaded"）；io.print 输出三种运行时名
+    run_ok(
+        r#"
+[test] fn t() !void {
+    var ev = Io.evented(alloc);
+    var th = Io.threaded(alloc);
+    io.print("ev.runtime = {}\n", ev.runtime);
+    io.print("th.runtime = {}\n", th.runtime);
+    io.print("io.runtime = {}\n", io.runtime);
+}
+"#,
+    );
+}
+
+#[test]
+fn async_under_evented_io() {
+    // E3：evented 运行时下 async/await 正常（Future 协作式运行），且 io.poll() 可
+    // 驱动未 join 线程
+    run_ok(
+        r#"
+global g: i32 = 0;
+async fn bump() i32 { g = g + 1; return g; }
+[test] fn t() !void {
+    var ev = Io.evented(alloc);
+    var fut = bump();
+    try expect_eq(g, 0);
+    var r = await fut;
+    try expect_eq(r, 1);
+    try expect_eq(g, 1);
+    try expect_eq(ev.poll(), 0);
 }
 "#,
     );

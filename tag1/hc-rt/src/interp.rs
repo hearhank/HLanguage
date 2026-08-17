@@ -1371,12 +1371,21 @@ impl Interp {
     }
 
     /// M5.4：Io 实例（含 fs/time/net 子模块；fs = 路径式文件 API，time = 毫秒时钟，
-    /// net = TCP 基础）
+    /// net = TCP 基础）。默认运行时 = threaded（阻塞 IO，spec 06-10 §Io 执行模型）。
     fn io_value(&self) -> Value {
+        self.io_value_with_runtime("threaded")
+    }
+
+    /// 组 E E3：Io 运行时构造——`Io.threaded(alloc)`（阻塞 IO + 每操作线程，默认风味）
+    /// / `Io.evented(alloc)`（单线程事件循环风味）。协作式模型下两者同为单线程确定性
+    /// 执行（ADR-0011：真线程/非阻塞 IO 归 1.x）；`runtime` 字段供程序查询，evented
+    /// 的 `io.poll()` 事件循环每轮运行待处理延迟任务（见 io_poll）。
+    fn io_value_with_runtime(&self, runtime: &str) -> Value {
         let mut f = HashMap::new();
         f.insert("fs".into(), Value::class("Fs", HashMap::new()));
         f.insert("time".into(), Value::class("Time", HashMap::new()));
         f.insert("net".into(), Value::class("Net", HashMap::new()));
+        f.insert("runtime".into(), Value::str(runtime));
         Value::class("Io", f)
     }
 
@@ -3225,6 +3234,17 @@ impl Interp {
                     if bname == "Arena" && field == "init" {
                         return Ok(Value::Arena(Rc::new(RefCell::new(ArenaState::new()))));
                     }
+                    // 组 E E3：Io.threaded(alloc) / Io.evented(alloc) 运行时构造
+                    // （协作式单线程；evented = 单线程事件循环风味，携带 runtime 字段）
+                    if bname == "Io" && (field == "threaded" || field == "evented") {
+                        // 实参（alloc）求值后丢弃——Io 无独立分配器（对齐 io_value 形态）
+                        for a in args {
+                            let _ = self.eval(a)?;
+                        }
+                        return Ok(self.io_value_with_runtime(
+                            if field == "evented" { "evented" } else { "threaded" },
+                        ));
+                    }
                     // String.from / String.concat 内建（String = 内建新类型，M3 定案）
                     if bname == "String" {
                         return self.call_string_builtin(field, args, span);
@@ -4902,6 +4922,12 @@ impl Interp {
                 self.call_io_print(args, span)?;
                 Ok(Some(Value::Void))
             }
+            // 组 E E3：io.poll()——evented 事件循环一轮（运行待处理延迟任务，返回事件数）
+            (Value::Class(c), "poll") if c.borrow().name == "Io" => {
+                let v = Value::Class(c.clone());
+                let n = self.io_poll(&v, args, span)?;
+                Ok(Some(Value::Int(n as i128)))
+            }
             // io.exit(ExitType, code)（M4.2：Exit 静默正常 / Error 错误退出打印）
             (Value::Class(c), "exit") if c.borrow().name == "Io" => {
                 if args.len() != 2 {
@@ -5394,6 +5420,36 @@ impl Interp {
             }
             _ => Ok(None),
         }
+    }
+
+    /// 组 E E3：evented 事件循环一轮 poll——运行待处理的延迟任务（根回收队列：
+    /// 作用域退出时未 join/未 detach 的 Thread 提升到根队列），返回处理的事件数。
+    /// threaded（阻塞 IO，默认）无事件循环 → 0；evented 下每轮 poll 运行队列到空
+    /// （协作式、确定性；错误丢弃——副作用已发生，不改变测试通过判定）。
+    /// 非阻塞 IO 事件源（select/epoll 式）归 1.x 真线程（ADR-0011）。
+    fn io_poll(&mut self, io: &Value, args: &[Expr], span: &Span) -> Result<usize> {
+        if !args.is_empty() {
+            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+        }
+        let evented = match io {
+            Value::Class(c) => {
+                let d = c.borrow();
+                matches!(
+                    d.fields.get("runtime"),
+                    Some(Value::Str(s)) if s.borrow().as_slice() == b"evented"
+                )
+            }
+            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+        };
+        if !evented {
+            return Ok(0);
+        }
+        let pending = std::mem::take(&mut self.root_threads);
+        let n = pending.len();
+        for t in pending {
+            let _ = self.thread_run(&t, &Span::new(0, 0, 0, 0));
+        }
+        Ok(n)
     }
 
     fn call_io_print(&mut self, args: &[Expr], span: &Span) -> Result<()> {
