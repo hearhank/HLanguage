@@ -3380,8 +3380,54 @@ fn emit_init_calls(out: &mut String, module: &IrModule) {
     }
 }
 
+/// 播种隐式环境全局（对齐 IrRuntime::init 的 `implicit_env_value`，ir.rs:4358）：
+/// `pi`→Float(PI) 常量、`Vec/Deque/Table`→空 Arr、`io/test_io/stdout/stderr`→Io 实例。
+/// 仅在 `@.h_globals` 数组含该名（module.globals 恒含 IMPLICIT_ENV）时发射 store；
+/// Map/alloc 需字符串全局（非恒在），未播种——原生路径经名分派（alloc.init 等）不 LoadGlobal。
+/// 入口 main/test 均在 `@__init__` 前执行（用户 init 可读隐式环境）。P11d：30-interface 的
+/// `Circle.area` 读 `pi` 原生此前为 Void → 0.0；播种后对齐 oracle。
+fn emit_implicit_env_seed(out: &mut String, module: &IrModule) {
+    let n = module.globals.len();
+    let gidx = globals_index(module);
+    // pi → Float(PI)
+    if let Some(&i) = gidx.get("pi") {
+        let bits = std::f64::consts::PI.to_bits() as u128;
+        let _ = writeln!(
+            out,
+            "  %seep = getelementptr inbounds [{n} x %Value], ptr @.h_globals, i64 0, i64 {i}"
+        );
+        let _ = writeln!(
+            out,
+            "  store %Value {{ i32 {T_FLOAT}, i128 {bits} }}, %Value* %seep"
+        );
+    }
+    // Vec/Deque/Table → 空 Arr（对齐 implicit_env_value make_arr(空)）
+    for name in ["Vec", "Deque", "Table"] {
+        if let Some(&i) = gidx.get(name) {
+            let _ = writeln!(out, "  %seev{i} = call %Value @hc_make_arr(i64 0)");
+            let _ = writeln!(
+                out,
+                "  %seep{i} = getelementptr inbounds [{n} x %Value], ptr @.h_globals, i64 0, i64 {i}"
+            );
+            let _ = writeln!(out, "  store %Value %seev{i}, %Value* %seep{i}");
+        }
+    }
+    // io/test_io/stdout/stderr → Io 实例（hc_make_io helper 恒发射）
+    for name in ["io", "test_io", "stdout", "stderr"] {
+        if let Some(&i) = gidx.get(name) {
+            let _ = writeln!(out, "  %seev{i} = call %Value @hc_make_io()");
+            let _ = writeln!(
+                out,
+                "  %seep{i} = getelementptr inbounds [{n} x %Value], ptr @.h_globals, i64 0, i64 {i}"
+            );
+            let _ = writeln!(out, "  store %Value %seev{i}, %Value* %seep{i}");
+        }
+    }
+}
+
 fn emit_main_wrapper(out: &mut String, module: &IrModule) {
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
+    emit_implicit_env_seed(out, module);
     emit_init_calls(out, module);
     if let Some(idxs) = module.func_index.get("main") {
         // main 入口按 arity 精确取（无则首个——重载 main 不存在，安全兜底）
@@ -3448,6 +3494,7 @@ fn emit_test_runner(out: &mut String, module: &IrModule) {
 
     out.push_str("define i32 @main(i32 %argc, i8** %argv) {\n");
     out.push_str("  %argvoid = load %Value, %Value* @.void_value\n");
+    emit_implicit_env_seed(out, module);
     emit_init_calls(out, module);
     for (idx, f) in &tests {
         let run = format!("[RUN] {}", f.name);
@@ -5087,5 +5134,26 @@ fn f() i32 {
         // 无连续类 → 恒等门（不含递归 helper/strcmp 链），且无 DeepCopy 调用
         assert!(!ll.contains("call %Value @hc_deep_copy_cont"), "{ll}");
         assert!(!ll.contains("define %Value @hc_deep_copy("), "{ll}");
+    }
+
+    #[test]
+    fn implicit_env_pi_seeded_in_entry() {
+        // P11d：30-interface 的 Circle.area 读 `pi`——原生 LoadGlobal 此前为 Void → 0.0；
+        // main/test 入口播种 Float(PI) 常量到 `@.h_globals` 槽位（对齐 IrRuntime::init）。
+        let ll = gen(
+            r#"fn area(r: f64) f64 {
+    return pi * r * r;
+}"#,
+        );
+        // Float tag=3 + PI 位模式常量；对 @.h_globals 数组 GEP 后 store
+        assert!(
+            ll.contains("store %Value { i32 3, i128 4614256656552045848 }"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains("getelementptr inbounds [10 x %Value], ptr @.h_globals, i64 0, i64 5"),
+            "{ll}"
+        );
+        assert!(ll.contains("call %Value @hc_make_arr(i64 0)"), "{ll}"); // Vec/Deque/Table 空 Arr 播种
     }
 }
