@@ -18,6 +18,7 @@
 //! 复杂库操作 = `CallBuiltin` 原子指令。
 
 use crate::ast::*;
+use crate::comptime::{self, Instantiated};
 use crate::errorcodes::ErrorCodeTable;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
@@ -507,6 +508,8 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     for g in IMPLICIT_ENV {
         globals.insert((*g).to_string());
     }
+    // E1.2 组 D：类型函数定义表（comptime-only，体降级跳过；类型应用点惰性具体化）
+    let type_fns = collect_type_fns(program);
     let mut module = IrModule::default();
     // C3：文件级 import 展开表（bound → 完整限定名 / 模块前缀）——原生链接与 IR 调用名对齐
     let (import_syms, import_mods) = collect_imports(program);
@@ -532,6 +535,7 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
             &types,
             &funcs,
             &globals,
+            &type_fns,
             &import_syms,
             &import_mods,
         )?;
@@ -544,6 +548,7 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
         &types,
         &funcs,
         &globals,
+        &type_fns,
         &mut module.closures,
         &import_syms,
         &import_mods,
@@ -696,6 +701,55 @@ fn collect_fn_names(decls: &[Decl], names: &mut HashSet<String>, path: &[String]
     }
 }
 
+/// E1.2 组 D：收集类型函数定义（name → params+body），供 NamedLit 惰性具体化。
+/// 顶层 + namespace 内均收集；键 = 扁平名 + 限定名（对齐 `collect_fn_names`）。
+/// 类型函数体本身由降级**跳过**（comptime-only，运行时不执行），仅在类型应用点
+/// （`Pair(i32)`）经 `comptime::instantiate` 编译期求值。
+fn collect_type_fns(program: &Program) -> HashMap<String, (Vec<Param>, Block)> {
+    let mut map = HashMap::new();
+    collect_type_fns_in(&program.decls, &mut map, &[]);
+    map
+}
+
+fn collect_type_fns_in(
+    decls: &[Decl],
+    map: &mut HashMap<String, (Vec<Param>, Block)>,
+    path: &[String],
+) {
+    for d in decls {
+        match d {
+            Decl::Fn {
+                name,
+                params,
+                body,
+                ret,
+                ..
+            } => {
+                if comptime::is_type_fn(params, ret) {
+                    let def = (params.clone(), body.clone());
+                    map.insert(name.clone(), def.clone());
+                    if !path.is_empty() {
+                        let mut q = path.join(".");
+                        q.push('.');
+                        q.push_str(name);
+                        map.insert(q, def);
+                    }
+                }
+            }
+            Decl::Namespace {
+                name,
+                decls: nested,
+                ..
+            } => {
+                let mut p = path.to_vec();
+                p.push(name.clone());
+                collect_type_fns_in(nested, map, &p);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 构造「原生/IR 后端暂不支持」的降级错误（阶段外特性 → 硬错误而非静默丢弃）。
 fn unsupported_ir_err(what: &str, span: &Span) -> IrError {
     IrError::msg(
@@ -714,6 +768,7 @@ fn lower_decl(
     types: &TypeTable,
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
+    type_fns: &HashMap<String, (Vec<Param>, Block)>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
 ) -> Result<(), IrError> {
@@ -723,8 +778,16 @@ fn lower_decl(
             params,
             body,
             is_test,
+            ret,
             ..
         } => {
+            // E1.2 组 D：类型函数（返回 `type`）= comptime-only，跳过体降级
+            // （体含 `struct { ... }` 类型值，运行时后端不可求值；类型应用点
+            // 经 `comptime::instantiate` 编译期求值）。函数名已在 funcs 集合，
+            // 调用位判定不受影响。
+            if comptime::is_type_fn(params, ret) {
+                return Ok(());
+            }
             let func = lower_func(
                 name,
                 params,
@@ -734,6 +797,7 @@ fn lower_decl(
                 types,
                 funcs,
                 globals,
+                type_fns,
                 &mut module.closures,
                 import_syms,
                 import_mods,
@@ -752,6 +816,7 @@ fn lower_decl(
                 types,
                 funcs,
                 globals,
+                type_fns,
                 &mut module.closures,
                 import_syms,
                 import_mods,
@@ -784,6 +849,7 @@ fn lower_decl(
                     types,
                     funcs,
                     globals,
+                    type_fns,
                     &mut module.closures,
                     import_syms,
                     import_mods,
@@ -810,6 +876,7 @@ fn collect_ns_funcs(
     types: &TypeTable,
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
+    type_fns: &HashMap<String, (Vec<Param>, Block)>,
     closures: &mut Vec<IrFunc>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
@@ -821,8 +888,13 @@ fn collect_ns_funcs(
                 params,
                 body,
                 is_test,
+                ret,
                 ..
             } if !*is_test => {
+                // E1.2 组 D：类型函数跳过体降级（comptime-only）
+                if comptime::is_type_fn(params, ret) {
+                    continue;
+                }
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
                 let func = lower_func(
@@ -834,6 +906,7 @@ fn collect_ns_funcs(
                     types,
                     funcs,
                     globals,
+                    type_fns,
                     closures,
                     import_syms,
                     import_mods,
@@ -855,6 +928,7 @@ fn collect_ns_funcs(
                     types,
                     funcs,
                     globals,
+                    type_fns,
                     closures,
                     import_syms,
                     import_mods,
@@ -889,6 +963,7 @@ fn lower_func(
     types: &TypeTable,
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
+    type_fns: &HashMap<String, (Vec<Param>, Block)>,
     closures: &mut Vec<IrFunc>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
@@ -898,6 +973,7 @@ fn lower_func(
         types.clone(),
         funcs,
         globals,
+        type_fns,
         closures,
         import_syms.clone(),
         import_mods.clone(),
@@ -952,6 +1028,7 @@ fn lower_init_func(
     types: &TypeTable,
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
+    type_fns: &HashMap<String, (Vec<Param>, Block)>,
     closures: &mut Vec<IrFunc>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
@@ -964,6 +1041,7 @@ fn lower_init_func(
         types.clone(),
         funcs,
         globals,
+        type_fns,
         closures,
         import_syms.clone(),
         import_mods.clone(),
@@ -1065,6 +1143,9 @@ struct LowerCtx<'a> {
     types: TypeTable,
     /// 已知函数名集合（Phase 4）：未解析 Ident → 函数引用（FnRef）/ 静态方法调用判定
     funcs: &'a HashSet<String>,
+    /// E1.2 组 D：类型函数定义表（name → params+body，comptime-only）。`Pair(i32)`
+    /// 类型应用点惰性具体化：instantiate → 具体化 Class 登记进 `self.types`。
+    type_fns: &'a HashMap<String, (Vec<Param>, Block)>,
     /// C3：文件级 import 符号选择展开表（bound 名 → 完整限定名 `jsonlib.parse`）
     import_syms: HashMap<String, String>,
     /// C3：整模块 import 前缀展开表（bound 模块名 → 包路径 `pkg.mod`）
@@ -1099,6 +1180,7 @@ impl<'a> LowerCtx<'a> {
         types: TypeTable,
         funcs: &'a HashSet<String>,
         globals: &'a HashSet<String>,
+        type_fns: &'a HashMap<String, (Vec<Param>, Block)>,
         closures: &'a mut Vec<IrFunc>,
         import_syms: HashMap<String, String>,
         import_mods: HashMap<String, String>,
@@ -1111,6 +1193,7 @@ impl<'a> LowerCtx<'a> {
             errors,
             types,
             funcs,
+            type_fns,
             import_syms,
             import_mods,
             globals,
@@ -1820,19 +1903,32 @@ impl<'a> LowerCtx<'a> {
                     items: item_ts,
                 });
             }
-            Expr::NamedLit { ty, fields, span, .. } => {
+            Expr::NamedLit { ty, ty_args, fields, span, .. } => {
+                // E1.2 组 D：泛型应用 `Pair(i32){...}` → 惰性具体化后按具体化名构造。
+                // 具体化失败（实参个数/形态不符）→ 硬错误。
+                let ty = if ty_args.is_empty() {
+                    ty.clone()
+                } else {
+                    match self.concrete_type_name(ty, ty_args) {
+                        Ok(cn) => cn,
+                        Err(msg) => {
+                            self.fail_void(t, &msg, span);
+                            return t;
+                        }
+                    }
+                };
                 // struct 字面量 → MakeClass；枚举字面量（恰一个变体）→ MakeEnum（对齐 oracle）
-                if self.types.classes.contains_key(ty) {
+                if self.types.classes.contains_key(&ty) {
                     let f: Vec<(String, usize)> = fields
                         .iter()
                         .map(|(k, v)| (k.clone(), self.lower_expr(v)))
                         .collect();
                     self.push(IrInst::MakeClass {
                         temp: t,
-                        ty: ty.clone(),
+                        ty,
                         fields: f,
                     });
-                } else if self.types.enums.contains_key(ty) {
+                } else if self.types.enums.contains_key(&ty) {
                     if fields.len() != 1 {
                         self.fail_void(t, "多字段枚举字面量（应为单变体）", span);
                         return t;
@@ -1841,7 +1937,7 @@ impl<'a> LowerCtx<'a> {
                     let pv = self.lower_expr(payload);
                     self.push(IrInst::MakeEnum {
                         temp: t,
-                        name: ty.clone(),
+                        name: ty,
                         variant: variant.clone(),
                         payload: Some(pv),
                     });
@@ -2076,6 +2172,7 @@ impl<'a> LowerCtx<'a> {
         let types = self.types.clone();
         let funcs = self.funcs;
         let globals = self.globals;
+        let type_fns = self.type_fns;
         let closures = &mut *self.closures;
         let import_syms = self.import_syms.clone();
         let import_mods = self.import_mods.clone();
@@ -2084,6 +2181,7 @@ impl<'a> LowerCtx<'a> {
             types,
             funcs,
             globals,
+            type_fns,
             closures,
             import_syms,
             import_mods,
@@ -2607,6 +2705,54 @@ impl<'a> LowerCtx<'a> {
             }
         }
         t
+    }
+
+    /// E1.2 组 D：惰性具体化——`Pair(i32)` → 具体化名 `Pair<@i32>`。
+    ///
+    /// `self.types` 缓存命中即回；未命中则查类型函数定义表（`type_fns`，comptime-only）
+    /// → `comptime::instantiate` → 以具体化名登记 `ClassInfo` → 返回具体化名。
+    /// `args` 为空 / 非类型函数（内建泛型 `Vec(T)` 等）→ 回退基础名，由调用方既有路径处理。
+    ///
+    /// 透传形态（`return T;`）产物是**实参类型自身**：返回其规范名（`type_key`），
+    /// 使 `Pair(i32)` 与 `i32` 同义。
+    fn concrete_type_name(&mut self, name: &str, args: &[Type]) -> Result<String, String> {
+        if args.is_empty() {
+            return Ok(name.to_string());
+        }
+        let cname = comptime::concrete_name(name, args);
+        if self.types.classes.contains_key(&cname) || self.types.enums.contains_key(&cname) {
+            return Ok(cname);
+        }
+        if let Some((params, body)) = self.type_fns.get(name) {
+            match comptime::instantiate(name, params, body, args) {
+                Ok(Instantiated::Class(decl)) => {
+                    if let Decl::Class {
+                        name: cn,
+                        traits,
+                        fields,
+                        methods,
+                        ..
+                    } = &decl
+                    {
+                        let ci = ClassInfo {
+                            fields: fields
+                                .iter()
+                                .map(|f| (f.name.clone(), f.ty.clone()))
+                                .collect(),
+                            methods: methods.iter().map(|m| m.name.clone()).collect(),
+                            continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
+                        };
+                        self.types.classes.insert(cn.clone(), ci);
+                    }
+                    return Ok(cname);
+                }
+                Ok(Instantiated::Type(t)) => return Ok(comptime::type_key(&t)),
+                Err(msg) => return Err(msg),
+            }
+        }
+        // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：回退基础名，由调用方
+        // 既有路径处理（空集合 / 类型未登记 → 未知类型，保持原语义）。
+        Ok(name.to_string())
     }
 
     fn lower_stmt(&mut self, s: &Stmt) {
