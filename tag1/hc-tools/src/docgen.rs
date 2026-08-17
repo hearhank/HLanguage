@@ -205,7 +205,8 @@ fn decl_span(d: &Decl) -> &Span {
         | Decl::Namespace { span, .. }
         | Decl::Using { span, .. }
         | Decl::Import { span, .. }
-        | Decl::Script { span, .. } => span,
+        | Decl::Script { span, .. }
+        | Decl::Comptime { span, .. } => span,
     }
 }
 
@@ -242,7 +243,10 @@ fn decl_anchor(d: &Decl) -> String {
         }
         Decl::Const { name, .. } => format!("const {name}"),
         Decl::Global { name, .. } => format!("global {name}"),
-        Decl::Import { .. } | Decl::Using { .. } | Decl::Script { .. } => String::new(),
+        Decl::Import { .. }
+        | Decl::Using { .. }
+        | Decl::Script { .. }
+        | Decl::Comptime { .. } => String::new(),
     }
 }
 
@@ -294,6 +298,11 @@ fn render_decl(
         Decl::Script { .. } => {
             if let Some(doc) = doc {
                 out.push_str(&format!("{h} `script`\n\n{doc}\n\n"));
+            }
+        }
+        Decl::Comptime { .. } => {
+            if let Some(doc) = doc {
+                out.push_str(&format!("{h} `comptime`\n\n{doc}\n\n"));
             }
         }
         Decl::Fn {

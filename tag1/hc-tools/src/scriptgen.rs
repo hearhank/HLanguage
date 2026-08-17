@@ -37,11 +37,14 @@ pub fn expand_scripts(source: &str) -> Result<String, String> {
     Err("script 展开超过最大轮数（疑似产物含自引用 script 块）".into())
 }
 
-/// 装载路径统一入口：script 展开 + 解析。返回（展开后源码, 展开后程序）。
-/// 展开失败返回已渲染诊断文本（调用方直接打印）。
+/// 装载路径统一入口：script 展开 → comptime 块求值 → 解析。
+/// 返回（展开后源码, 展开后程序）。展开/comptime 求值失败返回已渲染诊断文本（调用方直接打印）。
 pub fn parse_with_scripts(source: &str) -> Result<(String, hc::Program), String> {
     let expanded = expand_scripts(source)?;
     let program = hc::parse_source(&expanded).map_err(|d| diag::render(&d, &expanded))?;
+    // E1.2（组 D D2）：comptime 块装载期求值——script 展开后（可见生成类型）、
+    // 语义检查前；失败 = 编译错误。IR/字节码/native 对 comptime 块无感知（后端跳过）。
+    crate::comptimegen::eval_comptime_blocks(&expanded, &program)?;
     Ok((expanded, program))
 }
 

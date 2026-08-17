@@ -862,7 +862,8 @@ fn lower_decl(
         | Decl::Interface { .. }
         | Decl::Using { .. }
         | Decl::Import { .. }
-        | Decl::Script { .. } => {}
+        | Decl::Script { .. }
+        | Decl::Comptime { .. } => {}
     }
     Ok(())
 }

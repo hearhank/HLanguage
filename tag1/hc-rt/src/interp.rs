@@ -985,6 +985,9 @@ impl Interp {
             Decl::Script { .. } => {
                 // E1：第三块实现；tag1 不执行
             }
+            Decl::Comptime { .. } => {
+                // E1.2 组 D D2：comptime 块装载期求值（comptimegen）后跳过——仅编译期存在
+            }
             _ => {}
         }
         Ok(())

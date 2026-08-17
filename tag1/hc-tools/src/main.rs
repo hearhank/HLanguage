@@ -25,6 +25,7 @@ static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 mod buildzon;
 mod docgen;
 mod scriptgen;
+mod comptimegen;
 
 /// ANSI 颜色开关：仅当目标流为终端且未设置 NO_COLOR 时启用。
 /// 重定向/管道（CI、check-examples.sh 捕获）下自动关闭，保证 grep 解析不受污染。

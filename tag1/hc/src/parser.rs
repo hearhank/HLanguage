@@ -263,6 +263,17 @@ impl Parser {
                     span: start.merge(&end),
                 })
             }
+            TokenKind::KwComptime => {
+                // E1.2（组 D D2）：comptime 块——声明级占位，装载期受限 Interp 求值
+                // （结果丢弃、失败 = 编译错误）。不替换源码，无需 close_end。
+                self.advance();
+                let body = self.parse_block()?;
+                let end = self.span();
+                Ok(Decl::Comptime {
+                    body,
+                    span: start.merge(&end),
+                })
+            }
             other => Err(Diagnostic::error(
                 start,
                 format!("expected declaration, found {}", other.describe()),
