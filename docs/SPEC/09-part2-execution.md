@@ -162,12 +162,24 @@
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| G1 | `spawn(f, args...) o Thread(T)` 内建（interp）：每线程 alloc 实例（Q8）；线程栈与作用域根提升 | 线程测试绿（基本 spawn/join） | A3 | 2h |
-| G2 | `join() !T`（返回值传递）/ `cancel()`（协作式）/ `is_done()` / `detach()` | 线程生命周期测试绿 | G1 | 2h |
-| G3 | 捕获规则与所有权：值复制/move/global + Q18 绑定例外 + Q19 冻结窗口（02 E2.2） | 捕获规则测试绿 | G1 | 2h |
-| G4a | 三后端对齐 I：IR 线程指令 + 字节码 opcode 扩展 | ir/bytecode 测试绿 | G1/G2/G3 | 1.5h |
-| G4b | 三后端对齐 II：原生 codegen + 一致性套件线程用例 | consistency + native 绿 | G4a | 1.5h |
-| G5 | 示例 + 文档：37/76–80 线程示例迁移入列或新增最小示例；CONTEXT/SPEC 同步 | 示例回归绿 | G4b | 1.5h |
+| ✅ G1 | `spawn(f, args...) o Thread(T)` 内建（interp）：每线程 alloc 实例（Q8）；线程栈与作用域根提升 | 线程测试绿（基本 spawn/join） | A3 | 2h |
+| ✅ G2 | `join() !T`（返回值传递）/ `cancel()`（协作式）/ `is_done()` / `detach()` | 线程生命周期测试绿 | G1 | 2h |
+| ✅ G3 | 捕获规则与所有权：值复制/move/global + Q18 绑定例外 + Q19 冻结窗口（02 E2.2） | 捕获规则测试绿 | G1 | 2h |
+| ✅ G4a | 三后端对齐 I：IR 线程指令 + 字节码 opcode 扩展 | ir/bytecode 测试绿 | G1/G2/G3 | 1.5h |
+| ✅ G4b | 三后端对齐 II（定案 A：原生子集边界）：一致性套件线程用例 + 原生响亮拒绝边界测试 | consistency + native 绿 | G4a | 1.5h |
+| ✅ G5 | 示例 + 文档：新增最小示例 90-thread-lifecycle；CONTEXT/SPEC 同步 | 示例回归绿 | G4b | 1.5h |
+
+> ✅ **G1 已完成（2026-08-17）**：interp `spawn` 内建 + Q8 每线程 alloc——`hc-rt/src/interp.rs` `call_builtin` 新增 `"spawn"`（构造 `Class("Thread", {fn,args,alloc,cancel,done,detached,result})`）；Q8 经 `Expr::Ident("alloc")` 先 `lookup` 再回退 `Value::Alloc`，子任务 `push_scope` + `bind("alloc", thread.alloc)`。`hc-rt/tests/thread.rs` 新增（7 项）：spawn/join 返回值、is_done 状态转移、每线程 alloc 隔离、join 错误透传、cancel→Cancelled、detach 副作用、未 join 程序结束运行。
+>
+> ✅ **G2 已完成（2026-08-17）**：生命周期方法全量——`join`（返回值 + 错误 union 透传 + cancel 已置 → `error.Cancelled`）、`cancel`（置协作标志）、`is_done`、`detach`（立即运行到完成并丢弃结果）；未 join/未 detach 线程作用域退出提升根回收队列、程序结束运行；新增 `Cancelled` 错误名。`hc-rt/tests/thread.rs` 完整生命周期矩阵绿。
+>
+> ✅ **G3 已完成（2026-08-17）**：捕获规则 + Q18/Q19 静态检查——`hc/src/semantic.rs` `builtin_fn_ret` 新增 `"spawn"` → `Thread(T)`（T = callee 返回类型含错误 union）；绑定/逃逸数据流（Q18：句柄作用域内 join = 绑定；detach/退出 = 逃逸禁引用捕获）+ 冻结窗口（Q19：spawn→join 间禁止写被捕获引用目标）。`hc/tests/thread_capture.rs` 新增（9 项）：值/global/move 捕获逃逸安全、绑定引用捕获、detach 引用捕获、逃逸/条件 join 拒绝、冻结违例、join 后写回允许。
+>
+> ✅ **G4a 已完成（2026-08-17）**：IR + 字节码对齐——`hc/src/ir.rs` `call_builtin` `"spawn"`（构造 `Cell::Class{name:"Thread"}` + `ctx.current_alloc` 每线程 alloc 覆盖，save/restore）+ `call_builtin_method` Thread 臂（join/detach/is_done/cancel 分派）；字节码零改动（执行委托 `run_ir`，class 走既有序列化）。`hc/tests/ir.rs` 增 7 项、`hc/tests/bytecode.rs` 增 4 项 round-trip，全绿。
+>
+> ✅ **G4b 已完成（2026-08-17，定案 A）**：原生子集边界显式化——发现原生 LLVM 硬拒绝 `FnRef`/`CallIndirect`/`MakeClosure`（llvm.rs:5528-5530，Phase 8 原生 ABI 改造范畴），spawn 的 callee 即以 FnRef 传递 → **原生线程程序无法实现**。经用户裁决（计划风险条款「若仍有阻塞必须先上报」）定为：原生保持响亮拒绝（`error.NotCallable`，不静默误编译），线程原生支持留 Phase 8。落地：`hc/src/llvm.rs` notcallable 边界消息更新（函数引用/闭包/线程 spawn + Phase 8）+ 纯文本发射测试 `g4b_thread_spawn_aborts_notcallable`；`hc-tools/tests/native.rs` 运行期边界测试（编译成功但运行 error.NotCallable 中止）；`hc-rt/tests/consistency.rs` 增 `g4b_thread_lifecycle_consistent`（interp == IR：spawn/join 值、is_done 迁移、cancel→Cancelled、detach 副作用、值捕获）。门禁不变：125/10/1、compile 54 mismatch。
+>
+> ✅ **G5 已完成（2026-08-17）**：示例 + 文档——新增 `examples/04-concurrency/90-thread-lifecycle.hc`（组 G 最小在列示例：spawn/join/cancel/is_done/detach + 值复制/global 捕获 + Q8，5 测试全绿；不含四模式/async）。门禁基线刷新：interpret 130/10/1、compile 55 mismatch（54→55 为新增示例的原生子集边界 +1，G4b 定案 A）。文档同步：`06-10-concurrency.md`（E2.2 生命周期标注已落地，四模式/async 仍第三块）、`07-bootstrap-plan.md`、`CONTEXT.md`、`examples/README.md`、`tag1/README.md` 测试表。
 
 ### H. 代码管理四项（依赖：A（import）之后；工具链性质，排最后）
 

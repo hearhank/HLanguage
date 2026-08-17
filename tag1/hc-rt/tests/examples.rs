@@ -340,3 +340,13 @@ fn ex88_iterators() {
     assert_eq!(f, 0);
     assert!(p >= 3);
 }
+
+#[test]
+fn ex90_thread_lifecycle() {
+    // 组 G 线程生命周期（G5）：spawn/join/cancel/is_done/detach + Q8 每线程 alloc
+    let (p, f, _) = run_tests_in(&format!(
+        "{EXAMPLES}/04-concurrency/90-thread-lifecycle.hc"
+    ));
+    assert_eq!(f, 0);
+    assert!(p >= 5);
+}

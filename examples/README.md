@@ -1,6 +1,6 @@
 # H 语言示例（分类目录）
 
-按**使用层次 + 语法子类**分类，全局连续编号 01–85（沿目录顺序递增）。每类一个文件夹。
+按**使用层次 + 语法子类**分类，全局连续编号 01–85（沿目录顺序递增）+ 86–88/90（后续阶段补编，如标量接口/重载/迭代器/线程生命周期）。每类一个文件夹。
 
 ## 目录结构
 
@@ -66,9 +66,11 @@ examples/
 
 64-interface-poly · 65-composition · 66-builder-chain · 67-callbacks · 68-memoize · 69-config-load · 70-logger · 71-recursive-parser · 72-observer · 73-rate-limit · 74-state-machine-adv · 75-transaction
 
-## 04-concurrency 并发模式（76–80）
+## 04-concurrency 并发模式（76–80, 90）
 
-76-threads-edge · 77-producer-consumer · 78-task-dispatch · 79-retry · 80-batch-async
+76-threads-edge · 77-producer-consumer · 78-task-dispatch · 79-retry · 80-batch-async · 90-thread-lifecycle
+
+> 90-thread-lifecycle（组 G，2026-08-17 落地）：E2.2 线程生命周期提前纳入——`spawn(f, args...)` / `join()` / `cancel()` / `is_done()` / `detach()`，协作式延迟执行（确定性单线程），每线程独立 alloc（Q8），值复制/global 捕获安全。四模式类型 / async / @atomic / mutex 仍留第三块。
 
 ## 05-tools 实用工具（81–85）
 
@@ -87,4 +89,4 @@ examples/
 - **隔离/跳过**（Q-T3）：独立函数作用域、默认串行；`return error.SkipTest;` 标记跳过
 - **环境**（Q-T4）：测试函数内隐式 `test_io` + `alloc`
 - **形态**（Q-T6）：S1 纯逻辑断言 / S2 main smoke / S3 局部逻辑 / S4 演示标注（依赖外部环境，断言留 1.x）
-- **覆盖**：85 个示例 + math.hc 全部具备至少 1 个 `[test]` 测试函数（23-tests 为断言 API 全家福示例）
+- **覆盖**：89 个示例 + math.hc 全部具备至少 1 个 `[test]` 测试函数（23-tests 为断言 API 全家福示例）

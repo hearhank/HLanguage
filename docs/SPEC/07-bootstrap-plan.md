@@ -123,7 +123,7 @@ graph TD
 
 - **脚本生成（`script` 块）**：types 元数据/就地替换/实时预览——第三块 E1 实现；第一部分仅泛型 where 基础（comptime 泛型）
 - **comptime 完整**：`comptime { ... }` 块、类型即值/惰性实例化——第三块 E1
-- **多线程/并发/异步**：四模式类型、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2；**线程生命周期（仅 spawn/join/cancel/is_done/detach）2026-08-17 定案提前进第二部分**（`09-part2-execution.md` 组 G；四模式/async/@atomic/mutex 仍留第三块）
+- **多线程/并发/异步**：四模式类型、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2；**线程生命周期（E2.2：spawn/join/cancel/is_done/detach + Q8 每线程 alloc + Q18/Q19 捕获规则）已于 2026-08-17 提前落地**（`09-part2-execution.md` 组 G 全完成；三后端 interp/IR/字节码一致，**原生为子集边界**——spawn 需函数引用，原生 ABI 留 Phase 8，`error.NotCallable` 响亮拒绝；四模式/async/@atomic/mutex 仍留第三块）
 - **标准库扩展**：UDP/HTTP、ipc、storage/archive、text、time 完整、rng、FFI（`extern fn`/`@cImport`/`hc cc`）
 - **系统编程**：K1–K6/K7–K11 缺口、H core（freestanding）
 - **工具链扩展**：LSP、format、lint、注册中心、供应链指纹校验
@@ -149,7 +149,7 @@ graph TD
 | 模块 | 功能 | 详细说明 |
 |---|---|---|
 | E2.1 四模式类型 | 共享内存容器 | `OneToOne/OneToMany/ManyToOne/ManyToMany`：write/read/try_read/close/send/recv；**缓冲语义**（共享内存无容量、通道有界 `init(alloc, cap)`）；单写者无锁路径 |
-| E2.2 线程 | spawn/join/cancel | `spawn(f, args...) o Thread(T)`；join/cancel（协作式）/is_done/detach；线程所有权（作用域 → 根作用域提升）；捕获规则（值复制/move/global + Q18 绑定例外 + Q19 冻结窗口） |
+| ✅ E2.2 线程 | spawn/join/cancel | `spawn(f, args...) o Thread(T)`；join/cancel（协作式）/is_done/detach；线程所有权（作用域 → 根作用域提升）；捕获规则（值复制/move/global + Q18 绑定例外 + Q19 冻结窗口）——**2026-08-17 组 G 提前落地**（协作式延迟执行；原生子集边界 Phase 8） |
 | E2.3 异步 | Future/async/await | `async fn` → `Future(R)`；`await` ≡ `join()`（任何函数可用）；协作式取消；`Io.threaded()`/`Io.evented()`（单线程事件循环） |
 | E2.4 原子 | @atomic | `@atomicLoad/Store/Rmw` + C11 五内存序；四模式内部实现基础 |
 
