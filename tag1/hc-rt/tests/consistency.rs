@@ -1779,3 +1779,39 @@ fn LinkedList(T: type) type { return struct { value: T, next: ?LinkedList(T) }; 
 "#,
     );
 }
+
+#[test]
+fn d5_comptime_value_fn_consistent() {
+    // 组 D D5：comptime 值函数（参数含 `T: type`、非返回 `type` 的普通函数）运行时
+    // 调用点**三后端一致折叠**——interp `try_comptime_value_call` 与 IR `value_fns`
+    // 常量求值产生同一常量，IR 中无类型值/调用残留（类型值仅编译期存在）。
+    // 覆盖：纯类型实参、类型 + 值混合实参、体常量表达式（if 分支/比较/混合算术）。
+    assert_all_pass(
+        r#"
+fn array_len(T: type) comptime_int {
+    return 4;
+}
+fn byte_size(T: type, n: comptime_int) comptime_int {
+    if (n > 4) { return n + 1; }
+    return n * 2;
+}
+fn pick(T: type, a: comptime_int, b: comptime_int) comptime_int {
+    return if (a < b) a else b;
+}
+[test] fn type_only() void {
+    var n: comptime_int = array_len(i32);
+    expect_eq(n, 4);
+}
+[test] fn mixed_params() void {
+    var m: comptime_int = byte_size(f64, 7);
+    expect_eq(m, 8);
+    var l: comptime_int = byte_size(Vec(i32), 3);
+    expect_eq(l, 6);
+}
+[test] fn if_branch_fold() void {
+    expect_eq(pick(i32, 3, 9), 3);
+    expect_eq(pick(String, 9, 3), 3);
+}
+"#,
+    );
+}

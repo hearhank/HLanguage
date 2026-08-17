@@ -510,6 +510,8 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     }
     // E1.2 组 D：类型函数定义表（comptime-only，体降级跳过；类型应用点惰性具体化）
     let type_fns = collect_type_fns(program);
+    // E1.2 组 D D5：comptime 值函数定义表（运行时调用点常量折叠，IR 无调用残留）
+    let value_fns = collect_value_fns(program);
     let mut module = IrModule::default();
     // C3：文件级 import 展开表（bound → 完整限定名 / 模块前缀）——原生链接与 IR 调用名对齐
     let (import_syms, import_mods) = collect_imports(program);
@@ -536,6 +538,7 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
             &funcs,
             &globals,
             &type_fns,
+            &value_fns,
             &import_syms,
             &import_mods,
         )?;
@@ -549,6 +552,7 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
         &funcs,
         &globals,
         &type_fns,
+        &value_fns,
         &mut module.closures,
         &import_syms,
         &import_mods,
@@ -750,6 +754,55 @@ fn collect_type_fns_in(
     }
 }
 
+/// E1.2 组 D D5：收集 comptime 值函数定义（name → params+body），供运行时调用点折叠。
+/// 顶层 + namespace 内均收集；键 = 扁平名 + 限定名（对齐 `collect_type_fns`）。
+/// 与类型函数不同（体降级跳过），值函数体为普通常量表达式，**运行时不执行**——
+/// 调用点（`var n = array_len(i32);`）经常量求值折叠为 `IrConst`，IR 中无调用残留。
+fn collect_value_fns(program: &Program) -> HashMap<String, (Vec<Param>, Block)> {
+    let mut map = HashMap::new();
+    collect_value_fns_in(&program.decls, &mut map, &[]);
+    map
+}
+
+fn collect_value_fns_in(
+    decls: &[Decl],
+    map: &mut HashMap<String, (Vec<Param>, Block)>,
+    path: &[String],
+) {
+    for d in decls {
+        match d {
+            Decl::Fn {
+                name,
+                params,
+                body,
+                ret,
+                ..
+            } => {
+                if comptime::is_comptime_value_fn(params, ret) {
+                    let def = (params.clone(), body.clone());
+                    map.insert(name.clone(), def.clone());
+                    if !path.is_empty() {
+                        let mut q = path.join(".");
+                        q.push('.');
+                        q.push_str(name);
+                        map.insert(q, def);
+                    }
+                }
+            }
+            Decl::Namespace {
+                name,
+                decls: nested,
+                ..
+            } => {
+                let mut p = path.to_vec();
+                p.push(name.clone());
+                collect_value_fns_in(nested, map, &p);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 构造「原生/IR 后端暂不支持」的降级错误（阶段外特性 → 硬错误而非静默丢弃）。
 fn unsupported_ir_err(what: &str, span: &Span) -> IrError {
     IrError::msg(
@@ -769,6 +822,7 @@ fn lower_decl(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     type_fns: &HashMap<String, (Vec<Param>, Block)>,
+    value_fns: &HashMap<String, (Vec<Param>, Block)>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
 ) -> Result<(), IrError> {
@@ -798,6 +852,7 @@ fn lower_decl(
                 funcs,
                 globals,
                 type_fns,
+                value_fns,
                 &mut module.closures,
                 import_syms,
                 import_mods,
@@ -817,6 +872,7 @@ fn lower_decl(
                 funcs,
                 globals,
                 type_fns,
+                value_fns,
                 &mut module.closures,
                 import_syms,
                 import_mods,
@@ -850,6 +906,7 @@ fn lower_decl(
                     funcs,
                     globals,
                     type_fns,
+                    value_fns,
                     &mut module.closures,
                     import_syms,
                     import_mods,
@@ -878,6 +935,7 @@ fn collect_ns_funcs(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     type_fns: &HashMap<String, (Vec<Param>, Block)>,
+    value_fns: &HashMap<String, (Vec<Param>, Block)>,
     closures: &mut Vec<IrFunc>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
@@ -908,6 +966,7 @@ fn collect_ns_funcs(
                     funcs,
                     globals,
                     type_fns,
+                    value_fns,
                     closures,
                     import_syms,
                     import_mods,
@@ -930,6 +989,7 @@ fn collect_ns_funcs(
                     funcs,
                     globals,
                     type_fns,
+                    value_fns,
                     closures,
                     import_syms,
                     import_mods,
@@ -965,6 +1025,7 @@ fn lower_func(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     type_fns: &HashMap<String, (Vec<Param>, Block)>,
+    value_fns: &HashMap<String, (Vec<Param>, Block)>,
     closures: &mut Vec<IrFunc>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
@@ -975,6 +1036,7 @@ fn lower_func(
         funcs,
         globals,
         type_fns,
+        value_fns,
         closures,
         import_syms.clone(),
         import_mods.clone(),
@@ -1030,6 +1092,7 @@ fn lower_init_func(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     type_fns: &HashMap<String, (Vec<Param>, Block)>,
+    value_fns: &HashMap<String, (Vec<Param>, Block)>,
     closures: &mut Vec<IrFunc>,
     import_syms: &HashMap<String, String>,
     import_mods: &HashMap<String, String>,
@@ -1043,6 +1106,7 @@ fn lower_init_func(
         funcs,
         globals,
         type_fns,
+        value_fns,
         closures,
         import_syms.clone(),
         import_mods.clone(),
@@ -1147,6 +1211,9 @@ struct LowerCtx<'a> {
     /// E1.2 组 D：类型函数定义表（name → params+body，comptime-only）。`Pair(i32)`
     /// 类型应用点惰性具体化：instantiate → 具体化 Class 登记进 `self.types`。
     type_fns: &'a HashMap<String, (Vec<Param>, Block)>,
+    /// E1.2 组 D D5：comptime 值函数定义表（name → params+body）。运行时调用点
+    /// （`var n = array_len(i32);`）常量折叠为 `IrConst`，IR 中无调用残留。
+    value_fns: &'a HashMap<String, (Vec<Param>, Block)>,
     /// E1.2 组 D D3：具体化登记期进行中的具体化名集合（`Pair<@i32>` 键）。
     /// 自/互递归类型函数（`LinkedList(T) { next: ?LinkedList(T) }`）在登记期重入时
     /// 命中即返回键本身（叶），防止无限实例化。
@@ -1186,6 +1253,7 @@ impl<'a> LowerCtx<'a> {
         funcs: &'a HashSet<String>,
         globals: &'a HashSet<String>,
         type_fns: &'a HashMap<String, (Vec<Param>, Block)>,
+        value_fns: &'a HashMap<String, (Vec<Param>, Block)>,
         closures: &'a mut Vec<IrFunc>,
         import_syms: HashMap<String, String>,
         import_mods: HashMap<String, String>,
@@ -1199,6 +1267,7 @@ impl<'a> LowerCtx<'a> {
             types,
             funcs,
             type_fns,
+            value_fns,
             instantiating: Vec::new(),
             import_syms,
             import_mods,
@@ -1653,6 +1722,14 @@ impl<'a> LowerCtx<'a> {
                         {
                             return self.lower_new_constructor(ns, args);
                         }
+                    }
+                }
+                // E1.2 组 D D5：comptime 值函数运行时调用点折叠（`var n = array_len(i32);`）
+                // ——类型实参收已知类型表达式、值实参常量求值、体常量求值 → `Const`，
+                // 类型值仅编译期存在，IR 中无调用/类型值残留。折叠失败回落既有调用路径。
+                if let Some(qn) = &callee_name {
+                    if self.try_fold_comptime_value_call(qn, args, t) {
+                        return t;
                     }
                 }
                 let arg_ts: Vec<usize> = args
@@ -2184,6 +2261,7 @@ impl<'a> LowerCtx<'a> {
         let funcs = self.funcs;
         let globals = self.globals;
         let type_fns = self.type_fns;
+        let value_fns = self.value_fns;
         let closures = &mut *self.closures;
         let import_syms = self.import_syms.clone();
         let import_mods = self.import_mods.clone();
@@ -2193,6 +2271,7 @@ impl<'a> LowerCtx<'a> {
             funcs,
             globals,
             type_fns,
+            value_fns,
             closures,
             import_syms,
             import_mods,
@@ -2822,6 +2901,207 @@ impl<'a> LowerCtx<'a> {
         Ok(())
     }
 
+    // ---------- E1.2 组 D D5：comptime 值函数运行时调用点折叠 ----------
+
+    /// 已知类型名判定（对齐 oracle interp.rs `is_known_type_name`）：基础类型 + 内建
+    /// 容器 + 已登记 class/enum + 类型函数。值函数 `T: type` 实参须为已知类型表达式。
+    fn is_known_type_name(&self, name: &str) -> bool {
+        if matches!(
+            name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f16"
+                | "f32"
+                | "f64"
+                | "f128"
+                | "bool"
+                | "void"
+                | "String"
+                | "comptime_int"
+                | "comptime_float"
+        ) {
+            return true;
+        }
+        if matches!(
+            name,
+            "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "ExitType"
+        ) {
+            return true;
+        }
+        if self.types.classes.contains_key(name) || self.types.enums.contains_key(name) {
+            return true;
+        }
+        // 类型函数名（`fn X(...) type`）
+        if self.type_fns.contains_key(name) {
+            return true;
+        }
+        false
+    }
+
+    /// 折叠 comptime 值函数调用（`array_len(i32)`）→ `IrConst` 并发射 `Const`。
+    /// 类型实参经 `comptime::expr_to_type` 收已知类型表达式（编译期类型值，无运行时
+    /// 残留）；值实参常量求值入 bindings；体常量求值取最后 return。任一失败回退
+    /// `false` → 调用方走既有路径（未知类型实参等错误在实参降级处报告）。
+    fn try_fold_comptime_value_call(&mut self, name: &str, args: &[Expr], t: usize) -> bool {
+        let Some((params, body)) = self.value_fns.get(name).cloned() else {
+            return false;
+        };
+        if params.len() != args.len() {
+            return false;
+        }
+        let mut bindings: HashMap<String, IrConst> = HashMap::new();
+        for (p, a) in params.iter().zip(args.iter()) {
+            if comptime::is_type_param(p) {
+                match comptime::expr_to_type(a) {
+                    Some(Type::Named(n, _)) if self.is_known_type_name(&n) => {}
+                    _ => return false,
+                }
+            } else {
+                match self.eval_const_expr(a, &bindings) {
+                    Some(v) => {
+                        bindings.insert(p.name.clone(), v);
+                    }
+                    None => return false,
+                }
+            }
+        }
+        if let Ok(Some(v)) = self.eval_const_block(&body, &mut bindings) {
+            self.push(IrInst::Const { temp: t, val: v });
+            return true;
+        }
+        false
+    }
+
+    /// 常量表达式求值（编译期纯函数）：字面量、值参数引用、一元/二元、if 分支折叠、
+    /// 块（委托 `eval_const_block`）。不支持 → None（回退既有路径）。
+    fn eval_const_expr(&self, e: &Expr, bindings: &HashMap<String, IrConst>) -> Option<IrConst> {
+        match e {
+            Expr::IntLit { text, .. } => Some(IrConst::Int(parse_int_lit(text))),
+            Expr::FloatLit { text, .. } => {
+                let t = text.trim_end_matches(|c: char| c.is_alphabetic());
+                let f: f64 = t.replace('_', "").parse().ok()?;
+                Some(IrConst::Float(f))
+            }
+            Expr::BoolLit(b, _) => Some(IrConst::Bool(*b)),
+            Expr::StrLit { value, .. } => Some(IrConst::Str(value.clone())),
+            Expr::CharLit(c, _) => Some(IrConst::Int(*c as i128)),
+            Expr::Ident(n, _) => bindings.get(n).cloned(),
+            Expr::Unary(op, inner, _) => {
+                let v = self.eval_const_expr(inner, bindings)?;
+                const_unary(*op, &v)
+            }
+            Expr::Binary(BinOp::And, a, b, _) => match self.eval_const_expr(a, bindings)? {
+                IrConst::Bool(false) => Some(IrConst::Bool(false)),
+                IrConst::Bool(true) => self.eval_const_expr(b, bindings),
+                _ => None,
+            },
+            Expr::Binary(BinOp::Or, a, b, _) => match self.eval_const_expr(a, bindings)? {
+                IrConst::Bool(true) => Some(IrConst::Bool(true)),
+                IrConst::Bool(false) => self.eval_const_expr(b, bindings),
+                _ => None,
+            },
+            Expr::Binary(op, a, b, _) => {
+                let av = self.eval_const_expr(a, bindings)?;
+                let bv = self.eval_const_expr(b, bindings)?;
+                const_binop(*op, &av, &bv)
+            }
+            Expr::IfExpr {
+                cond,
+                then_e,
+                else_e,
+                ..
+            } => match self.eval_const_expr(cond, bindings)? {
+                IrConst::Bool(true) => self.eval_const_expr(then_e, bindings),
+                IrConst::Bool(false) => self.eval_const_expr(else_e, bindings),
+                _ => None,
+            },
+            Expr::Block(b, _) => {
+                let mut b2 = bindings.clone();
+                self.eval_const_block(b, &mut b2).ok().flatten()
+            }
+            _ => None,
+        }
+    }
+
+    /// 块常量执行（comptime 值函数体求值，对齐 oracle 顺序语义）：
+    /// - 语句按序执行；`var`/`const` 初始化并入 bindings；`return` 即返回其值。
+    /// - `Stmt::If` 常量条件折叠分支（then/else/else-if）；分支块**未返回**则继续后续语句。
+    /// - `Err(())` = 块含无法常量求值的语句（while/for/switch/丢弃调用等）→ 折叠回退；
+    ///   `Ok(None)` = 块正常执行完（未返回）；`Ok(Some(v))` = 块返回 v。
+    fn eval_const_block(
+        &self,
+        body: &Block,
+        bindings: &mut HashMap<String, IrConst>,
+    ) -> Result<Option<IrConst>, ()> {
+        for stmt in &body.stmts {
+            match stmt {
+                Stmt::VarDecl {
+                    name, init: Some(e), ..
+                } => {
+                    let v = self.eval_const_expr(e, bindings).ok_or(())?;
+                    bindings.insert(name.clone(), v);
+                }
+                Stmt::ConstDecl { name, init, .. } => {
+                    let v = self.eval_const_expr(init, bindings).ok_or(())?;
+                    bindings.insert(name.clone(), v);
+                }
+                Stmt::Return(Some(e), _) => {
+                    return Ok(Some(self.eval_const_expr(e, bindings).ok_or(())?))
+                }
+                Stmt::Return(None, _) => return Ok(Some(IrConst::Void)),
+                Stmt::If(ifst) => {
+                    let c = self.eval_const_expr(&ifst.cond, bindings).ok_or(())?;
+                    match c {
+                        IrConst::Bool(true) => {
+                            let r = self.eval_const_block(&ifst.then_b, bindings)?;
+                            if r.is_some() {
+                                return Ok(r);
+                            }
+                        }
+                        IrConst::Bool(false) => {
+                            if let Some(else_b) = &ifst.else_b {
+                                let r = match else_b.as_ref() {
+                                    Stmt::Block(b2) => self.eval_const_block(b2, bindings)?,
+                                    // else-if 链：伪块包一层继续求值
+                                    Stmt::If(inner) => {
+                                        let pseudo = Block {
+                                            stmts: vec![Stmt::If(inner.clone())],
+                                            span: inner.span.clone(),
+                                        };
+                                        self.eval_const_block(&pseudo, bindings)?
+                                    }
+                                    _ => None,
+                                };
+                                if r.is_some() {
+                                    return Ok(r);
+                                }
+                            }
+                        }
+                        _ => return Err(()),
+                    }
+                }
+                Stmt::Block(b2) => {
+                    let r = self.eval_const_block(b2, bindings)?;
+                    if r.is_some() {
+                        return Ok(r);
+                    }
+                }
+                // while/for/switch/丢弃调用等不可常量求值 → 折叠回退
+                _ => return Err(()),
+            }
+        }
+        Ok(None)
+    }
+
     fn lower_stmt(&mut self, s: &Stmt) {
         match s {
             Stmt::VarDecl { name, init, ty, .. } => {
@@ -3363,6 +3643,137 @@ fn parse_int_lit(text: &str) -> i128 {
         (10u32, cleaned.as_str())
     };
     i128::from_str_radix(digits, radix).unwrap_or(0)
+}
+
+/// E1.2 组 D D5：一元常量运算（comptime 值函数体折叠）。对齐 oracle 语义
+/// （interp.rs:2495-2510）：Neg 仅数值、Not 任意值转布尔、BitNot 仅整数。
+/// 不支持 → None（折叠回退既有调用路径）。
+fn const_unary(op: UnaryOp, v: &IrConst) -> Option<IrConst> {
+    match op {
+        UnaryOp::Neg => match v {
+            IrConst::Int(i) => Some(IrConst::Int(-i)),
+            IrConst::Float(f) => Some(IrConst::Float(-f)),
+            _ => None,
+        },
+        UnaryOp::Not => match v {
+            IrConst::Bool(b) => Some(IrConst::Bool(!b)),
+            IrConst::Int(i) => Some(IrConst::Bool(*i == 0)),
+            IrConst::Float(f) => Some(IrConst::Bool(*f == 0.0)),
+            _ => None,
+        },
+        UnaryOp::BitNot => match v {
+            IrConst::Int(i) => Some(IrConst::Int(!i)),
+            _ => None,
+        },
+    }
+}
+
+/// E1.2 组 D D5：二元常量运算（comptime 值函数体折叠）。对齐 oracle `binop_values`/
+/// `arith`（interp.rs:2811-2933）：Int 溢出回 None（回退）、除零回 None、Int/Float
+/// 混算提升 Int→Float、比较按值序。不支持 → None。
+fn const_binop(op: BinOp, l: &IrConst, r: &IrConst) -> Option<IrConst> {
+    use IrConst::{Bool, Float, Int};
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::EucMod => {
+            match (l, r) {
+                (Int(a), Int(b)) => {
+                    let v = match op {
+                        BinOp::Add => a.checked_add(*b),
+                        BinOp::Sub => a.checked_sub(*b),
+                        BinOp::Mul => a.checked_mul(*b),
+                        BinOp::Div => (*b != 0).then(|| a / b),
+                        BinOp::Mod => (*b != 0).then(|| a % b),
+                        BinOp::EucMod => (*b != 0).then(|| a.rem_euclid(*b)),
+                        _ => None,
+                    };
+                    v.map(Int)
+                }
+                (Float(a), Float(b)) => {
+                    let v = match op {
+                        BinOp::Add => a + b,
+                        BinOp::Sub => a - b,
+                        BinOp::Mul => a * b,
+                        BinOp::Div => a / b,
+                        BinOp::Mod | BinOp::EucMod => a % b,
+                        _ => return None,
+                    };
+                    Some(Float(v))
+                }
+                (Int(a), Float(_)) => const_binop(op, &Float(*a as f64), r),
+                (Float(_), Int(b)) => const_binop(op, l, &Float(*b as f64)),
+                _ => None,
+            }
+        }
+        BinOp::Eq => Some(Bool(const_eq(l, r))),
+        BinOp::Ne => Some(Bool(!const_eq(l, r))),
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+            let lt = const_lt(l, r)?;
+            let eq = const_eq(l, r);
+            let v = match op {
+                BinOp::Lt => lt,
+                BinOp::Le => lt || eq,
+                BinOp::Gt => !lt && !eq,
+                BinOp::Ge => !lt || eq,
+                _ => unreachable!(),
+            };
+            Some(Bool(v))
+        }
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => match (l, r) {
+            (Int(a), Int(b)) => {
+                let v = match op {
+                    BinOp::BitAnd => a & b,
+                    BinOp::BitOr => a | b,
+                    BinOp::BitXor => a ^ b,
+                    BinOp::Shl => {
+                        if *a >= 0 && *a <= u64::MAX as i128 && *b < 64 {
+                            ((*a as u64).wrapping_shl(*b as u32)) as i128
+                        } else {
+                            a << b
+                        }
+                    }
+                    BinOp::Shr => {
+                        if *a >= 0 && *a <= u64::MAX as i128 && *b < 64 {
+                            ((*a as u64).wrapping_shr(*b as u32)) as i128
+                        } else {
+                            a >> b
+                        }
+                    }
+                    _ => return None,
+                };
+                Some(Int(v))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// D5：常量相等比较（Int/Float 互比提升、Bool、Str、Null、Void）。
+fn const_eq(l: &IrConst, r: &IrConst) -> bool {
+    use IrConst::{Bool, Float, Int, Null, Str, Void};
+    match (l, r) {
+        (Int(a), Int(b)) => a == b,
+        (Float(a), Float(b)) => a == b,
+        (Int(a), Float(b)) => *a as f64 == *b,
+        (Float(a), Int(b)) => *a == *b as f64,
+        (Bool(a), Bool(b)) => a == b,
+        (Str(a), Str(b)) => a == b,
+        (Null, Null) => true,
+        (Void, Void) => true,
+        _ => l == r,
+    }
+}
+
+/// D5：常量小于比较（Int/Float 互比提升；其他不支持 → None）。
+fn const_lt(l: &IrConst, r: &IrConst) -> Option<bool> {
+    use IrConst::{Float, Int};
+    match (l, r) {
+        (Int(a), Int(b)) => Some(a < b),
+        (Float(a), Float(b)) => Some(a < b),
+        (Int(a), Float(b)) => Some((*a as f64) < *b),
+        (Float(a), Int(b)) => Some(*a < *b as f64),
+        _ => None,
+    }
 }
 
 // ---------- IR 参考解释器（M3.1：唯一语义源的语义定义） ----------

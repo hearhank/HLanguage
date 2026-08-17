@@ -487,8 +487,8 @@ fn comptime_value_fn_mixed_type_and_value_params() {
 
 #[test]
 fn comptime_value_fn_runtime_call_folds_in_interp() {
-    // 运行时调用点：`var n: comptime_int = array_len(i32);` 在 interp 折叠为常量
-    // （IR/原生后端运行时调用点折叠归 D5——本测试仅 interp）
+    // 运行时调用点：`var n: comptime_int = array_len(i32);` 折叠为常量——
+    // interp（D4c）与 IR（D5 `value_fns` 常量求值）一致，IR 中无类型值/调用残留
     let dir = temp_dir("runtime");
     let file = write(
         &dir,
@@ -497,15 +497,25 @@ fn comptime_value_fn_runtime_call_folds_in_interp() {
          fn array_len(T: type) comptime_int {\n\
          \x20   return 4;\n\
          }\n\
+         fn byte_size(T: type, n: comptime_int) comptime_int {\n\
+         \x20   return n + 1;\n\
+         }\n\
          fn main(args: o Vec(String)) !void {\n\
          \x20   var n: comptime_int = array_len(i32);\n\
          \x20   io.print(\"n = {}\\n\", n);\n\
+         \x20   var m: comptime_int = byte_size(f64, 7);\n\
+         \x20   io.print(\"m = {}\\n\", m);\n\
          }\n",
     );
     let out = run_hc(&[Path::new("run"), &file]);
     let s = stdout(&out);
     assert!(out.status.success(), "运行时调用应折叠: {}", combined(&out));
     assert!(s.contains("n = 4"), "折叠结果: {s}");
+    assert!(s.contains("m = 8"), "混合参数折叠结果: {s}");
+    let out_ir = run_hc(&[Path::new("run"), Path::new("--ir"), &file]);
+    let s_ir = stdout(&out_ir);
+    assert!(out_ir.status.success(), "IR 运行时调用应折叠: {}", combined(&out_ir));
+    assert!(s_ir.contains("n = 4") && s_ir.contains("m = 8"), "IR 折叠结果: {s_ir}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
