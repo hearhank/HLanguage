@@ -298,3 +298,71 @@ fn comptime_narrowing_u8_in_range_passes() {
     assert!(s.contains("narrow ok"), "main 应正常执行: {s}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn comptime_float_folding_expect_eq_passes() {
+    // comptime_float 折叠 + 类型检查双通过：浮点算术在装载期求值，expect_eq 断言成立
+    let dir = temp_dir("floatfold");
+    let file = write(
+        &dir,
+        "floatfold.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   var x: comptime_float = 1.5 + 2.5;\n\
+         \x20   expect_eq(x, 4.0);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"floatfold ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "comptime_float 折叠应通过: {}", combined(&out));
+    assert!(s.contains("floatfold ok"), "main 应正常执行: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_float_folding_expect_eq_failure_is_compile_error() {
+    // 负例：浮点折叠断言不成立 → 装载期 AssertFailed = 编译错误
+    let dir = temp_dir("floatfail");
+    let file = write(
+        &dir,
+        "floatfail.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   expect_eq(1.5 + 2.5, 3.0);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"unreachable\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "浮点折叠断言失败应为编译错误: {s}");
+    assert!(s.contains("AssertFailed"), "诊断应含 AssertFailed: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_float_var_decl_typechecks_and_folds() {
+    // comptime_float 变量声明类型检查 + 算术折叠（除法精确：40.0/2.0 = 20.0）
+    let dir = temp_dir("vardiv");
+    let file = write(
+        &dir,
+        "vardiv.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   var x: comptime_float = 40.0 / 2.0;\n\
+         \x20   expect_eq(x, 20.0);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"vardiv ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "comptime_float 变量折叠应通过: {}", combined(&out));
+    assert!(s.contains("vardiv ok"), "main 应正常执行: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

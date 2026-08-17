@@ -1393,6 +1393,8 @@ impl Checker {
                             width: IntWidth::Comptime,
                         }
                     }
+                    // comptime_float（组 D D4）：惰性宽度浮点——H 浮点单一 f64 表示，映射 SType::Float
+                    "comptime_float" => return SType::Float,
                     "f16" | "f32" | "f64" | "f128" => return SType::Float,
                     "bool" => return SType::Bool,
                     "void" => return SType::Void,

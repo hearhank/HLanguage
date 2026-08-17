@@ -469,3 +469,44 @@ fn check_semantics_rejects_string_assigned_to_comptime_int() {
         "comptime_int 应拒绝 String 初始化：{rendered:?}"
     );
 }
+
+#[test]
+fn check_semantics_recognizes_comptime_float_type() {
+    // `comptime_float` = 惰性宽度浮点（H 浮点单一 f64 表示）：识别为 SType::Float，
+    // 与浮点字面量初始化兼容
+    let prog = parse_source(
+        r#"
+        fn main() void {
+            var x: comptime_float = 1.5;
+            _ = x;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    assert!(
+        diags.is_empty(),
+        "comptime_float 类型应被识别且无诊断：{:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn check_semantics_rejects_string_assigned_to_comptime_float() {
+    // 类型不匹配：`comptime_float = "hello"` → 诊断（compatible 无 (Str, Float) 臂 → false）
+    let prog = parse_source(
+        r#"
+        fn main() void {
+            var x: comptime_float = "hello";
+            _ = x;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    let rendered: Vec<String> = diags.iter().map(|d| d.message.as_str().to_string()).collect();
+    assert!(
+        rendered.iter().any(|s| s.contains("cannot assign")),
+        "comptime_float 应拒绝 String 初始化：{rendered:?}"
+    );
+}
