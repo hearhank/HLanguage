@@ -99,18 +99,18 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **450 项测试**（409 单元/集成 + 41 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **458 项测试**（417 单元/集成 + 41 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
-| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 35 |
+| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 40 |
 | hc | `tests/bytecode.rs`（VM == 参考解释器一致性，opcode 0–46 往返） | 27 |
 | hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
-| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化） | 68 |
+| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化） | 69 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8） | 61 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8） | 63 |
 | hc-rt | `tests/inference.rs`（类型推断） | 11 |
 | hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 10 |
 | hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
@@ -127,9 +127,9 @@ hc --help
 补充：
 
 - **示例回归**（CLI `hc test examples/`）：**125/136 通过**；11 项失败属第三块（第二部分）特性 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80），均非本阶段范围。
-- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 54 项 mismatch —— 均为未实现原生内建/方法/降级缺口（`error.NotBuiltin`/`error.NoMethod`/`error.Unsupported` 响亮运行时中止，原生 ABI 留后续阶段全标准库），按文件粒度正确标记（defer/errdefer/带标签、global/const、io.print/alloc.init/标量 @ 内建/用户类方法/math.* 等降级期失败点已于 Phase 6/7 消除；连续类值语义已于 P11d 经 `DeepCopy` 指令 + 运行时门落地——`13-struct`/`58-copy-semantics` 的连续复制 AssertFailed 修复；隐式环境全局原生播种已于 P11d 经 `emit_implicit_env_seed` 落地——`pi`/Vec/Deque/Table/io 族 30-interface 转 MATCH）。
+- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 52 项 mismatch —— 均为未实现原生内建/方法/降级缺口（`error.NotBuiltin`/`error.NoMethod`/`error.Unsupported` 响亮运行时中止，原生 ABI 留后续阶段全标准库），按文件粒度正确标记（defer/errdefer/带标签、global/const、io.print/alloc.init/标量 @ 内建/用户类方法/math.* 等降级期失败点已于 Phase 6/7 消除；连续类值语义已于 P11d 经 `DeepCopy` 指令 + 运行时门落地——`13-struct`/`58-copy-semantics` 的连续复制 AssertFailed 修复；隐式环境全局原生播种已于 P11d 经 `emit_implicit_env_seed` 落地——`pi`/Vec/Deque/Table/io 族 30-interface 转 MATCH；`alloc.init`/`Type.new` 构造降级已于 P11d 落地——`31-class`/`46-recursion` 类树构造 + 原生 `Vec.append`（Arr 接收者内建集合方法 `hc_append`/`hc_append_u64`/`hc_extend`）转 MATCH）。
 
-CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥125 passed / ≤11 failed + compile ≤54 mismatch，低于基线即失败）。
+CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥125 passed / ≤11 failed + compile ≤52 mismatch，低于基线即失败）。
 
 ## 已知取舍
 

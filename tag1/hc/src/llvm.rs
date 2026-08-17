@@ -1034,6 +1034,149 @@ entry:
 }
 "#;
 
+/// `append` 的原生实现：ArrObj（固定容量，无 cap 字段）原地扩容——分配新 items 缓冲、
+/// 拷贝旧元素、`store` 回同一 ArrObj 指针。接收者槽/字段持有同一堆指针，写入即刻对所有
+/// 别名可见（对齐 run_ir 的共享 cell 语义）。旧缓冲泄漏（本阶段整体无 free，一致取舍）。
+const HC_APPEND: &str = r#"define void @hc_append(%Value %arr, %Value %v) {
+entry:
+  %d = extractvalue %Value %arr, 1
+  %op = inttoptr i128 %d to %ArrObj*
+  %ao = load %ArrObj, %ArrObj* %op
+  %oldlen = extractvalue %ArrObj %ao, 0
+  %olditems = extractvalue %ArrObj %ao, 1
+  %newlen = add i64 %oldlen, 1
+  %vsz = ptrtoint %Value* getelementptr (%Value, %Value* null, i32 1) to i64
+  %isz = mul i64 %vsz, %newlen
+  %iraw = call i8* @hc_alloc(i64 %isz)
+  %newitems = bitcast i8* %iraw to %Value*
+  br label %ccond
+ccond:
+  %i = phi i64 [ 0, %entry ], [ %inext, %cbody ]
+  %c = icmp ult i64 %i, %oldlen
+  br i1 %c, label %cbody, label %cdone
+cbody:
+  %op1 = getelementptr %Value, %Value* %olditems, i64 %i
+  %ov = load %Value, %Value* %op1
+  %np1 = getelementptr %Value, %Value* %newitems, i64 %i
+  store %Value %ov, %Value* %np1
+  %inext = add i64 %i, 1
+  br label %ccond
+cdone:
+  %last = getelementptr %Value, %Value* %newitems, i64 %oldlen
+  store %Value %v, %Value* %last
+  %a0 = insertvalue %ArrObj %ao, i64 %newlen, 0
+  %a1 = insertvalue %ArrObj %a0, %Value* %newitems, 1
+  store %ArrObj %a1, %ArrObj* %op
+  ret void
+}
+"#;
+
+/// `append_u64` 的原生实现：Int 值低 64 位按 LE 展开 8 字节，逐字节作为 Int 追加。
+/// 复用 `hc_append`（逐次扩容，阶段内可接受；无自引用/别名迭代正确性要求）。
+const HC_APPEND_U64: &str = r#"define void @hc_append_u64(%Value %arr, %Value %n) {
+entry:
+  %nd = extractvalue %Value %n, 1
+  %nlow = trunc i128 %nd to i64
+  %b0 = and i64 %nlow, 255
+  %b0z = zext i64 %b0 to i128
+  %v0a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v0b = insertvalue %Value %v0a, i128 %b0z, 1
+  call void @hc_append(%Value %arr, %Value %v0b)
+  %s1 = lshr i64 %nlow, 8
+  %b1 = and i64 %s1, 255
+  %b1z = zext i64 %b1 to i128
+  %v1a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v1b = insertvalue %Value %v1a, i128 %b1z, 1
+  call void @hc_append(%Value %arr, %Value %v1b)
+  %s2 = lshr i64 %nlow, 16
+  %b2 = and i64 %s2, 255
+  %b2z = zext i64 %b2 to i128
+  %v2a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v2b = insertvalue %Value %v2a, i128 %b2z, 1
+  call void @hc_append(%Value %arr, %Value %v2b)
+  %s3 = lshr i64 %nlow, 24
+  %b3 = and i64 %s3, 255
+  %b3z = zext i64 %b3 to i128
+  %v3a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v3b = insertvalue %Value %v3a, i128 %b3z, 1
+  call void @hc_append(%Value %arr, %Value %v3b)
+  %s4 = lshr i64 %nlow, 32
+  %b4 = and i64 %s4, 255
+  %b4z = zext i64 %b4 to i128
+  %v4a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v4b = insertvalue %Value %v4a, i128 %b4z, 1
+  call void @hc_append(%Value %arr, %Value %v4b)
+  %s5 = lshr i64 %nlow, 40
+  %b5 = and i64 %s5, 255
+  %b5z = zext i64 %b5 to i128
+  %v5a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v5b = insertvalue %Value %v5a, i128 %b5z, 1
+  call void @hc_append(%Value %arr, %Value %v5b)
+  %s6 = lshr i64 %nlow, 48
+  %b6 = and i64 %s6, 255
+  %b6z = zext i64 %b6 to i128
+  %v6a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v6b = insertvalue %Value %v6a, i128 %b6z, 1
+  call void @hc_append(%Value %arr, %Value %v6b)
+  %s7 = lshr i64 %nlow, 56
+  %b7 = and i64 %s7, 255
+  %b7z = zext i64 %b7 to i128
+  %v7a = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %v7b = insertvalue %Value %v7a, i128 %b7z, 1
+  call void @hc_append(%Value %arr, %Value %v7b)
+  ret void
+}
+"#;
+
+/// `extend` 的原生实现：`other` 为 Str（&[u8] 字节）或 Arr 时逐元素追加为 Int/元素值。
+/// 对齐 run_ir `extend`（Str 逐字节 Int；Arr 元素克隆）。复用 `hc_append`。
+const HC_EXTEND: &str = r#"define void @hc_extend(%Value %arr, %Value %other) {
+entry:
+  %ot = extractvalue %Value %other, 0
+  %is_str = icmp eq i32 %ot, 5
+  br i1 %is_str, label %estr, label %earr
+estr:
+  %od = extractvalue %Value %other, 1
+  %osp = inttoptr i128 %od to i8*
+  %cnt = call i64 @strlen(i8* %osp)
+  br label %scond
+scond:
+  %si = phi i64 [ 0, %estr ], [ %snext, %sbody ]
+  %sd = icmp ult i64 %si, %cnt
+  br i1 %sd, label %sbody, label %sdone
+sbody:
+  %sp = getelementptr i8, i8* %osp, i64 %si
+  %sb = load i8, i8* %sp
+  %sz = zext i8 %sb to i128
+  %sv0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %sv1 = insertvalue %Value %sv0, i128 %sz, 1
+  call void @hc_append(%Value %arr, %Value %sv1)
+  %snext = add i64 %si, 1
+  br label %scond
+sdone:
+  ret void
+earr:
+  %od2 = extractvalue %Value %other, 1
+  %op2 = inttoptr i128 %od2 to %ArrObj*
+  %ao2 = load %ArrObj, %ArrObj* %op2
+  %elen = extractvalue %ArrObj %ao2, 0
+  %eitems = extractvalue %ArrObj %ao2, 1
+  br label %econd
+econd:
+  %ei = phi i64 [ 0, %earr ], [ %enext, %ebody ]
+  %ed = icmp ult i64 %ei, %elen
+  br i1 %ed, label %ebody, label %edone
+ebody:
+  %ep = getelementptr %Value, %Value* %eitems, i64 %ei
+  %ev = load %Value, %Value* %ep
+  call void @hc_append(%Value %arr, %Value %ev)
+  %enext = add i64 %ei, 1
+  br label %econd
+edone:
+  ret void
+}
+"#;
+
 const HC_MAKE_CLASS: &str = r#"define %Value @hc_make_class(i8* %ty, i64 %n) {
 entry:
   %os = ptrtoint %ClassObj* getelementptr (%ClassObj, %ClassObj* null, i32 1) to i64
@@ -1880,6 +2023,9 @@ fn emit_aggregate_helpers(out: &mut String) {
         HC_ALLOC,
         HC_MAKE_ARR,
         HC_ARR_SET,
+        HC_APPEND,
+        HC_APPEND_U64,
+        HC_EXTEND,
         HC_MAKE_CLASS,
         HC_CLASS_SET,
         HC_MAKE_ENUM,
@@ -4133,6 +4279,14 @@ impl BodyEmitter {
         errors: &ErrorCodeTable,
         slot_consts: &HashMap<usize, IrConst>,
     ) {
+        // 内建集合方法（Arr 接收者，无 canon 拥有者）：append/append_u64/extend/init/len 等。
+        // 对齐 run_ir `call_builtin_method` 的 Arr 臂——运行时按 tag 分派，非 Arr 落入 Class 用户
+        // 方法分派（io.print / `{Type}.{method}`）。
+        let is_coll_method = matches!(
+            method,
+            "append" | "push_back" | "append_u64" | "extend" | "init" | "len"
+        );
+
         // 编译期候选拥有者：内建 Io.print + 用户 `{Type}.{method}`（canon 键点分前缀）
         let mut owners: Vec<String> = Vec::new();
         if method == "print" {
@@ -4145,12 +4299,12 @@ impl BodyEmitter {
         user_owners.sort();
         user_owners.dedup();
         owners.extend(user_owners);
-        if owners.is_empty() {
+        if owners.is_empty() && !is_coll_method {
             self.abort_feature("nomethod");
             return;
         }
 
-        // 运行时基址：load base → deref → 必须为 Class → 取类名
+        // 运行时基址：load base → deref → tag
         let bv = self.r();
         self.emit(format!("{bv} = load %Value, %Value* %sp.{base}"));
         let dv = self.r();
@@ -4159,6 +4313,24 @@ impl BodyEmitter {
         self.emit(format!("{tag} = extractvalue %Value {dv}, 0"));
         let is_cls = self.r();
         self.emit(format!("{is_cls} = icmp eq i32 {tag}, {T_CLASS}"));
+        let is_arr = self.r();
+        self.emit(format!("{is_arr} = icmp eq i32 {tag}, {T_ARR}"));
+        let l_done = self.fb();
+
+        if is_coll_method {
+            // Arr 接收者 → 内建集合方法；否则落 Class 分派
+            let l_coll = self.fb();
+            let l_cls = self.fb();
+            self.term(format!("br i1 {is_arr}, label %{l_coll}, label %{l_cls}"));
+            self.cur = format!("{l_coll}:\n");
+            self.terminated = false;
+            self.call_coll_method(temp, method, &dv, args);
+            self.term(format!("br label %{l_done}"));
+            self.cur = format!("{l_cls}:\n");
+            self.terminated = false;
+        }
+
+        // Class 分派：is_cls → disp（取类名链式 strcmp）/ notcls → abort
         let l_notcls = self.fb();
         let l_disp = self.fb();
         self.term(format!("br i1 {is_cls}, label %{l_disp}, label %{l_notcls}"));
@@ -4176,7 +4348,6 @@ impl BodyEmitter {
         self.emit(format!("{cname} = extractvalue %ClassObj {co}, 0"));
 
         // 链式 strcmp：每个拥有者一个比较块；命中 → found 处理器；全不中 → abort
-        let mut done: Option<String> = None;
         for owner in &owners {
             let (oi, on) = str_idx(strings, owner);
             let og = self.r();
@@ -4199,7 +4370,6 @@ impl BodyEmitter {
             } else {
                 self.call_method_user(owner, method, &dv, args, temp, canon, funcs, strings, errors);
             }
-            let l_done = done.get_or_insert_with(|| self.fb()).clone();
             self.term(format!("br label %{l_done}"));
 
             // 下一比较块
@@ -4208,9 +4378,74 @@ impl BodyEmitter {
         }
         // 全部不中 → 硬中止；续块换成 done（后续指令落入 done）
         self.abort_feature("nomethod");
-        let l_done = done.unwrap_or_else(|| self.fb());
         self.cur = format!("{l_done}:\n");
         self.terminated = false;
+    }
+
+    /// Arr 接收者内建集合方法（对齐 run_ir `call_builtin_method` Arr 臂 ir.rs:6085-6306）。
+    /// `dv` 为解引用后的基值（tag 8，data = `%ArrObj*`）。变更方法（append/append_u64/
+    /// extend）原地改写 `%ArrObj`——所有别名共享同一堆指针，写入即对接收者槽/字段可见。
+    fn call_coll_method(&mut self, temp: usize, method: &str, dv: &str, args: &[usize]) {
+        let load_arg = |s: &mut Self, slot: usize| {
+            let v = s.r();
+            s.emit(format!("{v} = load %Value, %Value* %sp.{slot}"));
+            v
+        };
+        match method {
+            "init" => {
+                // Vec(u8).init(alloc)：返回空 Arr（alloc 实参忽略）
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_make_arr(i64 0)"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "len" => {
+                let d = self.r();
+                self.emit(format!("{d} = extractvalue %Value {dv}, 1"));
+                let op = self.r();
+                self.emit(format!("{op} = inttoptr i128 {d} to %ArrObj*"));
+                let ao = self.r();
+                self.emit(format!("{ao} = load %ArrObj, %ArrObj* {op}"));
+                let al = self.r();
+                self.emit(format!("{al} = extractvalue %ArrObj {ao}, 0"));
+                let ai = self.r();
+                self.emit(format!("{ai} = zext i64 {al} to i128"));
+                let v0 = self.r();
+                self.emit(format!("{v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_INT}, 0"));
+                let v1 = self.r();
+                self.emit(format!("{v1} = insertvalue %Value {v0}, i128 {ai}, 1"));
+                self.emit(format!("store %Value {v1}, %Value* %sp.{temp}"));
+            }
+            "append" | "push_back" => {
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let v = load_arg(self, a0);
+                self.emit(format!("call void @hc_append(%Value {dv}, %Value {v})"));
+                self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+            }
+            "append_u64" => {
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let v = load_arg(self, a0);
+                self.emit(format!("call void @hc_append_u64(%Value {dv}, %Value {v})"));
+                self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+            }
+            "extend" => {
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let v = load_arg(self, a0);
+                self.emit(format!("call void @hc_extend(%Value {dv}, %Value {v})"));
+                self.emit(format!("store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"));
+            }
+            _ => {
+                self.abort_feature("nomethod");
+            }
+        }
     }
 
     /// 用户方法静态调用：canon `{Type}.{method}` 按 arity（含 self）精确分派，
@@ -4863,6 +5098,25 @@ mod tests {
         assert!(ll.contains("call void @hc_arr_set"), "{ll}");
         assert!(ll.contains("call %Value @hc_index"), "{ll}");
         assert!(ll.contains("call void @hc_store_index"), "{ll}");
+    }
+
+    #[test]
+    fn aggregate_append_emits_coll_helpers() {
+        // `Vec.append`（Arr 接收者内建方法）→ hc_append 定义 + 调用；append_u64/extend
+        // helper 随 preamble 发射（供 57-protocol 等）。对齐 run_ir `call_builtin_method`
+        // Arr 臂的原地扩容语义（同一 `%ArrObj` 指针写回，别名可见）。
+        let ll = gen(
+            r#"class Node { value: i32, children: Vec(Node), } fn f() i32 {
+    var r = Node.new(1, alloc);
+    r.children.append(Node.new(2, alloc));
+    r.children.append(Node.new(3, alloc));
+    return r.children.len;
+}"#,
+        );
+        assert!(ll.contains("define void @hc_append"), "{ll}");
+        assert!(ll.contains("define void @hc_append_u64"), "{ll}");
+        assert!(ll.contains("define void @hc_extend"), "{ll}");
+        assert!(ll.contains("call void @hc_append"), "{ll}");
     }
 
     #[test]
