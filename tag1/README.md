@@ -99,7 +99,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **586 项测试**（544 单元/集成 + 42 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **595 项测试**（553 单元/集成 + 42 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -107,6 +107,7 @@ hc --help
 | hc | `tests/bytecode.rs`（VM == 参考解释器一致性，opcode 0–46 往返） | 27 |
 | hc | `tests/frontend.rs`（lexer/parser/semantic） | 51 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
+| hc | `tests/thread_capture.rs`（组 G3：spawn 捕获规则 Q18 绑定/逃逸 + Q19 冻结窗口） | 9 |
 | hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化） | 93 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播 + io.exit/ExitType） | 22 |

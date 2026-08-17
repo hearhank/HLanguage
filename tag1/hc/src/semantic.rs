@@ -162,6 +162,20 @@ struct VarInfo {
     pending_fields: Option<std::collections::HashSet<String>>,
     /// 分配来源（M2.4 所有权：move 唯一约束 = 拥有所有权）
     source: AllocSource,
+    /// 组 G：`spawn(...)` 线程句柄状态（Q18 绑定/逃逸 + Q19 冻结窗口）
+    thread: Option<ThreadState>,
+}
+
+/// 线程句柄静态跟踪（协作式延迟执行：spawn 立即返回、join/detach/程序结束运行）
+#[derive(Clone)]
+struct ThreadState {
+    /// Q18 绑定：声明作用域线性路径上已 `join()`（可捕引用；冻结窗口闭合）
+    bound: bool,
+    /// 已 `detach()`（运行点 = 调用处，引用在该作用域内存活 → 允许）
+    detached: bool,
+    /// 捕获的局部引用（`&local`/`&local.f`/`&local[i]` 根变量名 + 位置）——
+    /// 线程逃逸（未 join 作用域退出 → 根回收运行到程序结束）时局部已死 → 悬垂，编译错误
+    local_refs: Vec<(String, Span)>,
 }
 
 /// 分配来源（M2.4：谁负责销毁 / 可否 move）
@@ -205,6 +219,7 @@ pub fn check_with_extern_deps(
         infer_ret: None,
         infer_ret_conflict: false,
         imported: HashSet::new(),
+        conditional_depth: 0,
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -255,6 +270,9 @@ struct Checker {
     /// ADR-0010：import 登记过的符号（限定名）——整模块导入冲突检测用
     /// （通配/整模块遇同名冲突 → 编译错误；文件自身定义优先，不被导入覆盖）
     imported: HashSet<String>,
+    /// 组 G Q18：if/while/for/switch 条件体内 = 非直线路径（join 不保证执行 →
+    /// 不视为绑定；冻结违例仍报）。0 = 直线/块级
+    conditional_depth: usize,
     diags: Vec<Diagnostic>,
 }
 
@@ -1171,6 +1189,7 @@ impl Checker {
                             pending_fields: None,
                             // 参数来源由调用点决定（o T 拥有 / 借用）——保守放行
                             source: AllocSource::Unknown,
+                            thread: None,
                         },
                     );
                 }
@@ -1204,6 +1223,7 @@ impl Checker {
                             ty: Some(self_ty),
                             pending_fields: None,
                             source: AllocSource::Unknown,
+                            thread: None,
                         },
                     );
                     // 方法参数（self 显式声明时已含；此处避免重复登记由 check_block 内 params
@@ -1259,6 +1279,7 @@ impl Checker {
                     ty: Some(st),
                     pending_fields: None,
                     source: AllocSource::Unknown,
+                    thread: None,
                 },
             );
         }
@@ -1439,6 +1460,10 @@ impl Checker {
         for stmt in &b.stmts {
             self.check_stmt(stmt, scopes, err_constraint.clone(), ret_ty.clone());
         }
+        // G3 Q18：作用域退出——未 join/未 detach 线程逃逸检查（运行时提升到根回收）
+        if let Some(scope) = scopes.last() {
+            self.thread_escape_sweep(scope);
+        }
         scopes.pop();
     }
 
@@ -1459,10 +1484,24 @@ impl Checker {
                 ..
             } => {
                 let declared = ty.as_ref().map(|t| self.ty_of(t));
+                // G3：spawn 初始化 → spawn_capture_info 提取 Thread(T) + 捕获分类
+                // （Q18/Q19 静态检查）；普通初始化走 expr_ty。
+                let mut spawn_thread: Option<ThreadState> = None;
                 let init_ty = match init {
+                    Some(Expr::Call { callee, args, .. })
+                        if matches!(callee.as_ref(), Expr::Ident(f, _) if f == "spawn") =>
+                    {
+                        let (t, ts) = self.spawn_capture_info(args, span, scopes);
+                        spawn_thread = Some(ts);
+                        Some(t)
+                    }
                     Some(e) => self.expr_ty(e, scopes, declared.as_ref()),
                     None => None,
                 };
+                // G3 Q18：初始化表达式中的线程方法调用（`var r = try th.join()`）
+                if let Some(e) = init {
+                    self.track_thread_method(e, scopes);
+                }
                 // 惰性宽度定型：var x: u8 = 256（期望类型已知时检查字面量范围）
                 if let (Some(SType::Int { width: w }), Some(Expr::IntLit { text, .. })) =
                     (declared.as_ref(), init)
@@ -1504,6 +1543,7 @@ impl Checker {
                         ty: var_ty,
                         pending_fields: pending,
                         source,
+                        thread: spawn_thread,
                     },
                 );
             }
@@ -1516,6 +1556,7 @@ impl Checker {
                         ty: t,
                         pending_fields: None,
                         source,
+                        thread: None,
                     },
                 );
             }
@@ -1530,6 +1571,8 @@ impl Checker {
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
                 // M2.3 指针形态：写只读指针 → 编译错误
                 self.check_ptr_write(target, scopes, span);
+                // G3 Q19：spawn→join 冻结窗口——写入被引用捕获目标 → 编译错误
+                self.check_thread_freeze(target, scopes, span);
                 // 字段赋值 x.field = v → 消除 definite assignment 待初始化字段
                 let (x, field): (Option<&str>, Option<&str>) = match target.as_ref() {
                     Expr::Dot { base, field, .. } | Expr::Field { base, field, .. } => {
@@ -1552,11 +1595,15 @@ impl Checker {
                 }
             }
             Stmt::Expr(e) => {
+                // G3 Q18：线程 join/detach 语句位置跟踪
+                self.track_thread_method(e, scopes);
                 let _ = self.expr_ty(e, scopes, None);
             }
             Stmt::If(ifs) => {
                 let ct = self.expr_ty(&ifs.cond, scopes, None);
                 self.check_condition(ct.as_ref(), &ifs.cond.span());
+                // G3 Q18：条件体内 join 不保证执行 → 非直线路径（不视为绑定）
+                self.conditional_depth += 1;
                 // optional 捕获：if (maybe) |v|
                 if let Some((_, n)) = &ifs.capture {
                     let cap_ty = match &ct {
@@ -1570,6 +1617,7 @@ impl Checker {
                             ty: cap_ty,
                             pending_fields: None,
                             source: AllocSource::Unknown,
+                            thread: None,
                         },
                     );
                     self.check_block(&ifs.then_b, scopes, err_constraint.clone(), ret_ty.clone());
@@ -1580,11 +1628,14 @@ impl Checker {
                 if let Some(else_b) = &ifs.else_b {
                     self.check_stmt(else_b, scopes, err_constraint, ret_ty);
                 }
+                self.conditional_depth -= 1;
             }
             Stmt::While(w) => {
                 let ct = self.expr_ty(&w.cond, scopes, None);
                 self.check_condition(ct.as_ref(), &w.cond.span());
+                self.conditional_depth += 1;
                 self.check_block(&w.body, scopes, err_constraint, ret_ty);
+                self.conditional_depth -= 1;
             }
             Stmt::For(f) => {
                 let it = self.expr_ty(&f.iter, scopes, None);
@@ -1596,13 +1647,19 @@ impl Checker {
                         ty: None, // 元素类型：Map 为键值对，集合元素——保守放行
                         pending_fields: None,
                         source: AllocSource::Unknown,
+                        thread: None,
                     },
                 );
+                // G3 Q18：循环体内 join 非直线路径
+                self.conditional_depth += 1;
                 self.check_block(&f.body, scopes, err_constraint, ret_ty);
+                self.conditional_depth -= 1;
                 scopes.pop();
             }
             Stmt::Switch(sw) => {
                 let st = self.expr_ty(&sw.subject, scopes, None);
+                // G3 Q18：分支体内 join 非直线路径
+                self.conditional_depth += 1;
                 for arm in &sw.arms {
                     scopes.push(HashMap::new());
                     if let Some((_, n)) = &arm.capture {
@@ -1615,12 +1672,14 @@ impl Checker {
                                 },
                                 pending_fields: None,
                                 source: AllocSource::Unknown,
+                                thread: None,
                             },
                         );
                     }
                     self.check_block(&arm.body, scopes, err_constraint.clone(), ret_ty.clone());
                     scopes.pop();
                 }
+                self.conditional_depth -= 1;
             }
             Stmt::Return(e, span) => {
                 // M2.4 Q18：返回值引用被编译期禁止（引用逃逸到比目标更长寿的
@@ -2187,6 +2246,7 @@ impl Checker {
                                     ty: var_ty,
                                     pending_fields: pending,
                                     source,
+                                    thread: None,
                                 },
                             );
                             last = None;
@@ -2686,6 +2746,12 @@ impl Checker {
                     return self.call_at_builtin(rest, args, span, scopes);
                 }
                 if is_builtin_fn(name) {
+                    // G3：spawn 特殊处理——提取 callee 返回类型 T 得 `Thread(T)`，
+                    // 并做捕获分类（Q18/Q19 由 VarDecl 持线程状态，此处仅返回类型）
+                    if name == "spawn" {
+                        let (t, _ts) = self.spawn_capture_info(args, span, scopes);
+                        return Some(t);
+                    }
                     return Some(self.builtin_fn_ret(name));
                 }
                 // 函数值/闭包调用（参数是 FnN 调用接口类型）：放行
@@ -2862,9 +2928,178 @@ impl Checker {
             })),
             "min" | "max" | "sort" | "fmt_int" | "fmt_float" => SType::Unknown,
             // G1：`spawn(f, args...) o Thread(T)` 返回线程句柄（协作式延迟执行）。
-            // G3 精化：提取 callee 返回类型 T 作泛型实参并加捕获/冻结窗口检查。
+            // G3 精化：check_call 拦截 spawn 走 spawn_capture_info 提取 T；此处兜底。
             "spawn" => SType::Named("Thread".to_string(), vec![]),
             _ => SType::Void,
+        }
+    }
+
+    // ---------- 组 G Q18/Q19：spawn 捕获规则（协作式延迟执行） ----------
+
+    /// G3：`spawn(f, args...)` 静态检查。提取 callee 返回类型 T（含错误联合）得
+    /// `Thread(T)`；分类捕获：值复制 / `&global` / `move x` 安全，`&局部` 记入
+    /// local_refs（线程逃逸 → Q18 错误；绑定场景 spawn→join 间写入 → Q19 冻结违例）。
+    /// 返回 (类型, 线程状态)。
+    fn spawn_capture_info(
+        &mut self,
+        args: &[Expr],
+        span: &Span,
+        scopes: &[HashMap<String, VarInfo>],
+    ) -> (SType, ThreadState) {
+        let mut local_refs: Vec<(String, Span)> = Vec::new();
+        let mut t = SType::Unknown;
+        if let Some(callee) = args.first() {
+            // callee 返回类型 T（重载按参数个数匹配；闭包/函数引用 → Unknown）
+            if let Expr::Ident(fname, _) = callee {
+                if let Some(sigs) = self.funcs.get(fname) {
+                    let want = args.len().saturating_sub(1);
+                    let sig = sigs
+                        .iter()
+                        .find(|s| s.params.len() == want)
+                        .or_else(|| sigs.first());
+                    if let Some(sig) = sig {
+                        if let Some(ret) = &sig.ret {
+                            t = self.ty_of(ret);
+                        }
+                    }
+                }
+            }
+            let _ = self.expr_ty(callee, scopes, None);
+        }
+        // 捕获分类（跳过 callee）
+        for a in args.iter().skip(1) {
+            self.classify_spawn_capture(a, scopes, &mut local_refs);
+        }
+        let thread_ty = SType::Named("Thread".to_string(), vec![t]);
+        let ts = ThreadState {
+            bound: false,
+            detached: false,
+            local_refs,
+        };
+        let _ = span;
+        (thread_ty, ts)
+    }
+
+    /// G3：单参数捕获分类——`&local`（含 `&local.f` / `&local[i]`）记根局部名；
+    /// `move x` / 值复制 / `&global` / 堆值安全放行。裸 `*T` 变量别名局部为已知
+    /// 缺口（形如 `&x` 的显式取址已覆盖，见计划「控制流扩展按测试需求推进」）。
+    fn classify_spawn_capture(
+        &mut self,
+        a: &Expr,
+        scopes: &[HashMap<String, VarInfo>],
+        local_refs: &mut Vec<(String, Span)>,
+    ) {
+        if let Expr::AddrOf(inner, _, _) = a {
+            if let Some(x) = self.addr_root_name(inner) {
+                if self.var_is_local(&x, scopes) {
+                    local_refs.push((x, a.span()));
+                }
+                // `&global` / `&未知` → 安全（全局程序期存活，不悬垂）
+            }
+        }
+        // Move / 其它：值随线程持有（Rc/复制），安全
+    }
+
+    /// 表达式根变量名：`x` / `x.f` / `x[i]` / `x.*` → Some(x)；其它 → None
+    fn addr_root_name(&self, e: &Expr) -> Option<String> {
+        match e {
+            Expr::Ident(n, _) => Some(n.clone()),
+            Expr::Field { base, .. }
+            | Expr::Dot { base, .. }
+            | Expr::Index { base, .. }
+            | Expr::Deref(base, _) => self.addr_root_name(base),
+            _ => None,
+        }
+    }
+
+    fn var_is_local(&self, name: &str, scopes: &[HashMap<String, VarInfo>]) -> bool {
+        scopes.iter().rev().any(|s| s.contains_key(name))
+    }
+
+    /// G3 Q18：语句位置的线程方法调用跟踪——`th.join()` → bound（冻结窗口闭合）；
+    /// `th.detach()` → detached。仅直线路径（conditional_depth == 0）计数：
+    /// 条件体内 join 不保证执行 → 不视为绑定（保守：逃逸错误仍报）。
+    fn track_thread_method(&mut self, e: &Expr, scopes: &mut Vec<HashMap<String, VarInfo>>) {
+        let inner = match e {
+            Expr::Try(inner, _) | Expr::Catch(inner, _, _) => inner,
+            _ => e,
+        };
+        if let Expr::Call { callee, .. } = inner {
+            let (base, field) = match callee.as_ref() {
+                Expr::Dot { base, field, .. } | Expr::Field { base, field, .. } => {
+                    (base.as_ref(), field.as_str())
+                }
+                _ => return,
+            };
+            if let Expr::Ident(n, _) = base {
+                for s in scopes.iter_mut().rev() {
+                    if let Some(info) = s.get_mut(n) {
+                        if let Some(ts) = &mut info.thread {
+                            if self.conditional_depth == 0 {
+                                match field {
+                                    "join" => ts.bound = true,
+                                    "detach" => ts.detached = true,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// G3 Q19：写入未绑定线程按引用捕获的局部 → 冻结违例（spawn→join 窗口）。
+    /// 保守即时报告：即使该线程后逃逸（另有 Q18 错误）也报——两错误独立有效。
+    fn check_thread_freeze(
+        &mut self,
+        target: &Expr,
+        scopes: &[HashMap<String, VarInfo>],
+        span: &Span,
+    ) {
+        let Some(x) = self.addr_root_name(target) else {
+            return;
+        };
+        for scope in scopes {
+            for info in scope.values() {
+                if let Some(ts) = &info.thread {
+                    if !ts.bound
+                        && !ts.detached
+                        && ts.local_refs.iter().any(|(n, _)| *n == x)
+                    {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "cannot write `{x}` between spawn and join: captured by reference \
+                                 in thread (Q19 冻结窗口)——被捕获引用目标在 `join()` 前禁止写入"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// G3 Q18：作用域退出——未 join/未 detach 的线程运行时提升到根回收队列
+    /// （程序结束运行）；捕获局部引用 → 局部已随作用域销毁 → 悬垂，编译错误。
+    fn thread_escape_sweep(&mut self, scope: &HashMap<String, VarInfo>) {
+        for (name, info) in scope {
+            if let Some(ts) = &info.thread {
+                if !ts.bound && !ts.detached {
+                    for (x, sp) in &ts.local_refs {
+                        self.diags.push(Diagnostic::error(
+                            sp.clone(),
+                            format!(
+                                "cannot capture reference to local `{x}` in escaping thread \
+                                 `{name}`: thread not joined before scope exit (Q18)——延迟执行\
+                                 在作用域退出时提升到根回收，局部引用悬垂；在 `{name}` 声明\
+                                 作用域内 `join()` 或改用值复制 / 全局捕获"
+                            ),
+                        ));
+                    }
+                }
+            }
         }
     }
 
