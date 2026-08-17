@@ -1820,7 +1820,7 @@ impl<'a> LowerCtx<'a> {
                     items: item_ts,
                 });
             }
-            Expr::NamedLit { ty, fields, span } => {
+            Expr::NamedLit { ty, fields, span, .. } => {
                 // struct 字面量 → MakeClass；枚举字面量（恰一个变体）→ MakeEnum（对齐 oracle）
                 if self.types.classes.contains_key(ty) {
                     let f: Vec<(String, usize)> = fields
@@ -1848,6 +1848,11 @@ impl<'a> LowerCtx<'a> {
                 } else {
                     self.fail_void(t, &format!("未知类型 `{ty}` 的字面量构造"), span);
                 }
+            }
+            // struct 类型字面量（E1.2 组 D）：类型值——仅 comptime 类型函数体内求值；
+            // 运行时表达式位置 = 用法错误（类型函数体由 IR 降级跳过，不会到达这里）
+            Expr::StructType { span, .. } => {
+                self.fail_void(t, "类型值 `struct { ... }`（仅 comptime 类型函数内可求值）", span);
             }
             Expr::Dot { base, field, span } => {
                 // 类型名（enum/class）限定 → 枚举常量（对齐 oracle：不做变体验证，全类型名同权）

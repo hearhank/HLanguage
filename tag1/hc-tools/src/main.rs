@@ -1108,6 +1108,7 @@ fn locate_build_deps(
         ty,
         fields,
         span: build_span,
+        ..
     } = init
     else {
         return Err("build.zon: `build` 必须是 `Build{ ... }` 数据字面量".into());
@@ -1126,6 +1127,7 @@ fn locate_build_deps(
                         ty,
                         fields,
                         span,
+                        ..
                     } = item
                     {
                         if ty == "Pkg" {

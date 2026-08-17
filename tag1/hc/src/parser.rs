@@ -1686,16 +1686,22 @@ impl Parser {
                         args,
                         span: start.merge(&end),
                     };
-                    // 泛型类型实例化后字面量：Pair(i32){ first = 1, ... }（tag1：忽略泛型参数）
+                    // 泛型类型实例化后字面量：Pair(i32){ first = 1, ... }。
+                    // call 实参按类型实参收集（E1.2 组 D comptime 类型应用——不再丢弃）。
                     if self.at(&TokenKind::LBrace) {
                         match &e {
-                            Expr::Call { callee, .. }
+                            Expr::Call { callee, args, .. }
                                 if matches!(callee.as_ref(), Expr::Ident(_, _)) =>
                             {
                                 if let Expr::Ident(tyname, _) = callee.as_ref() {
+                                    let ty_args: Vec<Type> = args
+                                        .iter()
+                                        .filter_map(|a| self.expr_to_type(a))
+                                        .collect();
                                     let fields = self.parse_named_lit_fields()?;
                                     e = Expr::NamedLit {
                                         ty: tyname.clone(),
+                                        ty_args,
                                         fields,
                                         span: start,
                                     };
@@ -1860,23 +1866,27 @@ impl Parser {
             });
         }
         match self.peek().clone() {
-            // struct { ... } 类型字面量（H1：struct/class 合并；E1 type-as-value 占位）——
-            // 字段为 `name: Type`（类型标注）或 `name = expr`（值）；tag1 仅解析不执行
+            // struct { ... } 类型字面量（H1：struct/class 合并；E1.2 组 D type-as-value）。
+            // 字段为 `name: Type`（类型标注——保留，构成 `Expr::StructType` 类型值）或
+            // `name = expr`（值——tag1 仅解析不执行，NamedLit 占位）。
             TokenKind::KwClass => {
                 self.advance();
                 self.expect(&TokenKind::LBrace, "`{` after struct literal")?;
-                let mut fields = Vec::new();
+                let mut type_fields: Vec<(String, Type)> = Vec::new();
+                let mut value_fields: Vec<(String, Expr)> = Vec::new();
+                let mut all_typed = true;
                 if !self.at(&TokenKind::RBrace) {
                     loop {
                         let name = self.expect_ident()?;
                         if self.at(&TokenKind::Colon) {
                             self.advance();
-                            let _ = self.parse_type()?;
-                            fields.push((name, Expr::VoidLit(start.clone())));
+                            let ty = self.parse_type()?;
+                            type_fields.push((name, ty));
                         } else if self.at(&TokenKind::Eq) {
                             self.advance();
                             let v = self.parse_expr()?;
-                            fields.push((name, v));
+                            value_fields.push((name, v));
+                            all_typed = false;
                         } else {
                             return Err(self.error_at(format!(
                                 "expected `:` or `=` in struct literal field `{name}`"
@@ -1894,11 +1904,19 @@ impl Parser {
                 }
                 self.expect(&TokenKind::RBrace, "`}` after struct literal")?;
                 let end = self.span();
-                Ok(Expr::NamedLit {
-                    ty: "struct".into(),
-                    fields,
-                    span: start.merge(&end),
-                })
+                if all_typed {
+                    Ok(Expr::StructType {
+                        fields: type_fields,
+                        span: start.merge(&end),
+                    })
+                } else {
+                    Ok(Expr::NamedLit {
+                        ty: "struct".into(),
+                        ty_args: vec![],
+                        fields: value_fields,
+                        span: start.merge(&end),
+                    })
+                }
             }
             TokenKind::Int(s) => {
                 self.advance();
@@ -2078,6 +2096,7 @@ impl Parser {
                     let end = self.span();
                     return Ok(Expr::NamedLit {
                         ty: name,
+                        ty_args: vec![],
                         fields,
                         span: start.merge(&end),
                     });
@@ -2101,6 +2120,7 @@ impl Parser {
                         let end = self.span();
                         return Ok(Expr::NamedLit {
                             ty: format!("{name}.{field}"),
+                            ty_args: vec![],
                             fields,
                             span: start.merge(&end),
                         });
@@ -2205,6 +2225,30 @@ impl Parser {
         Ok(fields)
     }
 
+    /// 表达式 → 类型实参（E1.2 组 D）：`Pair(i32){...}` 的 call 实参转为泛型实参。
+    /// 支持裸标识符 `i32`、限定名 `Math.Vec`、嵌套泛型 `Vec(i32)`；非类型形态返回 None
+    /// （调用方按「无类型实参」处理——tag1 泛型实参必须可解析为类型）。
+    fn expr_to_type(&self, e: &Expr) -> Option<Type> {
+        match e {
+            Expr::Ident(n, _) => Some(Type::Named(n.clone(), vec![])),
+            Expr::Dot { base, field, .. } => match self.expr_to_type(base) {
+                Some(Type::Named(bn, bargs)) if bargs.is_empty() => {
+                    Some(Type::Named(format!("{bn}.{field}"), vec![]))
+                }
+                _ => None,
+            },
+            Expr::Call { callee, args, .. } => match callee.as_ref() {
+                Expr::Ident(n, _) => {
+                    let targs: Option<Vec<Type>> =
+                        args.iter().map(|a| self.expr_to_type(a)).collect();
+                    targs.map(|t| Type::Named(n.clone(), t))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn expect_ident(&mut self) -> Result<String, Diagnostic> {
         match self.peek() {
             TokenKind::Ident(s) => {
@@ -2283,6 +2327,7 @@ impl Expr {
             | Expr::ArrayLit(_, span)
             | Expr::TupleLit(_, span)
             | Expr::NamedLit { span, .. }
+            | Expr::StructType { span, .. }
             | Expr::Dot { span, .. }
             | Expr::Field { span, .. }
             | Expr::Index { span, .. }

@@ -358,10 +358,20 @@ pub enum Expr {
     /// 数组/元组/struct/枚举字面量统一容器
     ArrayLit(Vec<Expr>, Span),
     TupleLit(Vec<Expr>, Span),
-    /// Type{field = value, ...}（struct/enum 字面量）
+    /// Type{field = value, ...}（struct/enum 字面量）。
+    /// `ty_args` = 泛型实参（`Pair(i32){...}` 的 `[i32]`；E1.2 组 D comptime 类型应用，
+    /// 无泛型 = 空）。类型函数名 + 实参 → 具体化（monomorphization）后登记具体类型。
     NamedLit {
         ty: String,
+        ty_args: Vec<Type>,
         fields: Vec<(String, Expr)>,
+        span: Span,
+    },
+    /// struct 类型字面量（E1.2 组 D type-as-value）：`struct { name: Type, ... }`。
+    /// 出现在类型函数体内（`fn Pair(T: type) type { return struct { ... }; }`），
+    /// 编译期求值 = 具体化后登记为 class。tag1 仅 `name: Type` 形态（值字段不在此）。
+    StructType {
+        fields: Vec<(String, Type)>,
         span: Span,
     },
     /// Type.name（枚举常量 / 命名空间限定）
@@ -631,6 +641,8 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
                 visit_expr(v, scopes, fv);
             }
         }
+        // struct 类型字面量：字段为类型标注（无运行时值/自由变量）
+        Expr::StructType { .. } => {}
         Expr::Dot { base, .. } | Expr::Field { base, .. } => visit_expr(base, scopes, fv),
         Expr::Index { base, indices, .. } => {
             visit_expr(base, scopes, fv);

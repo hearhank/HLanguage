@@ -9,6 +9,7 @@ use std::io::{Read, Seek, Write};
 use std::rc::Rc;
 
 use hc::ast::*;
+use hc::comptime::{self, Instantiated};
 use hc::token::Span;
 
 use crate::value::{
@@ -1422,45 +1423,61 @@ impl Interp {
         }
     }
 
-    fn default_value(&self, ty: Option<&Type>) -> Result<Value> {
+    fn default_value(&mut self, ty: Option<&Type>) -> Result<Value> {
         match ty {
             None => Ok(Value::Void),
             Some(t) => match t.strip() {
-                Type::Named(n, _) => match n.as_str() {
-                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => Ok(Value::Int(0)),
-                    "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => Ok(Value::Int(0)),
-                    "f32" | "f64" | "f16" | "f128" => Ok(Value::Float(0.0)),
-                    "bool" => Ok(Value::Bool(false)),
-                    "void" => Ok(Value::Void),
-                    "String" | "&[u8]" => Ok(Value::str("")),
-                    "Vec" | "Deque" => Ok(Value::vec(vec![], Value::Alloc)),
-                    "Map" => Ok(Value::map(HashMap::new(), Value::Alloc)),
-                    _ => {
-                        // Vec(T) / Map 集合类型
-                        if n == "Vec" {
-                            return Ok(Value::vec(vec![], Value::Alloc));
-                        }
-                        if n == "Map" {
-                            return Ok(Value::map(HashMap::new(), Value::Alloc));
-                        }
-                        // 命名类型：class / enum 空实例
-                        match self.types.get(n) {
-                            Some(TypeDef::Class { fields, .. }) => {
-                                let mut f = HashMap::new();
-                                for fd in fields {
-                                    f.insert(fd.name.clone(), self.default_value(Some(&fd.ty))?);
-                                }
-                                Ok(Value::class(n, f))
+                Type::Named(n, args) => {
+                    // E1.2 组 D：泛型类型应用（`Pair(i32)`）→ 惰性具体化后递归。
+                    // 具体化产物：struct → `Pair<@i32>`（登记后按 class 空实例）；
+                    // `return T;` 透传 → 实参类型自身（`Pair(i32)` ≡ `i32`）。
+                    if !args.is_empty() {
+                        let cn = self.concrete_type_name(n, args)?;
+                        return self.default_value(Some(&Type::Named(cn, vec![])));
+                    }
+                    match n.as_str() {
+                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => Ok(Value::Int(0)),
+                        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => Ok(Value::Int(0)),
+                        "f32" | "f64" | "f16" | "f128" => Ok(Value::Float(0.0)),
+                        "bool" => Ok(Value::Bool(false)),
+                        "void" => Ok(Value::Void),
+                        "String" | "&[u8]" => Ok(Value::str("")),
+                        "Vec" | "Deque" => Ok(Value::vec(vec![], Value::Alloc)),
+                        "Map" => Ok(Value::map(HashMap::new(), Value::Alloc)),
+                        _ => {
+                            // Vec(T) / Map 集合类型
+                            if n == "Vec" {
+                                return Ok(Value::vec(vec![], Value::Alloc));
                             }
-                            Some(TypeDef::Enum { .. }) => Ok(Value::Enum {
-                                name: n.clone(),
-                                variant: "__none__".into(),
-                                payload: None,
-                            }),
-                            _ => Err(RtError::msg("UnknownType", format!("unknown type `{n}`"))),
+                            if n == "Map" {
+                                return Ok(Value::map(HashMap::new(), Value::Alloc));
+                            }
+                            // 命名类型：class / enum 空实例
+                            match self.types.get(n) {
+                                Some(TypeDef::Class { fields, .. }) => {
+                                    let mut f = HashMap::new();
+                                    // 先克隆字段类型：default_value(&mut self) 具体化会重新借用 self
+                                    let ftypes: Vec<(String, Type)> = fields
+                                        .iter()
+                                        .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                                        .collect();
+                                    for (fname, fty) in &ftypes {
+                                        f.insert(fname.clone(), self.default_value(Some(fty))?);
+                                    }
+                                    Ok(Value::class(n, f))
+                                }
+                                Some(TypeDef::Enum { .. }) => Ok(Value::Enum {
+                                    name: n.clone(),
+                                    variant: "__none__".into(),
+                                    payload: None,
+                                }),
+                                _ => {
+                                    Err(RtError::msg("UnknownType", format!("unknown type `{n}`")))
+                                }
+                            }
                         }
                     }
-                },
+                }
                 Type::Optional(_) => Ok(Value::Opt(None)),
                 Type::Ptr(_, _) => Ok(Value::Void),
                 Type::Slice(_, _) => Ok(Value::str("")),
@@ -1468,6 +1485,48 @@ impl Interp {
                 _ => Ok(Value::Void),
             },
         }
+    }
+
+    /// E1.2 组 D：惰性具体化——`Pair(i32)` → 具体化名 `Pair<@i32>`。
+    ///
+    /// `self.types` 缓存命中即回（纯查找，immutable）；未命中则查类型函数定义
+    /// （`funcs` 中返回 `type` 的函数）→ `comptime::instantiate` → 以具体化名登记
+    /// 伪 Class 声明 → 返回具体化名。`args` 为空 → 原样返回（普通类型名）。
+    ///
+    /// 透传形态（`return T;`）产物是**实参类型自身**：返回其规范名（`type_key`），
+    /// 使 `Pair(i32)` 与 `i32` 同义（递归 `default_value` 自然落到原始类型分支）。
+    fn concrete_type_name(&mut self, name: &str, args: &[Type]) -> Result<String> {
+        if args.is_empty() {
+            return Ok(name.to_string());
+        }
+        let cname = comptime::concrete_name(name, args);
+        if self.types.contains_key(&cname) {
+            return Ok(cname);
+        }
+        // 查类型函数定义（`fn name(T: type) type`）→ 编译期求值具体化
+        if let Some(defs) = self.funcs.get(name) {
+            for f in defs {
+                if !comptime::is_type_fn(&f.params, &f.ret) {
+                    continue;
+                }
+                match comptime::instantiate(name, &f.params, &f.body, args) {
+                    Ok(Instantiated::Class(decl)) => {
+                        self.register_type_decl(&decl)?;
+                        return Ok(cname);
+                    }
+                    Ok(Instantiated::Type(t)) => {
+                        // 透传：`Pair(i32)` ≡ 实参类型自身
+                        return Ok(comptime::type_key(&t));
+                    }
+                    Err(msg) => {
+                        return Err(RtError::msg("TypeInstantiation", msg));
+                    }
+                }
+            }
+        }
+        // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：回退基础名，由调用方
+        // 既有非泛型路径处理（空集合 / 类型未登记 → UnknownType，保持原语义）。
+        Ok(name.to_string())
     }
 
     fn exec_if(&mut self, ifs: &IfStmt) -> Result<Flow> {
@@ -2124,15 +2183,30 @@ impl Interp {
             Expr::TupleLit(items, _) => Ok(Value::arr(
                 items.iter().map(|e| self.eval(e)).collect::<Result<_>>()?,
             )),
-            Expr::NamedLit { ty, fields, .. } => {
-                // class 字面量构造 / enum 带负载字面量
-                match self.types.get(ty) {
+            // struct 类型字面量（E1.2 组 D）：类型值——comptime 类型函数体内求值
+            // （经 `hc::comptime` 具体化引擎），运行时表达式位置 = 用法错误
+            Expr::StructType { span, .. } => Err(RtError::msg(
+                "TypeValue",
+                format!(
+                    "类型值 `struct {{ ... }}` 仅 comptime 类型函数内可求值（第 {} 行第 {} 列）",
+                    span.line, span.col
+                ),
+            )),
+            Expr::NamedLit { ty, ty_args, fields, .. } => {
+                // class 字面量构造 / enum 带负载字面量。
+                // E1.2 组 D：泛型应用 `Pair(i32){...}` → 惰性具体化后按具体化名构造。
+                let ty = if ty_args.is_empty() {
+                    ty.clone()
+                } else {
+                    self.concrete_type_name(ty, ty_args)?
+                };
+                match self.types.get(&ty) {
                     Some(TypeDef::Class { .. }) => {
                         let mut f = HashMap::new();
                         for (k, v) in fields {
                             f.insert(k.clone(), self.eval(v)?);
                         }
-                        Ok(Value::class(ty, f))
+                        Ok(Value::class(&ty, f))
                     }
                     Some(TypeDef::Enum { .. }) => {
                         // enum 变体字面量：Type{variant = payload}——单字段
@@ -4559,8 +4633,13 @@ impl Interp {
                 if let Expr::Ident(tname, _) = &args[0] {
                     if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
                         let mut f = HashMap::new();
-                        for fd in fields {
-                            f.insert(fd.name.clone(), self.default_value(Some(&fd.ty))?);
+                        // 先克隆字段类型：default_value(&mut self) 具体化会重新借用 self
+                        let ftypes: Vec<(String, Type)> = fields
+                            .iter()
+                            .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                            .collect();
+                        for (fname, fty) in &ftypes {
+                            f.insert(fname.clone(), self.default_value(Some(fty))?);
                         }
                         return Ok(Some(Value::class(tname, f)));
                     }
@@ -4937,8 +5016,13 @@ impl Interp {
                 if let Expr::Ident(tname, _) = &args[0] {
                     let inst = if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
                         let mut f = HashMap::new();
-                        for fd in fields {
-                            f.insert(fd.name.clone(), self.default_value(Some(&fd.ty))?);
+                        // 先克隆字段类型：default_value(&mut self) 具体化会重新借用 self
+                        let ftypes: Vec<(String, Type)> = fields
+                            .iter()
+                            .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                            .collect();
+                        for (fname, fty) in &ftypes {
+                            f.insert(fname.clone(), self.default_value(Some(fty))?);
                         }
                         Value::class(tname, f)
                     } else if self.types.contains_key(tname) {
@@ -6688,12 +6772,14 @@ impl Interp {
     }
 
     /// JSON 对象 → class 实例（匹配字段名；嵌套对象按字段声明类型还原）
-    fn class_from_json(&self, ty: &str, obj: &HashMap<String, Value>) -> Result<Value> {
+    fn class_from_json(&mut self, ty: &str, obj: &HashMap<String, Value>) -> Result<Value> {
         let Some(TypeDef::Class { fields: fdecls, .. }) = self.types.get(ty) else {
             return Err(RtError::msg("UnknownType", format!("unknown type `{ty}`")));
         };
+        // 先克隆字段声明：json_coerce/default_value（&mut self）具体化会重新借用 self
+        let fdecls = fdecls.clone();
         let mut f = HashMap::new();
-        for fd in fdecls {
+        for fd in &fdecls {
             let v = match obj.get(&fd.name) {
                 Some(v) => self.json_coerce(&fd.ty, v),
                 None => self.default_value(Some(&fd.ty)).unwrap_or(Value::Void),
@@ -6704,7 +6790,7 @@ impl Interp {
     }
 
     /// 解析后的 JSON 值 → 字段声明类型（嵌套对象（Map）还原为目标 class；集合元素递归还原）
-    fn json_coerce(&self, ty: &Type, v: &Value) -> Value {
+    fn json_coerce(&mut self, ty: &Type, v: &Value) -> Value {
         match ty.strip() {
             Type::Named(n, args) => {
                 // 集合元素类型还原（Vec(T)/Deque(T) 中的嵌套对象）

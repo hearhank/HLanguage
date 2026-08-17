@@ -1881,13 +1881,16 @@ impl Checker {
                     .collect();
                 SType::Tuple(ts)
             }
-            Expr::NamedLit { ty, fields, span } => {
+            Expr::NamedLit { ty, fields, span, .. } => {
                 self.check_named_lit(ty, fields, span, scopes);
                 match self.types.get(ty) {
                     Some(_) => SType::Named(ty.clone(), vec![]),
                     None => SType::Unknown,
                 }
             }
+            // struct 类型字面量（E1.2 组 D）：类型值——comptime 类型函数体内求值；
+            // 静态类型 = 元类型（无运行时表示），tag1 按 Unknown 放行（具体化由运行时登记）
+            Expr::StructType { .. } => SType::Unknown,
             Expr::Dot { base, field, span } => {
                 // 实例访问（v1.append / p2.x / self.count）：parse_primary 把变量成员的第一个 `.` 解析为 Dot
                 if let Expr::Ident(n, _) = base.as_ref() {

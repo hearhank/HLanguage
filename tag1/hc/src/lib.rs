@@ -7,6 +7,7 @@
 
 pub mod ast;
 pub mod bytecode;
+pub mod comptime;
 pub mod diag;
 pub mod errorcodes;
 pub mod ir;
