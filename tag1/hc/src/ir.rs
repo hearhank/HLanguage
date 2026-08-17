@@ -3098,6 +3098,8 @@ fn is_free_builtin(name: &str) -> bool {
             | "skip_space" | "peek" | "advance" | "is_digit" | "parse_number"
             // 文本解析
             | "parse_int" | "parse_float"
+            // 组 G 线程（E2.2）：spawn(f, args...) o Thread(T)——协作式延迟执行
+            | "spawn"
     )
 }
 
@@ -3351,6 +3353,13 @@ pub struct Ctx {
     /// IR 值无引用计数，分配登记不自动注销——`leaks()`/`leak_report()` 反映本 run 内
     /// 已分配数（对齐 oracle 语义的 Debug 簿记可观测面；tree-walking 侧用弱引用精确跟踪）。
     pub alloc_tracker: Vec<(usize, u32)>,
+    /// 组 G（Q8）：当前线程子任务的每线程 alloc 覆盖。协作式单线程执行下，线程 fn
+    /// 运行期间置 Some(每线程 Arena)，`alloc` 解析（LoadGlobal / implicit_env_value）
+    /// 优先返回该值——对齐 oracle `Interp` 的 `push_scope` + `bind("alloc", 每线程 arena)`。
+    pub current_alloc: Option<IrValue>,
+    /// 组 G：当前执行深度（`exec_body` 每次进入时刷新）。线程 fn 以 `cur_depth + 1`
+    /// 起步，对齐 oracle 共享 `call_depth` 的 StackOverflow 防护（非独立栈）。
+    pub cur_depth: usize,
 }
 
 impl Ctx {
@@ -4699,6 +4708,7 @@ fn exec_body(
     frame: Frame,
     depth: usize,
 ) -> R<IrValue> {
+    ctx.cur_depth = depth;
     let mut frame = frame;
     let mut pc = 0usize;
     let mut fail: Option<String> = None;
@@ -5158,10 +5168,15 @@ fn exec_body(
             }
             // ---- Phase 5：global / const ----
             IrInst::LoadGlobal { temp, name } => {
-                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
-                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
-                })?;
-                let v = ctx.cell_value(cell).clone();
+                let v = if name == "alloc" && ctx.current_alloc.is_some() {
+                    // Q8：线程子任务期间 `alloc` 解析到每线程 arena（对齐 oracle `lookup`）
+                    ctx.current_alloc.clone().unwrap()
+                } else {
+                    let cell = ctx.globals.get(name).copied().ok_or_else(|| {
+                        IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                    })?;
+                    ctx.cell_value(cell).clone()
+                };
                 ctx.set(&frame, *temp, v);
             }
             IrInst::StoreGlobal { name, value } => {
@@ -5383,10 +5398,17 @@ fn io_value_ir(ctx: &mut Ctx) -> IrValue {
 /// pi→Float(PI)、Vec/Deque/Table→空 Arr、Map→空 Map）
 fn implicit_env_value(ctx: &mut Ctx, name: &str) -> IrValue {
     match name {
-        "alloc" => IrValue::Class(ctx.alloc(Cell::Class {
-            name: "Alloc".into(),
-            fields: HashMap::new(),
-        })),
+        "alloc" => {
+            // Q8：每线程 alloc 覆盖（线程 fn 运行期间）优先；否则全局 Class("Alloc") 哨兵
+            if let Some(a) = &ctx.current_alloc {
+                a.clone()
+            } else {
+                IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "Alloc".into(),
+                    fields: HashMap::new(),
+                }))
+            }
+        }
         // Arena 类型构造根（G1）：`Arena.init(alloc)` → 真实 arena 句柄
         "Arena" => IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new()))),
         "io" | "test_io" | "stdout" | "stderr" => io_value_ir(ctx),
@@ -6900,6 +6922,148 @@ fn call_io_method_ir(
     }
 }
 
+// ---- 组 G 线程生命周期（协作式延迟执行；对齐 oracle call_thread_method interp.rs:4610）----
+
+/// Thread 类方法分派：`join() !T` / `cancel() !void` / `is_done() bool` / `detach()`。
+fn call_thread_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    if !args.is_empty() {
+        return Err(IrError::msg(
+            "ArityMismatch",
+            format!("Thread.{method} expects 0 args"),
+        ));
+    }
+    let thread = match self_v {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "Thread method on non-Thread")),
+    };
+    match method {
+        // 运行到完成并返回结果（错误 union 以 `IrValue::Err` 透传；done 后读缓存）
+        "join" => Ok(Some(thread_run_ir(ctx, module, thread)?)),
+        // detach：运行到完成并丢弃结果（副作用发生）、置 detached 标记
+        "detach" => {
+            let _ = thread_run_ir(ctx, module, thread)?;
+            thread_set_field_ir(ctx, thread, "detached", IrValue::Bool(true));
+            Ok(Some(IrValue::Void))
+        }
+        "is_done" => Ok(Some(IrValue::Bool(thread_field_bool_ir(
+            ctx,
+            thread,
+            "done",
+        )))),
+        "cancel" => {
+            // 协作式：置标志；运行点（join/detach）检查后跳过执行 → error.Cancelled
+            thread_set_field_ir(ctx, thread, "cancel", IrValue::Bool(true));
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// 运行线程到完成（对齐 oracle `thread_run` interp.rs:4647）：
+/// - 已运行（done）→ 返回缓存 result；
+/// - 已取消（cancel 且未运行）→ 置 done、缓存 `error.Cancelled`、返回 Cancelled；
+/// - 否则在线程每线程 alloc（Q8）覆盖下调用 fn，缓存 result 并置 done。
+/// 硬错误（StackOverflow/AssertFailed/ExitRequested 等）不缓存、直接传播。
+fn thread_run_ir(ctx: &mut Ctx, module: &IrModule, thread: usize) -> R<IrValue> {
+    let (callee, arg_vals, alloc_v, cancelled, done) = {
+        let fields = match &ctx.cells[thread] {
+            Cell::Class { fields, .. } => fields.clone(),
+            _ => return Err(IrError::msg("TypeError", "bad Thread")),
+        };
+        let getf = |k: &str| -> IrValue {
+            match fields.get(k) {
+                Some(c) => ctx.cell_value(*c).clone(),
+                None => IrValue::Void,
+            }
+        };
+        let callee = getf("fn");
+        // args 字段 = `make_arr` 产物（Arr → Cell::Elems）
+        let arg_vals = match getf("args") {
+            IrValue::Arr(c) => match &ctx.cells[c] {
+                Cell::Elems(e) => e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect(),
+                _ => vec![],
+            },
+            _ => vec![],
+        };
+        let alloc_v = getf("alloc");
+        let cancelled = matches!(getf("cancel"), IrValue::Bool(true));
+        let done = matches!(getf("done"), IrValue::Bool(true));
+        (callee, arg_vals, alloc_v, cancelled, done)
+    };
+    if done {
+        return thread_result_ir(ctx, thread);
+    }
+    if cancelled {
+        let err_v = err_val(module, "Cancelled");
+        thread_set_field_ir(ctx, thread, "done", IrValue::Bool(true));
+        thread_set_field_ir(ctx, thread, "result", err_v.clone());
+        return Ok(err_v);
+    }
+    // Q8：子任务执行期间绑定每线程 alloc（对齐 oracle `push_scope` + `bind("alloc", …)`；
+    // 嵌套线程 save/restore 自然恢复外层 alloc）
+    let saved = ctx.current_alloc.take();
+    ctx.current_alloc = Some(alloc_v);
+    let r = match callee {
+        IrValue::Fn(fname) => {
+            let idx = pick_func(ctx, module, &fname, &arg_vals).ok_or_else(|| {
+                IrError::msg("NoFunction", format!("no function `{fname}`"))
+            })?;
+            exec_func(ctx, module, idx, &arg_vals, ctx.cur_depth + 1)
+        }
+        IrValue::Closure {
+            func,
+            captures,
+            is_mut,
+            ..
+        } => call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, ctx.cur_depth + 1),
+        _ => Err(IrError::msg("NotCallable", "Thread fn is not callable")),
+    };
+    ctx.current_alloc = saved;
+    let result = r?;
+    thread_set_field_ir(ctx, thread, "done", IrValue::Bool(true));
+    thread_set_field_ir(ctx, thread, "result", result.clone());
+    Ok(result)
+}
+
+/// 读取线程缓存结果（done 或已取消时有效）
+fn thread_result_ir(ctx: &Ctx, thread: usize) -> R<IrValue> {
+    match &ctx.cells[thread] {
+        Cell::Class { fields, .. } => match fields.get("result") {
+            Some(c) => Ok(ctx.cell_value(*c).clone()),
+            None => Err(IrError::msg("TypeError", "Thread has no result")),
+        },
+        _ => Err(IrError::msg("TypeError", "bad Thread")),
+    }
+}
+
+/// 写线程字段（Thread 类字段 cell 索引定位）
+fn thread_set_field_ir(ctx: &mut Ctx, thread: usize, key: &str, v: IrValue) {
+    let fc = match &ctx.cells[thread] {
+        Cell::Class { fields, .. } => fields.get(key).copied(),
+        _ => None,
+    };
+    if let Some(c) = fc {
+        ctx.cells[c] = Cell::Value(v);
+    }
+}
+
+/// 读线程布尔字段（缺省 false）
+fn thread_field_bool_ir(ctx: &Ctx, thread: usize, key: &str) -> bool {
+    match &ctx.cells[thread] {
+        Cell::Class { fields, .. } => match fields.get(key) {
+            Some(c) => matches!(ctx.cell_value(*c), IrValue::Bool(true)),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
 // ---- JSON 解析（Map.from_json / json.parse；对齐 oracle parse_json_*）----
 
 fn parse_json_value_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
@@ -7443,6 +7607,9 @@ fn call_builtin_method(
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Io" => {
             call_io_method_ir(ctx, module, m, args)
         }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Thread" => {
+            call_thread_method_ir(ctx, module, &self_v, m, args)
+        }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Fs" => {
             call_fs_method_ir(ctx, module, m, args)
         }
@@ -7847,6 +8014,46 @@ fn call_builtin(
             };
             let v = args[0].clone();
             Ok(if shallow { v } else { deep_copy(ctx, v) })
+        }
+        // ---------- 组 G 线程（E2.2，协作式延迟执行） ----------
+        // spawn(f, args...) o Thread(T)：立即返回句柄但不并发运行——join/detach 时才
+        // 执行到完成（真并行留第三块 E2）。构造 `Class("Thread")`，字段经 cell 承载。
+        "spawn" => {
+            if args.is_empty() {
+                return Err(IrError::msg(
+                    "ArityMismatch",
+                    "spawn expects at least callee",
+                ));
+            }
+            let callee = deref_value(ctx, &args[0]).clone();
+            match &callee {
+                IrValue::Fn(_) | IrValue::Closure { .. } => {}
+                _ => return Err(IrError::msg("NotCallable", "spawn callee is not callable")),
+            }
+            // Q8：每线程独立 Arena 实例（子任务执行期间绑定为 alloc）
+            let alloc_v = IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new())));
+            let args_arr = make_arr(ctx, args[1..].to_vec());
+            let mut fields = HashMap::new();
+            fields.insert("fn".to_string(), ctx.alloc(Cell::Value(callee)));
+            fields.insert("args".to_string(), ctx.alloc(Cell::Value(args_arr)));
+            fields.insert("alloc".to_string(), ctx.alloc(Cell::Value(alloc_v)));
+            fields.insert(
+                "cancel".to_string(),
+                ctx.alloc(Cell::Value(IrValue::Bool(false))),
+            );
+            fields.insert(
+                "done".to_string(),
+                ctx.alloc(Cell::Value(IrValue::Bool(false))),
+            );
+            fields.insert(
+                "detached".to_string(),
+                ctx.alloc(Cell::Value(IrValue::Bool(false))),
+            );
+            fields.insert("result".to_string(), ctx.alloc(Cell::Value(IrValue::Void)));
+            Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Thread".into(),
+                fields,
+            })))
         }
         // ---------- @ 内建 ----------
         "@intFromEnum" => {

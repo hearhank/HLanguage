@@ -482,3 +482,75 @@ fn read() i32 { return counter; }
     assert_eq!(run_bc(src, "bump", &[]).unwrap(), IrValue::Int(1));
     assert_eq!(run_bc(src, "read", &[]).unwrap(), IrValue::Int(0)); // 新 runtime 重新 init
 }
+
+// ---------- 组 G4a：线程生命周期字节码往返（零 opcode 改动——Thread 复用 Class） ----------
+
+#[test]
+fn spawn_join_round_trip() {
+    // spawn/join：字节码 VM 与参考解释器一致（Class("Thread") 复用既有 class 语义）
+    let src = r#"
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn main() i32 {
+    var th = spawn(add, 6, 7);
+    return try th.join();
+}
+"#;
+    assert_consistent(src, "main", &[]);
+    assert_eq!(run_bc(src, "main", &[]).unwrap(), IrValue::Int(13));
+}
+
+#[test]
+fn thread_is_done_round_trip() {
+    // is_done 状态转移经字节码往返一致
+    let src = r#"
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn main() i32 {
+    var th = spawn(add, 6, 7);
+    if (th.is_done()) { return 1; }
+    var r = try th.join();
+    if (r != 13) { return 2; }
+    if (!th.is_done()) { return 3; }
+    return 0;
+}
+"#;
+    assert_consistent(src, "main", &[]);
+    assert_eq!(run_bc(src, "main", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn thread_own_alloc_round_trip() {
+    // Q8 每线程 alloc：worker 的 alloc.bytes() == 8，且不进全局泄漏跟踪
+    let src = r#"
+fn worker() usize {
+    var buf = alloc.alloc(8);
+    return alloc.bytes();
+}
+fn main() i32 {
+    var n0 = alloc.leaks();
+    var th = spawn(worker);
+    var b = try th.join();
+    if (b != 8) { return 1; }
+    if (alloc.leaks() != n0) { return 2; }
+    return 0;
+}
+"#;
+    assert_consistent(src, "main", &[]);
+    assert_eq!(run_bc(src, "main", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn cancel_join_round_trip() {
+    // cancel → join 返回 error.Cancelled（expect_error 按名比较）经字节码往返一致
+    let src = r#"
+fn work() i32 { return 42; }
+fn main() void {
+    var th = spawn(work);
+    expect_eq(th.is_done(), false);
+    th.cancel();
+    expect_error(error.Cancelled, th.join());
+    expect_eq(th.is_done(), true);
+}
+"#;
+    assert_consistent(src, "main", &[]);
+    assert_eq!(run_bc(src, "main", &[]).unwrap(), IrValue::Void);
+}

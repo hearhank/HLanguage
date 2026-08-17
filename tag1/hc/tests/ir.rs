@@ -1576,3 +1576,118 @@ fn t() i32 {
 "#;
     assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
 }
+
+// ---------- 组 G4a：线程生命周期（协作式延迟执行） ----------
+
+#[test]
+fn spawn_join_returns_value_ir() {
+    // 基本 spawn/join：spawn(add, 6, 7) 立即返回句柄；join 运行 add 到完成返回 13
+    let src = r#"
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn main() i32 {
+    var th = spawn(add, 6, 7);
+    return try th.join();
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Int(13));
+}
+
+#[test]
+fn thread_is_done_transitions_ir() {
+    // is_done 状态转移：spawn 后 false（未运行）→ join 后 true（已完成）
+    let src = r#"
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn main() i32 {
+    var th = spawn(add, 6, 7);
+    if (th.is_done()) { return 1; }
+    var r = try th.join();
+    if (r != 13) { return 2; }
+    if (!th.is_done()) { return 3; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn thread_own_alloc_isolation_ir() {
+    // Q8：子任务绑定每线程独立 alloc——worker 的 alloc.alloc(8) bump 到自身 arena
+    // （alloc.bytes() == 8），且不进全局泄漏跟踪（根 alloc.leaks() 不变）
+    let src = r#"
+fn worker() usize {
+    var buf = alloc.alloc(8);
+    return alloc.bytes();
+}
+fn main() i32 {
+    var n0 = alloc.leaks();
+    var th = spawn(worker);
+    var b = try th.join();
+    if (b != 8) { return 1; }
+    if (alloc.leaks() != n0) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn join_error_propagates_ir() {
+    // join 透传子任务错误 union——may_fail 返回 error.Boom，join 返回同名错误
+    // （expect_error 按错误名比较；IR value_eq 对 Err 比较码，避免两套码表歧义）
+    let src = r#"
+fn may_fail() !i32 { return error.Boom; }
+fn main() void {
+    var th = spawn(may_fail);
+    expect_error(error.Boom, th.join());
+    expect_eq(th.is_done(), true);
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Void);
+}
+
+#[test]
+fn cancel_then_join_returns_cancelled_ir() {
+    // cancel 置协作标志；未运行线程 join 返回 error.Cancelled 并置 done
+    let src = r#"
+fn work() i32 { return 42; }
+fn main() void {
+    var th = spawn(work);
+    expect_eq(th.is_done(), false);
+    th.cancel();
+    expect_error(error.Cancelled, th.join());
+    expect_eq(th.is_done(), true);
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Void);
+}
+
+#[test]
+fn detach_runs_side_effects_ir() {
+    // detach 立即运行到完成并丢弃结果——全局副作用发生、句柄置 done
+    let src = r#"
+global g: i32 = 0;
+fn bump() void { g = g + 1; }
+fn main() i32 {
+    var th = spawn(bump);
+    th.detach();
+    if (g != 1) { return 1; }
+    if (!th.is_done()) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn bound_ref_capture_join_ir() {
+    // `&局部` 捕获 + join（Q18 绑定）：spawn→join 之间无写入（Q19 冻结窗口闭合）
+    let src = r#"
+fn touch(x: *i32) i32 { return x.*; }
+fn main() i32 {
+    var v: i32 = 7;
+    var th = spawn(touch, &v);
+    return try th.join();
+}
+"#;
+    assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Int(7));
+}
