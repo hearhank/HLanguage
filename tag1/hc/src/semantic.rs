@@ -2593,7 +2593,8 @@ impl Checker {
     /// 内建函数返回类型（子集：供 orelse/return 期望传播）
     fn builtin_fn_ret(&self, name: &str) -> SType {
         match name {
-            "box" => SType::Ptr(Box::new(SType::Unknown), false),
+            // G3（设计文档 §6）：`box(v, alloc)` 返回拥有/可变指针 `o *mut T`
+            "box" => SType::Ptr(Box::new(SType::Unknown), true),
             "copy" => SType::Unknown,
             "parse_int" | "parse_char" => SType::Optional(Box::new(SType::Int {
                 width: IntWidth::Comptime,

@@ -231,3 +231,20 @@ fn dynamic_error_name_allocated() {
         "[test] fn t() !void {\n    var f = io.fs.read_file(\"__no_such_hc_test_file__\", alloc) catch |err| {\n        try expect_eq(err, error.NotFound);\n        return;\n    };\n}\n",
     );
 }
+
+#[test]
+fn allocator_oom_catchable() {
+    // G2/mem：alloc.alloc 分配失败（超出 Vec 可表示容量）→ error.OutOfMemory，
+    // 可 catch 处理（error union 值，非进程 panic——`vec![0u8; n]` 会直接中止）
+    run_ok(
+        "[test] fn t() !void {\n    var buf = alloc.alloc(1 << 63) catch |err| {\n        try expect_eq(err, error.OutOfMemory);\n        return;\n    };\n}\n",
+    );
+}
+
+#[test]
+fn arena_oom_catchable() {
+    // G2/mem：arena.alloc(n) 同样返回 error.OutOfMemory（与 alloc.alloc 一致）
+    run_ok(
+        "[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(1 << 63) catch |err| {\n        try expect_eq(err, error.OutOfMemory);\n        return;\n    };\n}\n",
+    );
+}

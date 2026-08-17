@@ -214,7 +214,7 @@ fn g() FileError!i32 {
 "#;
     let program = parse_source(src).expect("parse");
     let table = error_code_table(&program);
-    assert_eq!(table.len(), 1, "同名错误应合并为一条");
+    assert_eq!(table.len(), 2, "同名错误应合并为一条 + 内建 OutOfMemory");
     let c1 = table.code_of("NotFound").expect("NotFound 有码");
     // 声明序 = 0（首个出现）
     assert_eq!(c1, 0);
@@ -231,7 +231,7 @@ fn f() E1!i32 {
 "#;
     let program = parse_source(src).expect("parse");
     let table = error_code_table(&program);
-    assert_eq!(table.len(), 3);
+    assert_eq!(table.len(), 4, "3 用户错误 + 内建 OutOfMemory");
     assert_eq!(table.code_of("A"), Some(0));
     assert_eq!(table.code_of("B"), Some(1));
     assert_eq!(table.code_of("C"), Some(2));
@@ -256,7 +256,7 @@ fn g(e: anyerror!i32) i32 {
     let table = error_code_table(&program);
     assert!(table.code_of("NotFound").is_some(), "错误集声明成员收集");
     assert!(table.code_of("Timeout").is_some(), "switch 模式收集");
-    assert_eq!(table.len(), 2);
+    assert_eq!(table.len(), 3, "2 用户错误 + 内建 OutOfMemory");
 }
 
 #[test]
@@ -292,7 +292,8 @@ fn m26_reverse_lookup() {
     let table = error_code_table(&program);
     assert_eq!(table.name_of(0), Some("Alpha"));
     assert_eq!(table.name_of(1), Some("Beta"));
-    assert_eq!(table.name_of(2), None, "未分配码无名字");
+    assert_eq!(table.name_of(2), Some("OutOfMemory"), "内建错误已注册");
+    assert_eq!(table.name_of(3), None, "未分配码无名字");
     // 跨包码（高位非本包）→ 无名
     assert_eq!(table.name_of(0x0001_0000), None);
 }
@@ -312,7 +313,15 @@ const E2 = error{ Z };
     let v1: Vec<(String, u32)> = t1.entries().map(|e| (e.name.clone(), e.code)).collect();
     let v2: Vec<(String, u32)> = t2.entries().map(|e| (e.name.clone(), e.code)).collect();
     assert_eq!(v1, v2);
-    assert_eq!(v1, vec![("X".into(), 0), ("Y".into(), 1), ("Z".into(), 2)]);
+    assert_eq!(
+        v1,
+        vec![
+            ("X".into(), 0),
+            ("Y".into(), 1),
+            ("Z".into(), 2),
+            ("OutOfMemory".into(), 3)
+        ]
+    );
 }
 
 #[test]

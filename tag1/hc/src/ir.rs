@@ -2246,18 +2246,19 @@ impl<'a> LowerCtx<'a> {
                 "String" | "&[u8]" => {
                     self.push(IrInst::Const { temp: t, val: IrConst::Str(String::new()) });
                 }
-                "Vec" | "Deque" => {
-                    self.push(IrInst::MakeArr { temp: t, items: vec![] });
+                // G4：集合默认值 = 隐式环境空容器（持全局 alloc）
+                "Vec" | "Deque" | "Table" => {
+                    self.push(IrInst::LoadGlobal { temp: t, name: "Vec".into() });
                 }
                 "Map" => {
-                    self.push(IrInst::MakeClass { temp: t, ty: "Map".into(), fields: vec![] });
+                    self.push(IrInst::LoadGlobal { temp: t, name: "Map".into() });
                 }
                 _ => {
                     // Vec(T) / Map(K,V) 泛型集合形态
-                    if n == "Vec" {
-                        self.push(IrInst::MakeArr { temp: t, items: vec![] });
+                    if n == "Vec" || n == "Deque" {
+                        self.push(IrInst::LoadGlobal { temp: t, name: "Vec".into() });
                     } else if n == "Map" {
-                        self.push(IrInst::MakeClass { temp: t, ty: "Map".into(), fields: vec![] });
+                        self.push(IrInst::LoadGlobal { temp: t, name: "Map".into() });
                     } else if let Some(ci) = self.types.classes.get(n) {
                         // 命名 class：递归默认字段（先克隆字段表释放 `self.types` 借用）
                         let cls_fields = ci.fields.clone();
@@ -2842,8 +2843,14 @@ pub enum IrValue {
     Err { name: String, code: u32 },
     /// 指针：共享堆 cell 索引（别名装置——对齐 tree-walking `Value::Ptr(Rc<RefCell>)`）
     Ptr(usize),
+    /// 装箱/接口胖指针（G3：三字宽 data + vtbl + alloc；指向 `Cell::Boxed`）
+    Boxed(usize),
     /// 数组：`Cell::Elems` 的 cell 索引（元素为共享 cell——切片/写索引别名）
     Arr(usize),
+    /// 集合 Vec（G4：持分配器引用的集合；指向 `Cell::Vec`。deref peel 到 Arr）
+    Vec(usize),
+    /// 集合 Map（G4：持分配器引用的 Map；指向 `Cell::Map`）
+    Map(usize),
     /// 切片视图：共享底层 `Cell::Elems` + 窗口；`data` 为数组 cell 索引
     Slice {
         data: usize,
@@ -2852,6 +2859,8 @@ pub enum IrValue {
     },
     /// 类实例：`Cell::Class` 的 cell 索引（字段为普通值——无字段级别名）
     Class(usize),
+    /// Arena 分配器句柄（G1：真实 bump + 块链表；指向 `Cell::Arena`）
+    Arena(usize),
     /// 枚举值（`Type.variant` 常量 或 `Type{variant = payload}`）
     Enum {
         name: String,
@@ -2897,6 +2906,104 @@ pub enum Cell {
         items: Vec<IterItem>,
         next: usize,
     },
+    /// Arena 分配器状态（G1：真实 bump + 块链表；deinit 批量归还 backing）
+    Arena(ArenaStateIr),
+    /// 装箱/接口胖指针（G3：data + vtbl + alloc 三字宽；对齐 tree-walking `BoxedData`）。
+    /// data = pointee 的 cell 索引（`Cell::Value`）；vtbl = 具体类型名（tag1 静态标注）；
+    /// alloc = 分配器引用（全局 alloc 或 Arena 句柄）。
+    Boxed {
+        data: usize,
+        vtbl: String,
+        alloc: IrValue,
+    },
+    /// 集合 Vec（G4：`arr` 恒为 `IrValue::Arr(items_cell)`——deref peel 共享底层
+    /// `Cell::Elems`；`alloc` = 构造 `init(alloc)` 时携带的分配器引用）
+    Vec {
+        arr: IrValue,
+        alloc: IrValue,
+    },
+    /// 集合 Map（G4：键 → 字段 cell 索引；`alloc` = 构造时携带的分配器引用）
+    Map {
+        fields: HashMap<String, usize>,
+        alloc: IrValue,
+    },
+}
+
+/// Arena 默认块大小（IR 侧；对齐 tree-walking `value::ARENA_BLOCK_SIZE`）
+const ARENA_BLOCK_SIZE_IR: usize = 1024;
+
+/// 分配器对齐下限（G5/§2.3：H 值为 i128/f64 承载，对齐 ≥ 16；对齐 tree-walking `ALLOC_ALIGN`）
+const ALLOC_ALIGN_IR: usize = 16;
+
+/// 对齐到 `a` 倍数（向上圆整）
+fn align_up_ir(x: usize, a: usize) -> usize {
+    (x + a - 1) & !(a - 1)
+}
+
+/// Arena 分配器状态（G1：真实 bump + 块链表）
+#[derive(Debug, Clone, Default)]
+pub struct ArenaStateIr {
+    /// 已提交块（真实 backing 内存；bump 从当前块切，不足时申请新块）
+    pub blocks: Vec<Vec<u8>>,
+    /// 当前块内游标（下一分配起点）
+    pub cursor: usize,
+    /// 累计分配字节（统计；`arena.bytes()`）
+    pub total: usize,
+    /// 可用标志（`deinit` 后 false → `alloc` 抛 `ArenaDeinitialized`）
+    pub live: bool,
+}
+
+impl ArenaStateIr {
+    pub fn new() -> Self {
+        Self {
+            blocks: vec![],
+            cursor: 0,
+            total: 0,
+            live: true,
+        }
+    }
+
+    /// bump 分配 `n` 字节零初始化内存；不足时申请新块（大小 = `max(ARENA_BLOCK_SIZE_IR, n)`）。
+    /// 返回（块索引, 块内偏移）；失败（deinit / OOM）返回 Err。
+    ///
+    /// **对齐（G5/§2.3）**：切出前把游标圆整到 `ALLOC_ALIGN_IR`（16）的倍数，保证
+    /// 返回区域起始相对块起点 16 对齐；对齐填充计入 `total`（对齐 tree-walking `bump`）。
+    fn bump(&mut self, n: usize) -> Result<(usize, usize), ArenaAllocErrIr> {
+        if !self.live {
+            return Err(ArenaAllocErrIr::Deinit);
+        }
+        let aligned = align_up_ir(self.cursor, ALLOC_ALIGN_IR);
+        let need_new = self.blocks.is_empty() || aligned + n > self.blocks.last().unwrap().len();
+        if need_new {
+            let size = n.max(ARENA_BLOCK_SIZE_IR);
+            let mut block = Vec::new();
+            // 优雅失败（`vec![0u8; size]` 对超大 size 会中止进程）
+            block.try_reserve_exact(size).map_err(|_| ArenaAllocErrIr::Oom)?;
+            block.resize(size, 0u8);
+            self.blocks.push(block);
+            self.cursor = 0;
+        }
+        let idx = self.blocks.len() - 1;
+        let off = align_up_ir(self.cursor, ALLOC_ALIGN_IR);
+        self.total += off + n - self.cursor;
+        self.cursor = off + n;
+        Ok((idx, off))
+    }
+
+    /// deinit：清空全部块（归还 backing）、重置统计、标记不可用
+    fn deinit(&mut self) {
+        self.blocks.clear();
+        self.cursor = 0;
+        self.total = 0;
+        self.live = false;
+    }
+}
+
+/// bump 分配失败原因（调用方映射为 IR 错误 / `error.OutOfMemory`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArenaAllocErrIr {
+    Deinit,
+    Oom,
 }
 
 /// 迭代项：共享源 cell（或新 cell）+ 是否源容器引用（对齐 oracle `iter_items` 的 `(cell, is_ref)`）。
@@ -2927,6 +3034,10 @@ pub struct Ctx {
     pub tcp_listeners: HashMap<i64, std::net::TcpListener>,
     /// 下一网络描述符（自增分配）
     pub next_net_fd: i64,
+    /// G5/§8.3 Debug 泄漏检测：全局 alloc 分配记录表（(size, line)；IR 无行号 → line 0）。
+    /// IR 值无引用计数，分配登记不自动注销——`leaks()`/`leak_report()` 反映本 run 内
+    /// 已分配数（对齐 oracle 语义的 Debug 簿记可观测面；tree-walking 侧用弱引用精确跟踪）。
+    pub alloc_tracker: Vec<(usize, u32)>,
 }
 
 impl Ctx {
@@ -2952,6 +3063,18 @@ impl Ctx {
             _ => unreachable!("cell is not a value cell"),
         }
     }
+    /// 读 cell 为值：Value 直接克隆，非 Value cell（Class/Map/Arena/Boxed）还原为
+    /// 对应句柄值（遍历产物如 Map 的 KV 条目即以 Class cell 承载，捕获/收集时用）
+    fn read_cell(&self, cell: usize) -> IrValue {
+        match &self.cells[cell] {
+            Cell::Value(v) => v.clone(),
+            Cell::Class { .. } => IrValue::Class(cell),
+            Cell::Map { .. } => IrValue::Map(cell),
+            Cell::Arena(_) => IrValue::Arena(cell),
+            Cell::Boxed { .. } => IrValue::Boxed(cell),
+            other => unreachable!("cell is not a value or handle cell: {other:?}"),
+        }
+    }
     /// 写 cell 值（写穿）
     fn set_cell(&mut self, cell: usize, v: IrValue) {
         self.cells[cell] = Cell::Value(v);
@@ -2963,13 +3086,52 @@ impl Ctx {
             _ => 0,
         }
     }
+
+    /// G5/§8.3 Debug 泄漏检测：分配清单文本（供程序退出报告 / 测试断言）
+    pub fn leak_report(&self) -> String {
+        let mut out = String::new();
+        for (size, line) in &self.alloc_tracker {
+            out.push_str(&format!("leak: line {line}: {size} bytes\n"));
+        }
+        out
+    }
+
+    /// G5/§8.3 Debug 泄漏检测：当前已登记分配数
+    pub fn leak_count(&self) -> usize {
+        self.alloc_tracker.len()
+    }
 }
 
-/// 解引用：Ptr → pointee（一层，对齐 tree-walking `deref_value`）；非 Ptr → 恒等
+/// 解引用：Ptr/Boxed → pointee（对齐 tree-walking `deref_value`）；pointee 为 Vec 时
+/// 一并剥为共享 Arr；非 Ptr → 恒等。tree-walking 递归解引用，此处引用返回无法递归，
+/// 故在 Ptr/Boxed/Vec 三处显式 peel（一层 `Ptr(Vec)`/`Boxed(Vec)` 即达 Arr）。
 fn deref_value<'a>(ctx: &'a Ctx, v: &'a IrValue) -> &'a IrValue {
     match v {
         IrValue::Ptr(c) => match &ctx.cells[*c] {
-            Cell::Value(v) => v,
+            Cell::Value(v) => peel_vec(ctx, v),
+            _ => v,
+        },
+        IrValue::Boxed(c) => match &ctx.cells[*c] {
+            Cell::Boxed { data, .. } => match &ctx.cells[*data] {
+                Cell::Value(v) => peel_vec(ctx, v),
+                _ => v,
+            },
+            _ => v,
+        },
+        // G4：Vec peel → 共享底层的 Arr（对齐 tree-walking `Value::Vec => Value::Arr`）
+        IrValue::Vec(c) => match &ctx.cells[*c] {
+            Cell::Vec { arr, .. } => arr,
+            _ => v,
+        },
+        other => other,
+    }
+}
+
+/// G4：`IrValue::Vec` 剥为其底层 Arr 的引用；非 Vec 恒等（peel 辅助）
+fn peel_vec<'a>(ctx: &'a Ctx, v: &'a IrValue) -> &'a IrValue {
+    match v {
+        IrValue::Vec(c) => match &ctx.cells[*c] {
+            Cell::Vec { arr, .. } => arr,
             _ => v,
         },
         other => other,
@@ -2994,9 +3156,13 @@ fn type_descr(v: &IrValue) -> String {
         IrValue::Opt(_) => "?T".into(),
         IrValue::Err { name, .. } => format!("error.{name}"),
         IrValue::Ptr(_) => "*T".into(),
+        IrValue::Boxed(_) => "*T".into(),
         IrValue::Arr(_) => "[]T".into(),
+        IrValue::Vec(_) => "[]T".into(),
+        IrValue::Map(_) => "Map".into(),
         IrValue::Slice { .. } => "[]T".into(),
         IrValue::Class(_) => "class".into(),
+        IrValue::Arena(_) => "Arena".into(),
         IrValue::Enum { name, .. } => name.clone(),
         IrValue::End => "end".into(),
         IrValue::Iter(_) => "<iter>".into(),
@@ -3059,6 +3225,17 @@ fn make_iter(
                 .collect()),
             _ => Err(IrError::msg("NotIterable", "array cell is not an element list")),
         },
+        // 集合（G4）：Vec 句柄遍历（Ptr(Vec) 一层 deref 后为 Vec——共享 Elems）
+        IrValue::Vec(c) => match &ctx.cells[c] {
+            Cell::Vec { arr: IrValue::Arr(ac), .. } => match &ctx.cells[*ac] {
+                Cell::Elems(e) => Ok(e
+                    .iter()
+                    .map(|ec| IterItem { cell: *ec, is_ref: true })
+                    .collect()),
+                _ => Err(IrError::msg("NotIterable", "vec cell is not an element list")),
+            },
+            _ => Err(IrError::msg("NotIterable", "vec cell is corrupt")),
+        },
         IrValue::Slice { data, start, len } => match &ctx.cells[data] {
             Cell::Elems(e) => Ok(e[start..start + len]
                 .iter()
@@ -3119,6 +3296,30 @@ fn make_iter(
                 Ok(items)
             }
         },
+        // 集合（G4）：Map 句柄遍历 → KV 条目（key/value 字段，value 共享源字段 cell）
+        IrValue::Map(c) => {
+            let fields = match &ctx.cells[c] {
+                Cell::Map { fields, .. } => fields.clone(),
+                _ => return Err(IrError::msg("NotIterable", "map cell is corrupt")),
+            };
+            let items: Vec<IterItem> = fields
+                .iter()
+                .map(|(k, vc)| {
+                    let mut fs = HashMap::new();
+                    fs.insert(
+                        "key".into(),
+                        ctx.alloc(Cell::Value(IrValue::Str(k.clone().into_bytes()))),
+                    );
+                    fs.insert("value".into(), *vc);
+                    let kv = ctx.alloc(Cell::Class {
+                        name: "KV".into(),
+                        fields: fs,
+                    });
+                    IterItem { cell: kv, is_ref: false }
+                })
+                .collect();
+            Ok(items)
+        }
         IrValue::Str(s) => Ok(s
             .iter()
             .map(|b| IterItem {
@@ -3162,6 +3363,21 @@ fn field_value(ctx: &Ctx, b: &IrValue, field: &str) -> R<IrValue> {
             Cell::Elems(e) => {
                 if field == "len" {
                     Ok(IrValue::Int(e.len() as i128))
+                } else {
+                    Err(IrError::msg("NoField", format!("no field `{field}`")))
+                }
+            }
+            _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
+        },
+        // 集合（G4）：Vec 委托 Arr 字段读；Map 字段读（.len）
+        IrValue::Vec(c) => match &ctx.cells[*c] {
+            Cell::Vec { arr, .. } => field_value(ctx, arr, field),
+            _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
+        },
+        IrValue::Map(c) => match &ctx.cells[*c] {
+            Cell::Map { fields, .. } => {
+                if field == "len" {
+                    Ok(IrValue::Int(fields.len() as i128))
                 } else {
                     Err(IrError::msg("NoField", format!("no field `{field}`")))
                 }
@@ -3331,6 +3547,36 @@ fn arr_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
             .all(|(x, y)| ctx.cell_value(*x).value_eq(ctx, ctx.cell_value(*y)))
 }
 
+/// 集合 Map 深比较（G4）：键值表按值相等（键集相同 + 每键字段值相等）
+fn map_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
+    let (af, bf) = match (&ctx.cells[a], &ctx.cells[b]) {
+        (Cell::Map { fields: x, .. }, Cell::Map { fields: y, .. }) => (x.clone(), y.clone()),
+        _ => return false,
+    };
+    if af.len() != bf.len() {
+        return false;
+    }
+    af.iter().all(|(k, fc)| {
+        bf.get(k)
+            .map_or(false, |bc| ctx.cell_value(*fc).value_eq(ctx, ctx.cell_value(*bc)))
+    })
+}
+
+/// 集合 Map 与 Class("Map") 深比较（G4）：Map 字段表 vs class 字段表
+fn map_class_eq(ctx: &Ctx, m: usize, c: usize) -> bool {
+    let (fm, fc) = match (&ctx.cells[m], &ctx.cells[c]) {
+        (Cell::Map { fields: x, .. }, Cell::Class { fields: y, .. }) => (x.clone(), y.clone()),
+        _ => return false,
+    };
+    if fm.len() != fc.len() {
+        return false;
+    }
+    fm.iter().all(|(k, mc)| {
+        fc.get(k)
+            .map_or(false, |cc| ctx.cell_value(*mc).value_eq(ctx, ctx.cell_value(*cc)))
+    })
+}
+
 /// 类深比较：类型名相同 + 字段数相同 + 每字段按值相等
 fn class_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
     let (an, af) = match &ctx.cells[a] {
@@ -3390,6 +3636,7 @@ impl IrValue {
             IrValue::Opt(Some(v)) => v.as_bool(),
             // 指针恒真（对齐 tree-walking `Value::Ptr(_) => true`）
             IrValue::Ptr(_) => true,
+            IrValue::Boxed(_) => true,
             _ => true,
         }
     }
@@ -3413,6 +3660,10 @@ impl IrValue {
             IrValue::Err { name, .. } => format!("error.{name}"),
             // 指针显示 pointee（对齐 tree-walking `Value::Ptr(p) => p.borrow().display()`）
             IrValue::Ptr(c) => ctx.cell_value(*c).display(ctx),
+            IrValue::Boxed(c) => match &ctx.cells[*c] {
+                Cell::Boxed { data, .. } => ctx.cell_value(*data).display(ctx),
+                _ => "boxed".into(),
+            },
             IrValue::Arr(c) => match &ctx.cells[*c] {
                 Cell::Elems(e) => {
                     let items: Vec<String> =
@@ -3420,6 +3671,23 @@ impl IrValue {
                     format!("[{}]", items.join(", "))
                 }
                 _ => "[]".into(),
+            },
+            // 集合（G4）：Vec 委托 Arr 显示；Map 显示 `Map { k = v, ... }`
+            IrValue::Vec(c) => match &ctx.cells[*c] {
+                Cell::Vec { arr, .. } => arr.display(ctx),
+                _ => "[]".into(),
+            },
+            IrValue::Map(c) => match &ctx.cells[*c] {
+                Cell::Map { fields, .. } => {
+                    let items: Vec<String> = fields
+                        .iter()
+                        .map(|(k, fc)| {
+                            format!("{k} = {}", ctx.cell_value(*fc).display(ctx))
+                        })
+                        .collect();
+                    format!("Map {{ {} }}", items.join(", "))
+                }
+                _ => "Map {  }".into(),
             },
             IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
                 Cell::Elems(e) => {
@@ -3442,6 +3710,12 @@ impl IrValue {
                     format!("{name} {{ {} }}", items.join(", "))
                 }
                 _ => "void".into(),
+            },
+            IrValue::Arena(c) => match &ctx.cells[*c] {
+                Cell::Arena(st) => {
+                    format!("Arena(bytes={}, blocks={})", st.total, st.blocks.len())
+                }
+                _ => "Arena".into(),
             },
             IrValue::Enum {
                 name,
@@ -3478,6 +3752,38 @@ impl IrValue {
             (IrValue::Ptr(a), IrValue::Ptr(b)) => a == b,
             (IrValue::Ptr(a), b) => ctx.cell_value(*a).value_eq(ctx, b),
             (a, IrValue::Ptr(b)) => a.value_eq(ctx, ctx.cell_value(*b)),
+            // 装箱胖指针：同 cell 索引 = 同一目标（身份）；与普通值比较时解引用 pointee
+            (IrValue::Boxed(a), IrValue::Boxed(b)) => a == b,
+            (IrValue::Boxed(a), b) => match &ctx.cells[*a] {
+                Cell::Boxed { data, .. } => ctx.cell_value(*data).value_eq(ctx, b),
+                _ => false,
+            },
+            (a, IrValue::Boxed(b)) => match &ctx.cells[*b] {
+                Cell::Boxed { data, .. } => a.value_eq(ctx, ctx.cell_value(*data)),
+                _ => false,
+            },
+            // 集合（G4）：Vec 按内容比较（委托 Arr）；Map 按键值表比较（含 Class("Map")）
+            (IrValue::Vec(a), IrValue::Vec(b)) => match (&ctx.cells[*a], &ctx.cells[*b]) {
+                (Cell::Vec { arr: IrValue::Arr(aa), .. }, Cell::Vec { arr: IrValue::Arr(bb), .. }) => {
+                    arr_eq(ctx, *aa, *bb)
+                }
+                _ => a == b,
+            },
+            (IrValue::Vec(a), b) => match &ctx.cells[*a] {
+                Cell::Vec { arr, .. } => arr.value_eq(ctx, b),
+                _ => false,
+            },
+            (a, IrValue::Vec(b)) => match &ctx.cells[*b] {
+                Cell::Vec { arr, .. } => a.value_eq(ctx, arr),
+                _ => false,
+            },
+            (IrValue::Map(a), IrValue::Map(b)) => map_eq(ctx, *a, *b),
+            (IrValue::Map(a), IrValue::Class(b)) if class_name(ctx, *b) == "Map" => {
+                map_class_eq(ctx, *a, *b)
+            }
+            (IrValue::Class(a), IrValue::Map(b)) if class_name(ctx, *a) == "Map" => {
+                map_class_eq(ctx, *b, *a)
+            }
             // ---- Phase 2 聚合 ----
             (IrValue::Arr(a), IrValue::Arr(b)) => arr_eq(ctx, *a, *b),
             (
@@ -3656,11 +3962,8 @@ fn pick_func(ctx: &Ctx, module: &IrModule, name: &str, arg_vals: &[IrValue]) -> 
         let mut is_generic = false;
         for (p, a) in f.param_ty.iter().zip(arg_vals.iter()) {
             let pt = p.strip();
-            // 指针实参解引用后匹配
-            let a = match a {
-                IrValue::Ptr(c) => ctx.cell_value(*c),
-                other => other,
-            };
+            // 指针/装箱实参解引用后匹配
+            let a = deref_value(ctx, a);
             match pt {
                 Type::Named(n, _) => {
                     let want_float = matches!(n.as_str(), "f32" | "f64" | "f16" | "f128");
@@ -3837,6 +4140,52 @@ fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
             let copied = deep_copy(ctx, cv);
             IrValue::Ptr(ctx.alloc(Cell::Value(copied)))
         }
+        // 装箱胖指针：data 深拷贝（新 cell），vtbl/alloc 原样携带
+        IrValue::Boxed(c) => {
+            let (data, vtbl, alloc) = match &ctx.cells[c] {
+                Cell::Boxed {
+                    data,
+                    vtbl,
+                    alloc,
+                } => (*data, vtbl.clone(), alloc.clone()),
+                _ => return IrValue::Boxed(c),
+            };
+            let cv = ctx.cell_value(data).clone();
+            let copied = deep_copy(ctx, cv);
+            let new_data = ctx.alloc(Cell::Value(copied));
+            IrValue::Boxed(ctx.alloc(Cell::Boxed {
+                data: new_data,
+                vtbl,
+                alloc,
+            }))
+        }
+        // 集合（G4）：Vec items 深拷贝（新 Elems），alloc 原样携带；Map 字段深拷贝
+        IrValue::Vec(c) => {
+            let (arr, alloc) = match &ctx.cells[c] {
+                Cell::Vec { arr, alloc } => (arr.clone(), alloc.clone()),
+                _ => return IrValue::Vec(c),
+            };
+            let copied = deep_copy(ctx, arr);
+            IrValue::Vec(ctx.alloc(Cell::Vec { arr: copied, alloc }))
+        }
+        IrValue::Map(c) => {
+            let (fields, alloc) = match &ctx.cells[c] {
+                Cell::Map { fields, alloc } => (fields.clone(), alloc.clone()),
+                _ => return IrValue::Map(c),
+            };
+            let new_fields: HashMap<String, usize> = fields
+                .iter()
+                .map(|(k, vc)| {
+                    let cv = ctx.cell_value(*vc).clone();
+                    let copied = deep_copy(ctx, cv);
+                    (k.clone(), ctx.alloc(Cell::Value(copied)))
+                })
+                .collect();
+            IrValue::Map(ctx.alloc(Cell::Map {
+                fields: new_fields,
+                alloc,
+            }))
+        }
         IrValue::Opt(Some(b)) => IrValue::Opt(Some(Box::new(deep_copy(ctx, *b)))),
         // move 捕获闭包值：捕获 cell 逐个深拷贝——闭包持有独立环境副本
         // （与原作用域/其他闭包脱离共享，对齐 oracle `deep_copy` Closure 臂）
@@ -3871,12 +4220,16 @@ fn ir_type_name(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::Bool(_) => "bool".into(),
         IrValue::Str(_) => "&[u8]".into(),
         IrValue::Arr(_) => "array".into(),
+        IrValue::Vec(_) => "array".into(),
+        IrValue::Map(_) => "Map".into(),
         IrValue::Slice { .. } => "slice".into(),
         IrValue::Class(c) => class_name(ctx, *c),
+        IrValue::Arena(_) => "Arena".into(),
         IrValue::Enum { name, .. } => name.clone(),
         IrValue::Opt(_) => "optional".into(),
         IrValue::Err { .. } => "error".into(),
         IrValue::Ptr(_) => "pointer".into(),
+        IrValue::Boxed(_) => "pointer".into(),
         IrValue::Fn(_) => "fn".into(),
         IrValue::Closure { .. } => "closure".into(),
         IrValue::End => "end".into(),
@@ -4138,9 +4491,13 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 ctx.set(&frame, *temp, IrValue::Ptr(cell));
             }
             IrInst::Deref { temp, a } => {
-                // 解引用：Ptr → pointee；非 Ptr → 恒等（对齐 tree-walking `deref_value`）
+                // 解引用：Ptr/Boxed → pointee；非 Ptr → 恒等（对齐 tree-walking `deref_value`）
                 let v = match ctx.get(&frame, *a) {
                     IrValue::Ptr(cell) => ctx.cell_value(*cell).clone(),
+                    IrValue::Boxed(cell) => match &ctx.cells[*cell] {
+                        Cell::Boxed { data, .. } => ctx.cell_value(*data).clone(),
+                        _ => IrValue::Void,
+                    },
                     other => other.clone(),
                 };
                 ctx.set(&frame, *temp, v);
@@ -4150,6 +4507,17 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 let v = ctx.get(&frame, *value).clone();
                 match t {
                     IrValue::Ptr(cell) => ctx.set_cell(cell, v),
+                    // 装箱胖指针：写穿 data cell
+                    IrValue::Boxed(cell) => {
+                        let data = match &ctx.cells[cell] {
+                            Cell::Boxed { data, .. } => Some(*data),
+                            _ => None,
+                        };
+                        match data {
+                            Some(d) => ctx.set_cell(d, v),
+                            None => return Err(IrError::msg("BadAssign", "store to non-pointer")),
+                        }
+                    }
                     _ => return Err(IrError::msg("BadAssign", "store to non-pointer")),
                 }
             }
@@ -4347,8 +4715,9 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 match item {
                     Some(it) => {
                         if *read_only {
-                            // Read 捕获：槽 cell 置为该项值副本（与容器无别名）
-                            let v = ctx.cell_value(it.cell).clone();
+                            // Read 捕获：槽 cell 置为该项值副本（与容器无别名；
+                            // 非 Value cell——如 Map 的 KV Class 条目——用 read_cell 还原句柄）
+                            let v = ctx.read_cell(it.cell);
                             ctx.set_cell(frame.cells[*slot], v);
                         } else {
                             // Mut/Move 捕获：槽 cell 绑定共享源 cell（写穿）；
@@ -4452,7 +4821,37 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 method,
                 args,
             } => {
-                let self_v = deref_value(ctx, ctx.get(&frame, *base)).clone();
+                let raw = ctx.get(&frame, *base).clone();
+                // G3：装箱胖指针 .alloc() → 携带的分配器引用（三字宽胖指针的 alloc 字）
+                if let IrValue::Boxed(bc) = &raw {
+                    if method == "alloc" {
+                        if let Cell::Boxed { alloc, .. } = &ctx.cells[*bc] {
+                            ctx.set(&frame, *temp, alloc.clone());
+                            pc += 1;
+                            continue;
+                        }
+                    }
+                }
+                // G4：集合 .alloc() → 构造 `init(alloc)` 时携带的分配器引用
+                if let IrValue::Vec(vc) = &raw {
+                    if method == "alloc" {
+                        if let Cell::Vec { alloc, .. } = &ctx.cells[*vc] {
+                            ctx.set(&frame, *temp, alloc.clone());
+                            pc += 1;
+                            continue;
+                        }
+                    }
+                }
+                if let IrValue::Map(mc) = &raw {
+                    if method == "alloc" {
+                        if let Cell::Map { alloc, .. } = &ctx.cells[*mc] {
+                            ctx.set(&frame, *temp, alloc.clone());
+                            pc += 1;
+                            continue;
+                        }
+                    }
+                }
+                let self_v = deref_value(ctx, &raw).clone();
                 let mut arg_vals = vec![self_v.clone()];
                 for a in args {
                     arg_vals.push(ctx.get(&frame, *a).clone());
@@ -4490,9 +4889,11 @@ const IMPLICIT_ENV: &[&str] = &[
     "alloc", "io", "test_io", "stdout", "stderr", "pi", "Vec", "Deque", "Map", "Table",
 ];
 
-/// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from、math.*）
+/// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from、math.*、
+/// Arena.init）
 fn is_dotted_implicit_root(root: &str) -> bool {
-    IMPLICIT_ENV.contains(&root) || matches!(root, "json" | "csv" | "String" | "math")
+    IMPLICIT_ENV.contains(&root)
+        || matches!(root, "json" | "csv" | "String" | "math" | "Arena")
 }
 
 /// 错误值（码 = 编译期错误码表；内建产生的错误与 `error.X` 字面量同码）
@@ -4502,6 +4903,22 @@ fn err_val(module: &IrModule, name: &str) -> IrValue {
         name: name.to_string(),
         code,
     }
+}
+
+/// 分配 n 字节零初始化内存；n ≤ 0 → 空；n 超出可表示容量 / 分配失败 → None
+/// （调用方转 `error.OutOfMemory`——与 interp `alloc_zeroed_bytes` 对齐；
+/// `vec![0u8; n]` 对超大 n 会直接中止进程，分配失败应为可 catch 的错误值）
+fn alloc_zeroed_bytes_ir(n: i128) -> Option<Vec<u8>> {
+    if n <= 0 {
+        return Some(Vec::new());
+    }
+    if n as u128 > usize::MAX as u128 {
+        return None;
+    }
+    let mut v = Vec::new();
+    v.try_reserve_exact(n as usize).ok()?;
+    v.resize(n as usize, 0u8);
+    Some(v)
 }
 
 fn str_val(s: &str) -> IrValue {
@@ -4521,6 +4938,25 @@ fn make_arr(ctx: &mut Ctx, items: Vec<IrValue>) -> IrValue {
         .map(|v| ctx.alloc(Cell::Value(v)))
         .collect();
     IrValue::Arr(ctx.alloc(Cell::Elems(elems)))
+}
+
+/// 集合 Vec（G4）：items 存于共享 Elems cell；`alloc` = 构造时携带的分配器引用
+fn make_vec_with(ctx: &mut Ctx, items: Vec<IrValue>, alloc: IrValue) -> IrValue {
+    let arr = make_arr(ctx, items);
+    let inner = match arr {
+        IrValue::Arr(c) => c,
+        _ => unreachable!("make_arr 恒返回 Arr"),
+    };
+    IrValue::Vec(ctx.alloc(Cell::Vec { arr: IrValue::Arr(inner), alloc }))
+}
+
+/// 集合 Map（G4）：键 → 字段 cell；`alloc` = 构造时携带的分配器引用
+fn make_map_with(
+    ctx: &mut Ctx,
+    fields: HashMap<String, usize>,
+    alloc: IrValue,
+) -> IrValue {
+    IrValue::Map(ctx.alloc(Cell::Map { fields, alloc }))
 }
 
 /// M5.4 Io 实例（含 fs/time/net 子模块——对齐 oracle `io_value` interp.rs:1023-1029）
@@ -4558,13 +4994,19 @@ fn implicit_env_value(ctx: &mut Ctx, name: &str) -> IrValue {
             name: "Alloc".into(),
             fields: HashMap::new(),
         })),
+        // Arena 类型构造根（G1）：`Arena.init(alloc)` → 真实 arena 句柄
+        "Arena" => IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new()))),
         "io" | "test_io" | "stdout" | "stderr" => io_value_ir(ctx),
         "pi" => IrValue::Float(std::f64::consts::PI),
-        "Vec" | "Deque" | "Table" => make_arr(ctx, Vec::new()),
-        "Map" => IrValue::Class(ctx.alloc(Cell::Class {
-            name: "Map".into(),
-            fields: HashMap::new(),
-        })),
+        // G4：集合隐式根 = 空容器，持全局 alloc（`Vec(i32)` 类型表达式 / `Vec.init(alloc)` 基）
+        "Vec" | "Deque" | "Table" => {
+            let alloc = implicit_env_value(ctx, "alloc");
+            make_vec_with(ctx, Vec::new(), alloc)
+        }
+        "Map" => {
+            let alloc = implicit_env_value(ctx, "alloc");
+            make_map_with(ctx, HashMap::new(), alloc)
+        }
         _ => IrValue::Void,
     }
 }
@@ -4577,6 +5019,14 @@ fn arr_items(ctx: &mut Ctx, v: &IrValue) -> R<Vec<IrValue>> {
             Cell::Elems(e) => Ok(e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect()),
             _ => Err(IrError::msg("TypeError", "bad array")),
         },
+        // 集合（G4）：Vec 句柄（Ptr(Vec) 一层 deref 后为 Vec）——共享 Elems 元素
+        IrValue::Vec(c) => match &ctx.cells[c] {
+            Cell::Vec { arr: IrValue::Arr(ac), .. } => match &ctx.cells[*ac] {
+                Cell::Elems(e) => Ok(e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect()),
+                _ => Err(IrError::msg("TypeError", "bad vec")),
+            },
+            _ => Err(IrError::msg("TypeError", "bad vec")),
+        },
         IrValue::Slice { data, start, len } => match &ctx.cells[data] {
             Cell::Elems(e) => Ok(e[start..start + len]
                 .iter()
@@ -4588,6 +5038,24 @@ fn arr_items(ctx: &mut Ctx, v: &IrValue) -> R<Vec<IrValue>> {
         IrValue::Class(c) if class_name(ctx, c) == "Map" => {
             let fields = match &ctx.cells[c] {
                 Cell::Class { fields, .. } => fields.clone(),
+                _ => unreachable!(),
+            };
+            let mut out = Vec::new();
+            for (k, vc) in fields {
+                let mut f = HashMap::new();
+                f.insert("key".into(), ctx.alloc(Cell::Value(str_val(&k))));
+                f.insert("value".into(), vc);
+                out.push(IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "KV".into(),
+                    fields: f,
+                })));
+            }
+            Ok(out)
+        }
+        // 集合（G4）：Map 句柄 → KV 条目（key/value 字段）
+        IrValue::Map(c) => {
+            let fields = match &ctx.cells[c] {
+                Cell::Map { fields, .. } => fields.clone(),
                 _ => unreachable!(),
             };
             let mut out = Vec::new();
@@ -4669,6 +5137,15 @@ fn value_to_bytes_ir(ctx: &Ctx, v: &IrValue) -> Vec<u8> {
             out
         }
         IrValue::Ptr(c) => value_to_bytes_ir(ctx, ctx.cell_value(*c)),
+        IrValue::Boxed(c) => match &ctx.cells[*c] {
+            Cell::Boxed { data, .. } => value_to_bytes_ir(ctx, ctx.cell_value(*data)),
+            _ => vec![],
+        },
+        // 集合（G4）：Vec 委托 Arr 字节化
+        IrValue::Vec(c) => match &ctx.cells[*c] {
+            Cell::Vec { arr, .. } => value_to_bytes_ir(ctx, arr),
+            _ => vec![],
+        },
         _ => vec![],
     }
 }
@@ -4705,6 +5182,23 @@ fn value_to_json_ir(ctx: &Ctx, v: &IrValue) -> String {
             }
             _ => "null".into(),
         },
+        // 集合（G4）：Vec 委托 Arr JSON 化；Map 序列化为对象
+        IrValue::Vec(c) => match &ctx.cells[*c] {
+            Cell::Vec { arr, .. } => value_to_json_ir(ctx, arr),
+            _ => "null".into(),
+        },
+        IrValue::Map(c) => match &ctx.cells[*c] {
+            Cell::Map { fields, .. } => {
+                let items: Vec<String> = fields
+                    .iter()
+                    .map(|(k, vc)| {
+                        format!("\"{k}\":{}", value_to_json_ir(ctx, ctx.cell_value(*vc)))
+                    })
+                    .collect();
+                format!("{{{}}}", items.join(","))
+            }
+            _ => "null".into(),
+        },
         IrValue::Class(c) => {
             let items: Vec<String> = match &ctx.cells[*c] {
                 Cell::Class { fields, .. } => fields
@@ -4720,6 +5214,10 @@ fn value_to_json_ir(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::Opt(Some(b)) => value_to_json_ir(ctx, b),
         IrValue::Opt(None) => "null".into(),
         IrValue::Ptr(c) => value_to_json_ir(ctx, ctx.cell_value(*c)),
+        IrValue::Boxed(c) => match &ctx.cells[*c] {
+            Cell::Boxed { data, .. } => value_to_json_ir(ctx, ctx.cell_value(*data)),
+            _ => "null".into(),
+        },
         IrValue::Err { name, .. } => format!("\"error.{name}\""),
         _ => "null".into(),
     }
@@ -5603,9 +6101,24 @@ fn call_map_method_ir(
 ) -> R<Option<IrValue>> {
     let c = match self_v {
         IrValue::Class(c) => *c,
+        IrValue::Map(c) => *c,
         _ => return Ok(None),
     };
     match method {
+        // G4：.alloc() → 构造 `init(alloc)` 时携带的分配器引用（Class("Map") 无 alloc → 全局）
+        "alloc" => {
+            let alloc = match self_v {
+                IrValue::Map(mc) => match &ctx.cells[*mc] {
+                    Cell::Map { alloc, .. } => Some(alloc.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            Ok(Some(match alloc {
+                Some(a) => a,
+                None => implicit_env_value(ctx, "alloc"),
+            }))
+        }
         "put" => {
             let k = args
                 .get(0)
@@ -5616,7 +6129,7 @@ fn call_map_method_ir(
             let key = deref_value(ctx, k).display(ctx);
             let nc = ctx.alloc(Cell::Value(v.clone()));
             match &mut ctx.cells[c] {
-                Cell::Class { fields, .. } => {
+                Cell::Class { fields, .. } | Cell::Map { fields, .. } => {
                     fields.insert(key, nc);
                     Ok(Some(IrValue::Void))
                 }
@@ -5629,7 +6142,9 @@ fn call_map_method_ir(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "get"))?;
             let key = deref_value(ctx, k).display(ctx);
             let v = match &ctx.cells[c] {
-                Cell::Class { fields, .. } => fields.get(&key).map(|fc| ctx.cell_value(*fc).clone()),
+                Cell::Class { fields, .. } | Cell::Map { fields, .. } => {
+                    fields.get(&key).map(|fc| ctx.cell_value(*fc).clone())
+                }
                 _ => None,
             };
             Ok(Some(opt_val(v)))
@@ -5640,7 +6155,7 @@ fn call_map_method_ir(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "contains"))?;
             let key = deref_value(ctx, k).display(ctx);
             let b = match &ctx.cells[c] {
-                Cell::Class { fields, .. } => fields.contains_key(&key),
+                Cell::Class { fields, .. } | Cell::Map { fields, .. } => fields.contains_key(&key),
                 _ => false,
             };
             Ok(Some(IrValue::Bool(b)))
@@ -5651,7 +6166,7 @@ fn call_map_method_ir(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "remove"))?;
             let key = deref_value(ctx, k).display(ctx);
             match &mut ctx.cells[c] {
-                Cell::Class { fields, .. } => {
+                Cell::Class { fields, .. } | Cell::Map { fields, .. } => {
                     fields.remove(&key);
                     Ok(Some(IrValue::Void))
                 }
@@ -5660,7 +6175,7 @@ fn call_map_method_ir(
         }
         "len" => {
             let n = match &ctx.cells[c] {
-                Cell::Class { fields, .. } => fields.len(),
+                Cell::Class { fields, .. } | Cell::Map { fields, .. } => fields.len(),
                 _ => 0,
             };
             Ok(Some(IrValue::Int(n as i128)))
@@ -5682,10 +6197,20 @@ fn call_map_method_ir(
             for (k, v) in obj {
                 fields.insert(k, ctx.alloc(Cell::Value(v)));
             }
-            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
-                name: "Map".into(),
-                fields,
-            }))))
+            match self_v {
+                // G4：Map 句柄 → 新 Map（携带自身 alloc）；Class("Map") → 旧形态 Class
+                IrValue::Map(mc) => {
+                    let alloc = match &ctx.cells[*mc] {
+                        Cell::Map { alloc, .. } => alloc.clone(),
+                        _ => implicit_env_value(ctx, "alloc"),
+                    };
+                    Ok(Some(make_map_with(ctx, fields, alloc)))
+                }
+                _ => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "Map".into(),
+                    fields,
+                })))),
+            }
         }
         _ => Ok(None),
     }
@@ -5693,6 +6218,7 @@ fn call_map_method_ir(
 
 fn call_alloc_method_ir(
     ctx: &mut Ctx,
+    module: &IrModule,
     method: &str,
     args: &[IrValue],
 ) -> R<Option<IrValue>> {
@@ -5715,7 +6241,24 @@ fn call_alloc_method_ir(
         }
         "alloc" => {
             let n = int_arg_ir(ctx, args, 0)?;
-            Ok(Some(str_bytes_val(vec![0u8; n.max(0) as usize])))
+            match alloc_zeroed_bytes_ir(n) {
+                Some(b) => {
+                    // G5/§8.3 Debug 泄漏检测：登记分配（IR 无行号 → line 0；无引用计数不注销）
+                    ctx.alloc_tracker.push((b.len(), 0));
+                    Ok(Some(str_bytes_val(b)))
+                }
+                None => Ok(Some(err_val(module, "OutOfMemory"))),
+            }
+        }
+        // G5/§8.3 Debug 泄漏检测：本 run 内已分配数
+        "leaks" => Ok(Some(IrValue::Int(ctx.alloc_tracker.len() as i128))),
+        // G5/§8.3 Debug 泄漏检测：分配清单文本（`leak: line L: N bytes` 每行）
+        "leak_report" => {
+            let mut out = Vec::new();
+            for (size, line) in &ctx.alloc_tracker {
+                out.extend_from_slice(&format!("leak: line {line}: {size} bytes\n").into_bytes());
+            }
+            Ok(Some(str_bytes_val(out)))
         }
         "deinit" => Ok(Some(IrValue::Void)),
         _ => Ok(None),
@@ -5724,20 +6267,78 @@ fn call_alloc_method_ir(
 
 fn call_arena_method_ir(
     ctx: &mut Ctx,
+    module: &IrModule,
+    arena_cell: usize,
     method: &str,
     args: &[IrValue],
 ) -> R<Option<IrValue>> {
     match method {
         "alloc" => {
-            if let Some(a) = args.first() {
-                if matches!(deref_value(ctx, a), IrValue::Int(_)) {
-                    let n = int_arg_ir(ctx, args, 0)?;
-                    return Ok(Some(str_bytes_val(vec![0u8; n.max(0) as usize])));
-                }
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "arena.alloc expects 1 arg"));
             }
-            Ok(args.first().cloned())
+            if let IrValue::Int(_) = deref_value(ctx, &args[0]) {
+                let n = int_arg_ir(ctx, args, 0)?;
+                if n < 0 {
+                    return Err(IrError::msg("TypeError", "arena.alloc size must be >= 0"));
+                }
+                if n as u128 > usize::MAX as u128 {
+                    return Ok(Some(err_val(module, "OutOfMemory")));
+                }
+                let n = n as usize;
+                let bump_res = match &mut ctx.cells[arena_cell] {
+                    Cell::Arena(st) => st.bump(n),
+                    _ => unreachable!("cell {arena_cell} is not an arena"),
+                };
+                match bump_res {
+                    Ok((bidx, off)) => {
+                        let region = match &ctx.cells[arena_cell] {
+                            Cell::Arena(st) => st.blocks[bidx][off..off + n].to_vec(),
+                            _ => unreachable!(),
+                        };
+                        Ok(Some(str_bytes_val(region)))
+                    }
+                    Err(ArenaAllocErrIr::Deinit) => {
+                        Err(IrError::msg("ArenaDeinitialized", "arena.alloc after deinit"))
+                    }
+                    Err(ArenaAllocErrIr::Oom) => Ok(Some(err_val(module, "OutOfMemory"))),
+                }
+            } else {
+                // 非整数实参：类型字面量构造（arena.alloc(Node{...}) 兼容形态）
+                Ok(args.first().cloned())
+            }
         }
         "init" => Ok(Some(IrValue::Void)),
+        "deinit" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "arena.deinit expects 0 args"));
+            }
+            match &mut ctx.cells[arena_cell] {
+                Cell::Arena(st) => st.deinit(),
+                _ => unreachable!("cell {arena_cell} is not an arena"),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        "bytes" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "arena.bytes expects 0 args"));
+            }
+            let total = match &ctx.cells[arena_cell] {
+                Cell::Arena(st) => st.total,
+                _ => unreachable!(),
+            };
+            Ok(Some(IrValue::Int(total as i128)))
+        }
+        "blocks" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "arena.blocks expects 0 args"));
+            }
+            let blocks = match &ctx.cells[arena_cell] {
+                Cell::Arena(st) => st.blocks.len(),
+                _ => unreachable!(),
+            };
+            Ok(Some(IrValue::Int(blocks as i128)))
+        }
         _ => Ok(None),
     }
 }
@@ -6268,7 +6869,14 @@ fn call_builtin_method(
                 _ => Err(IrError::msg("TypeError", "append_u64 expects array")),
             }
         }
-        (IrValue::Arr(_), "init") => Ok(Some(make_arr(ctx, Vec::new()))),
+        // G4：`Vec(T).init(alloc)`——集合空容器，捕获分配器引用（缺省回退全局 alloc）
+        (IrValue::Arr(_), "init") => {
+            let alloc_v = args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| implicit_env_value(ctx, "alloc"));
+            Ok(Some(make_vec_with(ctx, Vec::new(), alloc_v)))
+        }
         (IrValue::Arr(_), "from_bytes") => {
             let b = str_arg_ir(ctx, args, 0)?;
             if b.len() < 8 {
@@ -6287,7 +6895,8 @@ fn call_builtin_method(
                 };
                 items.push(v);
             }
-            Ok(Some(make_arr(ctx, items)))
+            let alloc = implicit_env_value(ctx, "alloc");
+            Ok(Some(make_vec_with(ctx, items, alloc)))
         }
         (IrValue::Arr(c), "to_bytes") => {
             // 集合 → 字节（u64 LE 元素数前缀 + 逐元素 value_to_bytes，对齐 oracle
@@ -6305,17 +6914,23 @@ fn call_builtin_method(
             Ok(Some(str_bytes_val(out)))
         }
         (IrValue::Slice { len, .. }, "len") => Ok(Some(IrValue::Int(*len as i128))),
+        // G4：`Map(K,V).init(alloc)`——集合空容器，捕获分配器引用（缺省回退全局 alloc）
+        (IrValue::Map(_), "init") => {
+            let alloc_v = args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| implicit_env_value(ctx, "alloc"));
+            Ok(Some(make_map_with(ctx, HashMap::new(), alloc_v)))
+        }
+        // 集合（G4）：Map 句柄方法与 Class("Map") 共用实现
+        (IrValue::Map(_), m) => call_map_method_ir(ctx, &self_v, m, args),
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Map" => {
             call_map_method_ir(ctx, &self_v, m, args)
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Alloc" => {
-            call_alloc_method_ir(ctx, m, args)
+            call_alloc_method_ir(ctx, module, m, args)
         }
-        (IrValue::Class(c), m)
-            if class_name(ctx, *c) == "Arena" && matches!(m, "alloc" | "init") =>
-        {
-            call_arena_method_ir(ctx, m, args)
-        }
+        (IrValue::Arena(c), m) => call_arena_method_ir(ctx, module, *c, m, args),
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Io" => {
             call_io_method_ir(ctx, module, m, args)
         }
@@ -6389,6 +7004,36 @@ fn call_dotted_implicit(
     args: &[IrValue],
 ) -> R<IrValue> {
     match name {
+        // Arena.init(alloc) 内建：真实 arena 句柄（对齐 oracle interp.rs:2559-2562
+        // 特判——返回新建 arena，而非 Void）
+        "Arena.init" => {
+            return Ok(IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new()))));
+        }
+        // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
+        "Table.init" => {
+            if args.len() < 4 {
+                return Err(IrError::msg("ArityMismatch", "Table.init expects 4 args"));
+            }
+            let alloc_v = args[0].clone();
+            let rows = match deref_value(ctx, &args[1]) {
+                IrValue::Int(i) => (*i).max(0) as usize,
+                _ => return Err(IrError::msg("TypeError", "Table.init rows must be int")),
+            };
+            let cols = match deref_value(ctx, &args[2]) {
+                IrValue::Int(i) => (*i).max(0) as usize,
+                _ => return Err(IrError::msg("TypeError", "Table.init cols must be int")),
+            };
+            let init_v = args[3].clone();
+            let mut grid = Vec::new();
+            for _ in 0..rows {
+                let mut row = Vec::new();
+                for _ in 0..cols {
+                    row.push(init_v.clone());
+                }
+                grid.push(make_arr(ctx, row));
+            }
+            return Ok(make_vec_with(ctx, grid, alloc_v));
+        }
         // math.nan/inf/inf_neg/sqrt/abs/pow/floor/ceil/round（对齐 oracle call_math
         // interp.rs:4922-4960：nan/inf/inf_neg 忽略类型名参数；数值函数取 arg[0]，
         // Int 强制 f64 后计算，返回 Float）
@@ -6617,11 +7262,22 @@ fn call_builtin(
 ) -> R<IrValue> {
     match name {
         "box" => {
-            if args.len() != 2 {
-                return Err(IrError::msg("ArityMismatch", "box expects 2 args"));
+            if args.is_empty() || args.len() > 2 {
+                return Err(IrError::msg("ArityMismatch", "box expects 1-2 args"));
             }
-            let nc = ctx.alloc(Cell::Value(args[0].clone()));
-            Ok(IrValue::Ptr(nc))
+            // G3：分配器引用——显式传入或回退全局 alloc（`box(v)` 单参形态）
+            let alloc_v = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                implicit_env_value(ctx, "alloc")
+            };
+            let data = ctx.alloc(Cell::Value(args[0].clone()));
+            let vtbl = ir_type_name(ctx, &args[0]);
+            Ok(IrValue::Boxed(ctx.alloc(Cell::Boxed {
+                data,
+                vtbl,
+                alloc: alloc_v,
+            })))
         }
         "copy" => {
             if args.is_empty() {

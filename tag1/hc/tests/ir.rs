@@ -1169,3 +1169,410 @@ fn g() f32 {
     assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Float(1.0));
     assert_eq!(run(src, "g", &[]).unwrap(), IrValue::Float(1.0));
 }
+
+// ---------- G1/mem：Arena 真实内存管理（bump + 块链表 + deinit）----------
+
+#[test]
+fn arena_bump_reuses_block_ir() {
+    // 小块多次分配：同一块内 bump，块链表不增长
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var a = arena.alloc(16);
+    var b = arena.alloc(16);
+    var c = arena.alloc(16);
+    if (arena.blocks() != 1) { return 1; }
+    if (arena.bytes() != 48) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn arena_grows_block_list_ir() {
+    // 单次分配超过默认块大小（1024）→ 当前块不足，申请新块
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var a = arena.alloc(5000);
+    if (arena.blocks() != 1) { return 1; }
+    if (arena.bytes() != 5000) { return 2; }
+    var b = arena.alloc(16);
+    if (arena.blocks() != 2) { return 3; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn arena_zero_init_and_len_ir() {
+    // 分配内容零初始化、长度正确
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var buf = arena.alloc(4);
+    if (buf != "\x00\x00\x00\x00") { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn arena_deinit_releases_ir() {
+    // deinit 批量归还全部块、重置统计
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var a = arena.alloc(16);
+    var b = arena.alloc(16);
+    if (arena.blocks() != 1) { return 1; }
+    if (arena.bytes() != 32) { return 2; }
+    arena.deinit();
+    if (arena.blocks() != 0) { return 3; }
+    if (arena.bytes() != 0) { return 4; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn arena_alloc_after_deinit_errors_ir() {
+    // deinit 后 alloc → 运行期错误 ArenaDeinitialized
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    arena.deinit();
+    var b = arena.alloc(8);
+    return 0;
+}
+"#;
+    let e = run(src, "t", &[]).unwrap_err();
+    assert_eq!(e.name, "ArenaDeinitialized");
+}
+
+#[test]
+fn arena_oom_catchable_ir() {
+    // 超大分配（1 << 63 超 Vec 容量）→ error.OutOfMemory 可 catch
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var buf = arena.alloc(1 << 63) catch |err| {
+        if (err != error.OutOfMemory) { return 1; }
+        return 0;
+    };
+    return 2;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+// ---------- G3/mem：装箱胖指针携带 alloc 引用（三字宽）----------
+
+#[test]
+fn box_single_arg_falls_back_global_alloc_ir() {
+    // box(v) 单参 → 回退全局 alloc（设计文档 §6）；解引用读 pointee
+    let src = r#"
+fn t() i32 {
+    var p = box(42);
+    if (p.* != 42) { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn box_carries_explicit_alloc_ir() {
+    // box(v, alloc)：携带全局分配器——p.alloc() 返回它，可继续分配 8 字节
+    let src = r#"
+fn t() i32 {
+    var p = box(42, alloc);
+    var q = p.alloc();
+    var buf = q.alloc(8);
+    if (buf != "\x00\x00\x00\x00\x00\x00\x00\x00") { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn box_carries_arena_ir() {
+    // box(v, arena)：携带 arena——类型可见（Arena），且 box 不占用 arena 字节
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var p = box(42, arena);
+    if (@typeOf(p.alloc()) != "Arena") { return 1; }
+    if (p.alloc().bytes() != 0) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn box_deref_read_write_ir() {
+    // p.* 读/写穿透到 pointee（box 返回 *mut T）
+    let src = r#"
+fn t() i32 {
+    var p = box(7);
+    p.* = 9;
+    if (p.* != 9) { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn box_compare_with_plain_value_ir() {
+    // Boxed 与普通值比较：解引用后比较（对齐 Ptr 语义）
+    let src = r#"
+fn t() i32 {
+    var p = box(42);
+    if (p != 42) { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn box_interface_dispatch_ir() {
+    // 装箱 class → *I 胖指针：s.area() 鸭子类型分派到具体实现（Rect/Circle）
+    let src = r#"
+interface IShape { fn area(self: *Self) f32; }
+[continuous] class Rect: IShape {
+    w: f32,
+    h: f32,
+    fn area(self: *Self) f32 { return self.w * self.h; }
+}
+[continuous] class Circle: IShape {
+    r: f32,
+    fn area(self: *Self) f32 { return pi * self.r * self.r; }
+}
+fn total_area(shapes: &Vec(*IShape)) f32 {
+    var total = 0.0;
+    for (shapes) |s| {
+        total += s.area();
+    }
+    return total;
+}
+fn t() i32 {
+    var rect = Rect{ w = 3.0, h = 4.0 };
+    var circ = Circle{ r = 2.0 };
+    var shapes: o Vec(*IShape) = Vec(*IShape).init(alloc);
+    shapes.append(box(rect, alloc));
+    shapes.append(box(circ, alloc));
+    var total = total_area(&shapes);
+    if (total < 24.55 or total > 24.57) { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+// ---------- G4/mem：集合持有分配器引用（§7 定案落地）----------
+
+#[test]
+fn vec_init_captures_global_alloc_ir() {
+    // `Vec(T).init(alloc)`：携带全局分配器——`v.alloc()` 返回它，可继续分配 8 字节
+    let src = r#"
+fn t() i32 {
+    var v = Vec(i32).init(alloc);
+    var buf = v.alloc().alloc(8);
+    if (buf != "\x00\x00\x00\x00\x00\x00\x00\x00") { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn vec_init_captures_arena_ir() {
+    // `Vec(T).init(arena)`：携带 arena——类型可见（Arena），未分配过字节则为 0
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var v = Vec(i32).init(arena);
+    if (@typeOf(v.alloc()) != "Arena") { return 1; }
+    if (v.alloc().bytes() != 0) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn vec_default_carries_global_alloc_ir() {
+    // 裸类型表达式 `Vec(i32)`（无显式 init）→ 回退全局 alloc（§3 隐式环境）
+    let src = r#"
+fn t() i32 {
+    var v = Vec(i32);
+    var buf = v.alloc().alloc(4);
+    if (buf != "\x00\x00\x00\x00") { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn vec_stores_and_grows_with_stored_alloc_ir() {
+    // 携带的分配器随集合存在：扩容（append）后 `.alloc()` 仍可观测、可分配
+    let src = r#"
+fn t() i32 {
+    var v = Vec(i32).init(alloc);
+    v.append(1);
+    v.append(2);
+    if (v.len() != 2) { return 1; }
+    if (v[0] != 1) { return 2; }
+    if (v[1] != 2) { return 3; }
+    var buf = v.alloc().alloc(8);
+    if (buf != "\x00\x00\x00\x00\x00\x00\x00\x00") { return 4; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn map_init_captures_alloc_ir() {
+    // `Map(K,V).init(alloc)`：携带分配器 + put/get(.?)/len 正常
+    let src = r#"
+fn t() i32 {
+    var m = Map(i32, i32).init(alloc);
+    m.put(1, 2);
+    m.put(3, 4);
+    if (m.len() != 2) { return 1; }
+    if (m.get(1).? != 2) { return 2; }
+    if (m.get(3).? != 4) { return 3; }
+    var buf = m.alloc().alloc(4);
+    if (buf != "\x00\x00\x00\x00") { return 4; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn map_init_captures_arena_ir() {
+    // `Map(K,V).init(arena)`：携带 arena——类型可见
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var m = Map(i32, i32).init(arena);
+    m.put(1, 2);
+    if (@typeOf(m.alloc()) != "Arena") { return 1; }
+    if (m.get(1).? != 2) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn map_iterates_kv_pairs_ir() {
+    // Map 句柄可遍历：`for (m) |kv|` → kv.key / kv.value（对齐 Class("Map") 遍历）
+    let src = r#"
+fn t() i32 {
+    var m = Map(i32, i32).init(alloc);
+    m.put(10, 1);
+    m.put(20, 2);
+    var sum = 0;
+    for (m) |kv| {
+        sum += kv.value;
+    }
+    if (sum != 3) { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn table_init_captures_alloc_ir() {
+    // `Table(T).init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
+    let src = r#"
+fn t() i32 {
+    var t = Table(i32).init(alloc, 2, 3, 7);
+    if (t.len() != 2) { return 1; }
+    if (t[0].len() != 3) { return 2; }
+    if (t[0][1] != 7) { return 3; }
+    if (t[1][2] != 7) { return 4; }
+    var buf = t.alloc().alloc(8);
+    if (buf != "\x00\x00\x00\x00\x00\x00\x00\x00") { return 5; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+// ---------- G5/mem：对齐保证与 Debug 泄漏检测（§2.3 / §8.3 定案落地）----------
+
+#[test]
+fn arena_bump_aligned_to_16_ir() {
+    // 对齐（§2.3）：连续小分配每次从 16 对齐处切——alloc(1)+alloc(1)+alloc(16)
+    // 游标推进 0 → 1 → 16 → 17 → 32 → 48；bytes 含对齐填充（对齐 tree-walking）
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var a = arena.alloc(1);
+    var b = arena.alloc(1);
+    var c = arena.alloc(16);
+    if (arena.bytes() != 48) { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn arena_aligned_region_distinct_ir() {
+    // 对齐后区域互不干扰：alloc(1) 后 alloc(16) 从 16 对齐处切（跳过对齐填充）
+    let src = r#"
+fn t() i32 {
+    var arena = Arena.init(alloc);
+    var a = arena.alloc(1);
+    var b = arena.alloc(16);
+    if (a != "\x00") { return 1; }
+    if (b != "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00") { return 2; }
+    if (arena.bytes() != 32) { return 3; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn alloc_leaks_tracks_allocations_ir() {
+    // 泄漏检测（§8.3）：`alloc.alloc(n)` 登记；`alloc.leaks()` 反映登记数
+    let src = r#"
+fn t() i32 {
+    var b = alloc.alloc(8);
+    if (alloc.leaks() != 1) { return 1; }
+    var c = alloc.alloc(4);
+    if (alloc.leaks() != 2) { return 2; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}
+
+#[test]
+fn alloc_leak_report_ir() {
+    // 泄漏检测（§8.3）：`alloc.leak_report()` 输出清单——大小 + 行号（IR 无行号 → line 0）
+    let src = r#"
+fn t() i32 {
+    var b = alloc.alloc(8);
+    if (alloc.leak_report() != "leak: line 0: 8 bytes\n") { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(run(src, "t", &[]).unwrap(), IrValue::Int(0));
+}

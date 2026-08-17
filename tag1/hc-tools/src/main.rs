@@ -710,12 +710,18 @@ fn run_file(path: &Path) -> ExitCode {
     }
     match interp.run_main() {
         // io.exit 映射：code 0 → 成功；其它 → 对应退出码
-        Ok(()) => match interp.exit_code {
-            Some(0) => ExitCode::SUCCESS,
-            Some(c) => ExitCode::from(c),
-            None => ExitCode::SUCCESS,
-        },
+        Ok(()) => {
+            // G5/§8.3 Debug 泄漏检测：退出时报告泄漏清单（不改变退出码）
+            report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
+            match interp.exit_code {
+                Some(0) => ExitCode::SUCCESS,
+                Some(c) => ExitCode::from(c),
+                None => ExitCode::SUCCESS,
+            }
+        }
         Err(e) => {
+            // G5/§8.3：出错路径同样报告泄漏
+            report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
             eprintln!("{}", e.render(&source));
             ExitCode::FAILURE
         }
@@ -723,6 +729,14 @@ fn run_file(path: &Path) -> ExitCode {
 }
 
 // ---------- `hc run --ir`：IR 参考解释器过渡模式（M3.2 字节码 VM 的过渡形态） ----------
+
+/// G5/§8.3 Debug 泄漏检测：程序退出时报告泄漏清单（打印到 stderr；不改变退出码——
+/// 泄漏是资源缺陷，`hc test` 的通过判定仍以断言为准，报告作为 Debug 观测面）。
+fn report_leaks(name: &str, leaks: &str) {
+    if !leaks.is_empty() {
+        eprintln!("{name}::[LEAK]\n{leaks}");
+    }
+}
 
 /// IR 运行结果归一化（对齐 M2.6 根作用域语义：未处理错误到根 → panic 式失败）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -773,6 +787,8 @@ fn execute_ir(module: &hc::ir::IrModule) -> Result<IrRunOutcome, String> {
     // io.args：对齐 oracle `Interp::new`（interp.rs:234）——进程实参（跳过二进制本身）
     rt.ctx.args = std::env::args().skip(1).map(|a| a.into_bytes()).collect();
     let result = rt.call(module, "main", &[]);
+    // G5/§8.3 Debug 泄漏检测：IR 侧程序退出时报告泄漏清单（不改变退出码）
+    report_leaks("<ir>", &rt.ctx.leak_report());
     // 冲刷 io.print 缓冲（ctx.out）——成功/退出/错误均先落盘
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(&rt.ctx.out);
@@ -1160,6 +1176,8 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
             if fail > 0 {
                 all_ok = false;
             }
+            // G5/§8.3 Debug 泄漏检测：每个文件测试结束后报告泄漏（不改变通过判定）
+            report_leaks(&name, &interp.leak_report());
             let on = out_color();
             for line in &interp.test_out {
                 println!("{name}::{}", color_test_line(line, on));
@@ -1307,6 +1325,13 @@ fn main() i32 {
     fn parse_error_rendered() {
         // 解析失败 → 渲染诊断文本
         assert!(run_ir_source("fn main( {").is_err());
+    }
+
+    #[test]
+    fn leak_report_does_not_change_exit_code() {
+        // G5/§8.3 Debug 泄漏检测：`hc run --ir` 下泄漏程序仍返回 Success——
+        // CLI 退出时打印泄漏清单到 stderr，但**不改变退出码**（保持绿，退出码留给 §11）
+        expect_success("fn main() void { var buf = alloc.alloc(8); }");
     }
 
     #[test]

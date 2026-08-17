@@ -116,11 +116,20 @@ impl ErrorCodeTable {
     }
 }
 
-/// 从 AST 收集全部错误名（声明序；包 ID 由调用方指定）
+/// 内建标准错误（G2/mem：标准库/运行时内建可能产生，无论源码是否引用均注册）。
+/// 在用户错误之后追加——用户码保持声明序不变；与源码同名错误经 `register`
+/// 复用同一码（同名 → 同码，Q13 全局唯一）。随标准库扩展而增长。
+pub const BUILTIN_ERRORS: &[&str] = &["OutOfMemory"];
+
+/// 从 AST 收集全部错误名（声明序；包 ID 由调用方指定）+ 追加内建标准错误
 pub fn collect(program: &Program, package_id: u16) -> ErrorCodeTable {
     let mut table = ErrorCodeTable::new(package_id);
     for d in &program.decls {
         collect_decl(d, &mut table);
+    }
+    for name in BUILTIN_ERRORS {
+        // 占位 span（0:0）——内建错误无源码首次出现位置
+        table.register(name, &Span::new(0, 0, 0, 0));
     }
     table
 }

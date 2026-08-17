@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// 运行时值
 #[derive(Debug, Clone)]
@@ -42,12 +42,26 @@ pub enum Value {
     },
     /// 指针（共享槽）
     Ptr(Rc<RefCell<Value>>),
+    /// 装箱/接口胖指针（G3：data + vtbl + alloc 三字宽，设计文档 §6 定案落地）。
+    /// tag1：data = 被装箱值的共享槽（拥有）；vtbl = 具体类型名（真实接口虚表归编译期，
+    /// tag1 方法分派鸭子类型——deref 即达 pointee）；alloc = 装箱时显式传入的分配器
+    /// 引用（`box(v)` 未传回退全局 `alloc`）——销毁 `o *I` 时用携带的 alloc 释放 data。
+    Boxed(Rc<RefCell<BoxedData>>),
+    /// 集合句柄（G4：Vec/Deque 持有分配器引用，设计文档 §7 定案落地）。
+    /// tag1：items = Arr 同款共享槽存储（外部形态即数组），alloc = 构造 `init(alloc)`
+    /// 时携带的分配器引用——扩容/子对象分配概念上走它（tag1 无真实 backing 分配）。
+    /// 方法分派经 deref 剥为 `Value::Arr` 复用全部 Arr 方法。
+    Vec(Rc<RefCell<VecData>>),
+    /// Map 句柄（G4：持有分配器引用，设计文档 §7）。字段即键值；alloc 同 Vec。
+    Map(Rc<RefCell<MapData>>),
     /// 函数引用（tag1：仅命名函数）
     Fn(String),
     /// 闭包（捕获环境 = 共享槽快照；tag1：捕获整个当前作用域链）
     Closure(ClosureData),
     /// 分配器句柄（tag1：无状态哨兵）
     Alloc,
+    /// Arena 分配器句柄（G1：真实 bump + 块链表；deinit 批量归还 backing）
+    Arena(Rc<RefCell<ArenaState>>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -70,6 +84,130 @@ pub struct ClosureData {
     pub env: Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>>,
 }
 
+/// Arena 默认块大小（首块及新块下限；单块申请大于此值时按实际大小开块）
+pub const ARENA_BLOCK_SIZE: usize = 1024;
+
+/// 分配器对齐下限（§2.3：H 值为 i128/f64 承载，对齐 ≥ 16 字节，与 tag1 `%Value` 盒一致）。
+/// bump 游标按此圆整，返回区域起始相对块起点恒为 16 的倍数。
+pub const ALLOC_ALIGN: usize = 16;
+
+/// 对齐到 `ALLOC_ALIGN` 倍数（向上圆整；`align_up(x)` = `(x + A - 1) & !(A - 1)`）
+fn align_up(x: usize, a: usize) -> usize {
+    (x + a - 1) & !(a - 1)
+}
+
+/// Arena 分配器状态（G1：真实 bump + 块链表；`deinit` 批量归还 backing）
+#[derive(Debug, Clone)]
+pub struct ArenaState {
+    /// 已提交块（真实 backing 内存；每块独立 Vec，bump 从当前块切，不足时申请新块）
+    pub blocks: Vec<Rc<RefCell<Vec<u8>>>>,
+    /// 当前块内游标（下一分配起点）
+    pub cursor: usize,
+    /// 累计分配字节（统计；`arena.bytes()`）
+    pub total: usize,
+    /// 可用标志（`deinit` 后 false → `alloc` 抛 `ArenaDeinitialized`）
+    pub live: bool,
+}
+
+/// 装箱状态（G3：data + vtbl + alloc 三字宽胖指针；对齐设计文档 §6）
+#[derive(Debug, Clone)]
+pub struct BoxedData {
+    /// data 字：被装箱值（拥有；deref/方法分派经它达 pointee）
+    pub data: Rc<RefCell<Value>>,
+    /// vtbl 字：具体类型名（tag1 编译期静态标注；真实接口虚表归编译期）
+    pub vtbl: String,
+    /// alloc 字：创建时携带的分配器引用（销毁 `o *I` 时用它释放 data）
+    pub alloc: Value,
+}
+
+/// 集合状态（G4：Vec/Deque 共用；对齐设计文档 §7）
+#[derive(Debug, Clone)]
+pub struct VecData {
+    /// items：Arr 同款共享槽存储（方法分派经 deref 剥为 `Value::Arr` 共享此存储）
+    pub items: Rc<RefCell<Vec<Rc<RefCell<Value>>>>>,
+    /// alloc：构造 `Vec(T).init(alloc)` 时携带的分配器引用
+    pub alloc: Value,
+}
+
+/// Map 状态（G4：对齐设计文档 §7；字段即键值）
+#[derive(Debug, Clone)]
+pub struct MapData {
+    /// fields：键值存储（键 = 键的 display；与既有 `Class("Map")` 表示一致）
+    pub fields: HashMap<String, Value>,
+    /// alloc：构造 `Map(K,V).init(alloc)` 时携带的分配器引用
+    pub alloc: Value,
+}
+
+/// 全局分配器 Debug 泄漏登记（§8.3：分配记录表；`weak` 持分配数据的弱引用——
+/// 值被销毁（作用域退出自动销毁）后升级失败，即视为已释放。退出时仍可升级者 = 泄漏）。
+#[derive(Debug)]
+pub struct LeakRecord {
+    /// 分配大小（字节）
+    pub size: usize,
+    /// 分配点行号（调用 `alloc.alloc(n)` 处；IR 侧无行号 → 0）
+    pub line: u32,
+    /// 分配数据弱引用（存活判定）
+    pub weak: Weak<RefCell<Vec<u8>>>,
+}
+
+/// bump 分配失败原因（调用方映射为 H 可处理错误）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArenaAllocErr {
+    /// arena 已 deinit，不可再分配
+    Deinit,
+    /// backing 分配失败 / 超出可表示容量
+    Oom,
+}
+
+impl ArenaState {
+    pub fn new() -> Self {
+        Self {
+            blocks: vec![],
+            cursor: 0,
+            total: 0,
+            live: true,
+        }
+    }
+
+    /// bump 分配 `n` 字节零初始化内存：当前块剩余空间足够则切出，
+    /// 不足则向 backing 申请新块（大小 = `max(ARENA_BLOCK_SIZE, n)`）。
+    /// 返回（块引用, 块内偏移）——调用方按 `[off..off+n]` 读出区域。
+    ///
+    /// **对齐（G5/§2.3）**：切出前把游标圆整到 `ALLOC_ALIGN`（16）的倍数，保证
+    /// 返回区域起始相对块起点 16 对齐；对齐填充计入 `total`（真实 bump 语义——
+    /// 分配器消耗对齐后的空间）。新块游标从 0 起，起点天然对齐。
+    pub fn bump(&mut self, n: usize) -> Result<(Rc<RefCell<Vec<u8>>>, usize), ArenaAllocErr> {
+        if !self.live {
+            return Err(ArenaAllocErr::Deinit);
+        }
+        let aligned = align_up(self.cursor, ALLOC_ALIGN);
+        let need_new = self.blocks.is_empty()
+            || aligned + n > self.blocks.last().unwrap().borrow().len();
+        if need_new {
+            let size = n.max(ARENA_BLOCK_SIZE);
+            let mut block = Vec::new();
+            // 优雅失败（`vec![0u8; size]` 对超大 size 会中止进程）
+            block.try_reserve_exact(size).map_err(|_| ArenaAllocErr::Oom)?;
+            block.resize(size, 0u8);
+            self.blocks.push(Rc::new(RefCell::new(block)));
+            self.cursor = 0;
+        }
+        let block = self.blocks.last().unwrap().clone();
+        let off = align_up(self.cursor, ALLOC_ALIGN);
+        self.total += off + n - self.cursor;
+        self.cursor = off + n;
+        Ok((block, off))
+    }
+
+    /// deinit：清空全部块（归还 backing）、重置统计、标记不可用
+    pub fn deinit(&mut self) {
+        self.blocks.clear();
+        self.cursor = 0;
+        self.total = 0;
+        self.live = false;
+    }
+}
+
 impl Value {
     pub fn int(v: i128) -> Value {
         Value::Int(v)
@@ -89,6 +227,21 @@ impl Value {
             .map(|v| Rc::new(RefCell::new(v)))
             .collect();
         Value::Arr(Rc::new(RefCell::new(items)))
+    }
+    /// 集合（G4）：携带分配器引用的 Vec/Deque 句柄
+    pub fn vec(items: Vec<Value>, alloc: Value) -> Value {
+        let items = items
+            .into_iter()
+            .map(|v| Rc::new(RefCell::new(v)))
+            .collect();
+        Value::Vec(Rc::new(RefCell::new(VecData {
+            items: Rc::new(RefCell::new(items)),
+            alloc,
+        })))
+    }
+    /// 集合（G4）：携带分配器引用的 Map 句柄
+    pub fn map(fields: HashMap<String, Value>, alloc: Value) -> Value {
+        Value::Map(Rc::new(RefCell::new(MapData { fields, alloc })))
     }
     pub fn class(name: &str, fields: HashMap<String, Value>) -> Value {
         Value::Class(Rc::new(RefCell::new(ClassData {
@@ -143,9 +296,33 @@ impl Value {
             Value::Opt(None) => "null".to_string(),
             Value::Err { name, .. } => format!("error.{name}"),
             Value::Ptr(p) => p.borrow().display(),
+            Value::Boxed(b) => b.borrow().data.borrow().display(),
+            Value::Vec(v) => {
+                let d = v.borrow();
+                let items: Vec<String> = d
+                    .items
+                    .borrow()
+                    .iter()
+                    .map(|c| c.borrow().display())
+                    .collect();
+                format!("[{}]", items.join(", "))
+            }
+            Value::Map(m) => {
+                let d = m.borrow();
+                let items: Vec<String> = d
+                    .fields
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {}", v.display()))
+                    .collect();
+                format!("Map {{ {} }}", items.join(", "))
+            }
             Value::Fn(f) => format!("fn {f}"),
             Value::Closure(_) => "closure".to_string(),
             Value::Alloc => "alloc".to_string(),
+            Value::Arena(a) => {
+                let d = a.borrow();
+                format!("Arena(bytes={}, blocks={})", d.total, d.blocks.len())
+            }
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -232,9 +409,44 @@ impl Value {
                 _ => false,
             },
             (Value::Err { code: a, .. }, Value::Err { code: b, .. }) => a == b,
+            (Value::Arena(a), Value::Arena(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), Value::Ptr(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), b) => a.borrow().value_eq(b),
             (a, Value::Ptr(b)) => a.value_eq(&b.borrow()),
+            // 装箱胖指针：身份同 cell；与普通值比较时解引用后比较（对齐 Ptr 语义）
+            (Value::Boxed(a), Value::Boxed(b)) => Rc::ptr_eq(a, b),
+            (Value::Boxed(a), b) => a.borrow().data.borrow().value_eq(b),
+            (a, Value::Boxed(b)) => a.value_eq(&b.borrow().data.borrow()),
+            // 集合（G4）：剥为共享 Arr 后按内容比较（Arr/Slice/Vec 三者互通）
+            (Value::Vec(a), b) => Value::Arr(a.borrow().items.clone()).value_eq(b),
+            (a, Value::Vec(b)) => a.value_eq(&Value::Arr(b.borrow().items.clone())),
+            (Value::Map(a), Value::Map(b)) => {
+                let (a, b) = (a.borrow(), b.borrow());
+                if a.fields.len() != b.fields.len() {
+                    return false;
+                }
+                a.fields
+                    .iter()
+                    .all(|(k, v)| b.fields.get(k).map_or(false, |w| v.value_eq(w)))
+            }
+            (Value::Map(a), Value::Class(b)) if b.borrow().name == "Map" => {
+                let (a, b) = (a.borrow(), b.borrow());
+                if a.fields.len() != b.fields.len() {
+                    return false;
+                }
+                a.fields
+                    .iter()
+                    .all(|(k, v)| b.fields.get(k).map_or(false, |w| v.value_eq(w)))
+            }
+            (Value::Class(a), Value::Map(b)) if a.borrow().name == "Map" => {
+                let (a, b) = (a.borrow(), b.borrow());
+                if a.fields.len() != b.fields.len() {
+                    return false;
+                }
+                a.fields
+                    .iter()
+                    .all(|(k, v)| b.fields.get(k).map_or(false, |w| v.value_eq(w)))
+            }
             (Value::Void, Value::Void) => true,
             _ => false,
         }
@@ -262,6 +474,9 @@ impl Value {
             Value::Float(f) => *f != 0.0,
             Value::Opt(Some(v)) => v.as_bool(),
             Value::Ptr(_) => true,
+            Value::Boxed(_) => true,
+            Value::Vec(_) => true,
+            Value::Map(_) => true,
             Value::Str(s) => !s.borrow().is_empty(),
             _ => true,
         }
@@ -280,9 +495,13 @@ impl Value {
             Value::Opt(_) => "optional".into(),
             Value::Err { .. } => "error".into(),
             Value::Ptr(_) => "pointer".into(),
+            Value::Boxed(_) => "pointer".into(),
+            Value::Vec(_) => "array".into(),
+            Value::Map(_) => "Map".into(),
             Value::Fn(_) => "fn".into(),
             Value::Closure(_) => "closure".into(),
             Value::Alloc => "alloc".into(),
+            Value::Arena(_) => "Arena".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }

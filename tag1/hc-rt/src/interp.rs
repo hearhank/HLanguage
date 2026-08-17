@@ -11,9 +11,27 @@ use std::rc::Rc;
 use hc::ast::*;
 use hc::token::Span;
 
-use crate::value::{ClosureData, Value};
+use crate::value::{
+    ArenaAllocErr, ArenaState, BoxedData, ClosureData, LeakRecord, MapData, VecData, Value,
+};
 
 pub const MAX_CALL_DEPTH: usize = 1000;
+
+/// 分配 n 字节零初始化内存；n ≤ 0 → 空切片（保留旧行为）；n 超出可表示容量 /
+/// 底层分配失败 → None（调用方转 `error.OutOfMemory`——`vec![0u8; n]` 对超大 n
+/// 会直接中止进程，而 H 的分配失败应是可 catch 的 error union 值，非 panic）
+fn alloc_zeroed_bytes(n: i128) -> Option<Vec<u8>> {
+    if n <= 0 {
+        return Some(Vec::new());
+    }
+    if n as u128 > usize::MAX as u128 {
+        return None;
+    }
+    let mut v = Vec::new();
+    v.try_reserve_exact(n as usize).ok()?;
+    v.resize(n as usize, 0u8);
+    Some(v)
+}
 
 /// 运行时错误（tag1：错误名 + 位置；错误码表 M2.6 后续）
 #[derive(Debug, Clone)]
@@ -200,6 +218,9 @@ pub struct Interp {
     tracked: std::collections::HashSet<usize>,
     /// Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
     debug_dangling: bool,
+    /// G5/§8.3 Debug 泄漏检测：全局 alloc 分配记录表（`alloc.alloc(n)` 登记，
+    /// 值销毁后弱引用失效自动视为释放；退出时仍存活者 = 泄漏）
+    alloc_tracker: Rc<RefCell<Vec<LeakRecord>>>,
     /// M2.7 只读捕获强制（Phase 8）：当前执行闭包体内**只读**的捕获 cell 地址集合。
     /// 非 `mut` 闭包调用时压入其环境 cell 地址；写入这些 cell → ReadonlyCapture。
     /// 栈式（嵌套闭包叠压；仅直接重绑定被捕获变量受限——经指针/字段/索引写穿放行）。
@@ -239,6 +260,7 @@ impl Interp {
             error_locs: HashMap::new(),
             tracked: std::collections::HashSet::new(),
             debug_dangling: true,
+            alloc_tracker: Rc::new(RefCell::new(Vec::new())),
             readonly_caps: Vec::new(),
             error_codes: HashMap::new(),
             error_names: Vec::new(),
@@ -251,6 +273,27 @@ impl Interp {
     pub fn set_debug_dangling(&mut self, on: bool) -> &mut Self {
         self.debug_dangling = on;
         self
+    }
+
+    /// G5/§8.3：Debug 泄漏检测——返回当前仍存活（未释放）的全局 alloc 分配清单。
+    /// 供程序/线程退出时报告（CLI 打印 + 非零退出）；测试可直接断言。
+    pub fn leak_report(&self) -> String {
+        let mut out = String::new();
+        for r in self.alloc_tracker.borrow().iter() {
+            if r.weak.upgrade().is_some() {
+                out.push_str(&format!("leak: line {}: {} bytes\n", r.line, r.size));
+            }
+        }
+        out
+    }
+
+    /// G5/§8.3：当前活跃（未释放）分配数
+    pub fn leak_count(&self) -> usize {
+        self.alloc_tracker
+            .borrow()
+            .iter()
+            .filter(|r| r.weak.upgrade().is_some())
+            .count()
     }
 
     /// M2.6/M4.2：从编译期错误码表记录——错误名 → 首次出现位置（同名保留首个）
@@ -1044,15 +1087,15 @@ impl Interp {
                     "bool" => Ok(Value::Bool(false)),
                     "void" => Ok(Value::Void),
                     "String" | "&[u8]" => Ok(Value::str("")),
-                    "Vec" | "Deque" => Ok(Value::arr(vec![])),
-                    "Map" => Ok(Value::class("Map", HashMap::new())),
+                    "Vec" | "Deque" => Ok(Value::vec(vec![], Value::Alloc)),
+                    "Map" => Ok(Value::map(HashMap::new(), Value::Alloc)),
                     _ => {
                         // Vec(T) / Map 集合类型
                         if n == "Vec" {
-                            return Ok(Value::arr(vec![]));
+                            return Ok(Value::vec(vec![], Value::Alloc));
                         }
                         if n == "Map" {
-                            return Ok(Value::class("Map", HashMap::new()));
+                            return Ok(Value::map(HashMap::new(), Value::Alloc));
                         }
                         // 命名类型：class / enum 空实例
                         match self.types.get(n) {
@@ -1238,6 +1281,14 @@ impl Interp {
         let deref = self.deref_value(v.clone());
         match &deref {
             Value::Arr(a) => Ok(a.borrow().iter().map(|c| (c.clone(), true)).collect()),
+            // 集合（G4）：Vec 句柄遍历（Ptr(Vec) 一层 deref 后为 Vec——共享 items）
+            Value::Vec(d) => Ok(d
+                .borrow()
+                .items
+                .borrow()
+                .iter()
+                .map(|c| (c.clone(), true))
+                .collect()),
             Value::Slice { data, start, len } => {
                 let d = data.borrow();
                 Ok((0..*len).map(|i| (d[*start + i].clone(), true)).collect())
@@ -1245,6 +1296,24 @@ impl Interp {
             Value::Class(c) if c.borrow().name == "Map" => {
                 // Map 遍历：键值对捕获（|kv| → kv.key / kv.value）
                 let d = c.borrow();
+                let items: Vec<Value> = d
+                    .fields
+                    .iter()
+                    .map(|(k, v)| {
+                        let mut f = HashMap::new();
+                        f.insert("key".to_string(), Value::str(k));
+                        f.insert("value".to_string(), v.clone());
+                        Value::class("KV", f)
+                    })
+                    .collect();
+                Ok(items
+                    .into_iter()
+                    .map(|v| (Rc::new(RefCell::new(v)), false))
+                    .collect())
+            }
+            // 集合（G4）：Map 句柄遍历（同 Class("Map")）
+            Value::Map(m) => {
+                let d = m.borrow();
                 let items: Vec<Value> = d
                     .fields
                     .iter()
@@ -1330,6 +1399,21 @@ impl Interp {
             }
             Value::Class(c) if c.borrow().name == "Map" => {
                 let d = c.borrow();
+                let items = d
+                    .fields
+                    .iter()
+                    .map(|(k, val)| {
+                        let mut f = HashMap::new();
+                        f.insert("key".to_string(), Value::str(k));
+                        f.insert("value".to_string(), val.clone());
+                        Value::class("KV", f)
+                    })
+                    .collect();
+                Ok(Value::arr(items))
+            }
+            // 集合（G4）：Map 句柄 → KV 条目数组（同 Class("Map")）
+            Value::Map(m) => {
+                let d = m.borrow();
                 let items = d
                     .fields
                     .iter()
@@ -1461,13 +1545,20 @@ impl Interp {
                 }
                 Some(out)
             }
+            // 集合（G4）：Vec 与 Arr 同为元素共享槽容器 → 委托
+            Value::Vec(d) => self.value_bytes(&Value::Arr(d.borrow().items.clone())),
             _ => None,
         }
     }
 
     fn deref_value(&self, v: Value) -> Value {
         match v {
-            Value::Ptr(c) => c.borrow().clone(),
+            // 递归解引用：Ptr/Boxed → pointee（可能又是指针/集合），Vec → 共享 Arr
+            // （对齐 IR `deref_value`：Ptr(Vec)/Boxed(Vec) 一层即剥到 Arr）
+            Value::Ptr(c) => self.deref_value(c.borrow().clone()),
+            Value::Boxed(b) => self.deref_value(b.borrow().data.borrow().clone()),
+            // 集合（G4）：剥为共享 Arr（items 同一存储）——方法分派复用全部 Arr 方法
+            Value::Vec(d) => Value::Arr(d.borrow().items.clone()),
             other => other,
         }
     }
@@ -1618,9 +1709,9 @@ impl Interp {
                     "test_io" | "io" => return Ok(self.io_value()),
                     "stdout" | "stderr" => return Ok(self.io_value()),
                     "pi" => return Ok(Value::Float(std::f64::consts::PI)),
-                    "Vec" | "Deque" => return Ok(Value::arr(vec![])),
-                    "Map" => return Ok(Value::class("Map", HashMap::new())),
-                    "Table" => return Ok(Value::arr(vec![])),
+                    "Vec" | "Deque" => return Ok(Value::vec(vec![], Value::Alloc)),
+                    "Map" => return Ok(Value::map(HashMap::new(), Value::Alloc)),
+                    "Table" => return Ok(Value::vec(vec![], Value::Alloc)),
                     _ => {}
                 }
                 match self.lookup(name) {
@@ -2136,6 +2227,16 @@ impl Interp {
                 "len" => Ok(Value::Int(a.borrow().len() as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
             },
+            // 集合（G4）：Vec 字段读（.len）——委托 Arr
+            Value::Vec(d) => match field {
+                "len" => Ok(Value::Int(d.borrow().items.borrow().len() as i128)),
+                _ => Err(RtError::new("NoField", Some(span.clone()))),
+            },
+            // 集合（G4）：Map 字段读（.len）
+            Value::Map(m) => match field {
+                "len" => Ok(Value::Int(m.borrow().fields.len() as i128)),
+                _ => Err(RtError::new("NoField", Some(span.clone()))),
+            },
             Value::Slice { len, .. } => match field {
                 "len" => Ok(Value::Int(*len as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
@@ -2353,6 +2454,9 @@ impl Interp {
                     Value::Ptr(cell) => {
                         *cell.borrow_mut() = new_v;
                     }
+                    Value::Boxed(b) => {
+                        *b.borrow_mut().data.borrow_mut() = new_v;
+                    }
                     _ => return Err(RtError::new("BadAssign", Some(span.clone()))),
                 }
             }
@@ -2479,19 +2583,27 @@ impl Interp {
                 if field == "new" && self.types.contains_key(bname) {
                     return self.call_new_builtin(bname, args, span);
                 }
-                // 集合类型 Vec(&[u8]).init(alloc)（此处 base 为类型名时）
+                // 集合类型 Vec(T).init(alloc) / Map(K,V).init(alloc)（此处 base 为类型名时）
                 if matches!(bname.as_str(), "Vec" | "Map" | "Deque") && field == "init" {
-                    let _ = args;
+                    // G4：捕获分配器引用（arg0 = alloc；缺省回退全局 alloc）
+                    let alloc_v = if !args.is_empty() {
+                        let a = self.eval(&args[0])?;
+                        self.deref_value(a)
+                    } else {
+                        Value::Alloc
+                    };
                     if bname == "Map" {
-                        return Ok(Value::class("Map", HashMap::new()));
+                        return Ok(Value::map(HashMap::new(), alloc_v));
                     }
-                    return Ok(Value::arr(vec![]));
+                    return Ok(Value::vec(vec![], alloc_v));
                 }
-                // Table(T).init(alloc, rows, cols, init)（M8）
+                // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
                 if bname == "Table" && field == "init" {
                     if args.len() < 4 {
                         return Err(RtError::new("ArityMismatch", Some(span.clone())));
                     }
+                    let alloc_v = self.eval(&args[0])?;
+                    let alloc_v = self.deref_value(alloc_v);
                     let rows = self.eval(&args[1])?;
                     let cols = self.eval(&args[2])?;
                     let init_v = self.eval(&args[3])?;
@@ -2511,7 +2623,7 @@ impl Interp {
                         }
                         grid.push(Value::arr(row));
                     }
-                    return Ok(Value::arr(grid));
+                    return Ok(Value::vec(grid, alloc_v));
                 }
             }
             let self_v = self.eval(base)?;
@@ -2540,9 +2652,9 @@ impl Interp {
                     if let Some(v) = self.call_math(bname, field, args, span)? {
                         return Ok(v);
                     }
-                    // Arena.init(alloc) 内建
+                    // Arena.init(alloc) 内建：真实 arena 句柄（G1：bump + 块链表）
                     if bname == "Arena" && field == "init" {
-                        return Ok(Value::class("Arena", HashMap::new()));
+                        return Ok(Value::Arena(Rc::new(RefCell::new(ArenaState::new()))));
                     }
                     // String.from / String.concat 内建（String = 内建新类型，M3 定案）
                     if bname == "String" {
@@ -2552,19 +2664,28 @@ impl Interp {
                     if field == "new" && self.types.contains_key(bname) {
                         return self.call_new_builtin(bname, args, span);
                     }
-                    // Vec.init(alloc) / Map.init(alloc) 集合构造
+                    // Vec.init(alloc) / Map.init(alloc) 集合构造（G4：捕获分配器引用）
                     if matches!(bname.as_str(), "Vec" | "Map" | "Deque") && field == "init" {
-                        let _ = args;
+                        let alloc_v = if !args.is_empty() {
+                            let a = self.eval(&args[0])?;
+                            self.deref_value(a)
+                        } else {
+                            Value::Alloc
+                        };
                         if bname == "Map" {
-                            return Ok(Value::class("Map", HashMap::new()));
+                            return Ok(Value::map(HashMap::new(), alloc_v));
                         }
-                        return Ok(Value::arr(vec![]));
+                        return Ok(Value::vec(vec![], alloc_v));
                     }
-                    // Table(T).init(alloc, rows, cols, init)：二维表（M8 定案）
+                    // Table(T).init(alloc, rows, cols, init)：二维表（M8 定案；G4 持有 alloc）
                     if bname == "Table" && field == "init" {
                         if args.len() < 4 {
                             return Err(RtError::new("ArityMismatch", Some(span.clone())));
                         }
+                        let alloc_v = {
+                            let a = self.eval(&args[0])?;
+                            self.deref_value(a)
+                        };
                         let rows = self.eval(&args[1])?;
                         let cols = self.eval(&args[2])?;
                         let init_v = self.eval(&args[3])?;
@@ -2584,7 +2705,7 @@ impl Interp {
                             }
                             grid.push(Value::arr(row));
                         }
-                        return Ok(Value::arr(grid));
+                        return Ok(Value::vec(grid, alloc_v));
                     }
                     // Vec(i32).from_bytes：集合反序列化（u64 长度前缀 + 元素）
                     if matches!(bname.as_str(), "Vec" | "Deque") && field == "from_bytes" {
@@ -2684,6 +2805,23 @@ impl Interp {
                     }
                     // 实例方法：io.print(...) / arena.alloc(...)
                     let self_v = self.eval(base)?;
+                    // G3：装箱胖指针 .alloc() → 携带的分配器引用（三字宽胖指针的 alloc 字）
+                    if let Value::Boxed(b) = &self_v {
+                        if field == "alloc" {
+                            return Ok(b.borrow().alloc.clone());
+                        }
+                    }
+                    // G4：集合 .alloc() → 构造 `init(alloc)` 时携带的分配器引用
+                    if let Value::Vec(d) = &self_v {
+                        if field == "alloc" {
+                            return Ok(d.borrow().alloc.clone());
+                        }
+                    }
+                    if let Value::Map(m) = &self_v {
+                        if field == "alloc" {
+                            return Ok(m.borrow().alloc.clone());
+                        }
+                    }
                     let self_v = self.deref_value(self_v);
                     if let Some(v) = self.call_builtin_method(&self_v, field, args, span)? {
                         return Ok(v);
@@ -2700,16 +2838,16 @@ impl Interp {
                 Err(RtError::new("NoMethod", Some(span.clone())))
             }
             Expr::Ident(name, _) => {
-                // 集合类型实例化 Vec(i32)/Map(...)（类型表达式上下文 → 空容器）
+                // 集合类型实例化 Vec(i32)/Map(...)（类型表达式上下文 → 空容器，G4 持全局 alloc）
                 if matches!(name.as_str(), "Vec" | "Deque") {
-                    return Ok(Value::arr(vec![]));
+                    return Ok(Value::vec(vec![], Value::Alloc));
                 }
                 if name == "Map" {
-                    return Ok(Value::class("Map", HashMap::new()));
+                    return Ok(Value::map(HashMap::new(), Value::Alloc));
                 }
                 if name == "Table" {
                     // Table(i32) 类型实例化：空二维容器（init 填充）
-                    return Ok(Value::arr(vec![]));
+                    return Ok(Value::vec(vec![], Value::Alloc));
                 }
                 // 用户函数优先于内建（同名冲突时，如 parse_int）
                 if self.funcs.contains_key(name) {
@@ -2799,10 +2937,11 @@ impl Interp {
             let mut is_generic = false;
             for (p, a) in f.params.iter().zip(arg_vals.iter()) {
                 let pt = p.ty.strip();
-                // 指针实参解引用后匹配
+                // 指针/装箱实参解引用后匹配（克隆为持有值——链式 Ref 借用无法作 let 引用）
                 let a = match a {
-                    Value::Ptr(cell) => &*cell.borrow(),
-                    other => other,
+                    Value::Ptr(cell) => cell.borrow().clone(),
+                    Value::Boxed(b) => b.borrow().data.borrow().clone(),
+                    other => other.clone(),
                 };
                 match pt {
                     Type::Named(n, _) => {
@@ -2822,7 +2961,7 @@ impl Interp {
                                 | "usize"
                         );
                         let want_bool = n == "bool";
-                        match a {
+                        match &a {
                             Value::Int(_) if want_float => ok = false,
                             Value::Float(_) if want_int => ok = false,
                             Value::Str(_) if want_int || want_float || want_bool => ok = false,
@@ -2841,7 +2980,7 @@ impl Interp {
                     }
                     Type::Slice(inner, _) => {
                         // &[u8] / &[T]：Str 或数组；泛型元素 T 标记为泛型
-                        match a {
+                        match &a {
                             Value::Str(_) => {}
                             Value::Arr(_) | Value::Slice { .. } => {}
                             _ => ok = false,
@@ -2953,11 +3092,23 @@ impl Interp {
     fn call_builtin(&mut self, name: &str, args: &[Expr], span: &Span) -> Result<Option<Value>> {
         match name {
             "box" => {
-                if args.len() != 2 {
+                if args.is_empty() || args.len() > 2 {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
                 }
                 let v = self.eval(&args[0])?;
-                Ok(Some(Value::Ptr(Rc::new(RefCell::new(v)))))
+                // G3：分配器引用——显式传入或回退全局 alloc（`box(v)` 单参形态）
+                let alloc_v = if args.len() > 1 {
+                    let a = self.eval(&args[1])?;
+                    self.deref_value(a)
+                } else {
+                    Value::Alloc
+                };
+                let vtbl = v.type_name();
+                Ok(Some(Value::Boxed(Rc::new(RefCell::new(BoxedData {
+                    data: Rc::new(RefCell::new(v)),
+                    vtbl,
+                    alloc: alloc_v,
+                })))))
             }
             "copy" => {
                 if args.is_empty() {
@@ -3794,8 +3945,16 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // Vec(i32).init(alloc)：集合空容器
-            (Value::Arr(_), "init") => Ok(Some(Value::arr(vec![]))),
+            // Vec(i32).init(alloc)：集合空容器（G4：捕获分配器引用，缺省回退全局）
+            (Value::Arr(_), "init") => {
+                let alloc_v = if !args.is_empty() {
+                    let a = self.eval(&args[0])?;
+                    self.deref_value(a)
+                } else {
+                    Value::Alloc
+                };
+                Ok(Some(Value::vec(vec![], alloc_v)))
+            }
             // Vec(i32).from_bytes 集合反序列化（u64 长度前缀 + i32 元素）
             (Value::Arr(_), "from_bytes") => {
                 let bytes = self.eval(&args[0])?;
@@ -3820,7 +3979,7 @@ impl Interp {
                     };
                     items.push(v);
                 }
-                Ok(Some(Value::arr(items)))
+                Ok(Some(Value::vec(items, Value::Alloc)))
             }
             // 迭代器链（12.8：立即求值变换，产生新数据对象）——统一覆盖全部内建
             // 可迭代类型（Arr/Slice/Str/Map/用户类型）经 iter_to_arr 归一化为元素数组
@@ -3895,6 +4054,37 @@ impl Interp {
             (Value::Class(c), "len") if c.borrow().name == "Map" => {
                 Ok(Some(Value::Int(c.borrow().fields.len() as i128)))
             }
+            // 集合（G4）：Map 句柄方法（字段即键值，逻辑同 Class("Map")）
+            (Value::Map(m), "put") => {
+                let k = self.eval(&args[0])?;
+                let v = self.eval(&args[1])?;
+                let key = k.display();
+                m.borrow_mut().fields.insert(key, v);
+                Ok(Some(Value::Void))
+            }
+            (Value::Map(m), "get") => {
+                let k = self.eval(&args[0])?;
+                let key = k.display();
+                let v = m.borrow().fields.get(&key).cloned();
+                Ok(Some(match v {
+                    Some(x) => Value::Opt(Some(Rc::new(x))),
+                    None => Value::Opt(None),
+                }))
+            }
+            (Value::Map(m), "contains") => {
+                let k = self.eval(&args[0])?;
+                let key = k.display();
+                Ok(Some(Value::Bool(m.borrow().fields.contains_key(&key))))
+            }
+            (Value::Map(m), "remove") => {
+                let k = self.eval(&args[0])?;
+                let key = k.display();
+                m.borrow_mut().fields.remove(&key);
+                Ok(Some(Value::Void))
+            }
+            (Value::Map(m), "len") => {
+                Ok(Some(Value::Int(m.borrow().fields.len() as i128)))
+            }
             (
                 Value::Slice {
                     data: _,
@@ -3935,33 +4125,48 @@ impl Interp {
                 let n = self.eval(&args[0])?;
                 let n = self.deref_value(n);
                 if let Value::Int(i) = n {
-                    Ok(Some(Value::str_bytes(vec![0u8; i.max(0) as usize])))
+                    match alloc_zeroed_bytes(i) {
+                        Some(b) => {
+                            // G5/§8.3 Debug 泄漏检测：登记分配（弱引用随值销毁失效）
+                            let rc = Rc::new(RefCell::new(b));
+                            self.alloc_tracker.borrow_mut().push(LeakRecord {
+                                size: rc.borrow().len(),
+                                line: span.line as u32,
+                                weak: Rc::downgrade(&rc),
+                            });
+                            Ok(Some(Value::Str(rc)))
+                        }
+                        None => Ok(Some(self.err_val("OutOfMemory"))),
+                    }
                 } else {
                     Err(RtError::new("TypeError", Some(span.clone())))
                 }
             }
-            (Value::Alloc, "deinit") => Ok(Some(Value::Void)),
-            // Arena 方法
-            (Value::Class(c), "alloc") if c.borrow().name == "Arena" => {
-                // arena.alloc(n) 字节 / arena.alloc(Node{...}) 类型字面量
-                if args.len() == 1 {
-                    if let Expr::IntLit { .. } = &args[0] {
-                        let n = self.eval(&args[0])?;
-                        let n = self.deref_value(n);
-                        if let Value::Int(i) = n {
-                            return Ok(Some(Value::str_bytes(vec![0u8; i.max(0) as usize])));
-                        }
+            // G5/§8.3 Debug 泄漏检测：当前活跃（未释放）分配数
+            (Value::Alloc, "leaks") => {
+                let n = self
+                    .alloc_tracker
+                    .borrow()
+                    .iter()
+                    .filter(|r| r.weak.upgrade().is_some())
+                    .count();
+                Ok(Some(Value::int(n as i128)))
+            }
+            // G5/§8.3 Debug 泄漏检测：泄漏清单文本（`leak: line L: N bytes` 每行）
+            (Value::Alloc, "leak_report") => {
+                let mut out = Vec::new();
+                for r in self.alloc_tracker.borrow().iter() {
+                    if r.weak.upgrade().is_some() {
+                        out.extend_from_slice(
+                            format!("leak: line {}: {} bytes\n", r.line, r.size).as_bytes(),
+                        );
                     }
-                    let v = self.eval(&args[0])?;
-                    return Ok(Some(v));
                 }
-                Err(RtError::new("ArityMismatch", Some(span.clone())))
+                Ok(Some(Value::str_bytes(out)))
             }
-            (Value::Class(c), "init") if c.borrow().name == "Arena" => {
-                // arena.init(T)：类型构造（tag1：仅返回空实例）
-                let _ = args;
-                Ok(Some(Value::Void))
-            }
+            (Value::Alloc, "deinit") => Ok(Some(Value::Void)),
+            // Arena 方法（G1：bump + 块链表 + deinit 批量归还 + 统计）
+            (Value::Arena(a), m) => self.call_arena_method(a.clone(), m, args, span),
             // Io 方法
             (Value::Class(c), "print") if c.borrow().name == "Io" => {
                 self.call_io_print(args, span)?;
@@ -4024,6 +4229,34 @@ impl Interp {
                     Err(RtError::new("TypeError", Some(span.clone())))
                 }
             }
+            // 集合（G4）：Value::Map 形态的 init（捕获分配器引用）
+            (Value::Map(m), "init") => {
+                let alloc_v = if !args.is_empty() {
+                    let a = self.eval(&args[0])?;
+                    self.deref_value(a)
+                } else {
+                    Value::Alloc
+                };
+                let _ = m;
+                Ok(Some(Value::map(HashMap::new(), alloc_v)))
+            }
+            // 集合（G4）：Value::Map 形态的 from_json / to_json
+            (Value::Map(m), "from_json") => {
+                let alloc = m.borrow().alloc.clone();
+                let json = self.eval(&args[0])?;
+                let json = self.deref_value(json);
+                if let Value::Str(s) = json {
+                    let s = s.borrow().clone();
+                    let obj = self.parse_json_obj(&String::from_utf8_lossy(&s))?;
+                    Ok(Some(Value::map(obj, alloc)))
+                } else {
+                    Err(RtError::new("TypeError", Some(span.clone())))
+                }
+            }
+            (Value::Map(m), "to_json") => {
+                let json = self.value_to_json(&Value::Map(m.clone()));
+                Ok(Some(Value::str(&json)))
+            }
             // M5.4 真实 IO：io.fs 模块函数 / io.time / File 句柄方法 / io.net
             (Value::Class(c), m) if c.borrow().name == "Fs" => self.call_fs_method(m, args, span),
             (Value::Class(c), m) if c.borrow().name == "Time" => {
@@ -4063,6 +4296,75 @@ impl Interp {
                     Ok(v) => Ok(Some(Value::Opt(Some(Rc::new(Value::str(&v)))))),
                     Err(_) => Ok(Some(Value::Opt(None))),
                 }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Arena 内建方法（G1）：`alloc` 字节 bump 分配 / `init` 类型构造 / `deinit` 批量归还 /
+    /// `bytes`/`blocks` 统计诊断
+    fn call_arena_method(
+        &mut self,
+        arena: Rc<RefCell<ArenaState>>,
+        method: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match method {
+            "alloc" => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::Int(i) => {
+                        // 字节分配：bump 切块；超容量/失败 → error.OutOfMemory（可 catch）
+                        if i < 0 {
+                            return Err(RtError::new("TypeError", Some(span.clone())));
+                        }
+                        if i as u128 > usize::MAX as u128 {
+                            return Ok(Some(self.err_val("OutOfMemory")));
+                        }
+                        let n = i as usize;
+                        match arena.borrow_mut().bump(n) {
+                            Ok((block, off)) => {
+                                let bytes = block.borrow();
+                                Ok(Some(Value::str_bytes(bytes[off..off + n].to_vec())))
+                            }
+                            Err(ArenaAllocErr::Deinit) => {
+                                Err(RtError::new("ArenaDeinitialized", Some(span.clone())))
+                            }
+                            Err(ArenaAllocErr::Oom) => Ok(Some(self.err_val("OutOfMemory"))),
+                        }
+                    }
+                    // 非整数实参：类型字面量构造（arena.alloc(Node{...}) 兼容形态）
+                    _ => Ok(Some(v)),
+                }
+            }
+            "init" => {
+                // arena.init(T)：类型构造（tag1：保留 Void；typed 构造归 G3/G4）
+                let _ = args;
+                Ok(Some(Value::Void))
+            }
+            "deinit" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                arena.borrow_mut().deinit();
+                Ok(Some(Value::Void))
+            }
+            "bytes" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                Ok(Some(Value::int(arena.borrow().total as i128)))
+            }
+            "blocks" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                Ok(Some(Value::int(arena.borrow().blocks.len() as i128)))
             }
             _ => Ok(None),
         }
@@ -5282,6 +5584,7 @@ impl Interp {
             Type::Tuple(ts) => {
                 let items = match v {
                     Value::Arr(a) => a.borrow().clone(),
+                    Value::Vec(d) => d.borrow().items.borrow().clone(),
                     _ => Vec::new(),
                 };
                 let mut cur = off;
@@ -5406,6 +5709,7 @@ impl Interp {
                 self.class_to_bytes(&d.name, &d.fields).unwrap_or_default()
             }
             Value::Ptr(p) => self.value_to_bytes(&p.borrow()),
+            Value::Boxed(b) => self.value_to_bytes(&b.borrow().data.borrow()),
             _ => vec![],
         }
     }
@@ -5428,6 +5732,27 @@ impl Interp {
                     .collect();
                 format!("[{}]", items.join(","))
             }
+            // 集合（G4）：Vec 序列化为数组
+            Value::Vec(d) => {
+                let items: Vec<String> = d
+                    .borrow()
+                    .items
+                    .borrow()
+                    .iter()
+                    .map(|c| self.value_to_json(&c.borrow()))
+                    .collect();
+                format!("[{}]", items.join(","))
+            }
+            // 集合（G4）：Map 序列化为对象
+            Value::Map(m) => {
+                let items: Vec<String> = m
+                    .borrow()
+                    .fields
+                    .iter()
+                    .map(|(k, v)| format!("\"{k}\":{}", self.value_to_json(v)))
+                    .collect();
+                format!("{{{}}}", items.join(","))
+            }
             Value::Class(c) => {
                 let d = c.borrow();
                 if d.name == "Map" {
@@ -5449,6 +5774,7 @@ impl Interp {
             Value::Opt(Some(v)) => self.value_to_json(v),
             Value::Opt(None) => "null".to_string(),
             Value::Ptr(p) => self.value_to_json(&p.borrow()),
+            Value::Boxed(b) => self.value_to_json(&b.borrow().data.borrow()),
             _ => "null".to_string(),
         }
     }
@@ -5624,23 +5950,43 @@ impl Interp {
             Type::Named(n, args) => {
                 // 集合元素类型还原（Vec(T)/Deque(T) 中的嵌套对象）
                 if (n == "Vec" || n == "Deque") && !args.is_empty() {
-                    if let Value::Arr(a) = v {
-                        let items: Vec<Value> = a
+                    let items: Vec<Value> = match v {
+                        Value::Arr(a) => a
                             .borrow()
                             .iter()
                             .map(|c| self.json_coerce(&args[0], &c.borrow()))
-                            .collect();
-                        return Value::arr(items);
-                    }
+                            .collect(),
+                        // G4：集合为 Vec 句柄（items 同 Arr 存储）
+                        Value::Vec(d) => d
+                            .borrow()
+                            .items
+                            .borrow()
+                            .iter()
+                            .map(|c| self.json_coerce(&args[0], &c.borrow()))
+                            .collect(),
+                        _ => return v.clone(),
+                    };
+                    return Value::arr(items);
                 }
-                if let Value::Class(c) = v {
-                    let d = c.borrow();
-                    if d.name == "Map" && n != "Map" && self.types.contains_key(n) {
-                        // 嵌套 heap class：通用 JSON 对象（Map）→ 目标 class
-                        return self
-                            .class_from_json(n, &d.fields.clone())
-                            .unwrap_or_else(|_| v.clone());
+                match v {
+                    Value::Class(c) => {
+                        let d = c.borrow();
+                        if d.name == "Map" && n != "Map" && self.types.contains_key(n) {
+                            // 嵌套 heap class：通用 JSON 对象（Map）→ 目标 class
+                            return self
+                                .class_from_json(n, &d.fields.clone())
+                                .unwrap_or_else(|_| v.clone());
+                        }
                     }
+                    // 集合（G4）：Value::Map 同样可还原为 heap class
+                    Value::Map(m) => {
+                        if n != "Map" && self.types.contains_key(n) {
+                            return self
+                                .class_from_json(n, &m.borrow().fields.clone())
+                                .unwrap_or_else(|_| v.clone());
+                        }
+                    }
+                    _ => {}
                 }
                 v.clone()
             }
@@ -5669,6 +6015,37 @@ impl Interp {
             }
             Value::Str(s) => Value::Str(Rc::new(RefCell::new(s.borrow().clone()))),
             Value::Ptr(p) => Value::Ptr(Rc::new(RefCell::new(self.deep_copy(p.borrow().clone())))),
+            // 装箱胖指针：data 深拷贝（新 cell），vtbl/alloc 原样携带
+            Value::Boxed(b) => {
+                let d = b.borrow();
+                // data 先克隆为持有值（链式 Ref 借用不可跨块尾表达式）
+                let data = Rc::new(RefCell::new(self.deep_copy(d.data.borrow().clone())));
+                Value::Boxed(Rc::new(RefCell::new(BoxedData {
+                    data,
+                    vtbl: d.vtbl.clone(),
+                    alloc: d.alloc.clone(),
+                })))
+            }
+            // 集合（G4）：items/fields 深拷贝，alloc 原样携带
+            Value::Vec(v) => {
+                let d = v.borrow();
+                let items: Vec<Value> = d
+                    .items
+                    .borrow()
+                    .iter()
+                    .map(|c| self.deep_copy(c.borrow().clone()))
+                    .collect();
+                Value::vec(items, d.alloc.clone())
+            }
+            Value::Map(m) => {
+                let d = m.borrow();
+                let fields: HashMap<String, Value> = d
+                    .fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.deep_copy(v.clone())))
+                    .collect();
+                Value::map(fields, d.alloc.clone())
+            }
             Value::Opt(Some(v)) => Value::Opt(Some(Rc::new(self.deep_copy((*v).clone())))),
             // move 捕获闭包值：环境逐 cell 深拷贝——闭包持有独立环境副本
             // （与原作用域/其他闭包脱离共享；`Rc<RefCell>` 非 Copy 语义补齐）。
@@ -5706,6 +6083,17 @@ impl Interp {
                 Value::class(&d.name, d.fields.clone())
             }
             Value::Ptr(p) => Value::Ptr(p),
+            // 装箱胖指针浅复制：共享 data cell（内存问题用户负责，同 Ptr）
+            Value::Boxed(b) => Value::Boxed(b),
+            // 集合（G4）浅复制：新容器共享 items/fields，alloc 原样携带
+            Value::Vec(v) => Value::Vec(Rc::new(RefCell::new(VecData {
+                items: v.borrow().items.clone(),
+                alloc: v.borrow().alloc.clone(),
+            }))),
+            Value::Map(m) => Value::Map(Rc::new(RefCell::new(MapData {
+                fields: m.borrow().fields.clone(),
+                alloc: m.borrow().alloc.clone(),
+            }))),
             other => other,
         }
     }
