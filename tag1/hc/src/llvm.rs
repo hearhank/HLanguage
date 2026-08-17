@@ -92,10 +92,16 @@ fn runtime_to_declares(ll: &str) -> String {
     out
 }
 
-/// C3：库形态 codegen——函数/内部调用名带包前缀（`@{pkg}.hc_fn{i}`，跨模块链接唯一）、
-/// 运行时 helper/基建转 declare（由链接的 exe 提供定义）、跳过全局表
-/// （`@.h_globals` 跨 .o 撞符号——库全局链接留后续）与 main wrapper。
-pub fn codegen_lib(module: &IrModule, errors: &ErrorCodeTable, pkg: &str) -> String {
+/// C3/C4：库形态 codegen——函数/内部调用名带包前缀（`@{pkg}.hc_fn{i}`，跨模块链接唯一）、
+/// 跳过全局表（`@.h_globals` 跨 .o 撞符号——库全局链接留后续）与 main wrapper。
+/// `dll_mode`：静态归档（false）→ 运行时 helper/基建转 declare（由链接的 exe 提供定义）；
+/// dll（true）→ **自包含**（helper 保持 define——运行时加载的 dll 无法依赖 exe 提供符号）。
+pub fn codegen_lib(
+    module: &IrModule,
+    errors: &ErrorCodeTable,
+    pkg: &str,
+    dll_mode: bool,
+) -> String {
     let strings = collect_strings(module);
     let canon: HashMap<String, Vec<usize>> = module
         .func_index
@@ -122,7 +128,11 @@ pub fn codegen_lib(module: &IrModule, errors: &ErrorCodeTable, pkg: &str) -> Str
         );
     }
     emit_ext_decls(&mut out, &ext_decls);
-    runtime_to_declares(&out)
+    if dll_mode {
+        out
+    } else {
+        runtime_to_declares(&out)
+    }
 }
 
 fn codegen_inner(

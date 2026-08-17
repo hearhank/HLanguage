@@ -32,9 +32,15 @@ fn copy_dir_all(src: &Path, dst: &Path) {
         if entry.file_type().expect("file type").is_dir() {
             copy_dir_all(&entry.path(), &to);
         } else {
-            // 跳过既有构建产物（*.exe/*.a/*.sym），测试从源码态重新构建
+            // 跳过既有构建产物（*.exe/*.a/*.sym/*.dll/*.lib/*.pdb），测试从源码态重新构建
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".exe") || name.ends_with(".a") || name.ends_with(".sym") {
+            if name.ends_with(".exe")
+                || name.ends_with(".a")
+                || name.ends_with(".sym")
+                || name.ends_with(".dll")
+                || name.ends_with(".lib")
+                || name.ends_with(".pdb")
+            {
                 continue;
             }
             std::fs::copy(entry.path(), to).expect("copy file");
@@ -156,5 +162,93 @@ fn build_lib_static_archive_and_link_exe() {
         "exe 应调用依赖库函数输出 42: {out_text}"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn build_lib_dll_and_runtime_load() {
+    // C4：`hc build --dll`——jsonlib（Kind::lib）→ jsonlib.dll（zig cc -shared）；
+    // app（Kind::exe）依赖按 dll 构建并链接，dll 复制到 exe 目录供 OS 运行时加载。
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    let src = examples_dir().join("02-packages");
+    let dir = std::env::temp_dir().join(format!(
+        "hc_cli_c4_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(29) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    copy_dir_all(&src, &dir);
+
+    // 1) 库产 dll
+    let out = Command::new(hc_bin())
+        .arg("build")
+        .arg("--dll")
+        .arg(dir.join("jsonlib"))
+        .output()
+        .expect("hc build --dll lib");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "dll 库构建应成功: {stdout}{stderr}");
+    assert!(
+        dir.join("jsonlib/jsonlib.dll").exists(),
+        "应产出 jsonlib.dll: {stdout}{stderr}"
+    );
+
+    // 2) exe 链接 dll + 运行时加载
+    let out = Command::new(hc_bin())
+        .arg("build")
+        .arg("--dll")
+        .arg(dir.join("app"))
+        .output()
+        .expect("hc build --dll app");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "app --dll 构建应成功: {stdout}{stderr}");
+    let exe = dir.join("app/main.exe");
+    assert!(exe.exists(), "应产出 main.exe: {stdout}{stderr}");
+    assert!(
+        dir.join("app/jsonlib.dll").exists(),
+        "依赖 dll 应复制到 exe 目录供运行时加载: {stdout}{stderr}"
+    );
+    let run = Command::new(&exe).output().expect("run exe");
+    let out_text = String::from_utf8_lossy(&run.stdout).to_string();
+    assert!(
+        out_text.contains("jsonlib.parse = 42"),
+        "exe 应经 dll 运行时加载调用依赖库输出 42: {out_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn build_lib_with_main_is_diagnosed() {
+    // C4：库无 main 校验——`Kind::lib` 含 main → 构建失败并诊断
+    let dir = std::env::temp_dir().join(format!(
+        "hc_cli_libmain_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(37) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("build.zon"),
+        "const build = Build{ name = \"badlib\", version = \"0.1.0\", kind = Kind.lib, files = [\"lib.hc\"], deps = [] };\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("lib.hc"), "fn main(args: o Vec(String)) !void { }\n").unwrap();
+    let out = Command::new(hc_bin())
+        .arg("build")
+        .arg(&dir)
+        .output()
+        .expect("hc build lib-with-main");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!out.status.success(), "Kind::lib 含 main 应失败");
+    assert!(
+        stderr.contains("不应含 `main` 入口"),
+        "应诊断库含 main: {stderr}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

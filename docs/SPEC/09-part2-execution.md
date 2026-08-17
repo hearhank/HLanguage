@@ -112,6 +112,8 @@
 
 > ✅ **C3 已完成（2026-08-17，梯队 34）**：`hc build` 库形态（`Kind::lib` → **lib 静态归档**）——`build_lib`（codegen_lib 包前缀 + runtime helper 转 declare + `zig cc -c` → `.o` → `zig ar rcs lib{name}.a` + `.sym` 符号表，剔除 test 函数）；exe 链接本地依赖库端到端（`check_and_merge_deps` 依赖 pub 登记 + IR 文件级 import 展开表 `collect_imports` + `codegen_with_links` 外部链接符号路由 + 模块级 ext_decls 去重声明）。02-packages 改造为链接形态；cli.rs 新增 `build_lib_static_archive_and_link_exe` 测试。**已知限制**：库全局变量链接留后续（`@.h_globals` 跨 .o 撞符号）；`hc run --ir` 跨包调用仍 NoFunction（IR 参考解释器不装载依赖）。
 
+> ✅ **C4 已完成（2026-08-17，梯队 35）**：`hc build --dll` 库形态（`Kind::lib` → **dll 动态库**）——`build_lib` 加 `dll` 分支（`codegen_lib` dll_mode **自包含** helper + `zig cc -shared` → `{name}.dll`）；exe 依赖按 dll 构建并**链接 dll**（OS 运行时加载，dll 复制到 exe 目录供加载器定位）；**库无 main 校验**（`Kind::lib` 含 `main` → 诊断，06-08 定案）。cli.rs 新增 `build_lib_dll_and_runtime_load` + `build_lib_with_main_is_diagnosed` 测试。**已知限制**：库全局变量链接留后续（同 C3）；dll 模式的 `--dll` 为构建参数选择（构建参数形态第三块再评估）。
+
 ### D. M5.3 serialize 库（依赖：无特殊）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |

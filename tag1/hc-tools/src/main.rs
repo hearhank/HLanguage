@@ -199,11 +199,21 @@ fn run_cli() -> ExitCode {
             errors_file(Path::new(path))
         }
         "build" => {
-            let Some(path) = args.get(2) else {
-                eprintln!("error: `hc build` requires a file path");
+            // C4：`hc build [--dll] <path>`——`--dll` = 库产 dll / exe 依赖按 dll 链接
+            let mut dll = false;
+            let mut target: Option<&String> = None;
+            for a in args.iter().skip(2) {
+                if a == "--dll" {
+                    dll = true;
+                } else {
+                    target = Some(a);
+                }
+            }
+            let Some(path) = target else {
+                eprintln!("error: `hc build [--dll]` requires a file path");
                 return ExitCode::from(2);
             };
-            build_file(Path::new(path))
+            build_file(Path::new(path), dll)
         }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
@@ -529,10 +539,12 @@ fn link_exe(ll_path: &Path, exe_path: &Path, extra: &[PathBuf]) -> Result<(), St
     }
 }
 
-/// C3：`Kind::lib` 构建——codegen_lib（包前缀 + 无 helper/全局/main）→ `zig cc -c` →
-/// `.o` → `zig ar rcs lib{name}.a`；另写 `{name}.sym`（限定名 → 导出符号，exe 链接引用）。
+/// C3/C4：`Kind::lib` 构建——codegen_lib（包前缀，剔除 test 函数；静态归档转 runtime
+/// helper 为 declare，dll 保持自包含）→ `zig cc -c` + `zig ar rcs lib{name}.a`（静态）
+/// 或 `zig cc -shared` → `{name}.dll`（dll，exe 运行时加载）。另写 `{name}.sym`
+/// （限定名 → 导出符号，exe 链接引用）。**库无 main 校验**（C4：Kind::lib 含 main → 诊断）。
 /// 返回（库文件路径，符号表）。
-fn build_lib(dir: &Path, name: &str) -> Result<(PathBuf, Vec<(String, String)>), ExitCode> {
+fn build_lib(dir: &Path, name: &str, dll: bool) -> Result<(PathBuf, Vec<(String, String)>), ExitCode> {
     let entry_path = match package_entry(dir) {
         Ok(e) => e,
         Err(msg) => {
@@ -555,6 +567,14 @@ fn build_lib(dir: &Path, name: &str) -> Result<(PathBuf, Vec<(String, String)>),
     // 库不运行测试：剔除 [test] 函数（其断言 helper 在库形态不发射，保留会链接失败）
     let mut merged = merged;
     strip_test_funcs_in_place(&mut merged);
+    // C4：库无 main 校验——`Kind::lib` = 不含 main 的包（06-08 定案）
+    if merged.func_index.contains_key("main") {
+        eprintln!(
+            "error: 库包 `{}` 不应含 `main` 入口（Kind::lib = 不含 main 的包；应用请用 Kind.exe）",
+            name
+        );
+        return Err(ExitCode::FAILURE);
+    }
     // 符号表：func_index 限定名 → `{pkg}.hc_fn{i}`（pub 边界由语义层 import 检查保证——
     // 非 pub 符号 import 即报错，.sym 全量导出不绕过）
     let mut syms: Vec<(String, String)> = merged
@@ -563,55 +583,86 @@ fn build_lib(dir: &Path, name: &str) -> Result<(PathBuf, Vec<(String, String)>),
         .map(|(fn_, idxs)| (format!("{name}.{fn_}"), format!("{name}.hc_fn{}", idxs[0])))
         .collect();
     syms.sort();
-    let ll = hc::llvm::codegen_lib(&merged, &table, name);
+    let ll = hc::llvm::codegen_lib(&merged, &table, name, dll);
     let ll_path = dir.join(format!("{name}.ll"));
     if let Err(e) = std::fs::write(&ll_path, &ll) {
         eprintln!("error: 写入 {} 失败: {e}", ll_path.display());
         return Err(ExitCode::FAILURE);
     }
-    let o_path = dir.join(format!("{name}.o"));
-    let cc = std::process::Command::new("zig")
-        .arg("cc")
-        .arg("-c")
-        .arg(&ll_path)
-        .arg("-o")
-        .arg(&o_path)
-        .output();
-    match cc {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            eprintln!(
-                "{} zig cc -c 失败：\n{}",
-                paint(err_color(), "31", "[FAIL]"),
-                String::from_utf8_lossy(&o.stderr)
-            );
+    let artifact = if dll {
+        // C4：dll 动态库——`zig cc -shared`；自包含 helper（codegen_lib dll_mode）
+        let dll_path = dir.join(format!("{name}.dll"));
+        let shared = std::process::Command::new("zig")
+            .arg("cc")
+            .arg("-shared")
+            .arg(&ll_path)
+            .arg("-o")
+            .arg(&dll_path)
+            .output();
+        match shared {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                eprintln!(
+                    "{} zig cc -shared 失败：\n{}",
+                    paint(err_color(), "31", "[FAIL]"),
+                    String::from_utf8_lossy(&o.stderr)
+                );
+                return Err(ExitCode::FAILURE);
+            }
+            Err(e) => {
+                eprintln!("调用 zig cc 失败: {e}");
+                return Err(ExitCode::FAILURE);
+            }
+        }
+        dll_path
+    } else {
+        // C3：静态归档——`zig cc -c` → `.o` → `zig ar rcs lib{name}.a`
+        let o_path = dir.join(format!("{name}.o"));
+        let cc = std::process::Command::new("zig")
+            .arg("cc")
+            .arg("-c")
+            .arg(&ll_path)
+            .arg("-o")
+            .arg(&o_path)
+            .output();
+        match cc {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                eprintln!(
+                    "{} zig cc -c 失败：\n{}",
+                    paint(err_color(), "31", "[FAIL]"),
+                    String::from_utf8_lossy(&o.stderr)
+                );
+                return Err(ExitCode::FAILURE);
+            }
+            Err(e) => {
+                eprintln!("调用 zig cc 失败: {e}");
+                return Err(ExitCode::FAILURE);
+            }
+        }
+        let a_path = dir.join(format!("lib{name}.a"));
+        let ar = std::process::Command::new("zig")
+            .arg("ar")
+            .arg("rcs")
+            .arg(&a_path)
+            .arg(&o_path)
+            .output();
+        if let Err(e) = ar.and_then(|o| {
+            if o.status.success() {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("zig ar: {}", String::from_utf8_lossy(&o.stderr)),
+                ))
+            }
+        }) {
+            eprintln!("error: 归档 {} 失败: {e}", a_path.display());
             return Err(ExitCode::FAILURE);
         }
-        Err(e) => {
-            eprintln!("调用 zig cc 失败: {e}");
-            return Err(ExitCode::FAILURE);
-        }
-    }
-    let a_path = dir.join(format!("lib{name}.a"));
-    let ar = std::process::Command::new("zig")
-        .arg("ar")
-        .arg("rcs")
-        .arg(&a_path)
-        .arg(&o_path)
-        .output();
-    if let Err(e) = ar.and_then(|o| {
-        if o.status.success() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("zig ar: {}", String::from_utf8_lossy(&o.stderr)),
-            ))
-        }
-    }) {
-        eprintln!("error: 归档 {} 失败: {e}", a_path.display());
-        return Err(ExitCode::FAILURE);
-    }
+        let _ = std::fs::remove_file(&o_path);
+        a_path
+    };
     // 符号表文件（构建产物；exe 链接侧已由返回值直接使用）
     let sym_text = syms
         .iter()
@@ -619,16 +670,17 @@ fn build_lib(dir: &Path, name: &str) -> Result<(PathBuf, Vec<(String, String)>),
         .collect::<Vec<_>>()
         .join("\n");
     let _ = std::fs::write(dir.join(format!("{name}.sym")), format!("{sym_text}\n"));
-    // 清理中间 .ll/.o，保留 .a + .sym
+    // 清理中间 .ll，保留产物 + .sym
     let _ = std::fs::remove_file(&ll_path);
-    let _ = std::fs::remove_file(&o_path);
-    Ok((a_path, syms))
+    Ok((artifact, syms))
 }
 
-/// `hc build file.hc`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
+/// `hc build [--dll] <path>`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
 /// `zig cc` 缺失时回退字节码镜像 .hbc + 平台启动器（M3.2 前过渡形态）。
 /// C3：`Kind::lib` → 静态归档（build_lib）；`Kind::exe` 带本地依赖 → 链接库形态。
-fn build_file(path: &Path) -> ExitCode {
+/// C4：`--dll` → `Kind::lib` 产 dll（`zig cc -shared`，自包含 helper）；`Kind::exe`
+/// 依赖库按 dll 构建并**链接 dll**（OS 运行时加载；dll 复制到 exe 目录供加载器定位）。
+fn build_file(path: &Path, dll: bool) -> ExitCode {
     // 目录参数：取目录内 main.hc（否则首个 .hc）作为入口
     let entry_path = if path.is_dir() {
         let files = dir_hc_files(path);
@@ -673,7 +725,8 @@ fn build_file(path: &Path) -> ExitCode {
         }
     };
 
-    // C3：库形态——不产出 exe，编译为静态归档（zig cc -c + zig ar）
+    // C3/C4：库形态——不产出 exe，编译为静态归档（zig cc -c + zig ar）或 dll（--dll，
+    // zig cc -shared）
     if manifest
         .as_ref()
         .is_some_and(|m| m.kind == buildzon::Kind::Lib)
@@ -682,7 +735,7 @@ fn build_file(path: &Path) -> ExitCode {
             eprintln!("error: 库构建需要 zig cc（当前未检测到）");
             return ExitCode::FAILURE;
         }
-        return match build_lib(dir, &manifest.as_ref().unwrap().name) {
+        return match build_lib(dir, &manifest.as_ref().unwrap().name, dll) {
             Ok((a_path, _)) => {
                 println!("库产物: {}", a_path.display());
                 ExitCode::SUCCESS
@@ -704,9 +757,18 @@ fn build_file(path: &Path) -> ExitCode {
                     continue; // 注册中心依赖归第三块
                 };
                 let dep_dir = dir.join(rel);
-                match build_lib(&dep_dir, &dep.name) {
-                    Ok((a_path, syms)) => {
-                        libs.push(a_path);
+                match build_lib(&dep_dir, &dep.name, dll) {
+                    Ok((art, syms)) => {
+                        // C4：dll 模式把依赖 dll 复制到 exe 目录——Windows 加载器仅在
+                        // exe 目录/系统路径/PATH 搜索，子目录不找；静态归档直接链接无需复制
+                        let link_path = if dll {
+                            let copy = dir.join(art.file_name().unwrap_or_default());
+                            let _ = std::fs::copy(&art, &copy);
+                            copy
+                        } else {
+                            art
+                        };
+                        libs.push(link_path);
                         for (qn, sym) in syms {
                             links.insert(qn, sym);
                         }
