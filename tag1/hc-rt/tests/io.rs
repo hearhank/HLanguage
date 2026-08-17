@@ -73,6 +73,56 @@ fn io_fs_seek_pos_read_at_write_at() {
 }
 
 #[test]
+fn io_fs_append_rename_remove() {
+    // F4：fs 余项——append 追加（缺失即建）/ rename 改名 / remove 删除
+    run_ok(
+        "[test] fn t() !void {
+    io.fs.append(\"hc_f4_append.tmp\", \"hello\");
+    io.fs.append(\"hc_f4_append.tmp\", \" world\");
+    var content = io.fs.read_file(\"hc_f4_append.tmp\", alloc);
+    try expect_eq_slices(content, \"hello world\");
+    io.fs.rename(\"hc_f4_append.tmp\", \"hc_f4_renamed.tmp\");
+    try expect_eq_slices(io.fs.read_file(\"hc_f4_renamed.tmp\", alloc), \"hello world\");
+    io.fs.remove(\"hc_f4_renamed.tmp\");
+    var gone = io.fs.read_file(\"hc_f4_renamed.tmp\", alloc) catch |_| { return; };
+    try expect(false); // 删除后读取不应成功
+}\n",
+    );
+    let _ = std::fs::remove_file("hc_f4_append.tmp");
+    let _ = std::fs::remove_file("hc_f4_renamed.tmp");
+}
+
+#[test]
+fn io_fs_list_dir() {
+    // F4：fs 余项——list_dir 目录条目名（目录由 Rust 侧预建）
+    std::fs::create_dir_all("hc_f4_dir").unwrap();
+    std::fs::write("hc_f4_dir/alpha.txt", b"").unwrap();
+    run_ok(
+        "[test] fn t() !void {
+    var names = io.fs.list_dir(\"hc_f4_dir\");
+    try expect(names.len == 1);
+    try expect_eq_slices(names[0], \"alpha.txt\");
+}\n",
+    );
+    let _ = std::fs::remove_file("hc_f4_dir/alpha.txt");
+    let _ = std::fs::remove_dir("hc_f4_dir");
+}
+
+#[test]
+fn io_fs_read_int_write_int() {
+    // F4：fs 余项——write_int/read_int 十进制文本 round-trip（含负数）
+    run_ok(
+        "[test] fn t() !void {
+    io.fs.write_int(\"hc_f4_num.tmp\", 12345);
+    try expect_eq(io.fs.read_int(\"hc_f4_num.tmp\"), 12345);
+    io.fs.write_int(\"hc_f4_num.tmp\", -7);
+    try expect_eq(io.fs.read_int(\"hc_f4_num.tmp\"), -7);
+}\n",
+    );
+    let _ = std::fs::remove_file("hc_f4_num.tmp");
+}
+
+#[test]
 fn io_time_now_and_sleep() {
     // 时间：now() 毫秒时间戳 > 0；sleep 返回 void
     run_ok(

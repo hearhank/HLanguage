@@ -4,6 +4,7 @@
 //!
 //! 用 `hc` 二进制（CARGO_BIN_EXE_hc-tools）驱动 CLI，断言输出与退出码。
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -365,6 +366,43 @@ fn run_ir_exit_propagates_code() {
     assert!(
         stderr.contains("error: program exited with code 3"),
         "IR 侧 Error 应打印错误消息: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn run_io_stdin_reads_line() {
+    // F4：io.stdin() 从标准输入读一行（管道注入）——读取一行、去换行、原样回显
+    let path = temp_hc_file(
+        "stdin",
+        "import H.std.{io};\n\
+         fn main(args: o Vec(String)) !void {\n\
+             var line = io.stdin();\n\
+             io.print(\"got:\");\n\
+             io.print(line);\n\
+             io.print(\"\\n\");\n\
+         }\n",
+    );
+    let mut child = Command::new(hc_bin())
+        .arg("run")
+        .arg(&path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn hc run");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"hello-stdin\n")
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait hc run");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "io.stdin 读取应成功: {stdout}{stderr}");
+    assert!(
+        stdout.contains("got:hello-stdin"),
+        "应读到管道注入行（去换行）: {stdout}"
     );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

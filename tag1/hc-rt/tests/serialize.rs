@@ -134,6 +134,7 @@ class Doc {
 #[test]
 fn serialize_parse_int_float() {
     // serialize.parse_int / serialize.parse_float：文本 → ?i32 / ?f64
+    // F4 补全：负数 / 显式 + 号 / i32 上界 / 科学计数法与尾随空格
     run_ok(
         r#"
 [test] fn parse_int_float() !void {
@@ -141,9 +142,15 @@ fn serialize_parse_int_float() {
     try expect_eq(serialize.parse_int(" 7 ") orelse -1, 7);
     try expect_eq(serialize.parse_int("x") orelse -1, -1);
     try expect_eq(serialize.parse_int("") orelse -1, -1);
+    try expect_eq(serialize.parse_int("-42") orelse -1, -42);
+    try expect_eq(serialize.parse_int("+99") orelse -1, 99);
+    try expect_eq(serialize.parse_int("2147483647") orelse -1, 2147483647);
     try expect_eq(serialize.parse_float("3.5") orelse -1.0, 3.5);
     try expect_eq(serialize.parse_float("2.0") orelse -1.0, 2.0);
     try expect_eq(serialize.parse_float("z") orelse -1.0, -1.0);
+    try expect_eq(serialize.parse_float("-3.5") orelse -1.0, -3.5);
+    try expect_eq(serialize.parse_float("1e3") orelse -1.0, 1000.0);
+    try expect_eq(serialize.parse_float(" 3.50 ") orelse -1.0, 3.5);
 }
 "#,
     );

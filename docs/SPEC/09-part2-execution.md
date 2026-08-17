@@ -69,7 +69,7 @@
 - ~~`[SKIP]` 分支（`error.SkipTest`）零覆盖（23-tests.hc 中为注释）→ F1~~ ✅ F1 已完成（2026-08-17，见 §3 组 F 注）
 - ~~`io.exit`/`ExitType` 零覆盖 → F2~~ ✅ F2 已完成（2026-08-17，见 §3 组 F 注）
 - ~~测试基建自身（退出码/注入/汇总）无独立测试文件 → F3~~ ✅ F3 已完成（2026-08-17，见 §3 组 F 注）
-- fs 余项（append/rename/remove/list_dir/read_int/write_int）、`io.stdin`、`parse_int/parse_float` 无直测 → F4
+- ~~fs 余项（append/rename/remove/list_dir/read_int/write_int）、`io.stdin`、`parse_int/parse_float` 无直测 → F4~~ ✅ F4 已完成（2026-08-17，见 §3 组 F 注）
 
 ## 3. 执行序与 ≤2h 任务分解（A–H）
 
@@ -153,6 +153,8 @@
 > ✅ **F2 已完成（2026-08-17）**：`io.exit`/`ExitType` 测试（Exit 静默/Error 打印/退出码）。CLI 端到端（cli.rs 4 项）：Exit code0 静默成功且 exit 后代码不执行、Exit code5 进程退出码 5 静默、Error code3 打印 `error: program exited with code 3` + 进程退出码 3、`--ir` 同语义。interp 直测（errors.rs 3 项）：Exit 非零码 exit_code 记录、少参 ArityMismatch。**顺带修复 IR 侧退出码丢失**：`IrRuntime.ctx` 增 `exit_code` 字段，`call_io_method_ir("exit")` 记录请求码；`IrRunOutcome` 增 `Exited(u8)`，`execute_ir`/`ir_exit` 映射进程退出码（此前 `hc run --ir` 打印错误消息却恒退出 0，违背四后端同语义）。main.rs 单测 `ir_io_exit_maps_code` 锁定。
 >
 > ✅ **F3 已完成（2026-08-17）**：测试基建自测——新增 `hc-tools/tests/harness.rs`（5 项，独立测试文件驱动 `hc` 二进制）：①收集：仅 `[test]` fn 运行（普通 fn 不收集）、目录内多文件各自跑且汇总合并；②退出码：全过 → 0、有 FAIL → 1、解析失败文件 → 1（stderr `[FAIL]`）；③注入（Q-T4）：测试 fn 隐式可用 `io`/`alloc`（无参声明 `io.print`/`alloc.alloc` + `alloc.free`）；④汇总：逐项 `[PASS]/[FAIL]/[SKIP]` 行 + `N passed, M failed, K skipped`。全 workspace 575 项测试绿（README 测试表刷新至当前明细）。
+>
+> ✅ **F4 已完成（2026-08-17）**：直测补全——fs 余项 + `io.stdin` + parse 边界。`hc-rt/tests/io.rs` 增 3 项（6→9）：①`append`（缺失即建、两次追加累计）+ `rename` + `remove`（删除后再读 → 错误值可 catch，`try expect(false)` 兜底）；②`list_dir`（目录由 Rust 侧预建 + 写文件，断言条目名）；③`write_int`/`read_int` 十进制文本 round-trip（含负数 `-7`）。`hc-tools/tests/cli.rs` 增 1 项（10→11）：`io.stdin()` 管道注入——`.stdin(Stdio::piped())` 写入 `hello-stdin\n`，断言回显 `got:hello-stdin`（去换行）。`serialize.rs` 的 `serialize_parse_int_float` 补边界（负数 `-42`、显式 `+99`、i32 上界 `2147483647`、科学计数 `1e3`、尾随空格）。全 workspace 579 项测试绿（README 测试表刷新）；门禁 interpret 125/10/1、compile 53 mismatch 不变。
 
 ### G. 线程生命周期（依赖：M5 运行时 + 每线程 alloc（Q8）；捕获规则 02 E2.2 既有定义）
 
