@@ -8,6 +8,7 @@
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
 
 use std::collections::HashSet;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -20,6 +21,35 @@ use hc_rt::Interp;
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 mod buildzon;
+
+/// ANSI 颜色开关：仅当目标流为终端且未设置 NO_COLOR 时启用。
+/// 重定向/管道（CI、check-examples.sh 捕获）下自动关闭，保证 grep 解析不受污染。
+fn out_color() -> bool {
+    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+fn err_color() -> bool {
+    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+/// 给文本涂 ANSI 颜色（on=false 时原样返回）。
+fn paint(on: bool, code: &str, s: &str) -> String {
+    if on {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
+/// 单行测试结果标记上色：[PASS] 绿 / [FAIL] 红 / [SKIP] 黄，其余原样。
+fn color_test_line(line: &str, on: bool) -> String {
+    if !on {
+        return line.to_string();
+    }
+    for (tag, code) in [("[PASS]", "32"), ("[FAIL]", "31"), ("[SKIP]", "33")] {
+        if let Some(rest) = line.strip_prefix(tag) {
+            return format!("{}{rest}", paint(true, code, tag));
+        }
+    }
+    line.to_string()
+}
 
 const USAGE: &str = "hc <command> [args...]
 
@@ -274,7 +304,7 @@ fn package_programs(path: &Path) -> Result<(String, hc::Program, Vec<hc::Program
             ExitCode::FAILURE
         })?;
         let p = hc::parse_source(&src).map_err(|d| {
-            eprintln!("[FAIL] 兄弟文件解析失败 {}:", s.display());
+            eprintln!("{} 兄弟文件解析失败 {}:", paint(err_color(), "31", "[FAIL]"), s.display());
             for dg in &d {
                 eprintln!("  {}", dg.message);
             }
@@ -527,7 +557,7 @@ fn build_file(path: &Path) -> ExitCode {
         };
         let exe_path = dir.join(&exe_name);
         if let Err(msg) = link_exe(&ll_path, &exe_path) {
-            eprintln!("[FAIL] {msg}");
+            eprintln!("{} {msg}", paint(err_color(), "31", "[FAIL]"));
             eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
             return ExitCode::FAILURE;
         }
@@ -856,7 +886,7 @@ fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> 
     }
     let refs: Vec<&hc::Program> = programs.iter().collect();
     interp.load_siblings(&refs).map_err(|e| {
-        eprintln!("[FAIL] 兄弟文件装载: {} {}", e.name, e.message);
+        eprintln!("{} 兄弟文件装载: {} {}", paint(err_color(), "31", "[FAIL]"), e.name, e.message);
         ExitCode::FAILURE
     })
 }
@@ -954,7 +984,7 @@ fn load_deps_into(
         if !programs.is_empty() {
             let refs: Vec<&hc::Program> = programs.iter().collect();
             if let Err(e) = interp.load_dep(&dep.name, &refs) {
-                eprintln!("[FAIL] 依赖 {} 装载: {} {}", dep.name, e.name, e.message);
+                eprintln!("{} 依赖 {} 装载: {} {}", paint(err_color(), "31", "[FAIL]"), dep.name, e.name, e.message);
                 return Err(ExitCode::FAILURE);
             }
         }
@@ -1076,7 +1106,7 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                     Err(diags) => {
                         bad.push((f.clone(), "parse error".into()));
                         for d in &diags {
-                            eprintln!("[FAIL] {name}: {}", d.message);
+                            eprintln!("{} {name}: {}", paint(err_color(), "31", "[FAIL]"), d.message);
                         }
                     }
                 },
@@ -1085,7 +1115,7 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
         }
         for (f, err) in &bad {
             let name = f.file_name().unwrap_or_default().to_string_lossy();
-            eprintln!("[FAIL] {name} ({err})");
+            eprintln!("{} {name} ({err})", paint(err_color(), "31", "[FAIL]"));
             total_f += 1;
             all_ok = false;
         }
@@ -1105,7 +1135,7 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                 .collect();
             if !siblings.is_empty() {
                 if let Err(e) = interp.load_siblings(&siblings) {
-                    eprintln!("[FAIL] {name} (sibling load: {} {})", e.name, e.message);
+                    eprintln!("{} {name} (sibling load: {} {})", paint(err_color(), "31", "[FAIL]"), e.name, e.message);
                     total_f += 1;
                     all_ok = false;
                     continue;
@@ -1118,7 +1148,7 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                 continue;
             }
             if let Err(e) = interp.load(program) {
-                eprintln!("[FAIL] {name} (load error: {})", e.name);
+                eprintln!("{} {name} (load error: {})", paint(err_color(), "31", "[FAIL]"), e.name);
                 total_f += 1;
                 all_ok = false;
                 continue;
@@ -1130,15 +1160,16 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
             if fail > 0 {
                 all_ok = false;
             }
+            let on = out_color();
             for line in &interp.test_out {
-                println!("{name}::{line}");
+                println!("{name}::{}", color_test_line(line, on));
             }
             // Q-T5：编译模式——原生 runner 退出码 vs 解释器该文件聚合结果交叉验证
             if mode == TestMode::Compile {
                 match cross_validate_native(source, program, &siblings, fail) {
-                    Ok(()) => println!("[MATCH] {name}"),
+                    Ok(()) => println!("{} {name}", paint(out_color(), "32", "[MATCH]")),
                     Err(msg) => {
-                        eprintln!("[MISMATCH] {name}: {msg}");
+                        eprintln!("{} {name}: {msg}", paint(err_color(), "31", "[MISMATCH]"));
                         total_mismatch += 1;
                         all_ok = false;
                     }
@@ -1147,12 +1178,15 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
         }
     }
 
+    let on = out_color();
     println!(
         "{} passed, {} failed, {} skipped",
-        total_p, total_f, total_s
+        paint(on, "32", &total_p.to_string()),
+        paint(on, "31", &total_f.to_string()),
+        paint(on, "33", &total_s.to_string()),
     );
     if mode == TestMode::Compile && total_mismatch > 0 {
-        println!("{} mismatch", total_mismatch);
+        println!("{}", paint(on, "33", &format!("{total_mismatch} mismatch")));
     }
     if all_ok && total_f == 0 && total_mismatch == 0 {
         ExitCode::SUCCESS
@@ -1178,8 +1212,8 @@ fn collect_hc_files(dir: &Path, out: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_modules, programs_to_ll, programs_to_test_ll, run_ir_source, source_to_bytecode,
-        strip_test_funcs_in_place, write_bytecode_artifact, IrRunOutcome,
+        color_test_line, merge_modules, paint, programs_to_ll, programs_to_test_ll, run_ir_source,
+        source_to_bytecode, strip_test_funcs_in_place, write_bytecode_artifact, IrRunOutcome,
     };
 
     /// 断言切片内程序运行成功
@@ -1411,5 +1445,27 @@ fn main() i32 {
         let ll = programs_to_test_ll(&entry, entry_src, &[&sib]).expect("codegen_tests");
         assert!(ll.contains("[RUN] a"), "应含入口测试 a 的运行标记");
         assert!(!ll.contains("[RUN] b"), "不应含兄弟测试 b 的运行标记");
+    }
+
+    #[test]
+    fn color_helpers_paint_and_test_line() {
+        // paint：开=true 产 ANSI 码，关=false 原样返回
+        assert_eq!(paint(true, "32", "x"), "\u{1b}[32mx\u{1b}[0m");
+        assert_eq!(paint(false, "32", "x"), "x");
+        // color_test_line：终端下 [PASS]/[FAIL]/[SKIP] 分别绿/红/黄，其余原样
+        assert_eq!(
+            color_test_line("[PASS] a", true),
+            "\u{1b}[32m[PASS]\u{1b}[0m a"
+        );
+        assert_eq!(
+            color_test_line("[FAIL] b (error.X)", true),
+            "\u{1b}[31m[FAIL]\u{1b}[0m b (error.X)"
+        );
+        assert_eq!(
+            color_test_line("[SKIP] c", true),
+            "\u{1b}[33m[SKIP]\u{1b}[0m c"
+        );
+        assert_eq!(color_test_line("[PASS] a", false), "[PASS] a");
+        assert_eq!(color_test_line("other line", true), "other line");
     }
 }
