@@ -423,3 +423,142 @@ fn anytype_ret_concrete_mismatch_is_compile_error() {
     assert!(s.contains("cannot assign"), "诊断应含类型不匹配: {s}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- 组 D D4c：comptime 值函数（参数含 `T: type`，调用点编译期求值） ----------
+
+#[test]
+fn comptime_value_fn_type_param_folds_in_block() {
+    // 值函数（参数含 `T: type`、返回 comptime_int，非返回 type 的类型函数）在 comptime
+    // 块内调用 → 装载期求值折叠为常量；interp 与 IR 装载一致（comptime 块跳过，定义可降级）
+    let dir = temp_dir("valfn");
+    let file = write(
+        &dir,
+        "valfn.hc",
+        "import H.std.{io};\n\
+         fn array_len(T: type) comptime_int {\n\
+         \x20   return 4;\n\
+         }\n\
+         comptime {\n\
+         \x20   var a: comptime_int = array_len(i32);\n\
+         \x20   expect_eq(a, 4);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"valfn ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "comptime 值函数应折叠: {}", combined(&out));
+    assert!(s.contains("valfn ok"), "main 应正常执行: {s}");
+    let out_ir = run_hc(&[Path::new("run"), Path::new("--ir"), &file]);
+    assert!(out_ir.status.success(), "IR 装载应一致通过: {}", combined(&out_ir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_value_fn_mixed_type_and_value_params() {
+    // 混合参数：`T: type` + `n: comptime_int` → 类型实参作类型绑定、值实参常量求值
+    let dir = temp_dir("mixed");
+    let file = write(
+        &dir,
+        "mixed.hc",
+        "import H.std.{io};\n\
+         fn byte_size(T: type, n: comptime_int) comptime_int {\n\
+         \x20   return n + 1;\n\
+         }\n\
+         comptime {\n\
+         \x20   var a: comptime_int = byte_size(f64, 7);\n\
+         \x20   expect_eq(a, 8);\n\
+         \x20   var b: comptime_int = byte_size(Vec(i32), 0);\n\
+         \x20   expect_eq(b, 1);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"mixed ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "混合参数值函数应折叠: {}", combined(&out));
+    assert!(s.contains("mixed ok"), "main 应正常执行: {s}");
+    let out_ir = run_hc(&[Path::new("run"), Path::new("--ir"), &file]);
+    assert!(out_ir.status.success(), "IR 装载应一致通过: {}", combined(&out_ir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_value_fn_runtime_call_folds_in_interp() {
+    // 运行时调用点：`var n: comptime_int = array_len(i32);` 在 interp 折叠为常量
+    // （IR/原生后端运行时调用点折叠归 D5——本测试仅 interp）
+    let dir = temp_dir("runtime");
+    let file = write(
+        &dir,
+        "runtime.hc",
+        "import H.std.{io};\n\
+         fn array_len(T: type) comptime_int {\n\
+         \x20   return 4;\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   var n: comptime_int = array_len(i32);\n\
+         \x20   io.print(\"n = {}\\n\", n);\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "运行时调用应折叠: {}", combined(&out));
+    assert!(s.contains("n = 4"), "折叠结果: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_value_fn_self_recursion_is_compile_error() {
+    // 负例：自递归 comptime 值函数（`loop_fn(i32)` 体再调自身 → 无限编译期求值）
+    // → ComptimeRecursion = 编译错误（深度守卫）
+    let dir = temp_dir("recursion");
+    let file = write(
+        &dir,
+        "recursion.hc",
+        "import H.std.{io};\n\
+         fn loop_fn(T: type) comptime_int {\n\
+         \x20   return loop_fn(i32);\n\
+         }\n\
+         comptime {\n\
+         \x20   var x: comptime_int = loop_fn(i32);\n\
+         \x20   expect_eq(x, 1);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"unreachable\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "自递归应为编译失败: {s}");
+    assert!(s.contains("ComptimeRecursion"), "诊断应含 ComptimeRecursion: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_value_fn_non_type_arg_is_compile_error() {
+    // 负例：`T: type` 实参不是已知类型（未定义名 `mystery`）→ 回落既有调用路径
+    // → UndefinedName = 编译错误
+    let dir = temp_dir("badarg");
+    let file = write(
+        &dir,
+        "badarg.hc",
+        "import H.std.{io};\n\
+         fn array_len(T: type) comptime_int {\n\
+         \x20   return 4;\n\
+         }\n\
+         comptime {\n\
+         \x20   var x: comptime_int = array_len(mystery);\n\
+         \x20   expect_eq(x, 4);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"unreachable\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "非类型实参应为编译失败: {s}");
+    assert!(s.contains("UndefinedName"), "诊断应含 UndefinedName: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

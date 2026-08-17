@@ -35,6 +35,45 @@ pub fn has_anytype(params: &[ast::Param]) -> bool {
     params.iter().any(|p| matches!(p.ty.strip(), ast::Type::Infer))
 }
 
+/// 类型参数判定：`T: type`（`Type::Named("type")`）——实参是编译期类型对象。
+pub fn is_type_param(p: &ast::Param) -> bool {
+    matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "type")
+}
+
+/// comptime 值函数判定：参数含 `T: type` 类型参数、但**非返回 `type`** 的普通函数
+/// （ADR-0012「参数含 type/anytype 触发编译期执行」面向此类）。调用点在编译期求值
+/// 体（类型实参作类型绑定，值实参按常量求值）→ 折叠结果。返回 `type` 的类型函数
+/// 归 `is_type_fn`（D1 具体化引擎）；`anytype` 普通运行时函数归 D4b。
+pub fn is_comptime_value_fn(params: &[ast::Param], ret: &Option<ast::Type>) -> bool {
+    // 返回 `type` = 类型函数（D1），非本函数
+    if let Some(r) = ret {
+        if matches!(r.strip(), ast::Type::Named(n, _) if n == "type") {
+            return false;
+        }
+    }
+    params.iter().any(is_type_param)
+}
+
+/// 调用点实参表达式 → 类型（comptime 值函数 `T: type` 形参绑定用）。支持类型名
+/// （`i32`）与类型函数应用（`Vec(i32)` / `List(Pair(i32))`）；其余形态（变量、
+/// 算术、字面量）→ None（值实参，走运行时求值）。
+pub fn expr_to_type(e: &ast::Expr) -> Option<ast::Type> {
+    match e {
+        ast::Expr::Ident(n, _) => Some(ast::Type::Named(n.clone(), vec![])),
+        ast::Expr::Call { callee, args, .. } => {
+            if let ast::Expr::Ident(n, _) = callee.as_ref() {
+                let mut inner = Vec::with_capacity(args.len());
+                for a in args {
+                    inner.push(expr_to_type(a)?);
+                }
+                return Some(ast::Type::Named(n.clone(), inner));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 /// 具体化名（缓存键）：`Pair(i32)` → `Pair<@i32>`。`<@...>` 不会出现在用户类型名中
 /// （标识符不含 `<`/`>`/`@`），保证与手写类型不冲突、可作类型表键。
 pub fn concrete_name(name: &str, args: &[ast::Type]) -> String {

@@ -5,13 +5,14 @@
 
 use std::collections::HashMap;
 
-use hc::ast::{Block, Decl, Param, Program, Stmt, Type};
+use hc::ast::{Block, Decl, Expr, Param, Program, Stmt, Type};
 use hc::comptime::{
-    concrete_name, has_anytype, instantiate, is_type_fn, map_type_apps, subst, type_key,
-    Instantiated,
+    concrete_name, expr_to_type, has_anytype, instantiate, is_comptime_value_fn, is_type_fn,
+    map_type_apps, subst, type_key, Instantiated,
 };
 use hc::check_semantics;
 use hc::parse_source;
+use hc::token::Span;
 
 /// 从已解析程序取具名函数的三要素（params, ret, body）
 fn find_fn<'a>(prog: &'a Program, name: &str) -> (&'a [Param], &'a Option<Type>, &'a Block) {
@@ -83,6 +84,71 @@ fn has_anytype_detects_infer_params() {
     assert!(!has_anytype(p_params), "类型参数不是 anytype");
     let (n_params, _, _) = find_fn(&prog, "normal");
     assert!(!has_anytype(n_params), "普通参数不是 anytype");
+}
+
+#[test]
+fn is_comptime_value_fn_detects_type_params_but_not_type_fns() {
+    // D4c：参数含 `T: type` 且非返回 `type` 的普通函数 = comptime 值函数（调用点编译期求值）
+    let prog = parse_source(
+        r#"
+        fn array_len(T: type) comptime_int { return 4; }
+        fn make(T: type, n: comptime_int) comptime_int { return n; }
+        fn Pair(T: type) type { return struct { a: T }; }
+        fn max_value(a: anytype, b: anytype) anytype { return a; }
+        fn normal(x: i32) i32 { return x; }
+        "#,
+    )
+    .unwrap();
+    let (a_params, a_ret, _) = find_fn(&prog, "array_len");
+    assert!(
+        is_comptime_value_fn(a_params, a_ret),
+        "含 `T: type` 且返回 comptime_int 应为 comptime 值函数"
+    );
+    let (m_params, m_ret, _) = find_fn(&prog, "make");
+    assert!(
+        is_comptime_value_fn(m_params, m_ret),
+        "混合类型参数 + 值参数也应为 comptime 值函数"
+    );
+    let (p_params, p_ret, _) = find_fn(&prog, "Pair");
+    assert!(
+        !is_comptime_value_fn(p_params, p_ret),
+        "返回 `type` 的类型函数不是 comptime 值函数（归 D1 is_type_fn）"
+    );
+    let (v_params, v_ret, _) = find_fn(&prog, "max_value");
+    assert!(
+        !is_comptime_value_fn(v_params, v_ret),
+        "anytype 普通运行时函数（D4b）不是 comptime 值函数"
+    );
+    let (n_params, n_ret, _) = find_fn(&prog, "normal");
+    assert!(!is_comptime_value_fn(n_params, n_ret));
+}
+
+#[test]
+fn expr_to_type_converts_type_exprs_only() {
+    // D4c：调用点实参表达式 → 类型（`i32` → Named；`Vec(i32)` → 嵌套应用；值 → None）
+    let sp = Span::new(0, 0, 0, 0);
+    assert_eq!(
+        expr_to_type(&Expr::Ident("i32".into(), sp.clone())),
+        Some(Type::Named("i32".into(), vec![]))
+    );
+    let nested = Expr::Call {
+        callee: Box::new(Expr::Ident("Vec".into(), sp.clone())),
+        args: vec![Expr::Ident("i32".into(), sp.clone())],
+        span: sp.clone(),
+    };
+    assert_eq!(
+        expr_to_type(&nested),
+        Some(Type::Named("Vec".into(), vec![Type::Named("i32".into(), vec![])]))
+    );
+    // 值形态（整数字面量 / 算术）→ None
+    assert_eq!(expr_to_type(&Expr::IntLit { text: "3".into(), span: sp.clone() }), None);
+    let arith = Expr::Binary(
+        hc::ast::BinOp::Add,
+        Box::new(Expr::Ident("x".into(), sp.clone())),
+        Box::new(Expr::IntLit { text: "1".into(), span: sp.clone() }),
+        sp,
+    );
+    assert_eq!(expr_to_type(&arith), None);
 }
 
 #[test]

@@ -288,6 +288,9 @@ pub struct Interp {
     /// 自/互递归类型函数（`LinkedList(T) { next: ?LinkedList(T) }`）在登记期重入时
     /// 命中即返回键本身（叶），防止无限实例化。
     instantiating: Vec<String>,
+    /// E1.2 组 D D4c：comptime 值函数调用深度（自递归守卫——`fn f(T: type)` 体再调
+    /// `f(i32)` 无限编译期求值会栈溢出，超限报编译错误）。
+    comptime_value_depth: usize,
 }
 
 impl Interp {
@@ -325,6 +328,7 @@ impl Interp {
             root_threads: Vec::new(),
             script_mode: false,
             instantiating: Vec::new(),
+            comptime_value_depth: 0,
         }
     }
 
@@ -3099,6 +3103,10 @@ impl Interp {
                 if qn.starts_with("serialize.") {
                     return self.call_serialize_builtin(&qn, args, span);
                 }
+                // E1.2 组 D D4c：命名空间限定 comptime 值函数调用（ns.array_len(i32)）
+                if let Some(v) = self.try_comptime_value_call(&qn, args, span)? {
+                    return Ok(v);
+                }
                 if self.funcs.contains_key(&qn) {
                     let mut vals = Vec::new();
                     for a in args {
@@ -3389,6 +3397,10 @@ impl Interp {
                     // Table(i32) 类型实例化：空二维容器（init 填充）
                     return Ok(Value::vec(vec![], Value::Alloc));
                 }
+                // E1.2 组 D D4c：comptime 值函数调用（参数含 `T: type`）→ 编译期求值折叠
+                if let Some(v) = self.try_comptime_value_call(name, args, span)? {
+                    return Ok(v);
+                }
                 // 用户函数优先于内建（同名冲突时，如 parse_int）
                 if self.funcs.contains_key(name) {
                     let mut vals = Vec::new();
@@ -3625,6 +3637,112 @@ impl Interp {
         let r = self.exec_fn_body(&fdef.body, &bound);
         self.current_ret = prev_ret;
         r
+    }
+
+    /// E1.2 组 D D4c：comptime 值函数调用——参数含 `T: type`、非返回 `type` 的普通函数
+    /// （`fn array_len(T: type) comptime_int`）在调用点编译期求值（ADR-0012「参数含
+    /// type/anytype 触发编译期执行」）。类型实参（`array_len(i32)` 的 `i32`）经
+    /// `comptime::expr_to_type` 作类型绑定（最小切片：体不引用类型参数值，绑定不入
+    /// 运行时作用域）；值实参（comptime_int/anytype/普通）按常量求值；然后求值体 →
+    /// 折叠结果。comptime 块装载期求值（script_mode）与运行时 interp 共用此路径；
+    /// IR/原生后端由 D5 对齐。无匹配候选/实参不合法 → None（回落既有调用路径）。
+    fn try_comptime_value_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let Some(defs) = self.funcs.get(name).cloned() else {
+            return Ok(None);
+        };
+        for f in defs {
+            if !comptime::is_comptime_value_fn(&f.params, &f.ret) {
+                continue;
+            }
+            if f.params.len() != args.len() {
+                continue;
+            }
+            // 把实参绑定到参数：`T: type` 收已知类型表达式；其余求值。
+            let mut value_bindings: Vec<(String, Value)> = Vec::new();
+            let mut ok = true;
+            for (p, a) in f.params.iter().zip(args.iter()) {
+                if comptime::is_type_param(p) {
+                    match comptime::expr_to_type(a) {
+                        Some(Type::Named(n, _)) if self.is_known_type_name(&n) => {}
+                        _ => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                } else {
+                    match self.eval(a) {
+                        Ok(v) => value_bindings.push((p.name.clone(), v)),
+                        Err(_) => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+            // 自递归守卫：`fn f(T: type) { return f(i32); }` 无限编译期求值 → 报错
+            if self.comptime_value_depth >= 100 {
+                return Err(RtError::new("ComptimeRecursion", Some(span.clone())));
+            }
+            self.comptime_value_depth += 1;
+            let r = self.exec_fn_body(&f.body, &value_bindings);
+            self.comptime_value_depth -= 1;
+            return r.map(Some);
+        }
+        Ok(None)
+    }
+
+    /// 已知类型名判定（comptime 值函数 `T: type` 实参合法性）：基础类型 / 内建容器 /
+    /// 已登记类型 / 类型函数名。非类型名的实参（变量、字面量）→ false。
+    fn is_known_type_name(&self, name: &str) -> bool {
+        if matches!(
+            name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f16"
+                | "f32"
+                | "f64"
+                | "f128"
+                | "bool"
+                | "void"
+                | "String"
+                | "comptime_int"
+                | "comptime_float"
+        ) {
+            return true;
+        }
+        if matches!(
+            name,
+            "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "ExitType"
+        ) {
+            return true;
+        }
+        if self.types.contains_key(name) {
+            return true;
+        }
+        // 类型函数名（`fn X(...) type`）
+        if let Some(defs) = self.funcs.get(name) {
+            if defs.iter().any(|f| comptime::is_type_fn(&f.params, &f.ret)) {
+                return true;
+            }
+        }
+        false
     }
 
     // ---------- 内建 ----------
