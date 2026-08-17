@@ -1,7 +1,7 @@
 // build.zon — 跨包依赖演示（app 依赖 ../jsonlib）
 //
 // deps 中带 path 的项 = 本地依赖；jsonlib 的 pub 符号以包名前缀登记，
-// app 内 `using jsonlib;` 平铺、或 `jsonlib.xxx` 限定访问。
+// app 内 `import jsonlib.{parse};` 选择导入、或 `jsonlib.parse(...)` 限定访问。
 
 const build = Build{
     name = "app",

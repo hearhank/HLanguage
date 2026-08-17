@@ -108,6 +108,8 @@
 | C3 | `hc build` 库形态（`Kind::lib` → **lib 静态归档**）：zig cc 静态归档产出 + exe 链接本地库端到端（02-packages 改造为链接形态） | native 测试绿（库产出 + exe 链接运行） | C1 | 2h |
 | C4 | `hc build` 库形态（`Kind::lib` → **dll 动态库**，构建参数选择）：zig cc `-shared` 产出 dll + exe 运行时加载端到端；**库无 main 校验**（`Kind::lib` 含 main → 诊断） | native 测试绿（dll 加载运行 + 无 main 诊断） | C3 | 2h |
 
+> ✅ **C1/C2 已完成（2026-08-17，梯队 33）**：`hc run <目录>` 目录包运行（package_entry 入口解析）+ 02-packages 示例 import 迁移 + cli.rs 3 测试；06-08 目录运行约定已同步。
+
 ### D. M5.3 serialize 库（依赖：无特殊）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |

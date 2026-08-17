@@ -130,6 +130,20 @@ fn run_cli() -> ExitCode {
             } else if is_hbc2(Path::new(path)) {
                 let prog_args = program_args(&args[3..], path);
                 run_file_bytecode(Path::new(path), &prog_args)
+            } else if Path::new(path).is_dir() {
+                // C1：`hc run <目录>`——包加载：入口 `main.hc` 或首个 `.hc`，
+                // 兄弟文件 + build.zon 依赖由 run_file 复用装载
+                match package_entry(Path::new(path)) {
+                    Ok(entry) => {
+                        let entry_s = entry.to_string_lossy().into_owned();
+                        let prog_args = program_args(&args[3..], &entry_s);
+                        run_file(&entry, &prog_args)
+                    }
+                    Err(msg) => {
+                        eprintln!("error: {msg}");
+                        ExitCode::FAILURE
+                    }
+                }
             } else {
                 let prog_args = program_args(&args[3..], path);
                 run_file(Path::new(path), &prog_args)
@@ -876,6 +890,32 @@ fn run_file_bytecode(path: &Path, prog_args: &[String]) -> ExitCode {
         }
     };
     ir_exit(execute_ir(&module, prog_args))
+}
+
+/// C1：包目录入口文件——`main.hc` 优先，否则目录内首个 `.hc`（排序后）；无 .hc 报错。
+fn package_entry(dir: &Path) -> Result<PathBuf, String> {
+    let mut hc_files: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().map_or(false, |e| e == "hc") {
+                hc_files.push(p);
+            }
+        }
+    }
+    hc_files.sort();
+    if let Some(main) = hc_files.iter().find(|p| {
+        p.file_name()
+            .map_or(false, |n| n.to_string_lossy() == "main.hc")
+    }) {
+        return Ok(main.clone());
+    }
+    hc_files.into_iter().next().ok_or_else(|| {
+        format!(
+            "目录 {} 中无 .hc 文件（入口 main.hc 或任意 .hc）",
+            dir.display()
+        )
+    })
 }
 
 /// 同目录兄弟 .hc 文件（M1.4：目录 = 包；build.zon 文件清单解析归 M7.2）
