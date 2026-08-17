@@ -366,3 +366,60 @@ fn comptime_float_var_decl_typechecks_and_folds() {
     assert!(s.contains("vardiv ok"), "main 应正常执行: {s}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- 组 D D4b：anytype 完整语义（调用点具体化） ----------
+
+#[test]
+fn anytype_ret_resolves_concrete_across_modes() {
+    // anytype 调用点具体化 + 三后端一致：`max_value` 返回类型在调用点解析为具体
+    // 类型（f64 / i32），运行时动态分派不受影响——interp 与 IR 结果一致
+    let dir = temp_dir("anytype");
+    let file = write(
+        &dir,
+        "anytype.hc",
+        "import H.std.{io};\n\
+         fn max_value(a: anytype, b: anytype) anytype {\n\
+         \x20   return if (a > b) a else b;\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   var m: f64 = max_value(2.5, 1.5);\n\
+         \x20   io.print(\"max = {}\\n\", m);\n\
+         \x20   var n: i32 = max_value(3, 7);\n\
+         \x20   io.print(\"max = {}\\n\", n);\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "anytype 具体化应通过: {}", combined(&out));
+    assert!(s.contains("max = 2.5"), "f64 实例结果: {s}");
+    assert!(s.contains("max = 7"), "i32 实例结果: {s}");
+    let out_ir = run_hc(&[Path::new("run"), Path::new("--ir"), &file]);
+    let s_ir = stdout(&out_ir);
+    assert!(out_ir.status.success(), "IR 装载应一致通过: {}", combined(&out_ir));
+    assert_eq!(s, s_ir, "interp 与 IR 输出应一致");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn anytype_ret_concrete_mismatch_is_compile_error() {
+    // 负例：anytype 返回类型具体化为 f64 后，赋给 String → 语义检查诊断 = 编译错误
+    // （判别场景：具体化前返回类型为 anytype 通配，此赋值被静默放行）
+    let dir = temp_dir("anytypemismatch");
+    let file = write(
+        &dir,
+        "mismatch.hc",
+        "import H.std.{io};\n\
+         fn max_value(a: anytype, b: anytype) anytype {\n\
+         \x20   return if (a > b) a else b;\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   var s: String = max_value(2.5, 1.5);\n\
+         \x20   io.print(\"{}\\n\", s);\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "f64 结果赋给 String 应为编译失败: {s}");
+    assert!(s.contains("cannot assign"), "诊断应含类型不匹配: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

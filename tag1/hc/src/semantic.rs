@@ -221,6 +221,9 @@ pub fn check_with_extern_deps(
         imported: HashSet::new(),
         conditional_depth: 0,
         in_comptime_block: false,
+        anytype_bodies: HashMap::new(),
+        anytype_ret_cache: HashMap::new(),
+        anytype_resolving: HashSet::new(),
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -277,6 +280,14 @@ struct Checker {
     /// 组 D D4：`comptime { }` 块类型检查中——放宽「`return error.X` 需错误联合」
     /// （comptime 块失败机制 = `return error.X`，非函数错误联合语义）
     in_comptime_block: bool,
+    /// 组 D D4：anytype 函数体缓存（声明名 → 体）——调用点按实参具体类型解析
+    /// `anytype` 返回类型时重求值 return 表达式（ADR-0012 #5）
+    anytype_bodies: HashMap<String, Block>,
+    /// 组 D D4：anytype 具体化返回类型缓存（(qname, 具体化键) → 返回类型）——
+    /// 同签名同实例复用（对齐类型函数惰性缓存）
+    anytype_ret_cache: HashMap<(String, String), SType>,
+    /// 组 D D4：anytype 具体化解析中守卫（自递归 anytype 函数终止 → 回落 Infer）
+    anytype_resolving: HashSet<(String, String)>,
     diags: Vec<Diagnostic>,
 }
 
@@ -1179,6 +1190,11 @@ impl Checker {
                 ..
             } => {
                 let _ = (name, is_test, span);
+                // 组 D D4：缓存 anytype 函数体——调用点具体化解析 `anytype` 返回类型用
+                // （ADR-0012 #5：anytype 参数 = 参数类型不预先绑定，调用点按实参类型实例化）
+                if params.iter().any(|p| matches!(p.ty.strip(), Type::Infer)) {
+                    self.anytype_bodies.insert(name.clone(), body.clone());
+                }
                 let ret_ty = self.ret_stype(ret);
                 let constraint = self.fn_error_constraint(ret);
                 let mut scopes: Vec<HashMap<String, VarInfo>> = Vec::new();
@@ -3323,13 +3339,244 @@ impl Checker {
                 self.check_constraint(g, concrete, iface, span);
             }
         }
-        // 返回类型（具体化泛型）
-        let ret_st = sig
-            .ret
-            .as_ref()
-            .map(|r| self.substitute(&self.ty_of(r), &map));
+        // 组 D D4：anytype 调用点具体化——`anytype` 参数绑定实参具体类型，返回类型
+        // `anytype` 解析为体 return 表达式在该绑定下的具体类型（ADR-0012 #5）。
+        // 无 anytype 参数或返回类型非 `anytype` → 原路径（泛型替换 / 声明类型直用）。
+        let any_bindings = self.anytype_bindings(sig, &arg_tys, skip_self);
+        let ret_st = if !any_bindings.is_empty()
+            && matches!(
+                sig.ret.as_ref().map(|r| r.strip()),
+                Some(Type::Infer)
+            )
+        {
+            Some(
+                self.anytype_concrete_ret(qname, &any_bindings, &arg_tys)
+                    .unwrap_or(SType::Infer),
+            )
+        } else {
+            sig.ret
+                .as_ref()
+                .map(|r| self.substitute(&self.ty_of(r), &map))
+        };
         let _ = args;
         ret_st
+    }
+
+    /// anytype 参数 → 调用点实参具体类型绑定（ADR-0012 #5：参数类型不预先绑定）。
+    /// 仅绑定 `anytype` 参数（`Type::Infer`）；具体实参缺型（None）不绑定。
+    fn anytype_bindings(
+        &self,
+        sig: &FnSig,
+        arg_tys: &[Option<SType>],
+        skip_self: bool,
+    ) -> HashMap<String, SType> {
+        let mut m = HashMap::new();
+        let params: Vec<&Param> = if skip_self {
+            sig.params[1.min(sig.params.len())..].iter().collect()
+        } else {
+            sig.params.iter().collect()
+        };
+        for (p, at) in params.iter().zip(arg_tys.iter()) {
+            if matches!(p.ty.strip(), Type::Infer) {
+                if let Some(t) = at {
+                    m.insert(p.name.clone(), t.clone());
+                }
+            }
+        }
+        m
+    }
+
+    /// anytype 具体化返回类型：`(qname, 具体化键)` 缓存（同签名同实例复用，对齐
+    /// 类型函数惰性缓存）；未命中则按体 return 表达式在具体绑定下重求值。
+    /// 重入守卫：自递归 anytype 函数解析中再入 → None（回落 `Infer`）。
+    fn anytype_concrete_ret(
+        &mut self,
+        qname: &str,
+        bindings: &HashMap<String, SType>,
+        arg_tys: &[Option<SType>],
+    ) -> Option<SType> {
+        let key: String = {
+            let names: Vec<String> = arg_tys
+                .iter()
+                .filter_map(|t| t.as_ref().map(|t| self.stype_key(t)))
+                .collect();
+            format!("{qname}<@{}>", names.join(","))
+        };
+        let cache_key = (qname.to_string(), key);
+        if self.anytype_resolving.contains(&cache_key) {
+            return None;
+        }
+        if let Some(t) = self.anytype_ret_cache.get(&cache_key) {
+            return Some(t.clone());
+        }
+        let body = self.anytype_bodies.get(qname).cloned()?;
+        self.anytype_resolving.insert(cache_key.clone());
+        let rt = self.retype_return(&body, bindings);
+        self.anytype_resolving.remove(&cache_key);
+        if let Some(t) = &rt {
+            self.anytype_ret_cache.insert(cache_key, t.clone());
+        }
+        rt
+    }
+
+    /// 在 anytype 具体绑定下重求值函数体 return 表达式 → 具体返回类型。
+    /// 多路径 return 取「首个 definite 类型」为代表，其余须 mutual-compatible
+    /// （不符 → None，回落 `Infer`）。重求值产生的诊断截断（解析调用点类型不报错）。
+    fn retype_return(
+        &mut self,
+        body: &Block,
+        bindings: &HashMap<String, SType>,
+    ) -> Option<SType> {
+        let mut scopes: Vec<HashMap<String, VarInfo>> = vec![bindings
+            .iter()
+            .map(|(n, t)| {
+                (
+                    n.clone(),
+                    VarInfo {
+                        ty: Some(t.clone()),
+                        pending_fields: None,
+                        source: AllocSource::Unknown,
+                        thread: None,
+                    },
+                )
+            })
+            .collect()];
+        let mut collected: Vec<SType> = Vec::new();
+        let diag_len = self.diags.len();
+        self.collect_return_types(body, &mut scopes, &mut collected);
+        self.diags.truncate(diag_len);
+        let mut rep: Option<SType> = None;
+        for t in &collected {
+            if t.definite() {
+                match &rep {
+                    None => rep = Some(t.clone()),
+                    Some(r) => {
+                        if !self.compatible(r, t) && !self.compatible(t, r) {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        rep
+    }
+
+    /// 收集函数体所有 return 表达式的静态类型（嵌套 if/while/for/switch 块递推）。
+    fn collect_return_types(
+        &mut self,
+        block: &Block,
+        scopes: &mut Vec<HashMap<String, VarInfo>>,
+        out: &mut Vec<SType>,
+    ) {
+        for s in &block.stmts {
+            match s {
+                Stmt::Return(Some(e), _) => {
+                    if let Some(t) = self.expr_ty(e, scopes, None) {
+                        out.push(t);
+                    }
+                }
+                Stmt::Block(b) => self.collect_return_types(b, scopes, out),
+                Stmt::If(IfStmt { then_b, else_b, .. }) => {
+                    self.collect_return_types(then_b, scopes, out);
+                    if let Some(es) = else_b {
+                        self.collect_stmt_returns(es, scopes, out);
+                    }
+                }
+                Stmt::While(WhileStmt { body, .. }) => {
+                    self.collect_return_types(body, scopes, out)
+                }
+                Stmt::For(ForStmt { body, .. }) => self.collect_return_types(body, scopes, out),
+                Stmt::Switch(SwitchStmt { arms, .. }) => {
+                    for arm in arms {
+                        self.collect_return_types(&arm.body, scopes, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 单语句形态的 return 收集（else 分支：块 / else-if 链递推）。
+    fn collect_stmt_returns(
+        &mut self,
+        s: &Stmt,
+        scopes: &mut Vec<HashMap<String, VarInfo>>,
+        out: &mut Vec<SType>,
+    ) {
+        match s {
+            Stmt::Block(b) => self.collect_return_types(b, scopes, out),
+            Stmt::If(IfStmt { then_b, else_b, .. }) => {
+                self.collect_return_types(then_b, scopes, out);
+                if let Some(es) = else_b {
+                    self.collect_stmt_returns(es, scopes, out);
+                }
+            }
+            Stmt::Return(Some(e), _) => {
+                if let Some(t) = self.expr_ty(e, scopes, None) {
+                    out.push(t);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 静态类型规范串（anytype 具体化缓存键；区分整数宽度——诊断用 `name()` 不区分）。
+    fn stype_key(&self, t: &SType) -> String {
+        match t {
+            SType::Int { width } => match width {
+                IntWidth::I8 => "i8",
+                IntWidth::I16 => "i16",
+                IntWidth::I32 => "i32",
+                IntWidth::I64 => "i64",
+                IntWidth::I128 => "i128",
+                IntWidth::ISize => "isize",
+                IntWidth::U8 => "u8",
+                IntWidth::U16 => "u16",
+                IntWidth::U32 => "u32",
+                IntWidth::U64 => "u64",
+                IntWidth::U128 => "u128",
+                IntWidth::USize => "usize",
+                IntWidth::Comptime => "comptime_int",
+            }
+            .to_string(),
+            SType::Float => "f64".into(),
+            SType::Bool => "bool".into(),
+            SType::Void => "void".into(),
+            SType::Str => "String".into(),
+            SType::Slice(inner) => format!("&[{}]", self.stype_key(inner)),
+            SType::Named(n, args) => {
+                if args.is_empty() {
+                    n.clone()
+                } else {
+                    format!(
+                        "{n}({})",
+                        args.iter().map(|a| self.stype_key(a)).collect::<Vec<_>>().join(",")
+                    )
+                }
+            }
+            SType::Tuple(ts) => format!(
+                "({})",
+                ts.iter().map(|a| self.stype_key(a)).collect::<Vec<_>>().join(", ")
+            ),
+            SType::Optional(inner) => format!("?{}", self.stype_key(inner)),
+            SType::ErrorUnion(e, inner) => format!(
+                "{}!{}",
+                e.as_ref()
+                    .map_or_else(|| "anyerror".into(), |x| self.stype_key(x)),
+                self.stype_key(inner)
+            ),
+            SType::Ptr(inner, mut_) => {
+                if *mut_ {
+                    format!("*mut {}", self.stype_key(inner))
+                } else {
+                    format!("*{}", self.stype_key(inner))
+                }
+            }
+            SType::Array(n, inner) => format!("[{n}]{}", self.stype_key(inner)),
+            SType::Infer => "anytype".into(),
+            SType::Unknown => "?".into(),
+            SType::Generic(n) => n.clone(),
+        }
     }
 
     /// 泛型替换：泛型参数 → 具体化类型

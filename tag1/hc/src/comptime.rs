@@ -28,6 +28,13 @@ pub fn is_type_fn(params: &[ast::Param], ret: &Option<ast::Type>) -> bool {
     false
 }
 
+/// anytype 判定：参数含 `anytype`（`Type::Infer`）即触发调用点按实参具体类型实例化
+/// （ADR-0012 #5）。与 `is_type_fn` 正交——anytype 函数返回运行时值（非类型函数），
+/// 但返回类型 `anytype` 在调用点解析为具体类型（类型层具体化，见 semantic `match_overloads`）。
+pub fn has_anytype(params: &[ast::Param]) -> bool {
+    params.iter().any(|p| matches!(p.ty.strip(), ast::Type::Infer))
+}
+
 /// 具体化名（缓存键）：`Pair(i32)` → `Pair<@i32>`。`<@...>` 不会出现在用户类型名中
 /// （标识符不含 `<`/`>`/`@`），保证与手写类型不冲突、可作类型表键。
 pub fn concrete_name(name: &str, args: &[ast::Type]) -> String {

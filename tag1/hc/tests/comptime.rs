@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use hc::ast::{Block, Decl, Param, Program, Stmt, Type};
 use hc::comptime::{
-    concrete_name, instantiate, is_type_fn, map_type_apps, subst, type_key, Instantiated,
+    concrete_name, has_anytype, instantiate, is_type_fn, map_type_apps, subst, type_key,
+    Instantiated,
 };
 use hc::check_semantics;
 use hc::parse_source;
@@ -39,6 +40,10 @@ fn t_str() -> Type {
     Type::Named("String".into(), vec![])
 }
 
+fn t_f64() -> Type {
+    Type::Named("f64".into(), vec![])
+}
+
 #[test]
 fn is_type_fn_returns_type_only() {
     let prog = parse_source(
@@ -60,6 +65,43 @@ fn is_type_fn_returns_type_only() {
 
     let (n_params, n_ret, _) = find_fn(&prog, "normal");
     assert!(!is_type_fn(n_params, n_ret));
+}
+
+#[test]
+fn has_anytype_detects_infer_params() {
+    let prog = parse_source(
+        r#"
+        fn max_value(a: anytype, b: anytype) anytype { return a; }
+        fn Pair(T: type) type { return struct { a: T }; }
+        fn normal(x: i32) i32 { return x; }
+        "#,
+    )
+    .unwrap();
+    let (m_params, _, _) = find_fn(&prog, "max_value");
+    assert!(has_anytype(m_params), "anytype 参数应被识别");
+    let (p_params, _, _) = find_fn(&prog, "Pair");
+    assert!(!has_anytype(p_params), "类型参数不是 anytype");
+    let (n_params, _, _) = find_fn(&prog, "normal");
+    assert!(!has_anytype(n_params), "普通参数不是 anytype");
+}
+
+#[test]
+fn concrete_name_anytype_instance() {
+    // anytype 调用点具体化键：`max_value(i32, i32)` → `max_value<@i32,i32>`
+    // （对齐类型函数 `Pair(i32)` → `Pair<@i32>`；ADR-0012 #5 调用点按实参类型实例化）
+    assert_eq!(
+        concrete_name("max_value", &[t_i32(), t_i32()]),
+        "max_value<@i32,i32>"
+    );
+    assert_eq!(
+        concrete_name("max_value", &[t_f64(), t_f64()]),
+        "max_value<@f64,f64>"
+    );
+    assert_eq!(
+        concrete_name("pick", &[t_i32(), t_str()]),
+        "pick<@i32,String>",
+        "异构实参也按类型组合具体化"
+    );
 }
 
 #[test]
@@ -508,5 +550,81 @@ fn check_semantics_rejects_string_assigned_to_comptime_float() {
     assert!(
         rendered.iter().any(|s| s.contains("cannot assign")),
         "comptime_float 应拒绝 String 初始化：{rendered:?}"
+    );
+}
+
+// ---------- 组 D D4b：anytype 完整语义（调用点具体化） ----------
+
+#[test]
+fn semantic_anytype_ret_resolves_concrete() {
+    // anytype 调用点具体化：`max_value(2.5, 1.5)` 返回类型解析为 `f64`（非 anytype
+    // 通配）——赋给 f64 变量无诊断（具体类型匹配）
+    let prog = parse_source(
+        r#"
+        fn max_value(a: anytype, b: anytype) anytype {
+            return if (a > b) a else b;
+        }
+        fn main() void {
+            var m: f64 = max_value(2.5, 1.5);
+            _ = m;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    assert!(
+        diags.is_empty(),
+        "anytype 返回类型应解析为 f64：{:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn semantic_anytype_ret_mismatch_is_error() {
+    // anytype 具体化后类型精确：`max_value(2.5, 1.5)` = f64，赋给 String → 编译错误。
+    // 判别场景：具体化前返回类型为 anytype 通配（`Infer` 与一切兼容 → 静默放行）；
+    // int↔float 在本语言 mutual-compatible（compatible 有 (Int, Float) 臂），故用
+    // 非数值 String 作目标——只有返回类型具体化为 f64 才会触发诊断。
+    let prog = parse_source(
+        r#"
+        fn max_value(a: anytype, b: anytype) anytype {
+            return if (a > b) a else b;
+        }
+        fn main() void {
+            var s: String = max_value(2.5, 1.5);
+            _ = s;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    let rendered: Vec<String> = diags.iter().map(|d| d.message.as_str().to_string()).collect();
+    assert!(
+        rendered.iter().any(|s| s.contains("cannot assign")),
+        "f64 结果赋给 String 应报类型不匹配：{rendered:?}"
+    );
+}
+
+#[test]
+fn semantic_anytype_int_args_resolve_comptime_width() {
+    // 整型实参：`max_value(3, 7)` 返回惰性宽度整数（comptime_int 宽度）——
+    // 赋给 i32 变量按上下文收窄，无诊断
+    let prog = parse_source(
+        r#"
+        fn max_value(a: anytype, b: anytype) anytype {
+            return if (a > b) a else b;
+        }
+        fn main() void {
+            var n: i32 = max_value(3, 7);
+            _ = n;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    assert!(
+        diags.is_empty(),
+        "comptime 宽度结果赋给 i32 应无诊断：{:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }

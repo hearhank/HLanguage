@@ -1697,6 +1697,37 @@ fn max_value(a: anytype, b: anytype) anytype {
 }
 
 #[test]
+fn d4b_anytype_concrete_consistent() {
+    // 组 D D4b：anytype 完整语义——调用点按实参具体类型实例化，`anytype` 返回类型
+    // 解析为具体类型（f64 / i32 实例）。interp == IR 双模式一致：类型具体化不改变
+    // 运行时动态分派结果（值携带类型），跨 f64/i32/异构场景一致。
+    assert_all_pass(
+        r#"
+fn max_value(a: anytype, b: anytype) anytype {
+    if (a > b) { return a; }
+    return b;
+}
+fn pick_i(a: anytype, b: anytype) anytype {
+    return if (a < b) a else b;
+}
+[test] fn float_instance() void {
+    var m: f64 = max_value(2.5, 1.5);
+    expect_eq(m, 2.5);
+}
+[test] fn int_instance() void {
+    var n: i32 = max_value(3, 7);
+    expect_eq(n, 7);
+}
+[test] fn mixed_instances() void {
+    expect_eq(max_value(10, 20), 20);
+    expect_eq(max_value(1.5, 0.5), 1.5);
+    expect_eq(pick_i(4, 9), 4);
+}
+"#,
+    );
+}
+
+#[test]
 fn d3_nested_instantiation_consistent() {
     // 组 D D3：类型函数嵌套实例化——`PairPair(i32)` 字段类型在内层登记后为
     // 具体化键 `Pair<@i32>`。interp == IR 双模式一致：嵌套 NamedLit 构造、字段
