@@ -203,6 +203,8 @@ struct FnDef {
     test_name: Option<String>,
     #[allow(dead_code)] // 类型方法标记（tag1：方法经注入 self 路径调用）
     method_of: Option<String>,
+    /// 组 E E2：`async fn` 标记——调用点返回 `Future(R)`（延迟执行），await 运行体
+    is_async: bool,
     span: Span,
 }
 
@@ -811,6 +813,8 @@ impl Interp {
                         is_test: false,
                         test_name: None,
                         method_of: Some(qname.clone()),
+                        // 组 E：async 方法留 E3/E4（示例无 async 方法）
+                        is_async: false,
                         span: m.span.clone(),
                     });
                 }
@@ -899,6 +903,7 @@ impl Interp {
                 body,
                 is_test,
                 test_name,
+                is_async,
                 span,
                 ..
             } => {
@@ -920,6 +925,7 @@ impl Interp {
                     is_test: *is_test,
                     test_name: test_name.clone(),
                     method_of: None,
+                    is_async: *is_async,
                     span: span.clone(),
                 };
                 // 模块隔离（A2b）：`[module]` 成员不登记扁平名（仅限定名，供 import 复制）
@@ -2551,10 +2557,20 @@ impl Interp {
                     other => Ok(other),
                 }
             }
-            Expr::Await(e, _) => {
-                // 组 E E1 占位：await 运行时语义（协作式 join，E2）未落地，先透传。
-                // E1 范围 = parse + semantic；await 在语义层已按 Future(R)→R 定型。
-                self.eval(e)
+            Expr::Await(e, span) => {
+                // 组 E E2：await ≡ join()——求值 Future 值并运行到完成（协作式）。
+                // 非 Future 值（语义层已拦截，防御性）→ TypeError。
+                let fut = self.eval(e)?;
+                let fut = self.deref_value(fut);
+                if let Value::Class(c) = &fut {
+                    if c.borrow().name == "Future" {
+                        return self.future_run(&fut, span);
+                    }
+                }
+                Err(RtError::new(
+                    "TypeError",
+                    Some(span.clone()),
+                ))
             }
             Expr::Catch(e, kind, _) => {
                 let v = self.eval(e)?;
@@ -3354,7 +3370,7 @@ impl Interp {
                         }
                         let fname = format!("{bname}.{field}");
                         let fdef = self.pick_fn(&fname, &vals)?;
-                        return self.call_fn(&fdef, &vals, span);
+                        return self.call_or_defer(&fdef, &vals, span);
                     }
                     // 实例方法：io.print(...) / arena.alloc(...)
                     let self_v = self.eval(base)?;
@@ -3386,7 +3402,7 @@ impl Interp {
                     }
                     let fname = format!("{type_name}.{field}");
                     let fdef = self.pick_fn(&fname, &vals)?;
-                    return self.call_fn(&fdef, &vals, span);
+                    return self.call_or_defer(&fdef, &vals, span);
                 }
                 Err(RtError::new("NoMethod", Some(span.clone())))
             }
@@ -3413,7 +3429,8 @@ impl Interp {
                         vals.push(self.eval(a)?);
                     }
                     let fdef = self.pick_fn(name, &vals)?;
-                    return self.call_fn(&fdef, &vals, span);
+                    // 组 E E2：async fn 调用点返回 Future(R)（延迟执行），await 运行体
+                    return self.call_or_defer(&fdef, &vals, span);
                 }
                 // 内建函数
                 if let Some(v) = self.call_builtin(name, args, span)? {
@@ -3428,7 +3445,7 @@ impl Interp {
                             vals.push(self.eval(a)?);
                         }
                         let fdef = self.pick_fn(&fname, &vals)?;
-                        return self.call_fn(&fdef, &vals, span);
+                        return self.call_or_defer(&fdef, &vals, span);
                     }
                     if let Value::Closure(closure) = v {
                         let mut vals = Vec::new();
@@ -3443,7 +3460,7 @@ impl Interp {
                     vals.push(self.eval(a)?);
                 }
                 let fdef = self.pick_fn(name, &vals)?;
-                self.call_fn(&fdef, &vals, span)
+                self.call_or_defer(&fdef, &vals, span)
             }
             _ => {
                 // 任意表达式求值后调用（Fn 值 / 闭包）
@@ -3455,7 +3472,7 @@ impl Interp {
                         vals.push(self.eval(a)?);
                     }
                     let fdef = self.pick_fn(&fname, &vals)?;
-                    return self.call_fn(&fdef, &vals, span);
+                    return self.call_or_defer(&fdef, &vals, span);
                 }
                 if let Value::Closure(closure) = c {
                     let mut vals = Vec::new();
@@ -5012,6 +5029,11 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_thread_method(&v, m, args, span)
             }
+            // 组 E E2：Future 类方法 cancel/is_done（协作式取消，对齐 Thread）
+            (Value::Class(c), m) if c.borrow().name == "Future" => {
+                let v = Value::Class(c.clone());
+                self.call_future_method(&v, m, args, span)
+            }
             _ => Ok(None),
         }
     }
@@ -5141,6 +5163,115 @@ impl Interp {
         if let Value::Class(c) = thread {
             c.borrow_mut().fields.insert(key.to_string(), v);
         }
+    }
+
+    // ---------- 组 E E2：协作式 Future（await ≡ join()，复用 G 组 Thread 机制） ----------
+
+    /// async fn 调用点：普通函数同步调用；`async fn` 延迟执行——返回 `Future(R)` 值
+    /// （捕获 callee + 已求值实参 + 每 Future 独立 alloc，await 时运行体到完成）。
+    fn call_or_defer(&mut self, fdef: &FnDef, arg_vals: &[Value], span: &Span) -> Result<Value> {
+        if fdef.is_async {
+            Ok(self.make_future(fdef, arg_vals.to_vec()))
+        } else {
+            self.call_fn(fdef, arg_vals, span)
+        }
+    }
+
+    /// 构造 `Future(R)` 值：fields 布局对齐 Thread（fn/args/alloc/done/result/cancel）。
+    /// 实参已在调用点求值（Zig 语义：参数值随调用捕获，体延迟到 await）。
+    fn make_future(&self, fdef: &FnDef, arg_vals: Vec<Value>) -> Value {
+        // Q8 对齐：每 Future 独立 alloc 实例（体执行时绑定为 alloc）
+        let alloc_v = Value::Arena(Rc::new(RefCell::new(ArenaState::new())));
+        let mut f = HashMap::new();
+        f.insert("fn".to_string(), Value::Fn(fdef.name.clone()));
+        f.insert("args".to_string(), Value::arr(arg_vals));
+        f.insert("alloc".to_string(), alloc_v);
+        f.insert("cancel".to_string(), Value::Bool(false));
+        f.insert("done".to_string(), Value::Bool(false));
+        f.insert("result".to_string(), Value::Void);
+        Value::class("Future", f)
+    }
+
+    /// Future 类方法分派：`cancel() !void`（协作标志，await 时检查后跳过执行 →
+    /// `error.Cancelled`）/ `is_done() bool`（await 后 true）。await 本体经 `Expr::Await`
+    /// 直接走 `future_run`（不依赖方法分派）。
+    fn call_future_method(
+        &mut self,
+        self_v: &Value,
+        m: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        if !args.is_empty() {
+            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+        }
+        match m {
+            "cancel" => {
+                self.thread_set_bool(self_v, "cancel", true);
+                Ok(Some(Value::Void))
+            }
+            "is_done" => {
+                let done = self.thread_field_bool(self_v, "done");
+                Ok(Some(Value::Bool(done)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// await 运行 Future 到完成（≡ join）：
+    /// - 已运行（done）→ 返回缓存 result；
+    /// - 已取消（cancel 且未运行）→ 置 done、缓存 `error.Cancelled`、返回 Cancelled；
+    /// - 否则在子任务作用域（alloc 绑定独立实例 Q8）中调用 fn，缓存 result 并置 done。
+    fn future_run(&mut self, fut: &Value, span: &Span) -> Result<Value> {
+        let tv = self.deref_value(fut.clone());
+        let (callee, args, alloc_v, cancelled, done) = match tv {
+            Value::Class(c) => {
+                let d = c.borrow();
+                let callee = d.fields.get("fn").cloned().unwrap_or(Value::Void);
+                let args = match d.fields.get("args") {
+                    Some(Value::Arr(a)) => a
+                        .borrow()
+                        .iter()
+                        .map(|c| c.borrow().clone())
+                        .collect::<Vec<_>>(),
+                    _ => vec![],
+                };
+                let alloc_v = d.fields.get("alloc").cloned().unwrap_or(Value::Alloc);
+                let cancelled = matches!(d.fields.get("cancel"), Some(Value::Bool(true)));
+                let done = matches!(d.fields.get("done"), Some(Value::Bool(true)));
+                (callee, args, alloc_v, cancelled, done)
+            }
+            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+        };
+        if done {
+            return self.thread_result(fut, span);
+        }
+        if cancelled {
+            let err_v = self.err_val("Cancelled");
+            self.thread_set_bool(fut, "done", true);
+            self.thread_set_value(fut, "result", err_v);
+            return self.thread_result(fut, span);
+        }
+        self.push_scope();
+        self.bind("alloc", alloc_v);
+        let r = (|| -> Result<Value> {
+            match callee {
+                Value::Fn(fname) => {
+                    let fdef = self.pick_fn(&fname, &args)?;
+                    self.call_fn(&fdef, &args, span)
+                }
+                Value::Closure(cl) => self.call_closure(&cl, &args, span),
+                _ => Err(RtError::new("NotCallable", Some(span.clone()))),
+            }
+        })();
+        let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
+        let result = match r {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        };
+        self.thread_set_bool(fut, "done", true);
+        self.thread_set_value(fut, "result", result.clone());
+        Ok(result)
     }
 
     /// Arena 内建方法（G1）：`alloc` 字节 bump 分配 / `init` 类型构造 / `deinit` 批量归还 /

@@ -1610,8 +1610,10 @@ impl<'a> LowerCtx<'a> {
                 self.label(done);
             }
             Expr::Await(inner, _) => {
-                // 组 E E1 占位：await 运行时语义（协作式 join，E2）未落地，先透传内层值。
-                // E1 范围 = parse + semantic；await 在语义层已按 Future(R)→R 定型。
+                // 组 E E2 子集边界：IR 无 Future 延迟任务抽象，async fn 调用降级为同步
+                // 执行（lower 普通 Call），await 透传内层值——纯函数下与 interp lazy 语义
+                // 结果一致（consistency e2_async_await_consistent）；副作用时序/取消为
+                // interp 特有（E4 原生异步落地后对齐）。interp 侧见 future_run。
                 let a = self.lower_expr(inner);
                 self.push(IrInst::Load { temp: t, slot: a });
             }

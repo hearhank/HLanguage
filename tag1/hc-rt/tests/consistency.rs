@@ -1634,6 +1634,27 @@ fn bump_g() void { g = g + 1; }
 }
 
 #[test]
+fn e2_async_await_consistent() {
+    // 组 E E2：await ≡ join()——interp（lazy Future，await 运行体）== IR（async fn 调用
+    // 同步执行 + await 透传）在纯函数下结果一致：await 返回值、内联 await、嵌套 await。
+    // 副作用时序（体运行于调用点 vs await 点）与取消为 interp 特有，不进一致性（IR 子集
+    // 边界，E4 原生异步落地后对齐；hc-rt/tests/async.rs 覆盖 interp 完整语义）。
+    assert_all_pass(
+        r#"
+async fn add(a: i32, b: i32) i32 { return a + b; }
+async fn inner(n: i32) i32 { return n * 2; }
+async fn outer(n: i32) i32 { return await inner(n) + 1; }
+[test] fn async_await_value() void {
+    var fut = add(3, 4);
+    expect_eq(await fut, 7);
+    expect_eq(await add(1, 2), 3);
+    expect_eq(await outer(10), 21);
+}
+"#,
+    );
+}
+
+#[test]
 fn d35_comptime_array_type_fn_consistent() {
     // 组 D（示例 35）：comptime_int 值参数 + 数组类型函数
     // `fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`——`ArrayLen(i32, 3)`
