@@ -906,6 +906,58 @@ fn closure_capture_consistency() {
     );
 }
 
+// ---------- Phase 8：闭包捕获精确化 + is_mut 强制 双模式一致 ----------
+
+#[test]
+fn closure_precise_capture_consistency() {
+    // 捕获精确化：嵌套闭包传递（外层体只在内层体内引用 → 外层仍须捕获 a）、
+    // move 捕获闭包值深拷贝其环境副本、mut 捕获写穿 + 嵌套只读闭包共享同一 cell
+    // （对齐 closures.rs oracle 与 ir.rs 结构测试）
+    assert_all_pass(
+        r#"
+[test] fn nested_transitive() void {
+    var a = 1;
+    var f = | | {
+        var g = |v| v + a;      // 外层体只在内层闭包体内引用 a → 外层须捕获 a
+        return g(10);
+    };
+    a = 100;
+    expect_eq(f(), 110);        // 共享捕获：外部变更对闭包可见
+}
+[test] fn move_deep_copy() void {
+    var x = 1;
+    var inner = |v| v + x;
+    var outer_move = move | | inner(1);  // move 捕获闭包值 → 深拷贝其 env 副本
+    x = 100;
+    expect_eq(outer_move(), 2);          // 副本 x 仍为 1 → 1+1=2
+}
+[test] fn mut_cap_visible_to_nested_read() void {
+    var total = 0;
+    var acc = mut |v| { total = total + v; return total; };
+    var read = |v| total + v;            // 嵌套只读闭包共享同一捕获 cell
+    expect_eq(acc(3), 3);
+    expect_eq(read(1), 4);
+    expect_eq(total, 3);
+}
+"#,
+    );
+}
+
+#[test]
+fn closure_non_mut_cannot_rebind_capture_consistency() {
+    // is_mut 只读强制：非 `mut` 闭包内重绑定被捕获变量 → ReadonlyCapture
+    // （硬错误，不可 catch）——两模式测试均 FAIL
+    let src = r#"
+[test] fn rebind() void {
+    var total = 0;
+    var acc = |v| { total = total + v; return total; };
+    acc(3);
+}
+"#;
+    let (tw, ir) = assert_consistent(src);
+    assert_eq!((tw, ir), (0, 0));
+}
+
 #[test]
 fn method_dispatch_consistency() {
     // 实例方法（注入 self 动态分派）+ 静态调用（显式 self）两模式一致

@@ -311,8 +311,9 @@ pub enum IrInst {
         slot: usize,
     },
     // ---- Phase 4 闭包 / 函数引用 / 方法 / 动态调用 ----
-    /// temp = 闭包值（捕获当前作用域链各变量的 cell；`is_move` → 深拷贝独立 cell，
-    /// 对齐 oracle `capture_env` interp.rs:1419-1425 + M2.7 move 语义）
+    /// temp = 闭包值（Phase 8 起只捕获**自由变量**——body 实际引用且未被体内绑定
+    /// 遮蔽的名字，与 oracle `closure_free_vars` + `capture_env` 对齐；
+    /// `is_move` → 深拷贝独立 cell；`is_mut` → 闭包内可重绑定捕获槽，否则只读）
     MakeClosure {
         temp: usize,
         /// 索引 [`IrModule::closures`]（与 captures 长度一致的闭包函数）
@@ -320,6 +321,7 @@ pub enum IrInst {
         /// (变量名, 封闭帧槽号)：闭包函数的前导捕获参数与之逐位对齐
         captures: Vec<(String, usize)>,
         is_move: bool,
+        is_mut: bool,
     },
     /// temp = 调用 callee（`Fn` 名 → 按名分派；`Closure` → 绑定捕获 cell + 显式参数）
     CallIndirect {
@@ -1733,10 +1735,10 @@ impl<'a> LowerCtx<'a> {
                 params,
                 body,
                 is_move,
+                is_mut,
                 span,
-                ..
             } => {
-                let ct = self.lower_closure(params, body, *is_move, span);
+                let ct = self.lower_closure(params, body, *is_mut, *is_move, span);
                 self.push(IrInst::Load { temp: t, slot: ct });
             }
         }
@@ -1744,7 +1746,8 @@ impl<'a> LowerCtx<'a> {
     }
 
     /// 闭包降级（对齐 oracle `Expr::Closure` interp.rs:1931-1963 + `capture_env`）：
-    /// 捕获当前作用域链全部绑定（`(名字, 槽号)`，最近作用域优先——遮蔽解析正确），
+    /// **自由变量精确分析**（Phase 8，`closure_free_vars`）——只捕获 body 实际引用、
+    /// 未被体内绑定遮蔽的外部变量（`(名字, 槽号)`，最近作用域优先——遮蔽解析正确），
     /// 生成独立闭包函数（前 n_caps 个参数 = 捕获参数，之后 = 显式参数），
     /// 返回闭包值临时槽（MakeClosure 结果）。move → 运行时深拷贝捕获 cell。
     /// 块值语义（对齐 `exec_block_inner`）：末语句为表达式 → 作为返回值（单表达式
@@ -1753,21 +1756,23 @@ impl<'a> LowerCtx<'a> {
         &mut self,
         params: &[String],
         body: &Block,
+        is_mut: bool,
         is_move: bool,
         _span: &Span,
     ) -> usize {
-        // 捕获集合：当前作用域链全部绑定（名字, 槽号），最近作用域优先（遮蔽正确）
+        // 捕获集合：自由变量精确集 ∩ 当前作用域链绑定（名字, 槽号），
+        // 最近作用域优先（遮蔽正确）。自由集外的名字不捕获（闭包不可见）。
+        let free = closure_free_vars(params, body);
         let mut captures: Vec<(String, usize)> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         for scope in self.scopes.iter().rev() {
             for (name, slot) in scope {
-                if seen.insert(name.clone()) {
+                if free.contains(name) && seen.insert(name.clone()) {
                     captures.push((name.clone(), *slot));
                 }
             }
         }
         let n_caps = captures.len();
-        let func_idx = self.closures.len();
         let temp = self.alloc_slot();
         // 闭包体用独立 LowerCtx（共享闭包缓冲、错误码表、类型表、函数名/全局名集合）
         let errors = self.errors.clone();
@@ -1801,9 +1806,9 @@ impl<'a> LowerCtx<'a> {
                 ctx.insts.push(IrInst::Return { temp: v });
             }
         } else {
-            if let Some(last) = body.stmts.last() {
-                ctx.lower_stmt(last);
-            }
+            // 末语句非值表达式：上面循环已按 m = n 降级了全部语句，这里只补
+            // 尾部 ReturnVoid——**不得**再 lower_stmt(last)（会重复降级末语句，
+            // 非 Return 时副作用双重执行）。
             ctx.insts.push(IrInst::ReturnVoid);
         }
         ctx.pop_scope();
@@ -1817,6 +1822,9 @@ impl<'a> LowerCtx<'a> {
                 self.err = Some(e);
             }
         }
+        // 闭包索引须在**体降级完成后**取：嵌套闭包在体降级期间已推入
+        // `self.closures`（先内后外），此前快照的索引会指向错误函数。
+        let func_idx = self.closures.len();
         let mut fparams: Vec<usize> = (0..n_caps).collect();
         fparams.extend(param_slots.iter().copied());
         self.closures.push(IrFunc {
@@ -1834,6 +1842,7 @@ impl<'a> LowerCtx<'a> {
             func: func_idx,
             captures,
             is_move,
+            is_mut,
         });
         temp
     }
@@ -3098,6 +3107,10 @@ fn class_eq(ctx: &Ctx, a: usize, b: usize) -> bool {
 pub struct Frame {
     pub cells: Vec<usize>,
     pub defers: Vec<usize>,
+    /// M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包帧中**只读**的捕获参数槽号。
+    /// [`IrInst::Store`] 写这些槽 → ReadonlyCapture（对齐 oracle `readonly_caps`）。
+    /// 普通函数/`mut` 闭包恒空。
+    pub readonly: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -3566,6 +3579,27 @@ fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
             IrValue::Ptr(ctx.alloc(Cell::Value(copied)))
         }
         IrValue::Opt(Some(b)) => IrValue::Opt(Some(Box::new(deep_copy(ctx, *b)))),
+        // move 捕获闭包值：捕获 cell 逐个深拷贝——闭包持有独立环境副本
+        // （与原作用域/其他闭包脱离共享，对齐 oracle `deep_copy` Closure 臂）
+        IrValue::Closure {
+            func,
+            captures,
+            is_mut,
+        } => {
+            let new_caps: Vec<usize> = captures
+                .iter()
+                .map(|c| {
+                    let cv = ctx.cell_value(*c).clone();
+                    let copied = deep_copy(ctx, cv);
+                    ctx.alloc(Cell::Value(copied))
+                })
+                .collect();
+            IrValue::Closure {
+                func,
+                captures: new_caps,
+                is_mut,
+            }
+        }
         other => other,
     }
 }
@@ -3619,6 +3653,7 @@ fn exec_func(ctx: &mut Ctx, module: &IrModule, idx: usize, args: &[IrValue], dep
     let mut frame = Frame {
         cells: Vec::with_capacity(func.n_slots),
         defers: Vec::new(),
+        readonly: Vec::new(),
     };
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
@@ -3645,15 +3680,25 @@ fn call_closure_ir(
     func_idx: usize,
     captures: &[usize],
     args: &[IrValue],
+    is_mut: bool,
     depth: usize,
 ) -> R<IrValue> {
     if depth >= MAX_CALL_DEPTH {
         return Err(IrError::msg("StackOverflow", "maximum call depth exceeded"));
     }
     let func = &module.closures[func_idx];
+    let n_caps = captures.len();
+    // M2.7 只读强制（Phase 8）：非 `mut` 闭包 → 捕获参数槽只读
+    // （Store 写这些槽 → ReadonlyCapture；经指针/字段/索引写穿放行）
+    let readonly: Vec<usize> = if is_mut {
+        Vec::new()
+    } else {
+        func.params.iter().take(n_caps).copied().collect()
+    };
     let mut frame = Frame {
         cells: Vec::with_capacity(func.n_slots),
         defers: Vec::new(),
+        readonly,
     };
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
@@ -3665,7 +3710,6 @@ fn call_closure_ir(
         }
     }
     // 显式参数（捕获参数之后）
-    let n_caps = captures.len();
     for (i, ps) in func.params.iter().enumerate().skip(n_caps) {
         let ai = i - n_caps;
         if ai < args.len() {
@@ -3708,6 +3752,14 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 ctx.set(&frame, *temp, v);
             }
             IrInst::Store { slot, temp } => {
+                // M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包写捕获参数槽 → 错误
+                if frame.readonly.contains(slot) {
+                    return Err(IrError::msg(
+                        "ReadonlyCapture",
+                        "cannot assign to captured variable in non-mut closure \
+                         (declare the closure `mut` to capture mutably)",
+                    ));
+                }
                 let v = ctx.get(&frame, *temp).clone();
                 ctx.set(&frame, *slot, v);
             }
@@ -4048,6 +4100,7 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                 func,
                 captures,
                 is_move,
+                is_mut,
             } => {
                 let mut cap_cells = Vec::with_capacity(captures.len());
                 for (_, slot) in captures {
@@ -4069,7 +4122,7 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                     IrValue::Closure {
                         func: *func,
                         captures: cap_cells,
-                        is_mut: *is_move,
+                        is_mut: *is_mut,
                     },
                 );
             }
@@ -4109,9 +4162,12 @@ fn exec_body(ctx: &mut Ctx, module: &IrModule, func: &IrFunc, frame: Frame, dept
                         })?;
                         exec_func(ctx, module, idx, &arg_vals, depth + 1)?
                     }
-                    IrValue::Closure { func, captures, .. } => {
-                        call_closure_ir(ctx, module, func, &captures, &arg_vals, depth + 1)?
-                    }
+                    IrValue::Closure {
+                        func,
+                        captures,
+                        is_mut,
+                        ..
+                    } => call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, depth + 1)?,
                     other => {
                         return Err(IrError::msg(
                             "NotCallable",
@@ -4441,9 +4497,12 @@ fn call_closure_value_ir(
     args: &[IrValue],
 ) -> R<IrValue> {
     match f {
-        IrValue::Closure { func, captures, .. } => {
-            call_closure_ir(ctx, module, *func, captures, args, 0)
-        }
+        IrValue::Closure {
+            func,
+            captures,
+            is_mut,
+            ..
+        } => call_closure_ir(ctx, module, *func, captures, args, *is_mut, 0),
         IrValue::Fn(name) => {
             let idx = pick_func(ctx, module, name, args)
                 .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;

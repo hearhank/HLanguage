@@ -29,7 +29,7 @@ fn main(io: Io) !void {
 [test] fn publish_subscribe() !void {
     var subject: o Subject = alloc.init(Subject);
     var mut received = 0;
-    subject.subscribe(|event, payload| { received += 1; });   // 可写捕获
+    subject.subscribe(mut |event, payload| { received += 1; });   // 可写捕获（mut）
     subject.publish("user.login", "alice");
     subject.publish("user.logout", "alice");
     try expect_eq(received, 2);

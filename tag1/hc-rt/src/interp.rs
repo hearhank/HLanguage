@@ -200,6 +200,10 @@ pub struct Interp {
     tracked: std::collections::HashSet<usize>,
     /// Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
     debug_dangling: bool,
+    /// M2.7 只读捕获强制（Phase 8）：当前执行闭包体内**只读**的捕获 cell 地址集合。
+    /// 非 `mut` 闭包调用时压入其环境 cell 地址；写入这些 cell → ReadonlyCapture。
+    /// 栈式（嵌套闭包叠压；仅直接重绑定被捕获变量受限——经指针/字段/索引写穿放行）。
+    readonly_caps: Vec<usize>,
     /// M4.2 错误码运行时表示：错误名 → 码（编译期表 + 运行时动态扩展）
     error_codes: HashMap<String, u32>,
     /// 码（包内序）→ 错误名（反向表）
@@ -235,6 +239,7 @@ impl Interp {
             error_locs: HashMap::new(),
             tracked: std::collections::HashSet::new(),
             debug_dangling: true,
+            readonly_caps: Vec::new(),
             error_codes: HashMap::new(),
             error_names: Vec::new(),
             extern_programs: Vec::new(),
@@ -1486,11 +1491,23 @@ impl Interp {
         Ok(self.deref_value(v))
     }
 
-    /// 捕获当前作用域链（闭包环境快照）
-    fn capture_env(&self) -> Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>> {
+    /// 捕获当前作用域链（闭包环境快照）——**自由变量精确化**（Phase 8）：
+    /// 只捕获 `free` 集合内的名字（闭包体实际引用、未被体内绑定遮蔽）。
+    /// 作用域链结构保留（`call_closure` 按链重建作用域 → 查找最近绑定优先，
+    /// 遮蔽解析正确）；`free` 外的名字不进入环境（未捕获变量闭包不可见）。
+    fn capture_env(
+        &self,
+        free: &std::collections::HashSet<String>,
+    ) -> Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>> {
         self.scopes
             .iter()
-            .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .map(|s| {
+                s.vars
+                    .iter()
+                    .filter(|(k, _)| free.contains(*k))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
             .collect()
     }
 
@@ -1516,6 +1533,17 @@ impl Interp {
             return Err(RtError::new("ArityMismatch", Some(span.clone())));
         }
         let saved = std::mem::take(&mut self.scopes);
+        // M2.7 只读强制（Phase 8）：非 `mut` 闭包的环境 cell 只读——
+        // 直接重绑定捕获变量 → ReadonlyCapture；经指针/字段/索引写穿放行
+        // （被捕获变量自身的槽未被改写）。嵌套闭包叠压（外层非 mut 仍生效）。
+        let saved_readonly = std::mem::take(&mut self.readonly_caps);
+        if !c.is_mut {
+            for m in &c.env {
+                for (_, cell) in m {
+                    self.readonly_caps.push(Rc::as_ptr(cell) as usize);
+                }
+            }
+        }
         // 闭包无声明返回类型：隔离期望类型（避免借用外层函数返回类型）
         let saved_ret = self.current_ret.take();
         let mut scopes: Vec<Scope> = c
@@ -1543,6 +1571,7 @@ impl Interp {
         };
         let _ = self.pop_scope(Self::is_err_path(&r));
         self.scopes = saved;
+        self.readonly_caps = saved_readonly;
         self.current_ret = saved_ret;
         match r {
             Ok(Flow::Return(v)) => Ok(v),
@@ -2005,9 +2034,11 @@ impl Interp {
                 is_move,
                 ..
             } => {
-                // 捕获环境：当前作用域链中所有共享槽（tag1：捕获整个链，语义 = 捕获所有外部变量）
-                let env = self.capture_env();
-                // move 捕获（M2.7）：深拷贝整个作用域链——闭包持有独立副本，
+                // 自由变量精确分析（Phase 8）：只捕获 body 实际引用、未被体内绑定
+                // 遮蔽的外部变量（含嵌套闭包传递）；未捕获变量闭包不可见。
+                let free = hc::ast::closure_free_vars(params, body);
+                let env = self.capture_env(&free);
+                // move 捕获（M2.7）：深拷贝自由变量环境——闭包持有独立副本，
                 // 脱离原作用域生命周期（原绑定销毁/悬垂不影响闭包）
                 let env = if *is_move {
                     env.into_iter()
@@ -2301,6 +2332,17 @@ impl Interp {
                 let cell = self
                     .lookup(name)
                     .ok_or_else(|| RtError::new("UndefinedName", Some(span.clone())))?;
+                // M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包体内直接重绑定被捕获
+                // 变量 → 错误（经指针/字段/索引写穿被捕获值本身不受限）。
+                if self.readonly_caps.contains(&(Rc::as_ptr(&cell) as usize)) {
+                    return Err(RtError::msg(
+                        "ReadonlyCapture",
+                        format!(
+                            "cannot assign to captured variable `{name}` in non-mut closure \
+                             (declare the closure `mut` to capture mutably)"
+                        ),
+                    ));
+                }
                 *cell.borrow_mut() = new_v;
             }
             Expr::Deref(inner, _) => {
@@ -5625,8 +5667,29 @@ impl Interp {
                     .collect();
                 Value::class(&d.name, fields)
             }
+            Value::Str(s) => Value::Str(Rc::new(RefCell::new(s.borrow().clone()))),
             Value::Ptr(p) => Value::Ptr(Rc::new(RefCell::new(self.deep_copy(p.borrow().clone())))),
             Value::Opt(Some(v)) => Value::Opt(Some(Rc::new(self.deep_copy((*v).clone())))),
+            // move 捕获闭包值：环境逐 cell 深拷贝——闭包持有独立环境副本
+            // （与原作用域/其他闭包脱离共享；`Rc<RefCell>` 非 Copy 语义补齐）。
+            Value::Closure(c) => Value::Closure(ClosureData {
+                params: c.params.clone(),
+                body: c.body.clone(),
+                is_mut: c.is_mut,
+                is_move: c.is_move,
+                env: c
+                    .env
+                    .iter()
+                    .map(|m| {
+                        m.iter()
+                            .map(|(k, cell)| {
+                                let v = self.deep_copy(cell.borrow().clone());
+                                (k.clone(), Rc::new(RefCell::new(v)))
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            }),
             other => other,
         }
     }

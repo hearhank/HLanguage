@@ -500,6 +500,114 @@ fn make() i32 {
     assert_eq!(run(src, "make", &[]).unwrap(), IrValue::Int(15));
 }
 
+// ---------- Phase 8：捕获精确化（MakeClosure.captures = 自由变量集） + is_mut 强制 ----------
+
+/// 提取 `f` 体内第一条 MakeClosure 的捕获名列表（排序后）。
+fn closure_capture_names(module: &hc::ir::IrModule, fname: &str) -> Vec<String> {
+    let f = &module.funcs[module.func_index[fname][0]];
+    let mut names = f
+        .body
+        .iter()
+        .find_map(|inst| match inst {
+            hc::ir::IrInst::MakeClosure { captures, .. } => Some(captures.clone()),
+            _ => None,
+        })
+        .expect("MakeClosure")
+        .iter()
+        .map(|(n, _)| n.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+#[test]
+fn closure_captures_only_free_vars() {
+    // 精确捕获：作用域内有 a/b/c 三个变量，闭包只引用 a、c → captures = {a, c}，
+    // 未引用的 b 不捕获（Phase 8：MakeClosure.captures 对齐自由变量集）
+    let src = r#"
+fn f() i32 {
+    var a = 1;
+    var b = 2;
+    var c = 3;
+    var g = |v| v + a + c;   // 只引用 a、c
+    return g(0);
+}
+"#;
+    let program = parse_source(src).unwrap();
+    let module = lower(&program).unwrap();
+    assert_eq!(closure_capture_names(&module, "f"), vec!["a", "c"]);
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(4));
+}
+
+#[test]
+fn closure_transitive_capture_through_nested() {
+    // 嵌套传递：外层闭包体只在内层闭包体内引用 a → 自由变量分析须穿过嵌套闭包，
+    // 外层 MakeClosure.captures 仍含 a；未引用的 b 不捕获
+    let src = r#"
+fn f() i32 {
+    var a = 1;
+    var b = 2;
+    var g = | | {
+        var h = |v| v + a;   // 只引用 a
+        return h(0);
+    };
+    return g();
+}
+"#;
+    let program = parse_source(src).unwrap();
+    let module = lower(&program).unwrap();
+    assert_eq!(closure_capture_names(&module, "f"), vec!["a"]);
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(1));
+}
+
+#[test]
+fn closure_capture_ignores_shadowed_local() {
+    // 遮蔽：体内声明的同名局部变量遮蔽外部绑定 → 不捕获（captures 为空）
+    let src = r#"
+fn f() i32 {
+    var a = 1;
+    var g = | | {
+        var a = 100;   // 体内局部，遮蔽外部 a——非捕获
+        return a;
+    };
+    return g();
+}
+"#;
+    let program = parse_source(src).unwrap();
+    let module = lower(&program).unwrap();
+    assert!(closure_capture_names(&module, "f").is_empty());
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(100));
+}
+
+#[test]
+fn closure_non_mut_rebind_capture_fails() {
+    // is_mut 只读强制（IR 侧）：非 `mut` 闭包重绑定被捕获变量 → ReadonlyCapture
+    let src = r#"
+fn f() i32 {
+    var total = 0;
+    var acc = |v| { total = total + v; return total; };
+    return acc(3);
+}
+"#;
+    let e = run(src, "f", &[]).unwrap_err();
+    assert_eq!(e.name, "ReadonlyCapture");
+}
+
+#[test]
+fn closure_move_deep_copies_closure_value() {
+    // move 捕获闭包值：深拷贝其环境副本（对照共享——若共享则 x=100 后 outer() 得 101）
+    let src = r#"
+fn f() i32 {
+    var x = 1;
+    var inner = |v| v + x;
+    var outer = move | | inner(1);
+    x = 100;
+    return outer();
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(2));
+}
+
 #[test]
 fn fnref_and_indirect_call() {
     // FnRef：函数名作为值绑定到变量；CallIndirect 经 Fn 值动态调用

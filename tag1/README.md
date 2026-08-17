@@ -99,22 +99,22 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **428 项单元/集成测试 + 41 项示例回归**，全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **450 项测试**（409 单元/集成 + 41 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
-| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 31 |
+| hc | `src` 单元测试（bytecode 往返 + llvm.rs 纯文本发射） | 35 |
 | hc | `tests/bytecode.rs`（VM == 参考解释器一致性，opcode 0–46 往返） | 27 |
 | hc | `tests/frontend.rs`（lexer/parser/semantic） | 35 |
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
-| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签） | 63 |
+| hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化） | 68 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播） | 18 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–6） | 56 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8） | 61 |
 | hc-rt | `tests/inference.rs`（类型推断） | 11 |
 | hc-rt | `tests/interfaces.rs`（M2.1 接口三用途） | 10 |
 | hc-rt | `tests/io.rs`（net/fs/环境） | 6 |
-| hc-rt | `tests/closures.rs`（闭包） | 4 |
+| hc-rt | `tests/closures.rs`（闭包，含 Phase 8 捕获精确化） | 12 |
 | hc-rt | `tests/deque.rs`（Deque） | 4 |
 | hc-rt | `tests/iter.rs`（迭代内建） | 4 |
 | hc-rt | `tests/serialize.rs`（序列化内建） | 4 |
@@ -127,13 +127,13 @@ hc --help
 补充：
 
 - **示例回归**（CLI `hc test examples/`）：**125/136 通过**；11 项失败属第三块（第二部分）特性 —— E1 元编程（35/34/63）、E2 并发/异步（37/38/39/76–80），均非本阶段范围。
-- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 80 项 mismatch —— 均为原生/IR 子集外特性（`io.*`/接口类型参等全核心标准库、struct 字面量构造、`&test_io` 取址、defer 体控制流），按文件粒度正确标记（defer/errdefer/带标签 break/continue 降级期失败点已于 Phase 6 消除）。
+- **原生交叉验证**（`hc test --mode=compile examples/`）：编译模式 68 项 mismatch —— 均为未实现原生内建/方法（`error.NotBuiltin`/`error.NoMethod` 响亮运行时中止，原生 ABI 留后续阶段全标准库），按文件粒度正确标记（defer/errdefer/带标签、global/const、io.print/alloc.init/标量 @ 内建/用户类方法等降级期失败点已于 Phase 6/7 消除）。
 
-CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥125 passed / ≤11 failed + compile ≤80 mismatch，低于基线即失败）。
+CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspace` 与完整示例套件回归（`tag1/scripts/check-examples.sh`，interpret ≥125 passed / ≤11 failed + compile ≤68 mismatch，低于基线即失败）。
 
 ## 已知取舍
 
-- **原生/IR 后端为标量 + 指针 + 聚合 + switch/for + 闭包/函数引用/方法/重载 + global/const + defer/errdefer + 带标签 break/continue 子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片 + Phase 1 指针 + Phase 2 聚合 + Phase 3 switch/for（字段/索引/切片/数组/class/enum/元组解构/move/unwrap/switch 全模式/for 迭代含 mut 写回）+ Phase 4 闭包/函数引用/实例方法/重载 + Phase 5 global/const（声明序初始化 + 跨函数/跨测试可变全局 + `&global` 取址写穿）+ Phase 6 defer/errdefer（LIFO + 仅错误路径）+ 带标签 break/continue（跨层定位）；Table 多索引、全核心标准库（`io.*`/接口类型参等）、defer 体控制流等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式。
+- **原生/IR 后端为标量 + 指针 + 聚合 + switch/for + 闭包/函数引用/方法/重载 + global/const + defer/errdefer + 带标签 break/continue + 全核心标准库（IR）子集**：`hc build` / `hc test --mode=compile` 覆盖 M3.1 切片 + Phase 1 指针 + Phase 2 聚合 + Phase 3 switch/for（字段/索引/切片/数组/class/enum/元组解构/move/unwrap/switch 全模式/for 迭代含 mut 写回）+ Phase 4 闭包/函数引用/实例方法/重载 + Phase 5 global/const（声明序初始化 + 跨函数/跨测试可变全局 + `&global` 取址写穿）+ Phase 6 defer/errdefer（LIFO + 仅错误路径）+ 带标签 break/continue（跨层定位）+ Phase 7 全核心标准库（`run_ir` 全量；LLVM 原生仅已实现内建子集——io.print / `alloc.init` 无字段 / 标量 @ 内建 / min/max/sqrt/box/read_u64_le/copy / 用户类实例方法 + `Io.print`）+ Phase 8 闭包捕获精确化（自由变量精确分析含嵌套传递 + 非 mut 只读强制 + move 深拷贝）；Table 多索引、defer 体控制流等子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（**不静默丢弃**），`hc build` / `hc run --ir` 直接报错并提示改用 tree-walking 模式；未实现原生内建/方法在运行时以 `error.NotBuiltin`/`error.NoMethod` 响亮中止（原生 ABI 留后续阶段全标准库）。
 - **LLVM 值盒全精度载荷**：`%Value = { i32, i128 }`（i128 修复 i64 截断；浮点位模式存低 64 位）；`hc build` 依赖外部 `zig cc`，无优化 pass，硬错误消息依赖 libc。
 - **LLVM Mut/Move for 捕获 = copy-in/copy-out 写回**：迭代体内中读源容器在 LLVM 见旧值（`run_ir` 槽 cell == 源 cell 无此问题），接受近似。
 - **原生交叉验证为文件粒度**：全绿 vs 有失败，非逐测试 PASS/FAIL 清单（断言失败在测试函数 ret 路径直接 abort）。

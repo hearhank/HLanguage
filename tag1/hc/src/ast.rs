@@ -2,6 +2,8 @@
 //!
 //! tag1 垂直切片覆盖核心语法子集。注释中标注「E1/E3」等表示完整功能归后续里程碑。
 
+use std::collections::HashSet;
+
 use crate::token::Span;
 
 #[derive(Debug, Clone)]
@@ -466,4 +468,224 @@ pub enum CatchKind {
     Default(Box<Expr>),
     /// catch |err| { block }
     Bind { name: String, body: Block },
+}
+
+// ---------- 闭包自由变量分析（M2.7 捕获精确化，Phase 8） ----------
+
+/// 闭包自由变量：body 实际引用、且未被体内部署绑定遮蔽的外部变量名。
+///
+/// 语义依据（对齐 tree-walking 运行时）：
+/// - **作用域栈感知**：嵌套块/捕获绑定只在其作用域内遮蔽；外层块对同名的引用
+///   仍是自由变量（`{ var x = 1; print(x); } print(x);` → x 自由）。
+/// - **流敏感**：`var` 绑定自其语句位置起生效（运行时「声明时绑定」，非提升）——
+///   `print(x); var x = 5;` 的 x 为自由变量（引用先于声明）。
+/// - **嵌套闭包传递**：内层闭包体对未被遮蔽名的引用归入外层自由集（外层必须捕获
+///   才能在内层创建时提供）；内层参数不泄漏到外层。
+/// - 函数名（`FnRef`/`Dot` base 类型名/`SwitchPattern::Ident` 枚举变体）非变量，
+///   但 `Dot` base 表达式照常访问——多捕获无害（`capture_env` 只对作用域内名字生效）。
+pub fn closure_free_vars(params: &[String], body: &Block) -> HashSet<String> {
+    let mut fv = HashSet::new();
+    // 参数作用域在最底；闭包体块压栈其下
+    let mut scopes: Vec<HashSet<String>> = vec![params.iter().cloned().collect()];
+    visit_block(body, &mut scopes, &mut fv);
+    fv
+}
+
+/// 块级访问：新作用域压栈；语句按序访问（绑定自出现位置生效）；退出弹栈。
+fn visit_block(b: &Block, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<String>) {
+    scopes.push(HashSet::new());
+    for stmt in &b.stmts {
+        visit_stmt(stmt, scopes, fv);
+    }
+    scopes.pop();
+}
+
+/// 带捕获绑定的块访问（`if (m) |v| {...}`、`for |v| in ...`、`catch |err| {...}`、
+/// switch 臂捕获）：种子名在块作用域内最先绑定。
+fn visit_block_seeded(
+    seed: &str,
+    b: &Block,
+    scopes: &mut Vec<HashSet<String>>,
+    fv: &mut HashSet<String>,
+) {
+    let mut scope = HashSet::new();
+    scope.insert(seed.to_string());
+    scopes.push(scope);
+    for stmt in &b.stmts {
+        visit_stmt(stmt, scopes, fv);
+    }
+    scopes.pop();
+}
+
+fn visit_stmt(s: &Stmt, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<String>) {
+    match s {
+        Stmt::VarDecl { name, init, .. } => {
+            if let Some(init) = init {
+                visit_expr(init, scopes, fv);
+            }
+            scopes.last_mut().unwrap().insert(name.clone());
+        }
+        Stmt::ConstDecl { name, init, .. } => {
+            visit_expr(init, scopes, fv);
+            scopes.last_mut().unwrap().insert(name.clone());
+        }
+        Stmt::Expr(e) => visit_expr(e, scopes, fv),
+        Stmt::If(IfStmt {
+            cond,
+            capture,
+            then_b,
+            else_b,
+            ..
+        }) => {
+            visit_expr(cond, scopes, fv);
+            match capture {
+                Some((_, name)) => visit_block_seeded(name, then_b, scopes, fv),
+                None => visit_block(then_b, scopes, fv),
+            }
+            if let Some(e) = else_b {
+                visit_stmt(e, scopes, fv);
+            }
+        }
+        Stmt::While(WhileStmt {
+            cond, step, body, ..
+        }) => {
+            visit_expr(cond, scopes, fv);
+            if let Some(st) = step {
+                visit_expr(st, scopes, fv);
+            }
+            visit_block(body, scopes, fv);
+        }
+        Stmt::For(ForStmt {
+            iter, capture_name, body, ..
+        }) => {
+            visit_expr(iter, scopes, fv);
+            let mut scope = HashSet::new();
+            scope.insert(capture_name.clone());
+            scopes.push(scope);
+            for stmt in &body.stmts {
+                visit_stmt(stmt, scopes, fv);
+            }
+            scopes.pop();
+        }
+        Stmt::Switch(SwitchStmt { subject, arms, .. }) => {
+            visit_expr(subject, scopes, fv);
+            for arm in arms {
+                match &arm.capture {
+                    Some((_, name)) => visit_block_seeded(name, &arm.body, scopes, fv),
+                    None => visit_block(&arm.body, scopes, fv),
+                }
+            }
+        }
+        Stmt::Return(e, _) => {
+            if let Some(e) = e {
+                visit_expr(e, scopes, fv);
+            }
+        }
+        Stmt::Defer(e, _) | Stmt::Errdefer(e, _) => visit_expr(e, scopes, fv),
+        Stmt::Block(b) => visit_block(b, scopes, fv),
+        Stmt::Break(..) | Stmt::Continue(..) | Stmt::Empty => {}
+    }
+}
+
+fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<String>) {
+    match e {
+        Expr::Ident(name, _) => {
+            if !scopes.iter().any(|s| s.contains(name)) {
+                fv.insert(name.clone());
+            }
+        }
+        Expr::ArrayLit(items, _) | Expr::TupleLit(items, _) => {
+            for it in items {
+                visit_expr(it, scopes, fv);
+            }
+        }
+        Expr::NamedLit { fields, .. } => {
+            for (_, v) in fields {
+                visit_expr(v, scopes, fv);
+            }
+        }
+        Expr::Dot { base, .. } | Expr::Field { base, .. } => visit_expr(base, scopes, fv),
+        Expr::Index { base, indices, .. } => {
+            visit_expr(base, scopes, fv);
+            for i in indices {
+                visit_expr(i, scopes, fv);
+            }
+        }
+        Expr::Deref(inner, _) | Expr::AddrOf(inner, _, _) => visit_expr(inner, scopes, fv),
+        Expr::Unary(_, inner, _) => visit_expr(inner, scopes, fv),
+        Expr::Binary(_, a, b, _) | Expr::Orelse(a, b, _) => {
+            visit_expr(a, scopes, fv);
+            visit_expr(b, scopes, fv);
+        }
+        Expr::Unwrap(inner, _) | Expr::Try(inner, _) | Expr::Move(inner, _) => {
+            visit_expr(inner, scopes, fv)
+        }
+        Expr::Catch(e, kind, _) => {
+            visit_expr(e, scopes, fv);
+            match kind.as_ref() {
+                CatchKind::Default(d) => visit_expr(d, scopes, fv),
+                CatchKind::Bind { name, body } => visit_block_seeded(name, body, scopes, fv),
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            visit_expr(callee, scopes, fv);
+            for a in args {
+                visit_expr(a, scopes, fv);
+            }
+        }
+        Expr::IfExpr {
+            cond,
+            capture,
+            then_e,
+            else_e,
+            ..
+        } => {
+            visit_expr(cond, scopes, fv);
+            match capture {
+                Some((_, name)) => {
+                    let mut scope = HashSet::new();
+                    scope.insert(name.clone());
+                    scopes.push(scope);
+                    visit_expr(then_e, scopes, fv);
+                    scopes.pop();
+                }
+                None => visit_expr(then_e, scopes, fv),
+            }
+            visit_expr(else_e, scopes, fv);
+        }
+        Expr::SwitchExpr { subject, arms, .. } => {
+            visit_expr(subject, scopes, fv);
+            for arm in arms {
+                match &arm.capture {
+                    Some((_, name)) => visit_block_seeded(name, &arm.body, scopes, fv),
+                    None => visit_block(&arm.body, scopes, fv),
+                }
+            }
+        }
+        Expr::Block(b, _) => visit_block(b, scopes, fv),
+        Expr::Assign { target, value, .. } => {
+            visit_expr(target, scopes, fv);
+            visit_expr(value, scopes, fv);
+        }
+        Expr::TupleDestructure(names, e, _) => {
+            visit_expr(e, scopes, fv);
+            scopes.last_mut().unwrap().extend(names.iter().cloned());
+        }
+        Expr::Closure { params, body, .. } => {
+            // 嵌套闭包：参数入栈（不泄漏到外层）；体内引用与当前作用域链解析
+            scopes.push(params.iter().cloned().collect());
+            visit_block(body, scopes, fv);
+            scopes.pop();
+        }
+        // 无变量引用：字面量 / 错误字面量 / 函数名
+        Expr::IntLit { .. }
+        | Expr::FloatLit { .. }
+        | Expr::StrLit { .. }
+        | Expr::CharLit(..)
+        | Expr::BoolLit(..)
+        | Expr::NullLit(..)
+        | Expr::VoidLit(..)
+        | Expr::ErrorLit(..)
+        | Expr::FnRef(..) => {}
+    }
 }

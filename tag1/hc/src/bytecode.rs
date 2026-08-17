@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
 /// v3：Phase 5 增全局表 + LoadGlobal/StoreGlobal/GlobalAddr opcode（41-43）。
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 // ---------- 常量 / 运算符 / 指令 标签 ----------
 
@@ -495,6 +495,7 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
             func,
             captures,
             is_move,
+            is_mut,
         } => {
             out.push(37);
             push_u32(out, *temp as u32);
@@ -505,6 +506,7 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
                 push_u32(out, *slot as u32);
             }
             out.push(*is_move as u8);
+            out.push(*is_mut as u8);
         }
         IrInst::FnRef { temp, name } => {
             out.push(38);
@@ -997,6 +999,7 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
                 v
             },
             is_move: r.u8()? != 0,
+            is_mut: r.u8()? != 0,
         },
         38 => IrInst::FnRef {
             temp: r.u32()? as usize,
@@ -1310,6 +1313,7 @@ mod tests {
                     func: 0,
                     captures: vec![("x".to_string(), 0), ("y".to_string(), 1)],
                     is_move: true,
+                    is_mut: true,
                 },
                 IrInst::FnRef {
                     temp: 7,
