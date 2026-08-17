@@ -9,6 +9,7 @@ use hc::ast::{Block, Decl, Param, Program, Stmt, Type};
 use hc::comptime::{
     concrete_name, instantiate, is_type_fn, map_type_apps, subst, type_key, Instantiated,
 };
+use hc::check_semantics;
 use hc::parse_source;
 
 /// 从已解析程序取具名函数的三要素（params, ret, body）
@@ -423,5 +424,48 @@ fn map_type_apps_resolves_nested_apps() {
         map_type_apps(&tup, &mut fake_resolve).unwrap(),
         Type::Tuple(vec![Type::Named("Pair<@i32>".into(), vec![]), t_i32()]),
         "Tuple 递推"
+    );
+}
+
+// ---------- 组 D D4：comptime_int 常量折叠（类型层） ----------
+
+#[test]
+fn check_semantics_recognizes_comptime_int_type() {
+    // `comptime_int` = 惰性宽度整数：`ty_of` 识别为 `Int { width: Comptime }`，
+    // 与整数字面量初始化兼容（Comptime 宽度跳过收窄检查）
+    let prog = parse_source(
+        r#"
+        fn main() void {
+            var x: comptime_int = 5;
+            _ = x;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    assert!(
+        diags.is_empty(),
+        "comptime_int 类型应被识别且无诊断：{:?}",
+        diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn check_semantics_rejects_string_assigned_to_comptime_int() {
+    // 类型不匹配：`comptime_int = "hello"` → 诊断（compatible 无 (Str, Int) 臂 → false）
+    let prog = parse_source(
+        r#"
+        fn main() void {
+            var x: comptime_int = "hello";
+            _ = x;
+        }
+        "#,
+    )
+    .unwrap();
+    let diags = check_semantics(&prog);
+    let rendered: Vec<String> = diags.iter().map(|d| d.message.as_str().to_string()).collect();
+    assert!(
+        rendered.iter().any(|s| s.contains("cannot assign")),
+        "comptime_int 应拒绝 String 初始化：{rendered:?}"
     );
 }

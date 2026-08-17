@@ -184,3 +184,117 @@ fn comptime_sees_script_generated_types() {
     assert!(s.contains("script+comptime ok"), "main 应正常执行: {s}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- 组 D D4：comptime_int 常量折叠（类型层） ----------
+
+#[test]
+fn comptime_arith_folding_expect_eq_passes() {
+    // 折叠 + 类型检查双通过：comptime_int 算术在装载期求值，expect_eq 断言成立
+    let dir = temp_dir("fold");
+    let file = write(
+        &dir,
+        "fold.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   var x: comptime_int = 1 + 2;\n\
+         \x20   expect_eq(x, 3);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"fold ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "comptime_int 折叠应通过: {}", combined(&out));
+    assert!(s.contains("fold ok"), "main 应正常执行: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_folding_expect_eq_failure_is_compile_error() {
+    // 负例：折叠断言不成立 → 装载期 AssertFailed = 编译错误
+    let dir = temp_dir("foldfail");
+    let file = write(
+        &dir,
+        "foldfail.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   expect_eq(1 + 2, 4);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"unreachable\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "折叠断言失败应为编译错误: {s}");
+    assert!(s.contains("AssertFailed"), "诊断应含 AssertFailed: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_int_var_decl_typechecks_and_folds() {
+    // comptime_int 变量声明类型检查 + 算术折叠
+    let dir = temp_dir("varfold");
+    let file = write(
+        &dir,
+        "varfold.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   var x: comptime_int = 40 + 2;\n\
+         \x20   expect_eq(x, 42);\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"varfold ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "comptime_int 变量折叠应通过: {}", combined(&out));
+    assert!(s.contains("varfold ok"), "main 应正常执行: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_narrowing_u8_overflow_is_compile_error() {
+    // 负例：comptime 块内收窄溢出（u8 = 256）→ 语义检查在收窄点诊断 = 编译错误
+    let dir = temp_dir("narrow");
+    let file = write(
+        &dir,
+        "narrow.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   var x: u8 = 256;\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"unreachable\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "comptime 块内收窄溢出应为编译错误: {s}");
+    assert!(s.contains("out of range"), "诊断应含 out of range: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn comptime_narrowing_u8_in_range_passes() {
+    // comptime 块内收窄在范围内 → 通过
+    let dir = temp_dir("narrowok");
+    let file = write(
+        &dir,
+        "narrowok.hc",
+        "import H.std.{io};\n\
+         comptime {\n\
+         \x20   var x: u8 = 200;\n\
+         }\n\
+         fn main(args: o Vec(String)) !void {\n\
+         \x20   io.print(\"narrow ok\\n\");\n\
+         }\n",
+    );
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "comptime 块内范围内收窄应通过: {}", combined(&out));
+    assert!(s.contains("narrow ok"), "main 应正常执行: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

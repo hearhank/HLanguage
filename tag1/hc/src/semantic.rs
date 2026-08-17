@@ -220,6 +220,7 @@ pub fn check_with_extern_deps(
         infer_ret_conflict: false,
         imported: HashSet::new(),
         conditional_depth: 0,
+        in_comptime_block: false,
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -273,6 +274,9 @@ struct Checker {
     /// 组 G Q18：if/while/for/switch 条件体内 = 非直线路径（join 不保证执行 →
     /// 不视为绑定；冻结违例仍报）。0 = 直线/块级
     conditional_depth: usize,
+    /// 组 D D4：`comptime { }` 块类型检查中——放宽「`return error.X` 需错误联合」
+    /// （comptime 块失败机制 = `return error.X`，非函数错误联合语义）
+    in_comptime_block: bool,
     diags: Vec<Diagnostic>,
 }
 
@@ -1261,6 +1265,16 @@ impl Checker {
             Decl::Const { name, init, .. } => {
                 let _ = (name, init); // 常量表达式类型检查放行（简化）
             }
+            // 组 D D4：comptime 块按函数体做类型检查（收窄溢出/类型不匹配在块内捕获）。
+            // ret_ty/err_constraint = None——块非函数；`return error.X` 是其失败机制，
+            // 经 in_comptime_block 守卫在 Stmt::Return 处放宽。
+            Decl::Comptime { body, .. } => {
+                let mut scopes: Vec<HashMap<String, VarInfo>> = Vec::new();
+                let prev = self.in_comptime_block;
+                self.in_comptime_block = true;
+                self.check_block(body, &mut scopes, None, None);
+                self.in_comptime_block = prev;
+            }
             _ => {}
         }
     }
@@ -1371,6 +1385,12 @@ impl Checker {
                     "usize" => {
                         return SType::Int {
                             width: IntWidth::USize,
+                        }
+                    }
+                    // comptime_int（组 D D4）：惰性宽度整数——定型点收窄，Comptime 宽度跳过收窄检查
+                    "comptime_int" => {
+                        return SType::Int {
+                            width: IntWidth::Comptime,
                         }
                     }
                     "f16" | "f32" | "f64" | "f128" => return SType::Float,
@@ -1707,7 +1727,9 @@ impl Checker {
                 // （错误不进入传播链，运行时由根作用域记录输出后 panic 式中止）
                 let ret_is_error_union = matches!(&ret_ty, Some(SType::ErrorUnion(..)));
                 if let Some(Expr::ErrorLit(ename, _)) = e {
-                    if !ret_is_error_union {
+                    // comptime 块：`return error.X` 是其失败机制（装载期求值失败 = 编译错误），
+                    // 不适用「未声明错误联合」报错
+                    if !ret_is_error_union && !self.in_comptime_block {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!(

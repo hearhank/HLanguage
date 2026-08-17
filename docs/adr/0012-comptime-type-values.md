@@ -13,7 +13,7 @@
 1. **`type` = 元类型**：类型参数声明为 `T: type`；`type` 表达式 = 类型名（`class Foo`/`enum E`/`interface I`/基础类型/内建容器）产生**编译期类型对象**。类型对象是**编译期值，无运行时表示**——降级后 IR 中不残留类型值，实例化即**具体化（monomorphization）**
 2. **泛型实例化 = 名字 + 实参列表的具体化**：`List(i32)` 以 `(名, 实参列表)` 为键实例化并**缓存**（同签名同实例）；实例化在**调用点/声明点**触发（对齐 M2.3 具体优先泛型：具体函数仍胜泛型，泛型仅在无具体匹配时实例化）。**惰性实例化**：仅被实际使用的泛型声明才具体化
 3. **comptime 块 = 语义分析阶段的编译期求值**：复用既有求值器子集（无运行时环境：io/alloc/argv 不可用），可见完整 `types` 元数据；块/函数失败（含 `return error.X`）= 编译错误带块内 + 所属块位置（沿 06-09 错误机制）。`comptime { ... }` 仅编译期存在，产物是**类型级副作用**（注册类型/实例化/常量折叠），不产生运行时代码
-4. **comptime_int/comptime_float = 惰性宽度字面量**：编译期任意精度，实例化/赋值时按上下文收窄（对齐 M2.3 字面量惰性宽度语义）；溢出在收窄点诊断
+4. **comptime_int/comptime_float = 惰性宽度字面量**：编译期求值，实例化/赋值时按上下文收窄（对齐 M2.3 字面量惰性宽度语义）；溢出在收窄点诊断。**落地边界（2026-08-18）：`Value::Int(i128)` 无 bignum——实际以 i128 为上限（偏离「任意精度」），超大常量溢出在收窄点/运行时报错**
 5. **`anytype` = 参数类型不预先绑定**：调用点按实参具体类型实例化；仅用于泛型函数参数
 6. **与 script 分工不变（06-09）**：comptime 管类型级计算与泛型实例化；script 管数据定义驱动的样板生成。降级闸门 Q-S10 保留（脚本生成成本超预期 → 降级为编译期执行 H 子集函数，`script{}` 语法保留）
 
@@ -41,4 +41,5 @@
 - 示例 **35-comptime-branch** interp / IR / 原生编译三模式全绿；comptime 单测 +8（值参数/数组形态含错误路径）；一致性 `d35_comptime_array_type_fn_consistent`。
 - **组 D D2（comptime 块最小切片）已实现（2026-08-18）**：`comptime { }` 块装载期编译期求值——AST/parser 增 `Decl::Comptime`（镜像 `Decl::Script`），`hc-tools/src/comptimegen.rs` 装载期 pass（script 展开后、语义检查前，经 `parse_with_scripts` 统一入口）：受限 Interp（`script_mode`：io/alloc/argv 不可用）求值块体，结果**丢弃**（仅编译期存在，无运行时代码/无源码替换）；失败 = 编译错误（`return error.X` → 「comptime 块返回错误 `error.X`」带块 span；运行时错误 → 原 RtError 渲染），与运行时错误同一机制。块内可见完整 `types` 元数据（含 script 生成类型——「script 展开后求值」顺序验证）。三后端跳过 `Decl::Comptime`（镜像 Script），IR/native 零改动。测试 `hc-tools/tests/comptime.rs` 5 项端到端全绿；门禁基线不变。
 - **组 D D3（嵌套/递归实例化）已实现（2026-08-18）**：类型函数嵌套（`PairPair(i32)` 字段 `a: Pair(T)` → 具体化键 `Pair<@i32>`）与递归/自引用（`LinkedList(T) { value: T, next: ?LinkedList(T) }`）实例化。`hc::comptime` 增 `map_type_apps` 深度遍历辅助（后端注入 resolver 回调，hc 零依赖约束下纯函数）；interp 与 IR 的 `concrete_type_name` 预解析实参（内层先具体化登记）+ `instantiating` in-progress 守卫（自/互递归字段内自引用 → 返回自身键为叶）；IR `lower_default_value` 增类型函数应用臂并补 `var x: PairPair(i32);` 声明式无初值路径（对齐 oracle `default_value`）。运行时递归靠 Optional 默认 `None` 终止。comptime 单测 +2（parser 嵌套回归、`map_type_apps` 复合形态）、一致性 +2（`d3_nested`/`d3_recursive`，含无初值）；门禁基线不变。
+- **组 D D4（comptime_int 常量折叠最小切片）已实现（2026-08-18）**：comptime 块类型层补齐——`comptime_int` 类型名识别（`ty_of` → `SType::Int { width: IntWidth::Comptime }`）+ comptime 块语义检查（`Checker.in_comptime_block` + `check_decl` `Decl::Comptime` 臂；`Stmt::Return` 错误返回守卫放宽——comptime 块失败机制 = `return error.X`）。折叠核心（装载期受限 Interp 求值）已在 D2，本切片补类型安全：收窄溢出（`var x: u8 = 256`）、类型不匹配（`var x: comptime_int = "hello"`）在收窄点/赋值点诊断；`expect_eq` 断言折叠。hc 语义单测 +2、hc-tools 端到端 +5；门禁基线不变。**已知边界**：`Value::Int(i128)` 无 bignum，comptime_int 超大常量溢出（i128 上限，见决策 #4）；块内 `_ = x;` 丢弃语句装载期 Interp 不支持。
 - **待组 D4**：comptime_float、`anytype` 完整语义、`comptime` 值函数（参数含 `type`/`anytype` 触发编译期执行的普通函数）。
