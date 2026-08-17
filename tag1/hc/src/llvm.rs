@@ -46,6 +46,56 @@ const T_CLOSURE: i32 = 15;
 
 /// 生成完整 `.ll` 模块文本（导言 + 每个 `IrFunc` + `main` 包装）。
 pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
+    codegen_inner(module, errors, &HashMap::new(), "", true)
+}
+
+/// C3：exe 链接本地库形态——codegen 时把未登记限定名（canon miss 含 `.`）路由到
+/// 外部链接符号（`{pkg}.hc_fn{i}`，依赖库 .sym 表）。未命中仍响亮中止。
+pub fn codegen_with_links(
+    module: &IrModule,
+    errors: &ErrorCodeTable,
+    links: &HashMap<String, String>,
+) -> String {
+    codegen_inner(module, errors, links, "", true)
+}
+
+/// C3：库形态运行时声明化——模板 helper/基建（`define ... @hc_...`）转 `declare`、
+/// `@hc_fail_msg` 全局转 external；用户函数（`define %Value @"{pkg}.hc_fn{i}"`）保留
+/// define。链接时由 exe 提供运行时定义——库 .o 与 exe .o 无重复符号。
+fn runtime_to_declares(ll: &str) -> String {
+    let mut out = String::new();
+    let mut skip = false;
+    for line in ll.lines() {
+        if skip {
+            if line.trim() == "}" {
+                skip = false;
+            }
+            continue;
+        }
+        let t = line.trim();
+        if t.starts_with("define ") && t.contains("@hc_") && !t.starts_with("define %Value @\"") {
+            let sig = t
+                .trim_start_matches("define ")
+                .trim_end_matches('{')
+                .trim_end();
+            out.push_str("declare ");
+            out.push_str(sig);
+            out.push('\n');
+            skip = true;
+        } else if t.starts_with("@hc_fail_msg = global") {
+            out.push_str("@hc_fail_msg = external global i8*\n");
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// C3：库形态 codegen——函数/内部调用名带包前缀（`@{pkg}.hc_fn{i}`，跨模块链接唯一）、
+/// 运行时 helper/基建转 declare（由链接的 exe 提供定义）、跳过全局表
+/// （`@.h_globals` 跨 .o 撞符号——库全局链接留后续）与 main wrapper。
+pub fn codegen_lib(module: &IrModule, errors: &ErrorCodeTable, pkg: &str) -> String {
     let strings = collect_strings(module);
     let canon: HashMap<String, Vec<usize>> = module
         .func_index
@@ -54,8 +104,8 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .collect();
     let gidx = globals_index(module);
     let mut out = String::new();
-    emit_preamble(&mut out, &strings, &module.continuous);
-    emit_globals(&mut out, module);
+    let mut ext_decls: Vec<(String, usize)> = Vec::new();
+    emit_preamble(&mut out, &strings, &module.continuous, true);
     for (idx, f) in module.funcs.iter().enumerate() {
         emit_func(
             &mut out,
@@ -66,9 +116,54 @@ pub fn codegen(module: &IrModule, errors: &ErrorCodeTable) -> String {
             &canon,
             &module.funcs,
             &gidx,
+            &format!("{pkg}."),
+            &HashMap::new(),
+            &mut ext_decls,
         );
     }
-    emit_main_wrapper(&mut out, module);
+    emit_ext_decls(&mut out, &ext_decls);
+    runtime_to_declares(&out)
+}
+
+fn codegen_inner(
+    module: &IrModule,
+    errors: &ErrorCodeTable,
+    links: &HashMap<String, String>,
+    prefix: &str,
+    helpers: bool,
+) -> String {
+    let strings = collect_strings(module);
+    let canon: HashMap<String, Vec<usize>> = module
+        .func_index
+        .iter()
+        .map(|(name, idxs)| (name.clone(), idxs.clone()))
+        .collect();
+    let gidx = globals_index(module);
+    let mut out = String::new();
+    let mut ext_decls: Vec<(String, usize)> = Vec::new();
+    emit_preamble(&mut out, &strings, &module.continuous, helpers);
+    if helpers {
+        emit_globals(&mut out, module);
+    }
+    for (idx, f) in module.funcs.iter().enumerate() {
+        emit_func(
+            &mut out,
+            f,
+            idx,
+            &strings,
+            errors,
+            &canon,
+            &module.funcs,
+            &gidx,
+            prefix,
+            links,
+            &mut ext_decls,
+        );
+    }
+    emit_ext_decls(&mut out, &ext_decls);
+    if helpers {
+        emit_main_wrapper(&mut out, module);
+    }
     out
 }
 
@@ -83,7 +178,8 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .collect();
     let gidx = globals_index(module);
     let mut out = String::new();
-    emit_preamble(&mut out, &strings, &module.continuous);
+    let mut ext_decls: Vec<(String, usize)> = Vec::new();
+    emit_preamble(&mut out, &strings, &module.continuous, true);
     emit_globals(&mut out, module);
     for (idx, f) in module.funcs.iter().enumerate() {
         emit_func(
@@ -95,8 +191,12 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
             &canon,
             &module.funcs,
             &gidx,
+            "",
+            &HashMap::new(),
+            &mut ext_decls,
         );
     }
+    emit_ext_decls(&mut out, &ext_decls);
     emit_test_runner(&mut out, module);
     out
 }
@@ -348,7 +448,12 @@ const MSGS: &[Msg] = &[
 
 // ---------- 导言 ----------
 
-fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<String>) {
+fn emit_preamble(
+    out: &mut String,
+    strings: &[String],
+    continuous: &HashSet<String>,
+    helpers: bool,
+) {
     out.push_str("; H M3.3 LLVM 原生后端（自动生成；`zig cc file.ll -o file.exe`）\n\n");
     out.push_str("%Value = type { i32, i128 }\n");
     // Phase 2 聚合堆对象（聚合 `%Value` 的 data = 堆对象指针）
@@ -481,19 +586,22 @@ fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<Stri
         "define %Value @hc_no_function() {\n  call void @hc_abort_nofunc()\n  unreachable\n}\n\n",
     );
 
-    emit_arith_helpers(out);
-    emit_bit_helpers(out);
-    emit_cmp_helpers(out);
-    emit_unary_helpers(out);
-    emit_assert_helpers(out);
-    emit_pointer_helpers(out);
-    emit_aggregate_helpers(out);
-    emit_switch_helpers(out);
-    emit_iter_helpers(out);
-    emit_print_helpers(out);
-    emit_scalar_builtin_helpers(out);
-    emit_io_helper(out);
-    emit_deep_copy_gate(out, strings, continuous);
+    // 计算 helper（C3 库形态跳过——由链接的 exe 提供符号；中止基建保留）
+    if helpers {
+        emit_arith_helpers(out);
+        emit_bit_helpers(out);
+        emit_cmp_helpers(out);
+        emit_unary_helpers(out);
+        emit_assert_helpers(out);
+        emit_pointer_helpers(out);
+        emit_aggregate_helpers(out);
+        emit_switch_helpers(out);
+        emit_iter_helpers(out);
+        emit_print_helpers(out);
+        emit_scalar_builtin_helpers(out);
+        emit_io_helper(out);
+        emit_deep_copy_gate(out, strings, continuous);
+    }
 }
 
 // ---------- 算术 helper（加/减/乘/除/模/欧几里得模） ----------
@@ -3602,16 +3710,19 @@ fn emit_func(
     canon: &HashMap<String, Vec<usize>>,
     funcs: &[IrFunc],
     gidx: &HashMap<String, usize>,
+    prefix: &str,
+    links: &HashMap<String, String>,
+    ext_decls: &mut Vec<(String, usize)>,
 ) {
     let slot_consts = build_slot_consts(f);
-    let _ = writeln!(out, "; hc_fn{idx} = {}", f.name);
+    let _ = writeln!(out, "; {prefix}hc_fn{idx} = {}", f.name);
     let params = (0..f.params.len())
         .map(|i| format!("%Value %p{i}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let _ = writeln!(out, "define %Value @\"hc_fn{idx}\"({params}) {{");
+    let _ = writeln!(out, "define %Value @\"{prefix}hc_fn{idx}\"({params}) {{");
     // 序言（槽数组 + 参数存槽）并入 entry 块（BodyEmitter 首个块即 entry）
-    let mut be = BodyEmitter::new();
+    let mut be = BodyEmitter::new(prefix, links);
     be.emit(format!(
         "%slots = alloca [{} x %Value], align 16",
         f.n_slots
@@ -3646,8 +3757,28 @@ fn emit_func(
     for inst in &f.body {
         be.inst(inst, strings, errors, canon, funcs, gidx, &slot_consts);
     }
+    let per_func = std::mem::take(&mut be.ext_decls);
     out.push_str(&be.finish());
     out.push_str("}\n\n");
+    // C3：外部链接符号声明——去重收集到模块级（同一符号被多函数引用时只 declare 一次，
+    // LLVM 拒绝重复声明同一函数）；模块末尾统一 emit（LLVM 允许前向引用）。
+    for (sym, n) in per_func {
+        if !ext_decls.iter().any(|(s, _)| *s == sym) {
+            ext_decls.push((sym, n));
+        }
+    }
+}
+
+/// C3：模块级外部链接符号声明（`declare %Value @\"jsonlib.hc_fn0\"(%Value, ...)`——
+/// 链接时由库 .a 提供定义）。
+fn emit_ext_decls(out: &mut String, ext_decls: &[(String, usize)]) {
+    for (sym, n) in ext_decls {
+        let params = (0..*n)
+            .map(|i| format!("%Value %d{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "declare %Value @\"{sym}\"({params})");
+    }
 }
 
 // ---------- main 包装（原生 CRT 入口） ----------
@@ -3854,16 +3985,25 @@ struct BodyEmitter {
     blocks: Vec<String>,
     cur: String,
     terminated: bool,
+    /// C3：函数/内部调用名前缀（库形态 = `{pkg}.`；exe = 空）
+    prefix: String,
+    /// C3：未登记限定名 → 外部链接符号（exe 链接本地库 .a 用）
+    links: HashMap<String, String>,
+    /// C3：已引用的外部链接符号 (符号名, 参数个数)——emit_func 末尾补 declare
+    ext_decls: Vec<(String, usize)>,
 }
 
 impl BodyEmitter {
-    fn new() -> Self {
+    fn new(prefix: &str, links: &HashMap<String, String>) -> Self {
         BodyEmitter {
             ssa: 0,
             fresh: 0,
             blocks: Vec::new(),
             cur: "entry:\n".to_string(),
             terminated: false,
+            prefix: prefix.to_string(),
+            links: links.clone(),
+            ext_decls: Vec::new(),
         }
     }
 
@@ -4102,6 +4242,20 @@ impl BodyEmitter {
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
+    /// 从参数槽加载 `%Value` 实参列表（C3 外部链接调用复用；emit load 指令）
+    fn arglist(&mut self, args: &[usize]) -> String {
+        let mut arglist = String::new();
+        for a in args {
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
+            if !arglist.is_empty() {
+                arglist.push_str(", ");
+            }
+            arglist.push_str(&format!("%Value {v}"));
+        }
+        arglist
+    }
+
     fn call(
         &mut self,
         name: &str,
@@ -4130,8 +4284,19 @@ impl BodyEmitter {
             return;
         }
         let Some(candidates) = canon.get(name) else {
-            // Phase 7：未实现的内建/限定名（json.parse 等）响亮拒绝，禁止 NoFunction 静默歧义
+            // C3：未登记限定名 → 外部链接符号（exe 链接本地库 .a：`jsonlib.parse` →
+            // `@{pkg}.hc_fn{i}`）；未命中才 Phase 7 响亮拒绝（禁止 NoFunction 静默歧义）
             if name.contains('.') {
+                if let Some(sym) = self.links.get(name).cloned() {
+                    if !self.ext_decls.iter().any(|(s, _)| *s == sym) {
+                        self.ext_decls.push((sym.clone(), args.len()));
+                    }
+                    let res = self.r();
+                    let arglist = self.arglist(args);
+                    self.emit(format!("{res} = call %Value @\"{sym}\"({arglist})"));
+                    self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+                    return;
+                }
                 self.abort_feature("builtin");
                 return;
             }
@@ -4153,15 +4318,7 @@ impl BodyEmitter {
         };
         let target = pool[0]; // 同 arity 多候选 → 首个（类型分派留待 Phase 7）
         let fdef = &funcs[target];
-        let mut arglist = String::new();
-        for a in args {
-            let v = self.r();
-            self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
-            if !arglist.is_empty() {
-                arglist.push_str(", ");
-            }
-            arglist.push_str(&format!("%Value {v}"));
-        }
+        let mut arglist = self.arglist(args);
         // 尾参默认值（编译期常量）补齐
         for d in fdef.defaults.iter().skip(args.len()) {
             if let Some(c) = d {
@@ -4173,7 +4330,10 @@ impl BodyEmitter {
             }
         }
         let res = self.r();
-        self.emit(format!("{res} = call %Value @\"hc_fn{target}\"({arglist})"));
+        self.emit(format!(
+            "{res} = call %Value @\"{}hc_fn{target}\"({arglist})",
+            self.prefix
+        ));
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 
@@ -4717,7 +4877,10 @@ impl BodyEmitter {
             }
         }
         let res = self.r();
-        self.emit(format!("{res} = call %Value @\"hc_fn{target}\"({arglist})"));
+        self.emit(format!(
+            "{res} = call %Value @\"{}hc_fn{target}\"({arglist})",
+            self.prefix
+        ));
         self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
     }
 

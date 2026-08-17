@@ -508,6 +508,8 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
         globals.insert((*g).to_string());
     }
     let mut module = IrModule::default();
+    // C3：文件级 import 展开表（bound → 完整限定名 / 模块前缀）——原生链接与 IR 调用名对齐
+    let (import_syms, import_mods) = collect_imports(program);
     // 错误码表（名 → 码）：内建运行时错误值（io.fs 等）须与 `error.X` 字面量同码
     for e in errors.entries() {
         module.error_codes.insert(e.name.clone(), e.code);
@@ -523,7 +525,16 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
         }
     }
     for d in &program.decls {
-        lower_decl(d, &mut module, &errors, &types, &funcs, &globals)?;
+        lower_decl(
+            d,
+            &mut module,
+            &errors,
+            &types,
+            &funcs,
+            &globals,
+            &import_syms,
+            &import_mods,
+        )?;
     }
     // Phase 5：合成 `@__init__` 函数（声明序初始化 global/const；多文件合并 = 各模块
     // 自带 init，运行时按 funcs 序依次执行）。不登记 func_index（不可被用户调用）。
@@ -534,6 +545,8 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
         &funcs,
         &globals,
         &mut module.closures,
+        &import_syms,
+        &import_mods,
     )? {
         module.funcs.push(init);
     }
@@ -552,6 +565,42 @@ fn collect_globals(program: &Program) -> HashSet<String> {
     let mut set = HashSet::new();
     collect_globals_in(&program.decls, &mut set);
     set
+}
+
+/// C3：文件级 import 展开表——(符号选择 bound → 完整限定名, 整模块 bound → 包路径)。
+/// `H.std` 根跳过（内建虚拟根，`io.print` 等走 CallBuiltin 路由，不展开）。
+fn collect_imports(program: &Program) -> (HashMap<String, String>, HashMap<String, String>) {
+    let mut syms = HashMap::new();
+    let mut mods = HashMap::new();
+    for d in &program.decls {
+        if let Decl::Import {
+            path,
+            alias,
+            select,
+            ..
+        } = d
+        {
+            if path.first().map_or(false, |p| p == "H") {
+                continue;
+            }
+            let base = path.join(".");
+            match select {
+                Some(syms_sel) => {
+                    for (sym, sym_alias) in syms_sel {
+                        let bound = sym_alias.clone().unwrap_or_else(|| sym.clone());
+                        syms.insert(bound, format!("{base}.{sym}"));
+                    }
+                }
+                None => {
+                    let bound = alias
+                        .clone()
+                        .unwrap_or_else(|| path.last().cloned().unwrap_or_default());
+                    mods.insert(bound, base);
+                }
+            }
+        }
+    }
+    (syms, mods)
 }
 
 /// 收集全局/常量名（声明序，供 `IrModule::globals` + `@__init__` 复用）。
@@ -665,6 +714,8 @@ fn lower_decl(
     types: &TypeTable,
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
+    import_syms: &HashMap<String, String>,
+    import_mods: &HashMap<String, String>,
 ) -> Result<(), IrError> {
     match d {
         Decl::Fn {
@@ -684,6 +735,8 @@ fn lower_decl(
                 funcs,
                 globals,
                 &mut module.closures,
+                import_syms,
+                import_mods,
             )?;
             register_func(module, name, func);
         }
@@ -700,6 +753,8 @@ fn lower_decl(
                 funcs,
                 globals,
                 &mut module.closures,
+                import_syms,
+                import_mods,
             )?;
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
@@ -730,6 +785,8 @@ fn lower_decl(
                     funcs,
                     globals,
                     &mut module.closures,
+                    import_syms,
+                    import_mods,
                 ) {
                     register_func(module, &fname, func);
                 }
@@ -754,6 +811,8 @@ fn collect_ns_funcs(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     closures: &mut Vec<IrFunc>,
+    import_syms: &HashMap<String, String>,
+    import_mods: &HashMap<String, String>,
 ) -> Result<(), IrError> {
     for d in decls {
         match d {
@@ -767,7 +826,17 @@ fn collect_ns_funcs(
                 let mut qn = path.to_vec();
                 qn.push(name.clone());
                 let func = lower_func(
-                    name, params, body, false, errors, types, funcs, globals, closures,
+                    name,
+                    params,
+                    body,
+                    false,
+                    errors,
+                    types,
+                    funcs,
+                    globals,
+                    closures,
+                    import_syms,
+                    import_mods,
                 )?;
                 out.push((name.clone(), qn.join("."), func));
             }
@@ -778,7 +847,18 @@ fn collect_ns_funcs(
             } => {
                 let mut p = path.to_vec();
                 p.push(name.clone());
-                collect_ns_funcs(nested, &p, out, errors, types, funcs, globals, closures)?;
+                collect_ns_funcs(
+                    nested,
+                    &p,
+                    out,
+                    errors,
+                    types,
+                    funcs,
+                    globals,
+                    closures,
+                    import_syms,
+                    import_mods,
+                )?;
             }
             // namespace 内 global/const：扁平登记（对齐 oracle `exec_decl_top`），由 `@__init__` 处理
             Decl::Global { .. } | Decl::Const { .. } => {}
@@ -810,8 +890,18 @@ fn lower_func(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     closures: &mut Vec<IrFunc>,
+    import_syms: &HashMap<String, String>,
+    import_mods: &HashMap<String, String>,
 ) -> Result<IrFunc, IrError> {
-    let mut ctx = LowerCtx::new(errors.clone(), types.clone(), funcs, globals, closures);
+    let mut ctx = LowerCtx::new(
+        errors.clone(),
+        types.clone(),
+        funcs,
+        globals,
+        closures,
+        import_syms.clone(),
+        import_mods.clone(),
+    );
     ctx.push_scope();
     // 参数槽（声明序，从 0 开始）
     let param_slots: Vec<usize> = params.iter().map(|_| ctx.alloc_slot()).collect();
@@ -863,11 +953,21 @@ fn lower_init_func(
     funcs: &HashSet<String>,
     globals: &HashSet<String>,
     closures: &mut Vec<IrFunc>,
+    import_syms: &HashMap<String, String>,
+    import_mods: &HashMap<String, String>,
 ) -> Result<Option<IrFunc>, IrError> {
     if globals.is_empty() {
         return Ok(None);
     }
-    let mut ctx = LowerCtx::new(errors.clone(), types.clone(), funcs, globals, closures);
+    let mut ctx = LowerCtx::new(
+        errors.clone(),
+        types.clone(),
+        funcs,
+        globals,
+        closures,
+        import_syms.clone(),
+        import_mods.clone(),
+    );
     ctx.push_scope();
     for d in &program.decls {
         lower_global_decl(d, &mut ctx)?;
@@ -965,6 +1065,10 @@ struct LowerCtx<'a> {
     types: TypeTable,
     /// 已知函数名集合（Phase 4）：未解析 Ident → 函数引用（FnRef）/ 静态方法调用判定
     funcs: &'a HashSet<String>,
+    /// C3：文件级 import 符号选择展开表（bound 名 → 完整限定名 `jsonlib.parse`）
+    import_syms: HashMap<String, String>,
+    /// C3：整模块 import 前缀展开表（bound 模块名 → 包路径 `pkg.mod`）
+    import_mods: HashMap<String, String>,
     /// 已知全局/常量名集合（Phase 5）：未解析 Ident → LoadGlobal；赋值目标 → StoreGlobal
     globals: &'a HashSet<String>,
     /// 循环栈（Phase 3）：无标签 break/continue 定位（对齐 oracle 单级跳出；标签 → Phase 6）
@@ -996,6 +1100,8 @@ impl<'a> LowerCtx<'a> {
         funcs: &'a HashSet<String>,
         globals: &'a HashSet<String>,
         closures: &'a mut Vec<IrFunc>,
+        import_syms: HashMap<String, String>,
+        import_mods: HashMap<String, String>,
     ) -> Self {
         LowerCtx {
             scopes: Vec::new(),
@@ -1005,6 +1111,8 @@ impl<'a> LowerCtx<'a> {
             errors,
             types,
             funcs,
+            import_syms,
+            import_mods,
             globals,
             loops: Vec::new(),
             defers: Vec::new(),
@@ -1514,9 +1622,16 @@ impl<'a> LowerCtx<'a> {
                                 args: arg_ts,
                             });
                         } else {
-                            // 全局/namespace 函数静态调用（含重载，按名分派）
+                            // 全局/namespace 函数静态调用（含重载，按名分派）；
+                            // C3：import 符号选择 bound → 展开完整限定名（`parse` → `jsonlib.parse`，
+                            // 原生经 extern links 链接 / IR 运行时 NoFunction）
+                            let qn = self
+                                .import_syms
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_else(|| name.clone());
                             self.push(IrInst::Call {
-                                name: name.clone(),
+                                name: qn,
                                 args: arg_ts,
                                 temp: t,
                             });
@@ -1545,6 +1660,13 @@ impl<'a> LowerCtx<'a> {
                             parts.push(ns.clone());
                             parts.reverse();
                             let qn = parts.join(".");
+                            // C3：整模块 import 前缀替换——`import jsonlib;` 后 `jsonlib.f` →
+                            // `{包路径}.f`（原生经 extern links 链接）
+                            let qn = if let Some(base) = self.import_mods.get(ns) {
+                                format!("{base}.{field}")
+                            } else {
+                                qn
+                            };
                             // 已知静态函数（namespace 函数 / `Type.method` 静态调用）→ 直接调用；
                             // `Rect.area(&rect)` 静态调用显式传 self，无注入（对齐 oracle eval_call）
                             if self.funcs.contains(&qn) {
@@ -1944,7 +2066,17 @@ impl<'a> LowerCtx<'a> {
         let funcs = self.funcs;
         let globals = self.globals;
         let closures = &mut *self.closures;
-        let mut ctx = LowerCtx::new(errors, types, funcs, globals, closures);
+        let import_syms = self.import_syms.clone();
+        let import_mods = self.import_mods.clone();
+        let mut ctx = LowerCtx::new(
+            errors,
+            types,
+            funcs,
+            globals,
+            closures,
+            import_syms,
+            import_mods,
+        );
         ctx.push_scope();
         // 捕获参数槽（0..n_caps）与显式参数槽（n_caps..）
         for _ in 0..n_caps {

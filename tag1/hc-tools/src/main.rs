@@ -453,7 +453,19 @@ fn check_and_merge(
     siblings: &[&hc::Program],
     strip_sibling_tests: bool,
 ) -> Result<(hc::ir::IrModule, hc::ErrorCodeTable), String> {
-    let errs = hc::check_semantics_extern_deps(entry, siblings, &[]);
+    check_and_merge_deps(entry, entry_source, siblings, strip_sibling_tests, &[])
+}
+
+/// M7.1 + C3：联合语义检查（`deps` = 依赖包 (包名, Program)，仅登记 pub 符号供
+/// `import pkg.{sym}` 解析）→ 入口与兄弟各自 lower → 合并为单模块与错误码表。
+fn check_and_merge_deps(
+    entry: &hc::Program,
+    entry_source: &str,
+    siblings: &[&hc::Program],
+    strip_sibling_tests: bool,
+    deps: &[(&str, &hc::Program)],
+) -> Result<(hc::ir::IrModule, hc::ErrorCodeTable), String> {
+    let errs = hc::check_semantics_extern_deps(entry, siblings, deps);
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, entry_source));
     }
@@ -476,7 +488,9 @@ fn check_and_merge(
     Ok((merged, table))
 }
 
-/// M7.1：入口 + 同包兄弟 → LLVM IR 文本（`main` 入口）。
+/// M7.1：入口 + 同包兄弟 → LLVM IR 文本（`main` 入口）。仅测试用（C3 后生产路径
+/// 走 [`check_and_merge_deps`] + `codegen_with_links`）。
+#[cfg(test)]
 fn programs_to_ll(
     entry: &hc::Program,
     entry_source: &str,
@@ -497,13 +511,14 @@ fn programs_to_test_ll(
 }
 
 /// `zig cc <ll> -o <exe>`（M3.3 原生链接）。返回 Ok 或带诊断的 Err。
-fn link_exe(ll_path: &Path, exe_path: &Path) -> Result<(), String> {
-    let out = std::process::Command::new("zig")
-        .arg("cc")
-        .arg(ll_path)
-        .arg("-o")
-        .arg(exe_path)
-        .output();
+fn link_exe(ll_path: &Path, exe_path: &Path, extra: &[PathBuf]) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("zig");
+    cmd.arg("cc").arg(ll_path);
+    for a in extra {
+        cmd.arg(a);
+    }
+    cmd.arg("-o").arg(exe_path);
+    let out = cmd.output();
     match out {
         Ok(o) if o.status.success() => Ok(()),
         Ok(o) => Err(format!(
@@ -514,8 +529,105 @@ fn link_exe(ll_path: &Path, exe_path: &Path) -> Result<(), String> {
     }
 }
 
+/// C3：`Kind::lib` 构建——codegen_lib（包前缀 + 无 helper/全局/main）→ `zig cc -c` →
+/// `.o` → `zig ar rcs lib{name}.a`；另写 `{name}.sym`（限定名 → 导出符号，exe 链接引用）。
+/// 返回（库文件路径，符号表）。
+fn build_lib(dir: &Path, name: &str) -> Result<(PathBuf, Vec<(String, String)>), ExitCode> {
+    let entry_path = match package_entry(dir) {
+        Ok(e) => e,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
+    let (source, entry, siblings) = match package_programs(&entry_path) {
+        Ok(t) => t,
+        Err(c) => return Err(c),
+    };
+    let sib_refs: Vec<&hc::Program> = siblings.iter().collect();
+    let (merged, table) = match check_and_merge(&entry, &source, &sib_refs, false) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprint!("{msg}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
+    // 库不运行测试：剔除 [test] 函数（其断言 helper 在库形态不发射，保留会链接失败）
+    let mut merged = merged;
+    strip_test_funcs_in_place(&mut merged);
+    // 符号表：func_index 限定名 → `{pkg}.hc_fn{i}`（pub 边界由语义层 import 检查保证——
+    // 非 pub 符号 import 即报错，.sym 全量导出不绕过）
+    let mut syms: Vec<(String, String)> = merged
+        .func_index
+        .iter()
+        .map(|(fn_, idxs)| (format!("{name}.{fn_}"), format!("{name}.hc_fn{}", idxs[0])))
+        .collect();
+    syms.sort();
+    let ll = hc::llvm::codegen_lib(&merged, &table, name);
+    let ll_path = dir.join(format!("{name}.ll"));
+    if let Err(e) = std::fs::write(&ll_path, &ll) {
+        eprintln!("error: 写入 {} 失败: {e}", ll_path.display());
+        return Err(ExitCode::FAILURE);
+    }
+    let o_path = dir.join(format!("{name}.o"));
+    let cc = std::process::Command::new("zig")
+        .arg("cc")
+        .arg("-c")
+        .arg(&ll_path)
+        .arg("-o")
+        .arg(&o_path)
+        .output();
+    match cc {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            eprintln!(
+                "{} zig cc -c 失败：\n{}",
+                paint(err_color(), "31", "[FAIL]"),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        Err(e) => {
+            eprintln!("调用 zig cc 失败: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+    }
+    let a_path = dir.join(format!("lib{name}.a"));
+    let ar = std::process::Command::new("zig")
+        .arg("ar")
+        .arg("rcs")
+        .arg(&a_path)
+        .arg(&o_path)
+        .output();
+    if let Err(e) = ar.and_then(|o| {
+        if o.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("zig ar: {}", String::from_utf8_lossy(&o.stderr)),
+            ))
+        }
+    }) {
+        eprintln!("error: 归档 {} 失败: {e}", a_path.display());
+        return Err(ExitCode::FAILURE);
+    }
+    // 符号表文件（构建产物；exe 链接侧已由返回值直接使用）
+    let sym_text = syms
+        .iter()
+        .map(|(qn, sym)| format!("{qn} {sym}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(dir.join(format!("{name}.sym")), format!("{sym_text}\n"));
+    // 清理中间 .ll/.o，保留 .a + .sym
+    let _ = std::fs::remove_file(&ll_path);
+    let _ = std::fs::remove_file(&o_path);
+    Ok((a_path, syms))
+}
+
 /// `hc build file.hc`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
 /// `zig cc` 缺失时回退字节码镜像 .hbc + 平台启动器（M3.2 前过渡形态）。
+/// C3：`Kind::lib` → 静态归档（build_lib）；`Kind::exe` 带本地依赖 → 链接库形态。
 fn build_file(path: &Path) -> ExitCode {
     // 目录参数：取目录内 main.hc（否则首个 .hc）作为入口
     let entry_path = if path.is_dir() {
@@ -541,8 +653,8 @@ fn build_file(path: &Path) -> ExitCode {
     let stem = entry_path.file_stem().unwrap_or_default().to_string_lossy();
     let dir = entry_path.parent().unwrap_or_else(|| Path::new("."));
 
-    // M7.2：build.zon 包清单报告（原生后端首轮单文件；跨包链接归后续）
-    match buildzon::load_from_dir(dir) {
+    // M7.2：build.zon 包清单（C3：kind 分流——lib → 静态归档；exe → 链接依赖库）
+    let manifest = match buildzon::load_from_dir(dir) {
         Ok(Some(m)) => {
             println!("包：{} {}（{:?}）", m.name, m.version, m.kind);
             if !m.files.is_empty() {
@@ -552,15 +664,70 @@ fn build_file(path: &Path) -> ExitCode {
                 let names: Vec<&str> = m.deps.iter().map(|d| d.name.as_str()).collect();
                 println!("  依赖：{}", names.join(", "));
             }
+            Some(m)
         }
-        Ok(None) => {}
-        Err(e) => eprintln!("[warn] build.zon 解析失败: {e}"),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[warn] build.zon 解析失败: {e}");
+            None
+        }
+    };
+
+    // C3：库形态——不产出 exe，编译为静态归档（zig cc -c + zig ar）
+    if manifest
+        .as_ref()
+        .is_some_and(|m| m.kind == buildzon::Kind::Lib)
+    {
+        if !zig_cc_available() {
+            eprintln!("error: 库构建需要 zig cc（当前未检测到）");
+            return ExitCode::FAILURE;
+        }
+        return match build_lib(dir, &manifest.as_ref().unwrap().name) {
+            Ok((a_path, _)) => {
+                println!("库产物: {}", a_path.display());
+                ExitCode::SUCCESS
+            }
+            Err(c) => c,
+        };
     }
 
     // M3.3 原生路径：zig cc 可用 → 生成 .ll → 编译链接为可执行文件
     if zig_cc_available() {
         let sib_refs: Vec<&hc::Program> = siblings.iter().collect();
-        let ll = match programs_to_ll(&entry, &source, &sib_refs) {
+        // C3：本地依赖先构建为静态库，收集 .a 与外部符号表（限定名 → `{pkg}.hc_fn{i}`）
+        let mut libs: Vec<PathBuf> = Vec::new();
+        let mut links: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut dep_progs: Vec<(String, hc::Program)> = Vec::new();
+        if let Some(m) = &manifest {
+            for dep in &m.deps {
+                let Some(rel) = &dep.path else {
+                    continue; // 注册中心依赖归第三块
+                };
+                let dep_dir = dir.join(rel);
+                match build_lib(&dep_dir, &dep.name) {
+                    Ok((a_path, syms)) => {
+                        libs.push(a_path);
+                        for (qn, sym) in syms {
+                            links.insert(qn, sym);
+                        }
+                    }
+                    Err(c) => return c,
+                }
+                // 依赖包源码（pub 符号登记用，不合并函数体）
+                for f in dir_hc_files(&dep_dir) {
+                    if let Ok(src) = std::fs::read_to_string(&f) {
+                        if let Ok(p) = hc::parse_source(&src) {
+                            dep_progs.push((dep.name.clone(), p));
+                        }
+                    }
+                }
+            }
+        }
+        let dep_refs: Vec<(&str, &hc::Program)> =
+            dep_progs.iter().map(|(n, p)| (n.as_str(), p)).collect();
+        let ll = match check_and_merge_deps(&entry, &source, &sib_refs, false, &dep_refs)
+            .and_then(|(merged, table)| Ok(hc::llvm::codegen_with_links(&merged, &table, &links)))
+        {
             Ok(ll) => ll,
             Err(msg) => {
                 eprint!("{msg}");
@@ -578,7 +745,7 @@ fn build_file(path: &Path) -> ExitCode {
             stem.to_string()
         };
         let exe_path = dir.join(&exe_name);
-        if let Err(msg) = link_exe(&ll_path, &exe_path) {
+        if let Err(msg) = link_exe(&ll_path, &exe_path, &libs) {
             eprintln!("{} {msg}", paint(err_color(), "31", "[FAIL]"));
             eprintln!("（LLVM IR 已保留：{}）", ll_path.display());
             return ExitCode::FAILURE;
@@ -782,7 +949,8 @@ enum IrRunOutcome {
 ///
 /// 流程：解析 → 语义检查（准确优先）→ `lower` → `execute_ir`；失败返回可直接
 /// 打印的文本（诊断渲染 / `error.{name}: {message}` + 切片外特性提示）。
-/// 不依赖文件系统与退出码——仅 `hc run --ir` 使用，默认路径不受影响。
+/// 不依赖文件系统与退出码——测试用（生产入口走 [`run_ir_source_with_args`]）。
+#[cfg(test)]
 fn run_ir_source(source: &str) -> Result<IrRunOutcome, String> {
     run_ir_source_with_args(source, &[])
 }
@@ -1106,7 +1274,7 @@ fn cross_validate_native(
     std::fs::write(&ll_path, &ll).map_err(|e| format!("写入 {} 失败: {e}", ll_path.display()))?;
     let exe_name = if cfg!(windows) { "prog.exe" } else { "prog" };
     let exe_path = work.join(exe_name);
-    if let Err(e) = link_exe(&ll_path, &exe_path) {
+    if let Err(e) = link_exe(&ll_path, &exe_path, &[]) {
         let _ = std::fs::remove_dir_all(&work);
         return Err(e);
     }

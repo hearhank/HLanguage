@@ -8,6 +8,9 @@ node_modules/
 *.o
 *.bin
 *.lock
+# 库形态构建产物（C3：zig ar 静态归档 + 符号表）
+lib*.a
+*.sym
 build/
 out/
 debug/

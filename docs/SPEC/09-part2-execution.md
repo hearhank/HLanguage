@@ -110,6 +110,8 @@
 
 > ✅ **C1/C2 已完成（2026-08-17，梯队 33）**：`hc run <目录>` 目录包运行（package_entry 入口解析）+ 02-packages 示例 import 迁移 + cli.rs 3 测试；06-08 目录运行约定已同步。
 
+> ✅ **C3 已完成（2026-08-17，梯队 34）**：`hc build` 库形态（`Kind::lib` → **lib 静态归档**）——`build_lib`（codegen_lib 包前缀 + runtime helper 转 declare + `zig cc -c` → `.o` → `zig ar rcs lib{name}.a` + `.sym` 符号表，剔除 test 函数）；exe 链接本地依赖库端到端（`check_and_merge_deps` 依赖 pub 登记 + IR 文件级 import 展开表 `collect_imports` + `codegen_with_links` 外部链接符号路由 + 模块级 ext_decls 去重声明）。02-packages 改造为链接形态；cli.rs 新增 `build_lib_static_archive_and_link_exe` 测试。**已知限制**：库全局变量链接留后续（`@.h_globals` 跨 .o 撞符号）；`hc run --ir` 跨包调用仍 NoFunction（IR 参考解释器不装载依赖）。
+
 ### D. M5.3 serialize 库（依赖：无特殊）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
