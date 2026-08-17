@@ -257,6 +257,118 @@ fn script_alloc_forbidden() {
 }
 
 #[test]
+fn serialization_boilerplate_validate_and_to_json() {
+    // C1（Q37/Q38 定制通道）：脚本从 types.fields 生成校验 + to_json 样板。
+    // 校验规则（类型驱动）：String 非空 / i32 >= 0 / ?String null 允许、非空时非空串；
+    // to_json：String 带引号、i32 裸值（fmt_int）、?String null → `null`。
+    // 端到端 `hc run` 与 `hc run --ir` 输出一致（B5 后端无感知）。
+    let dir = temp_dir("c1_ser");
+    let file = write(
+        &dir,
+        "ser.hc",
+        r#"import H.std.{io};
+
+class User {
+    name: String,
+    age: i32,
+    email: ?String,
+}
+
+script {
+    var out = "fn user_validate(u: *User) !void {\n";
+    for (types.fields("User")) |f| {
+        if (f[1] == "String") {
+            out = out.concat("    if (u.").concat(f[0]).concat(".len() == 0) return error.Invalid;\n");
+        } else if (f[1] == "i32") {
+            out = out.concat("    if (u.").concat(f[0]).concat(" < 0) return error.Invalid;\n");
+        } else if (f[1] == "?String") {
+            out = out.concat("    if (u.").concat(f[0]).concat(" != null) {\n");
+            out = out.concat("        if (u.").concat(f[0]).concat(".?.len() == 0) return error.Invalid;\n");
+            out = out.concat("    }\n");
+        }
+    }
+    out = out.concat("}\n");
+
+    out = out.concat("fn user_to_json(u: *User, alloc: Allocator) String {\n");
+    out = out.concat("    var out = \"{\";\n");
+    var first = true;
+    for (types.fields("User")) |f| {
+        var sep = "";
+        if (first) {
+            first = false;
+        } else {
+            sep = ", ";
+        }
+        if (f[1] == "String") {
+            out = out.concat("    out = out.concat(\"")
+                .concat(sep)
+                .concat("\\\"")
+                .concat(f[0])
+                .concat("\\\": \\\"\").concat(u.")
+                .concat(f[0])
+                .concat(").concat(\"\\\"\");\n");
+        } else if (f[1] == "i32") {
+            out = out.concat("    out = out.concat(\"")
+                .concat(sep)
+                .concat("\\\"")
+                .concat(f[0])
+                .concat("\\\": \").concat(fmt_int(u.")
+                .concat(f[0])
+                .concat("));\n");
+        } else if (f[1] == "?String") {
+            out = out.concat("    if (u.").concat(f[0]).concat(" != null) {\n");
+            out = out.concat("        out = out.concat(\"")
+                .concat(sep)
+                .concat("\\\"")
+                .concat(f[0])
+                .concat("\\\": \\\"\").concat(u.")
+                .concat(f[0])
+                .concat(".?).concat(\"\\\"\");\n");
+            out = out.concat("    } else {\n");
+            out = out.concat("        out = out.concat(\"")
+                .concat(sep)
+                .concat("\\\"")
+                .concat(f[0])
+                .concat("\\\": null\");\n");
+            out = out.concat("    }\n");
+        }
+    }
+    out = out.concat("    out = out.concat(\"}\");\n");
+    out = out.concat("    return out;\n");
+    out = out.concat("}\n");
+    out;
+}
+
+fn main(args: o Vec(String)) !void {
+    var good = alloc.init(User{name = "alice", age = 30, email = "a@x.com"});
+    try user_validate(&good);
+    io.print("json = {}\n", user_to_json(&good, alloc));
+    var bad = alloc.init(User{name = "bob", age = -1, email = null});
+    user_validate(&bad) catch |e| {
+        io.print("bad = {}\n", e);
+    };
+    var none = alloc.init(User{name = "carol", age = 40, email = null});
+    io.print("none = {}\n", user_to_json(&none, alloc));
+}
+"#,
+    );
+    let expected = r#"json = {"name": "alice", "age": 30, "email": "a@x.com"}
+bad = error.Invalid
+none = {"name": "carol", "age": 40, "email": null}"#;
+
+    let out = run_hc(&[Path::new("run"), &file]);
+    let s = stdout(&out);
+    assert!(out.status.success(), "tree-walking 应成功: {s}");
+    assert_eq!(s.trim(), expected, "校验+to_json 样板输出应正确: {s}");
+
+    let out_ir = run_hc(&[Path::new("run"), Path::new("--ir"), &file]);
+    let s_ir = stdout(&out_ir);
+    assert!(out_ir.status.success(), "--ir 应成功: {s_ir}");
+    assert_eq!(s_ir.trim(), expected, "IR 输出应与 tree-walking 一致: {s_ir}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn non_string_product_rejected() {
     // B3：产物非字符串 → 编译错误（带值种类提示）
     let dir = temp_dir("neg_int");

@@ -159,6 +159,30 @@ fn run_cli() -> ExitCode {
                 run_file(Path::new(path), &prog_args)
             }
         }
+        // 调试：打印 script 块展开后的源码（组 C 开发辅助）
+        "dump-scripts" => {
+            let Some(path) = args.get(2) else {
+                eprintln!("error: `hc dump-scripts` requires a file path");
+                return ExitCode::from(2);
+            };
+            let source = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: 读取 {path} 失败: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match scriptgen::expand_scripts(&source) {
+                Ok(expanded) => {
+                    println!("{expanded}");
+                    ExitCode::SUCCESS
+                }
+                Err(msg) => {
+                    eprintln!("{msg}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         "test" => {
             // 解析可选 --mode=interpret|compile（默认 interpret）与目标路径
             let mut mode = TestMode::Interpret;

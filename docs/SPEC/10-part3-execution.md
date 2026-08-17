@@ -60,7 +60,7 @@
 |---|---|---|
 | Debug 悬垂标记切换粒度（编译单元/函数/引用点） | 05 开放问题 #1 | E6.1 裁决 |
 | 无 GC 长运行脚本（Arena 惯例） | 05 #3 | E3.4（time/rng 同组）推广 |
-| 序列化 schema 演进（版本/迁移钩子） | 05 #4 | E1.3 定制通道设计时 |
+| 序列化 schema 演进（版本/迁移钩子） | 05 #4 | ✅ 已定案（组 C E1.3，2026-08-18，见 05 #4 设计） |
 | 注册中心治理（冲突/审计/失联） | 05 #5 | E5.2 MVP 起步 |
 | 跨线程引用传递（Send/Sync 式静态标记） | 05 #6 | E6.1 静态标记 |
 | `io.stdout`/`io.stderr` 独立流、`list_dir → Vec(DirEntry)`、`String.to_upper`、`io.fs.open_dir/Dir`、UDP | 09 §2.2（第二部分标注归口） | E3.1/E3 落地 |
@@ -98,10 +98,12 @@
 
 ### C. E1.3 序列化定制（依赖 B；脚本生成样板通道）
 
+> ✅ **组 C 已完成（2026-08-18）**：C1/C2 实现——脚本从 `types.fields` 生成校验 + to_json 样板（String 非空 / i32 >= 0 / ?String null 守卫；JSON String 带引号 / i32 裸值 / ?String→`null`），示例 36 扩为「字段统计 + 校验 + 序列化」三合一；`hc-tools/tests/scriptgen.rs` 新增端到端定制通道测试（`hc run` 与 `hc run --ir` 一致）；schema 版本/迁移钩子设计定案（05 #4）。**已知边界**：生成的样板用 String 方法（`.concat`/`.len`）与 `fmt_int`——原生运行时 String 方法属 Phase 7 缺口，示例 interpret/IR 全绿、原生计入 compile mismatch（基线同步，见 tag1/README.md）。
+
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| C1 | 序列化/校验/存储样板生成（数据定义 → 样板，Q37/Q38）；schema 版本/迁移钩子设计（05 #4） | 样板生成端到端绿 + 文档 | B | 2h |
-| C2 | 定制通道测试 + 文档 | script 定制测试绿 | C1 | 1h |
+| C1 | ✅ 序列化/校验/存储样板生成（数据定义 → 样板，Q37/Q38）；schema 版本/迁移钩子设计（05 #4） | 样板生成端到端绿 + 文档 | B | 2h |
+| C2 | ✅ 定制通道测试 + 文档 | script 定制测试绿 | C1 | 1h |
 
 ### D. E1.2 comptime 完整（依赖 A2；类型即值）
 
