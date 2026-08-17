@@ -188,7 +188,7 @@
 | ✅ H1 | 项目代码结构：`hc init <name>` 脚手架（目录骨架：`main.hc`/`build.zon`/源码与测试目录约定）+ 约定文档 | CLI 测试 + 脚手架示例绿 | A6 | 2h |
 | ✅ H2 | 代码引用库：build.zon 依赖引用完善（本地路径引用、版本声明、`hc pkg add` 本地形态、缺失依赖诊断） | dep 测试绿 | A6 | 2h |
 | ✅ H3 | 模块(domain)约定（**不含语法实现——已含于 A2b**）：`[module]` 标注 + 边界（owns 数据/对外 pub API）+ 上下文（init 参数列表）约定文档 + 示例（如 orders 域） | 约定文档 + 示例绿 | A6 | 1.5h |
-| H4 | `hc doc` 生成（Markdown）：`///` 注释 + 声明签名收集（标准库 + 用户项目）；输出目录约定 | doc 生成测试绿（标准库页 + 项目页） | A6 | 2h |
+| ✅ H4 | `hc doc` 生成（Markdown）：`///` 注释 + 声明签名收集（标准库 + 用户项目）；输出目录约定 | doc 生成测试绿（标准库页 + 项目页） | A6 | 2h |
 | H5 | `hc doc` 细化：索引/链接/格式回归 | doc 测试绿 | H4 | 1.5h |
 
 > ✅ **H1 已完成（2026-08-17）**：`hc init <name>` 脚手架——`hc-tools/src/main.rs` `init_project`（校验名 [A-Za-z0-9_-]、拒绝非空目录；写 `build.zon` + `main.hc` 模板，扁平布局对齐编译器实际能力 `package_entry`/`sibling_files` 不递归，故不引入 `src/` 子目录）。约定文档 `docs/SPEC/06-13-project-structure.md`（目录 = 包、源码/测试/依赖约定、hc init 脚手架章节）+ `06-language-spec.md`/`README.md` 文件索引。cli.rs 新增 2 测试（init 脚手架 run 绿、非空目录/非法名拒绝），总数 11→13、README 610→612。
@@ -196,6 +196,8 @@
 > ✅ **H2 已完成（2026-08-17）**：build.zon 依赖引用完善——`hc pkg add <name> [--path <dir>] [--version <ver>]` 写入/更新 deps 中 `Pkg{name, version, path}` 声明（无 deps 字段时在 Build 字面量 `}` 前插入）。**修复 pkg add 插入位 bug**：parser 的 ArrayLit/NamedLit `span.end` 取 `]`/`}` 之后下一个 token（常含尾随逗号），改为按字符扫描定位实际 `[`/`]`/`{`/`}` 并重建 deps 数组（保留既有 Pkg 原文）。缺失本地依赖目录/目录无 build.zon → 硬错误（提示 path 须指向包目录）；声明版本与本地版本不符 → `[warn]`（本地 path 权威）。cli.rs 新增 3 测试（pkg add 写入本地依赖并 run 绿、缺失依赖诊断、版本不符告警），总数 13→16、README 612→615。
 >
 > ✅ **H3 已完成（2026-08-17）**：模块(domain)约定（语法已含于 A2b）——`06-08-modules.md` 新增「模块(domain)约定」专节：边界（owns 数据 = 模块内 class，对外仅 pub API）、上下文（`init(...)` 参数列表 = 依赖注入，与 `import` 符号引用正交 Q24）、隔离（成员仅限定名 `Orders.xxx`，模块内互引亦限定名）、跨包形态（`pub [module]` + `import pkg.Mod` 整模块 / `import pkg.Mod.{f}` 符号选择）。示例 `examples/05-tools/91-orders-domain.hc`（orders 域：边界 + 上下文 DI + 隔离，2 测试；采用固定数组使 **interpret + compile 双全绿**，compile 门禁基线 55 mismatch 不变；经实测确认非 `pub` 的 `[module]` 跨包不可见）。
+>
+> ✅ **H4 已完成（2026-08-17）**：`hc doc [target] [--out <dir>]` Markdown 生成——新模块 `hc-tools/src/docgen.rs`：`collect_doc_runs` 从原始源码扫描 `///` 行（lexer 跳过注释，故不用 token 流）分组带 end 偏移；`doc_before` 消费式关联声明（**关键适配**：parser 的 `span.start` 落在 fn/class 关键字、`pub`/`[test]` 等标注在 span 外，故间隙判定放宽为「空白 + `pub` + `[...]` 标注」`gap_is_doc_prefix`，直接贴在声明上的 doc 归属该声明，文件级 doc 仅取 import 之上的首块）；`render_type`/`render_decl` 自写签名渲染（`o T`/`?T`/`!void`/`[N]T`/`T(args)`；namespace 递归嵌套成员、class/interface 方法、trait 用 `{:?}`）。页形态：文件页 = `# \`stem\`` + 文件级 doc + `## 导入` + `## 声明`；包页 = `index.md`（包名/版本/类型/文件清单）+ 每文件一页；标准库页 = `std.md`（H.std 为 Rust 内建无 .hc 源，用内置目录化摘要：io/alloc·mem/collections/serialize/scalar 接口族/@ 内建/线程）。输出目录约定：默认 `<target 所在目录>/docs/api/`（`--out` 覆盖）。验收：doc 生成测试绿——hc-tools src 单元 4（doc 提取/页面含签名与文档/std 页/类型渲染）+ cli.rs 集成 3（目录页 + 标准库页 + 单文件页），总数 615→622。
 
 **预估合计 ≈ 57.5h，36 个任务**（A 14 / B 4.5 / C 7 / D 6 / E 3 / F 3.5 / G 10.5 / H 9）。
 

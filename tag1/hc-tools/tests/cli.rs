@@ -604,6 +604,114 @@ fn missing_local_dep_is_diagnosed() {
 }
 
 #[test]
+fn doc_project_generates_index_and_file_pages() {
+    // H4：`hc doc <dir>`——包索引 + 每文件页（/// 文档 + 声明签名）到 docs/api/
+    let root = std::env::temp_dir().join(format!(
+        "hc_cli_doc_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(97) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("build.zon"),
+        "const build = Build{ name = \"lib\", version = \"0.3.0\", kind = Kind.lib, files = [\"lib.hc\"], deps = [] };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("lib.hc"),
+        "import H.std.{io};\n\n/// 把两个整数相加。\n/// 跨行文档也支持。\npub fn add(a: i32, b: i32) i32 { return a + b; }\n\n[test] fn t() !void { try expect_eq(add(1, 2), 3); }\n",
+    )
+    .unwrap();
+
+    let out = Command::new(hc_bin())
+        .arg("doc")
+        .arg(&root)
+        .output()
+        .expect("hc doc dir");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "hc doc 应成功: {stdout}{stderr}");
+
+    let api = root.join("docs/api");
+    let index = std::fs::read_to_string(api.join("index.md")).unwrap_or_default();
+    assert!(index.contains("# lib 文档"), "索引页应含包标题: {index}");
+    assert!(index.contains("版本 0.3.0"), "索引应含清单版本: {index}");
+    assert!(index.contains("lib.hc"), "索引应列出文件: {index}");
+
+    let page = std::fs::read_to_string(api.join("lib.md")).unwrap_or_default();
+    assert!(page.contains("# `lib`"), "文件页应含标题: {page}");
+    assert!(
+        page.contains("fn add(a: i32, b: i32) i32"),
+        "应含声明签名: {page}"
+    );
+    assert!(page.contains("把两个整数相加"), "应含 /// 文档: {page}");
+    assert!(
+        page.contains("import H.std.{io};"),
+        "应含导入列表: {page}"
+    );
+    assert!(page.contains("[test]"), "应含测试签名: {page}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn doc_std_generates_stdlib_page() {
+    // H4：`hc doc std --out <dir>`——标准库内置目录页
+    let out_dir = std::env::temp_dir().join(format!(
+        "hc_cli_docstd_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(41) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let out = Command::new(hc_bin())
+        .arg("doc")
+        .arg("std")
+        .arg("--out")
+        .arg(&out_dir)
+        .output()
+        .expect("hc doc std");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "hc doc std 应成功: {stdout}{stderr}");
+    let std_page = std::fs::read_to_string(out_dir.join("std.md")).unwrap_or_default();
+    assert!(std_page.contains("# H 标准库文档"), "标准库页应含标题");
+    assert!(std_page.contains("io（I/O）"), "应含 io 模块");
+    assert!(std_page.contains("thread"), "应含线程模块");
+    assert!(std_page.contains("io.print"), "应含 io.print 条目");
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn doc_single_file_and_default_out() {
+    // H4：`hc doc <file.hc>`——单文件页到 <文件目录>/docs/api/
+    let root = std::env::temp_dir().join(format!(
+        "hc_cli_docfile_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(29) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("util.hc"),
+        "/// 返回常量的值。\nfn value() i32 { return 42; }\n",
+    )
+    .unwrap();
+    let out = Command::new(hc_bin())
+        .arg("doc")
+        .arg(root.join("util.hc"))
+        .output()
+        .expect("hc doc file");
+    assert!(out.status.success(), "单文件 doc 应成功");
+    let page =
+        std::fs::read_to_string(root.join("docs/api/util.md")).unwrap_or_default();
+    assert!(page.contains("# `util`"), "文件页应含标题: {page}");
+    assert!(page.contains("fn value() i32"), "应含签名: {page}");
+    assert!(page.contains("返回常量的值"), "应含文档: {page}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn dep_version_mismatch_warns() {
     // H2：版本声明——本地依赖声明版本与包清单不符 → 告警（本地 path 权威，不失败）
     let root = std::env::temp_dir().join(format!(

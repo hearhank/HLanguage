@@ -68,6 +68,9 @@ hc check <file.hc>         仅检查（词法/语法/装载）
 hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
 hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
 hc init <name>             创建新项目骨架（build.zon + main.hc，组 H1；约定见 06-13-project-structure.md）
+hc doc [target] [--out <dir>]
+                          生成 Markdown 文档（/// 注释 + 声明签名；target 默认当前目录包，
+                          `std` = 标准库内置目录页；输出默认 <target 目录>/docs/api/，组 H4）
 hc --version
 hc --help
 ```
@@ -100,7 +103,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **615 项测试**（572 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **622 项测试**（579 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -129,8 +132,8 @@ hc --help
 | hc-rt | `tests/scalar.rs`（标量接口族） | 2 |
 | hc-rt | `tests/thread.rs`（组 G 线程生命周期：spawn/join/cancel/is_done/detach + Q8 每线程 alloc） | 7 |
 | hc-rt | `tests/examples.rs`（43 示例回归） | 43 ✅ |
-| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules + IR 退出码） | 23 |
-| hc-tools | `tests/cli.rs`（C1 包目录运行 + C3/C4 库形态 + F2 io.exit 端到端 + F4 io.stdin 管道读取 + H1 hc init 脚手架 + H2 pkg add 本地依赖与缺失/版本诊断） | 16 |
+| hc-tools | `src` 单元测试（CLI/buildzon/merge_modules + IR 退出码 + H4 docgen） | 27 |
+| hc-tools | `tests/cli.rs`（C1 包目录运行 + C3/C4 库形态 + F2 io.exit 端到端 + F4 io.stdin 管道读取 + H1 hc init 脚手架 + H2 pkg add 本地依赖与缺失/版本诊断 + H4 hc doc 目录/标准库/单文件页） | 19 |
 | hc-tools | `tests/harness.rs`（F3 测试基建自测：收集/退出码/注入/汇总） | 5 |
 | hc-tools | `tests/native.rs`（M3.3 原生端到端，含 Phase 6 defer/errdefer/带标签 + 组 G 线程原生边界，zig 缺失自动 SKIP） | 39 |
 
