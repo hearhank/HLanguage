@@ -1447,6 +1447,36 @@ fn p7_map_json_csv_and_string() {
 }
 
 #[test]
+fn p7_serialize_namespace() {
+    // D2：serialize 命名空间（parse_int/parse_float/json/csv/parser 辅助组）双后端一致
+    assert_all_pass(
+        r#"
+[test] fn serialize_parse() !void {
+    try expect_eq(serialize.parse_int("42") orelse -1, 42);
+    try expect_eq(serialize.parse_float("3.5") orelse -1.0, 3.5);
+    var obj = serialize.json.parse("{\"a\":1}");
+    try expect_eq(obj.get("a").?, 1);
+    var rows = serialize.csv.parse("x,y\n1,2");
+    try expect_eq(rows.len, 2);
+}
+[test] fn serialize_helpers() !void {
+    var data: &[u8] = "  42,";
+    var pos: usize = 0;
+    serialize.skip_space(data, &pos);
+    try expect_eq(pos, 2);
+    var c = serialize.peek(data, &pos) orelse return error.End;
+    try expect_eq(c, '4');
+    try expect_eq(serialize.is_digit(c), true);
+    var n = serialize.parse_number(data, &pos);
+    try expect_eq(n, 42);
+    serialize.expect(data, &pos, ',') catch return error.Token;
+    try expect_eq(pos, 5);
+}
+"#,
+    );
+}
+
+#[test]
 fn p7_alloc_and_at_builtins() {
     // @ 内建（sizeOf/intCast/typeOf/intFromEnum/enumFromInt 往返）、box 指针
     assert_all_pass(

@@ -128,3 +128,74 @@ class Doc {
 "#,
     );
 }
+
+// ---- D2：serialize 命名空间（M5.3 库封装）——解析辅助组 ----
+
+#[test]
+fn serialize_parse_int_float() {
+    // serialize.parse_int / serialize.parse_float：文本 → ?i32 / ?f64
+    run_ok(
+        r#"
+[test] fn parse_int_float() !void {
+    try expect_eq(serialize.parse_int("42") orelse -1, 42);
+    try expect_eq(serialize.parse_int(" 7 ") orelse -1, 7);
+    try expect_eq(serialize.parse_int("x") orelse -1, -1);
+    try expect_eq(serialize.parse_int("") orelse -1, -1);
+    try expect_eq(serialize.parse_float("3.5") orelse -1.0, 3.5);
+    try expect_eq(serialize.parse_float("2.0") orelse -1.0, 2.0);
+    try expect_eq(serialize.parse_float("z") orelse -1.0, -1.0);
+}
+"#,
+    );
+}
+
+#[test]
+fn serialize_json_csv_parse() {
+    // serialize.json.parse / serialize.csv.parse：与虚拟根 json.parse/csv.parse 等价
+    run_ok(
+        r#"
+[test] fn json_csv() !void {
+    var obj = serialize.json.parse("{\"a\":1,\"b\":2}");
+    try expect_eq(obj.get("a").?, 1);
+    try expect_eq(obj.get("b").?, 2);
+    var rows = serialize.csv.parse("x,y\n1,2");
+    try expect_eq(rows.len, 2);
+    try expect_eq(rows[0][1], "y");
+    try expect_eq(rows[1][0], "1");
+    // 与既有虚拟根形式等价
+    var obj2 = json.parse("{\"a\":1}");
+    try expect_eq(obj2.get("a").?, 1);
+}
+"#,
+    );
+}
+
+#[test]
+fn serialize_parser_helpers() {
+    // serialize.skip_space/peek/advance/is_digit/parse_number/expect：&[u8] + *usize
+    run_ok(
+        r#"
+[test] fn parser_helpers() !void {
+    var data: &[u8] = "  42,";
+    var pos: usize = 0;
+    serialize.skip_space(data, &pos);
+    try expect_eq(pos, 2);
+    var c = serialize.peek(data, &pos) orelse return error.End;
+    try expect_eq(c, '4');
+    try expect_eq(serialize.is_digit(c), true);
+    try expect_eq(serialize.is_digit(' '), false);
+    var n = serialize.parse_number(data, &pos);
+    try expect_eq(n, 42);
+    try expect_eq(pos, 4);
+    serialize.expect(data, &pos, ',') catch return error.Token;
+    try expect_eq(pos, 5);
+    serialize.advance(data, &pos);
+    try expect_eq(pos, 6);
+    // 自由内建形态保持可用（既有示例依赖）
+    var pos2: usize = 0;
+    skip_space(data, &pos2);
+    try expect_eq(pos2, 2);
+}
+"#,
+    );
+}

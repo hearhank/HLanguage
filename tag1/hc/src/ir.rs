@@ -1765,18 +1765,24 @@ impl<'a> LowerCtx<'a> {
                 });
             }
             Expr::Orelse(l, r, _) => {
-                // orelse：null → 默认值
+                // orelse：null → 默认值；非 null → 解包负载（Opt(Some(x)) → x，
+                // 对齐 oracle interp.rs Orelse——此前直接存 a 导致 Opt 泄漏）
                 let a = self.lower_expr(l);
                 let l_null = self.new_label();
                 let done = self.new_label();
                 let res_slot = self.alloc_slot();
+                let unwrapped = self.alloc_slot();
                 self.push(IrInst::JumpIfNull {
                     temp: a,
                     label: l_null,
                 });
+                self.push(IrInst::Unwrap {
+                    temp: unwrapped,
+                    a,
+                });
                 self.push(IrInst::Store {
                     slot: res_slot,
-                    temp: a,
+                    temp: unwrapped,
                 });
                 self.push(IrInst::Jump { label: done });
                 self.label(l_null);
@@ -5272,9 +5278,13 @@ const IMPLICIT_ENV: &[&str] = &[
 ];
 
 /// 限定名根的隐式环境/虚拟根分派（io.*、alloc.*、json.parse、csv.parse、String.from、math.*、
-/// Arena.init）
+/// Arena.init、serialize.*）
 fn is_dotted_implicit_root(root: &str) -> bool {
-    IMPLICIT_ENV.contains(&root) || matches!(root, "json" | "csv" | "String" | "math" | "Arena")
+    IMPLICIT_ENV.contains(&root)
+        || matches!(
+            root,
+            "json" | "csv" | "String" | "math" | "Arena" | "serialize"
+        )
 }
 
 /// 错误值（码 = 编译期错误码表；内建产生的错误与 `error.X` 字面量同码）
@@ -5916,7 +5926,9 @@ fn parser_pos(ctx: &Ctx, args: &[IrValue], ix: usize) -> R<usize> {
     let v = args
         .get(ix)
         .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
-    match deref_value(ctx, v) {
+    // 不 deref：位置参数是 `&pos` 指针（AddrSlot → IrValue::Ptr(cell)），
+    // deref_value 会追到 pointee（Int）导致 Ptr 匹配失败（对齐 oracle interp get_pos）
+    match v {
         IrValue::Ptr(c) => Ok(*c),
         _ => Err(IrError::msg("TypeError", "expected pointer")),
     }
@@ -7460,6 +7472,11 @@ fn call_dotted_implicit(
     name: &str,
     args: &[IrValue],
 ) -> R<IrValue> {
+    // serialize 命名空间（M5.3）：解析辅助组——serialize.parse_int 等对齐自由内建，
+    // serialize.json.parse/csv.parse 对齐虚拟根（与 interp call_serialize_builtin 对齐）
+    if let Some(rest) = name.strip_prefix("serialize.") {
+        return call_serialize_builtin_ir(ctx, module, rest, args);
+    }
     match name {
         // Arena.init(alloc) 内建：真实 arena 句柄（对齐 oracle interp.rs:2559-2562
         // 特判——返回新建 arena，而非 Void）
@@ -7576,6 +7593,45 @@ fn call_dotted_implicit(
         )
     })?;
     Ok(v)
+}
+
+/// serialize 命名空间（M5.3）：解析辅助组组织为库命名空间。
+/// `rest` 为去掉 `serialize.` 前缀的辅助名；json/csv 虚拟根对齐 call_dotted_implicit 对应
+/// 分支，其余对齐自由内建 call_builtin（parse_int/parse_float/parse_number/skip_space/
+/// peek/advance/is_digit/expect）。
+fn call_serialize_builtin_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    rest: &str,
+    args: &[IrValue],
+) -> R<IrValue> {
+    match rest {
+        "json.parse" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let obj = parse_json_obj_ir(ctx, &String::from_utf8_lossy(&data))?;
+            let mut fields = HashMap::new();
+            for (k, v) in obj {
+                fields.insert(k, ctx.alloc(Cell::Value(v)));
+            }
+            Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Map".into(),
+                fields,
+            })))
+        }
+        "csv.parse" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let text = String::from_utf8_lossy(&data).to_string();
+            let rows: Vec<IrValue> = text
+                .split('\n')
+                .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                .filter(|line| !line.is_empty())
+                .map(|line| line.split(',').map(str_val).collect::<Vec<_>>())
+                .map(|cols| make_arr(ctx, cols))
+                .collect();
+            Ok(make_arr(ctx, rows))
+        }
+        _ => call_builtin(ctx, module, rest, args, &mut None),
+    }
 }
 
 fn find_label(func: &IrFunc, id: usize) -> R<usize> {

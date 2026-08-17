@@ -2766,6 +2766,10 @@ impl Interp {
             // M3.4：多级命名空间限定调用（io.net.double）→ 静态函数表查找
             // （与单级 Dot 形式一致；对象方法链如 io.net.connect 不在此表 → 落方法派发）
             if let Some(qn) = qualified_flat_name(base, field) {
+                // serialize 命名空间（M5.3）：serialize.json.parse / serialize.csv.parse
+                if qn.starts_with("serialize.") {
+                    return self.call_serialize_builtin(&qn, args, span);
+                }
                 if self.funcs.contains_key(&qn) {
                     let mut vals = Vec::new();
                     for a in args {
@@ -2848,6 +2852,12 @@ impl Interp {
                     // math.sqrt / math.nan
                     if let Some(v) = self.call_math(bname, field, args, span)? {
                         return Ok(v);
+                    }
+                    // serialize 命名空间（M5.3）：解析辅助组
+                    // （serialize.parse_int / parse_number / skip_space / … 对齐自由内建；
+                    // serialize.json.parse 等三级名经 Field 分支路由）
+                    if bname == "serialize" {
+                        return self.call_serialize_builtin(&format!("serialize.{field}"), args, span);
                     }
                     // Arena.init(alloc) 内建：真实 arena 句柄（G1：bump + 块链表）
                     if bname == "Arena" && field == "init" {
@@ -5388,6 +5398,53 @@ impl Interp {
                 Ok(Some(Value::Int(n)))
             }
             _ => Ok(None),
+        }
+    }
+
+    /// serialize 命名空间（M5.3）：解析辅助组组织为库命名空间
+    ///
+    /// `serialize.parse_int/parse_float/parse_number/skip_space/peek/advance/is_digit/expect`
+    /// 对齐对应自由内建（call_builtin）；`serialize.json.parse` / `serialize.csv.parse`
+    /// 对齐虚拟根 json.parse / csv.parse。
+    fn call_serialize_builtin(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Value> {
+        let helper = name.strip_prefix("serialize.").unwrap_or(name);
+        match helper {
+            "json.parse" => {
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                if let Value::Str(s) = v {
+                    let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                    let obj = self.parse_json_obj(&text)?;
+                    return Ok(Value::class("Map", obj));
+                }
+                Err(RtError::new("TypeError", Some(span.clone())))
+            }
+            "csv.parse" => {
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                if let Value::Str(s) = v {
+                    let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                    let rows = text
+                        .split('\n')
+                        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                        .filter(|line| !line.is_empty())
+                        .map(|line| line.split(',').map(Value::str).collect::<Vec<_>>())
+                        .map(Value::arr)
+                        .collect::<Vec<_>>();
+                    return Ok(Value::arr(rows));
+                }
+                Err(RtError::new("TypeError", Some(span.clone())))
+            }
+            // parse_int/parse_float/parse_number/skip_space/peek/advance/is_digit/expect
+            _ => match self.call_builtin(helper, args, span)? {
+                Some(v) => Ok(v),
+                None => Err(RtError::new("NotBuiltin", Some(span.clone()))),
+            },
         }
     }
 

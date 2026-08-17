@@ -124,6 +124,8 @@
 
 > ✅ **D1 已完成（2026-08-17）**：`fmt_int`/`fmt_float` 落地 interp + IR `call_builtin`（含 `is_free_builtin` 登记 → bytecode 路径复用）。interp：`Value::Int(i)` → `i.to_string()`；`fmt_float` 接受 Float/Int（Int 转 f64），display 语义与 IR 一致（整数值 → `{:.1}`，否则 `to_string()`）。`ex63_template_render` 加入 examples.rs（D1 前失败于 `fmt_int` 缺失，现绿）。
 >
+> ✅ **D2 已完成（2026-08-17）**：解析辅助组（parse_int/parse_float/json.parse/csv.parse/parse_number/skip_space/peek/advance/is_digit/expect）组织为 `serialize` 命名空间。interp：eval_call Field 块 + Dot 臂按 `serialize.` 前缀路由到 `call_serialize_builtin`（json.parse/csv.parse 复用虚拟根逻辑，其余助手走 `call_builtin` + Option 解包）；IR：`is_dotted_implicit_root` 增 `serialize`、`call_dotted_implicit` 前置 `serialize.` 剥离 → `call_serialize_builtin_ir`（同形）。直测：serialize.rs 增 `serialize_parse_int_float`/`serialize_json_csv_parse`/`serialize_parser_helpers`，consistency.rs 增 `p7_serialize_namespace`。**顺带修复两个一致性套件暴露的既有 IR bug**：① `orelse` 非空分支现发 `IrInst::Unwrap` 取载荷（此前直存 `a` 导致 `Opt` 泄漏）；② `parser_pos` 不再 `deref_value`（此前追 Ptr 到 pointee 使 `&pos` 的 Ptr 匹配失败 → "expected pointer"，对齐 oracle interp get_pos）。serialize 测试 + 全 workspace 测试绿。
+>
 > ✅ **D3 已完成（2026-08-17）**：原生 `hc_fmt_int`/`hc_fmt_float` LLVM helper（emit_scalar_builtin_helpers 注册；`fmt_int` 为 i128→十进制→`hc_alloc` 堆串 tag5，带符号处理；`fmt_float` 用 `sprintf`（`%.1f` 整数值 / `%.15g` 小数），接受 Int 输入 `sitofp`），llvm 单测 + native.rs `fmt_int_float_native` 绿。**已知限制**：63-template-render 的 compile 模式仍 mismatch——阻塞来自 `String.from`/`String.replace`/`String.find` 原生未实现（预先存在的原生子集缺口，非 D3 范围；compile 门禁预算内）。
 
 ### E. arena.init(T) typed 构造（依赖：M5.1 已落地）
