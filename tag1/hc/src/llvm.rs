@@ -403,6 +403,7 @@ fn emit_preamble(out: &mut String, strings: &[String], continuous: &HashSet<Stri
     out.push_str("@.fmt_s = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n");
     out.push_str("@.fmt_one = private unnamed_addr constant [5 x i8] c\"%.1f\\00\"\n");
     out.push_str("@.fmt_g15 = private unnamed_addr constant [6 x i8] c\"%.15g\\00\"\n");
+    out.push_str("@.fmt_e = private unnamed_addr constant [3 x i8] c\"%e\\00\"\n");
     out.push_str("@.hc_dash = private unnamed_addr constant [2 x i8] c\"-\\00\"\n");
     out.push_str("@.hc_lb = private unnamed_addr constant [2 x i8] c\"[\\00\"\n");
     out.push_str("@.hc_rb = private unnamed_addr constant [2 x i8] c\"]\\00\"\n");
@@ -2567,10 +2568,12 @@ fn emit_iter_helpers(out: &mut String) {
 
 // ---------- Phase 7 io.print 显示 helper（定长字节写 + 值格式化） ----------
 //
-// 取舍（P7e 子集）：`hc_write_value` 对 Int/Float/Bool/Str/Null/Err/Arr/Slice/Class/Enum
-// 对齐 oracle `display`；`{x}/{b}` 对 Int 走 16/2 进制（负数按无符号位模式，对齐 Rust
-// `{n:x}`）。Err 显示为 `error.{code}`（原生无错误名表——与 IR 的 `error.{name}` 有差异，
-// 记录为已知取舍）。Float 用 `%.1f`（整值）/`%.15g`（余值）近似 Rust 最短表示。
+// 取舍（P7e 子集 + B3）：`hc_write_value` 对 Int/Float/Bool/Str/Null/Err/Arr/Slice/Class/Enum
+// 对齐 oracle `display`；`{x}/{X}/{b}` 对 Int 走 16/16大写/2 进制（负数按无符号位模式，对齐 Rust
+// `{n:x}/{n:X}/{n:b}`）；`{e}` 对 Float 走 printf `%e`（固定 6 位小数 + 带符号指数，与 Rust 最短
+// 表示的 `{f:e}` 有差异——记录为已知取舍，`{e}` 无示例/测试比对精确输出）。Err 显示为 `error.{code}`
+// （原生无错误名表——与 IR 的 `error.{name}` 有差异，记录为已知取舍）。Float 用 `%.1f`（整值）/
+// `%.15g`（余值）近似 Rust 最短表示。
 
 const HC_WRITE_BYTES: &str = r#"define void @hc_write_bytes(i8* %p, i64 %n) {
 entry:
@@ -2589,10 +2592,11 @@ entry:
 }
 "#;
 
-const HC_WRITE_U128_BASE: &str = r#"define void @hc_write_u128_base(i128 %v, i32 %base) {
+const HC_WRITE_U128_BASE: &str = r#"define void @hc_write_u128_base(i128 %v, i32 %base, i32 %upper) {
 entry:
   %buf = alloca [64 x i8], align 1
   %b64 = zext i32 %base to i128
+  %up_i1 = icmp ne i32 %upper, 0
   br label %loop
 loop:
   %val = phi i128 [ %v, %entry ], [ %quot, %loop ]
@@ -2602,7 +2606,8 @@ loop:
   %rem64 = trunc i128 %rem to i64
   %lt10 = icmp ult i64 %rem64, 10
   %dig = add i64 %rem64, 48
-  %up = add i64 %rem64, 87
+  %off = select i1 %up_i1, i64 55, i64 87
+  %up = add i64 %rem64, %off
   %ch64 = select i1 %lt10, i64 %dig, i64 %up
   %ch = trunc i64 %ch64 to i8
   %dst = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %pos
@@ -2629,7 +2634,7 @@ neg:
 mag:
   %negv = sub i128 0, %n
   %m = select i1 %is_neg, i128 %negv, i128 %n
-  call void @hc_write_u128_base(i128 %m, i32 10)
+  call void @hc_write_u128_base(i128 %m, i32 10, i32 0)
   ret void
 }
 "#;
@@ -2647,9 +2652,12 @@ dec:
 basefmt:
   %is_bin = icmp eq i32 %mode, 2
   %is_hex = icmp eq i32 %mode, 1
-  %b1 = select i1 %is_hex, i32 16, i32 10
+  %is_hexu = icmp eq i32 %mode, 4
+  %is_hex2 = or i1 %is_hex, %is_hexu
+  %b1 = select i1 %is_hex2, i32 16, i32 10
   %base = select i1 %is_bin, i32 2, i32 %b1
-  call void @hc_write_u128_base(i128 %d, i32 %base)
+  %upper = select i1 %is_hexu, i32 1, i32 0
+  call void @hc_write_u128_base(i128 %d, i32 %base, i32 %upper)
   ret void
 }
 "#;
@@ -2802,6 +2810,15 @@ int_case:
   call void @hc_write_int(%Value %v, i32 %mode)
   ret void
 float_case:
+  %me5 = icmp eq i32 %mode, 5
+  br i1 %me5, label %exp_f, label %norm_f
+exp_f:
+  %dt2 = trunc i128 %d to i64
+  %fve = bitcast i64 %dt2 to double
+  %pe = getelementptr inbounds [3 x i8], ptr @.fmt_e, i64 0, i64 0
+  call i32 (i8*, ...) @printf(i8* %pe, double %fve)
+  ret void
+norm_f:
   %dt = trunc i128 %d to i64
   %fv = bitcast i64 %dt to double
   %fr = call double @fmod(double %fv, double 1.0)
@@ -3518,7 +3535,9 @@ enum PrintSeg {
     Arg { slot: Option<usize>, mode: u32 },
 }
 
-/// 解析格式串：`{}`→显示、`{x}`→十六进制、`{b}`→二进制、`{s}`→显示；
+/// 解析格式串（B1/B3，2026-08-17）：`{}`→显示、`{d}`→十进制、`{x}`→十六进制小写、
+/// `{X}`→十六进制大写、`{b}`→二进制、`{e}`→科学计数、`{s}`→显示；宽度/对齐/精度
+/// （`{:8}`/`{:<6}`/`{:.2}`）原生暂不填充（值格式化不受影响——原生填充留后续）。
 /// 其余字节为字面量。占位符无对应实参（参数不足）→ oracle 跳过（slot=None）。
 fn parse_print_fmt(fmt: &str, args: &[usize]) -> Vec<PrintSeg> {
     let bytes = fmt.as_bytes();
@@ -3533,35 +3552,40 @@ fn parse_print_fmt(fmt: &str, args: &[usize]) -> Vec<PrintSeg> {
                 lit.clear();
             }
         };
-        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
-            flush(&mut lit, &mut out);
-            out.push(PrintSeg::Arg {
-                slot: args.get(argi).copied(),
-                mode: 0,
-            });
-            argi += 1;
-            i += 2;
-        } else if bytes[i] == b'{'
-            && i + 2 < bytes.len()
-            && matches!(bytes[i + 1], b'x' | b'b' | b's')
-            && bytes[i + 2] == b'}'
-        {
-            flush(&mut lit, &mut out);
-            let mode = match bytes[i + 1] {
-                b'x' => 1,
-                b'b' => 2,
-                _ => 0,
-            };
-            out.push(PrintSeg::Arg {
-                slot: args.get(argi).copied(),
-                mode,
-            });
-            argi += 1;
-            i += 3;
-        } else {
-            lit.push(bytes[i]);
-            i += 1;
+        if bytes[i] == b'{' {
+            if let Some(close) = bytes[i + 1..].iter().position(|&c| c == b'}') {
+                flush(&mut lit, &mut out);
+                // 说明符内：可选 `:` + 对齐/宽度/精度（原生忽略填充）+ 类型字符
+                let inner = &bytes[i + 1..i + 1 + close];
+                let ty = inner
+                    .iter()
+                    .rfind(|&&c| {
+                        !c.is_ascii_digit()
+                            && c != b'.'
+                            && c != b':'
+                            && c != b'<'
+                            && c != b'>'
+                            && c != b'^'
+                    })
+                    .copied();
+                let mode = match ty {
+                    Some(b'x') => 1,
+                    Some(b'b') => 2,
+                    Some(b'X') => 4,
+                    Some(b'e') => 5,
+                    _ => 0, // {} / {d} / {s} / 未识别 → 显示
+                };
+                out.push(PrintSeg::Arg {
+                    slot: args.get(argi).copied(),
+                    mode,
+                });
+                argi += 1;
+                i += close + 2;
+                continue;
+            }
         }
+        lit.push(bytes[i]);
+        i += 1;
     }
     if !lit.is_empty() {
         out.push(PrintSeg::Lit(String::from_utf8_lossy(&lit).to_string()));

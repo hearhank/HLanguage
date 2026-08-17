@@ -4576,42 +4576,22 @@ impl Interp {
         let mut argi = 1;
         let mut i = 0;
         while i < fmt.len() {
-            if fmt[i] == b'{' && i + 1 < fmt.len() && fmt[i + 1] == b'}' {
-                if argi < args.len() {
-                    let v = self.eval(&args[argi])?;
-                    let v = self.deref_value(v);
-                    out.extend_from_slice(v.display().as_bytes());
-                    argi += 1;
-                }
-                i += 2;
-            } else if fmt[i] == b'{'
-                && i + 2 < fmt.len()
-                && fmt[i + 2] == b'}'
-                && (fmt[i + 1] == b'x' || fmt[i + 1] == b'b' || fmt[i + 1] == b's')
-            {
-                // {x} {b} {s} 说明符
-                let spec = fmt[i + 1];
-                if argi < args.len() {
-                    let v = self.eval(&args[argi])?;
-                    let v = self.deref_value(v);
-                    match spec {
-                        b'x' => match &v {
-                            Value::Int(n) => out.extend_from_slice(format!("{n:x}").as_bytes()),
-                            _ => out.extend_from_slice(v.display().as_bytes()),
-                        },
-                        b'b' => match &v {
-                            Value::Int(n) => out.extend_from_slice(format!("{n:b}").as_bytes()),
-                            _ => out.extend_from_slice(v.display().as_bytes()),
-                        },
-                        _ => out.extend_from_slice(v.display().as_bytes()),
+            if fmt[i] == b'{' {
+                // 找匹配 `}`；无匹配 → 按字面量
+                if let Some(close) = fmt[i + 1..].iter().position(|&c| c == b'}') {
+                    if argi < args.len() {
+                        let v = self.eval(&args[argi])?;
+                        let v = self.deref_value(v);
+                        let s = self.format_spec_value(&v, &fmt[i + 1..i + 1 + close], span)?;
+                        out.extend_from_slice(s.as_bytes());
+                        argi += 1;
                     }
-                    argi += 1;
+                    i += close + 2;
+                    continue;
                 }
-                i += 3;
-            } else {
-                out.push(fmt[i]);
-                i += 1;
             }
+            out.push(fmt[i]);
+            i += 1;
         }
         let line = String::from_utf8_lossy(&out).to_string();
         if self.in_main {
@@ -4620,6 +4600,94 @@ impl Interp {
             self.test_out.push(line);
         }
         Ok(())
+    }
+
+    /// 格式说明符（B1，2026-08-17）：`{}` 默认 / `{d}` / `{x}` / `{X}` / `{b}` / `{e}` / `{s}`
+    /// + 宽度/对齐/精度（`{:8}` 右对齐、`{:<6}` 左对齐、`{:.2}` 精度）——Zig 式：
+    /// `{` [可选 `:`] [对齐 `<`/`>`/`^`] [宽度数字] [`.` 精度数字] [类型字符] `}`。
+    /// 未知类型字符 → `FormatError`（B2：不再按字面量静默输出）。
+    fn format_spec_value(&self, v: &Value, inner: &[u8], span: &Span) -> Result<String> {
+        let mut p = if inner.first() == Some(&b':') { 1 } else { 0 };
+        let align = match inner.get(p) {
+            Some(b'<') | Some(b'>') | Some(b'^') => {
+                let a = inner[p];
+                p += 1;
+                a
+            }
+            _ => b'>',
+        };
+        let mut width: Option<usize> = None;
+        let mut ws = String::new();
+        while p < inner.len() && inner[p].is_ascii_digit() {
+            ws.push(inner[p] as char);
+            p += 1;
+        }
+        if !ws.is_empty() {
+            width = ws.parse().ok();
+        }
+        let mut precision: Option<usize> = None;
+        if p < inner.len() && inner[p] == b'.' {
+            p += 1;
+            let mut ps = String::new();
+            while p < inner.len() && inner[p].is_ascii_digit() {
+                ps.push(inner[p] as char);
+                p += 1;
+            }
+            precision = ps.parse().ok();
+        }
+        let ty = inner.get(p).copied();
+        if p + usize::from(ty.is_some()) < inner.len() {
+            // 多字符残留 → 未知说明符（不再静默输出）
+            return Err(RtError::new("FormatError", Some(span.clone())));
+        }
+        let display = v.display();
+        let mut s = match ty {
+            Some(b'd') => match v {
+                Value::Int(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                _ => display,
+            },
+            Some(b'x') => match v {
+                Value::Int(n) => format!("{n:x}"),
+                _ => display,
+            },
+            Some(b'X') => match v {
+                Value::Int(n) => format!("{n:X}"),
+                _ => display,
+            },
+            Some(b'b') => match v {
+                Value::Int(n) => format!("{n:b}"),
+                _ => display,
+            },
+            Some(b'e') => match v {
+                Value::Float(f) => format!("{f:e}"),
+                _ => display,
+            },
+            Some(b's') => display,
+            Some(_) => return Err(RtError::new("FormatError", Some(span.clone()))),
+            None => display,
+        };
+        // 精度（浮点）
+        if let Some(pr) = precision {
+            if let Value::Float(f) = v {
+                s = format!("{f:.pr$}");
+            }
+        }
+        // 宽度/对齐
+        if let Some(w) = width {
+            if s.len() < w {
+                let pad = w - s.len();
+                match align {
+                    b'<' => s = format!("{s}{}", " ".repeat(pad)),
+                    b'^' => {
+                        let l = pad / 2;
+                        s = format!("{}{s}{}", " ".repeat(l), " ".repeat(pad - l));
+                    }
+                    _ => s = format!("{}{s}", " ".repeat(pad)),
+                }
+            }
+        }
+        Ok(s)
     }
 
     // ---------- M5.4 真实 IO：io.fs / io.time / File 句柄 ----------

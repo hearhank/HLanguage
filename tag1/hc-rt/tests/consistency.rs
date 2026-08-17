@@ -1475,3 +1475,36 @@ enum Status { ready, busy }
 "#,
     );
 }
+
+// ---------- B1/B3：io.print 格式说明符（双模式一致） ----------
+
+#[test]
+fn b1_print_format_specifiers() {
+    // {d}/{X}/{e}/宽度/对齐/精度——双模式执行无错（输出内容由 05-format 示例验证）
+    assert_all_pass(
+        r#"
+[test] fn format_specs() !void {
+    io.print("{d}\n", 255);
+    io.print("{X}\n", 255);
+    io.print("{:.2}\n", 3.14159);
+    io.print("{:8}\n", 42);
+    io.print("{:<6}\n", "hi");
+    io.print("{e}\n", 3.14);
+}
+"#,
+    );
+}
+
+#[test]
+fn b2_unknown_format_specifier_fails_both() {
+    // B2：未知说明符 → FormatError（不再按字面量静默输出），双模式一致失败
+    let (tw, ir) = assert_consistent(
+        r#"
+[test] fn bad_spec() !void {
+    io.print("{q}\n", 1);
+}
+"#,
+    );
+    assert_eq!(tw, 0, "tree-walking 未知说明符应失败: {tw}");
+    assert_eq!(ir, 0, "IR 未知说明符应失败: {ir}");
+}

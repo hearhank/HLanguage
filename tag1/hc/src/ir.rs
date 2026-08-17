@@ -5554,42 +5554,107 @@ fn call_io_print_ir(ctx: &mut Ctx, args: &[IrValue]) -> R<()> {
     let mut argi = 1usize;
     let mut i = 0usize;
     while i < fmt.len() {
-        if fmt[i] == b'{' && i + 1 < fmt.len() && fmt[i + 1] == b'}' {
-            if argi < args.len() {
-                let v = deref_value(ctx, &args[argi]);
-                out.extend_from_slice(v.display(ctx).as_bytes());
-                argi += 1;
-            }
-            i += 2;
-        } else if fmt[i] == b'{'
-            && i + 2 < fmt.len()
-            && fmt[i + 2] == b'}'
-            && (fmt[i + 1] == b'x' || fmt[i + 1] == b'b' || fmt[i + 1] == b's')
-        {
-            let spec = fmt[i + 1];
-            if argi < args.len() {
-                let v = deref_value(ctx, &args[argi]);
-                match spec {
-                    b'x' => match v {
-                        IrValue::Int(n) => out.extend_from_slice(format!("{n:x}").as_bytes()),
-                        _ => out.extend_from_slice(v.display(ctx).as_bytes()),
-                    },
-                    b'b' => match v {
-                        IrValue::Int(n) => out.extend_from_slice(format!("{n:b}").as_bytes()),
-                        _ => out.extend_from_slice(v.display(ctx).as_bytes()),
-                    },
-                    _ => out.extend_from_slice(v.display(ctx).as_bytes()),
+        if fmt[i] == b'{' {
+            if let Some(close) = fmt[i + 1..].iter().position(|&c| c == b'}') {
+                if argi < args.len() {
+                    let v = deref_value(ctx, &args[argi]);
+                    let s = format_spec_value_ir(ctx, v, &fmt[i + 1..i + 1 + close])?;
+                    out.extend_from_slice(s.as_bytes());
+                    argi += 1;
                 }
-                argi += 1;
+                i += close + 2;
+                continue;
             }
-            i += 3;
-        } else {
-            out.push(fmt[i]);
-            i += 1;
         }
+        out.push(fmt[i]);
+        i += 1;
     }
     ctx.out.extend_from_slice(&out);
     Ok(())
+}
+
+/// 格式说明符（B1/B3，镜像 interp `format_spec_value`）：`{}` 默认 / `{d}` / `{x}` /
+/// `{X}` / `{b}` / `{e}` / `{s}` + 宽度/对齐/精度（`{:8}`、`{:<6}`、`{:.2}`）。
+/// 未知类型字符 → `FormatError`（B2：不再按字面量静默输出）。
+fn format_spec_value_ir(ctx: &Ctx, v: &IrValue, inner: &[u8]) -> R<String> {
+    let mut p = if inner.first() == Some(&b':') { 1 } else { 0 };
+    let align = match inner.get(p) {
+        Some(b'<') | Some(b'>') | Some(b'^') => {
+            let a = inner[p];
+            p += 1;
+            a
+        }
+        _ => b'>',
+    };
+    let mut width: Option<usize> = None;
+    let mut ws = String::new();
+    while p < inner.len() && inner[p].is_ascii_digit() {
+        ws.push(inner[p] as char);
+        p += 1;
+    }
+    if !ws.is_empty() {
+        width = ws.parse().ok();
+    }
+    let mut precision: Option<usize> = None;
+    if p < inner.len() && inner[p] == b'.' {
+        p += 1;
+        let mut ps = String::new();
+        while p < inner.len() && inner[p].is_ascii_digit() {
+            ps.push(inner[p] as char);
+            p += 1;
+        }
+        precision = ps.parse().ok();
+    }
+    let ty = inner.get(p).copied();
+    if p + usize::from(ty.is_some()) < inner.len() {
+        return Err(IrError::msg("FormatError", "unknown format specifier"));
+    }
+    let display = v.display(ctx);
+    let mut s = match ty {
+        Some(b'd') => match v {
+            IrValue::Int(n) => n.to_string(),
+            IrValue::Float(f) => f.to_string(),
+            _ => display,
+        },
+        Some(b'x') => match v {
+            IrValue::Int(n) => format!("{n:x}"),
+            _ => display,
+        },
+        Some(b'X') => match v {
+            IrValue::Int(n) => format!("{n:X}"),
+            _ => display,
+        },
+        Some(b'b') => match v {
+            IrValue::Int(n) => format!("{n:b}"),
+            _ => display,
+        },
+        Some(b'e') => match v {
+            IrValue::Float(f) => format!("{f:e}"),
+            _ => display,
+        },
+        Some(b's') => display,
+        Some(_) => return Err(IrError::msg("FormatError", "unknown format specifier")),
+        None => display,
+    };
+    if let Some(pr) = precision {
+        if let IrValue::Float(f) = v {
+            s = format!("{f:.pr$}");
+        }
+    }
+    if let Some(w) = width {
+        if s.len() < w {
+            let pad = w - s.len();
+            match align {
+                b'<' => s = format!("{s}{}", " ".repeat(pad)),
+                b'^' => {
+                    let l = pad / 2;
+                    s = format!("{}{s}{}", " ".repeat(l), " ".repeat(pad - l));
+                }
+                _ => s = format!("{}{s}", " ".repeat(pad)),
+            }
+        }
+    }
+    Ok(s)
 }
 
 /// 标量方法（ICompare/INumber 族内建：add/sub/mul/div/neg/mod/abs/eq/lt/pow；
