@@ -1538,3 +1538,55 @@ fn b2_unknown_format_specifier_fails_both() {
     assert_eq!(tw, 0, "tree-walking 未知说明符应失败: {tw}");
     assert_eq!(ir, 0, "IR 未知说明符应失败: {ir}");
 }
+
+// ---------- E2：arena.init(T) typed 构造（双模式一致） ----------
+
+#[test]
+fn e1_arena_init_typed() {
+    // arena.init(T) 类型名 / arena.init(T{...}) 字面量：字段值 + bump 记账
+    // （堆上 class = 指针宽 8；二次分配对齐到 16 处切 → 8 + 16 = 24）
+    assert_all_pass(
+        r#"
+class Node {
+    mut x: i32,
+    mut y: i32,
+}
+[test] fn arena_init_default() !void {
+    var arena = Arena.init(alloc);
+    var node = arena.init(Node);
+    try expect_eq(node.x, 0);
+    try expect_eq(node.y, 0);
+    try expect_eq(arena.bytes(), 8);
+    try expect_eq(arena.blocks(), 1);
+}
+[test] fn arena_init_literal() !void {
+    var arena = Arena.init(alloc);
+    var node = arena.init(Node{ x = 1, y = 2 });
+    try expect_eq(node.x, 1);
+    try expect_eq(node.y, 2);
+    try expect_eq(arena.bytes(), 8);
+    var node2 = arena.init(Node{ x = 3, y = 4 });
+    try expect_eq(node2.x, 3);
+    try expect_eq(node2.y, 4);
+    try expect_eq(arena.bytes(), 24);
+}
+"#,
+    );
+}
+
+#[test]
+fn e2_arena_init_after_deinit_fails_both() {
+    // deinit 后 arena.init → ArenaDeinitialized，双模式一致失败
+    let (tw, ir) = assert_consistent(
+        r#"
+class Node { mut x: i32 }
+[test] fn bad() !void {
+    var arena = Arena.init(alloc);
+    arena.deinit();
+    var node = arena.init(Node);
+}
+"#,
+    );
+    assert_eq!(tw, 0, "tree-walking deinit 后 init 应失败: {tw}");
+    assert_eq!(ir, 0, "IR deinit 后 init 应失败: {ir}");
+}

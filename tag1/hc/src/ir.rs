@@ -1574,7 +1574,7 @@ impl<'a> LowerCtx<'a> {
                             // alloc.init(SomeClass)：已知 class 类型名 → 默认字段 MakeClass
                             // （对齐 oracle 无参构造 = 类型空实例，字段逐默认值；未知/枚举
                             // 类型名回退 Const Str——运行时建空实例）。
-                            if cn == "alloc.init" && i == 0 {
+                            if matches!(cn.as_str(), "alloc.init" | "arena.init") && i == 0 {
                                 if let Expr::Ident(n, _) = a {
                                     if self.types.classes.contains_key(n) {
                                         return self.lower_alloc_init_defaults(n);
@@ -3109,8 +3109,8 @@ fn is_type_arg_pos(name: &str, i: usize) -> bool {
         "@sizeOf" | "@alignOf" => i == 0,
         "@offsetOf" => i == 0 || i == 1,
         "@intCast" | "@enumFromInt" | "@ptrCast" | "@alignCast" => i == 0,
-        // alloc.init(ABC)：类型名参数（运行时按名建空实例）
-        "alloc.init" => i == 0,
+        // alloc.init(ABC) / arena.init(ABC)：类型名参数（运行时按名建空实例）
+        "alloc.init" | "arena.init" => i == 0,
         // math.nan/math.inf/math.inf_neg(f64)：类型名参数（运行时忽略，仅指示宽度）
         "math.nan" | "math.inf" | "math.inf_neg" => i == 0,
         _ => false,
@@ -5922,7 +5922,7 @@ fn parser_bytes(ctx: &Ctx, args: &[IrValue], ix: usize) -> R<Vec<u8>> {
     }
 }
 
-fn parser_pos(ctx: &Ctx, args: &[IrValue], ix: usize) -> R<usize> {
+fn parser_pos(_ctx: &Ctx, args: &[IrValue], ix: usize) -> R<usize> {
     let v = args
         .get(ix)
         .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
@@ -6773,7 +6773,42 @@ fn call_arena_method_ir(
                 Ok(args.first().cloned())
             }
         }
-        "init" => Ok(Some(IrValue::Void)),
+        // arena.init(T) / arena.init(T{...})（E2：typed 构造，对齐 oracle call_arena_method
+        // interp.rs "init" 双形态；bump 记账——堆上 class = 指针宽 8，连续 class IR 无布局
+        // 表也按 8，与 alloc.init IR 同源简化）。
+        "init" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "arena.init expects 1 arg"));
+            }
+            let v = deref_value(ctx, &args[0]).clone();
+            let inst = match v {
+                // 类型名参数（未知/枚举类型回退 Const Str）→ 空 class 实例
+                IrValue::Str(s) => IrValue::Class(ctx.alloc(Cell::Class {
+                    name: String::from_utf8_lossy(&s).to_string(),
+                    fields: HashMap::new(),
+                })),
+                // 字面量 / 已知 class 默认字段构造（lower_alloc_init_defaults）→ 原样返回
+                IrValue::Class(c) => IrValue::Class(c),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "arena.init expects type name or literal",
+                    ))
+                }
+            };
+            let bump_res = match &mut ctx.cells[arena_cell] {
+                Cell::Arena(st) => st.bump(8),
+                _ => unreachable!("cell {arena_cell} is not an arena"),
+            };
+            match bump_res {
+                Ok(_) => Ok(Some(inst)),
+                Err(ArenaAllocErrIr::Deinit) => Err(IrError::msg(
+                    "ArenaDeinitialized",
+                    "arena.init after deinit",
+                )),
+                Err(ArenaAllocErrIr::Oom) => Ok(Some(err_val(module, "OutOfMemory"))),
+            }
+        }
         "deinit" => {
             if !args.is_empty() {
                 return Err(IrError::msg("ArityMismatch", "arena.deinit expects 0 args"));

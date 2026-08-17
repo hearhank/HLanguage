@@ -136,6 +136,8 @@
 | E2 | IR 对齐 + 一致性 + 08 文档同步 | consistency 绿 | E1 | 1.5h |
 
 > ✅ **E1 已完成（2026-08-17）**：`call_arena_method("init")` 替换 Void 占位——`arena.init(T)` 类型名形态按类型建空实例（class 字段逐默认值 / enum 空变体，未知类型 `UnknownType`）+ 按 `type_size_of` bump 记账（堆上 class = 指针宽 8，连续 class = 布局总大小）；`arena.init(T{...})` 字面量形态求值即实例 + 按实例类型 bump。deinit 后 init → `ArenaDeinitialized`，OOM → `error.OutOfMemory`（对齐 alloc 规则）。arena.rs 新增 5 直测：typed_default / typed_literal（含二次 bump 对齐填充）/ continuous_size / after_deinit_errors / unknown_type_errors。全 workspace 绿。
+>
+> ✅ **E2 已完成（2026-08-17）**：IR 对齐——降级阶段 `alloc.init` 分支扩为 `alloc.init`/`arena.init`（已知 class → `lower_alloc_init_defaults` 默认字段 MakeClass），`is_type_arg_pos` 登记 `arena.init`；运行期 `call_arena_method_ir("init")` 双形态构造（Str 类型名 → 空 class 实例 / Class 字面量 → 原样返回）+ `bump(8)` 记账（堆上 class = 指针宽；连续 class IR 无布局表也按 8，与 alloc.init IR 同源简化）。顺带清理 D2 遗留 `parser_pos` 未用参数告警。一致性：consistency.rs 增 `e1_arena_init_typed`（类型名 + 字面量 + bytes 记账双模式一致）与 `e2_arena_init_after_deinit_fails_both`（deinit 后 init 双模式一致失败）。08 设计文档 G1 行同步 typed 构造落地。全 workspace 绿（consistency 68）。
 
 ### F. 测试空白补全（依赖：F2/F4 依赖 A5b——io 模块函数化后形态）
 
