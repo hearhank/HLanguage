@@ -62,6 +62,7 @@ pub fn type_key(t: &ast::Type) -> String {
             format!("({})", ts.iter().map(type_key).collect::<Vec<_>>().join(", "))
         }
         ast::Type::Array(n, inner) => format!("[{n}]{}", type_key(inner)),
+        ast::Type::ComptimeInt(v) => format!("{v}"),
         ast::Type::Infer => "anytype".to_string(),
         ast::Type::Owned(inner) => type_key(inner),
     }
@@ -95,6 +96,7 @@ pub fn subst(ty: &ast::Type, bindings: &HashMap<String, ast::Type>) -> ast::Type
             ast::Type::Tuple(ts.iter().map(|t| subst(t, bindings)).collect())
         }
         ast::Type::Array(n, inner) => ast::Type::Array(*n, Box::new(subst(inner, bindings))),
+        ast::Type::ComptimeInt(v) => ast::Type::ComptimeInt(*v),
         ast::Type::Infer => ast::Type::Infer,
         ast::Type::Owned(inner) => ast::Type::Owned(Box::new(subst(inner, bindings))),
     }
@@ -119,21 +121,61 @@ pub fn instantiate(
     body: &ast::Block,
     args: &[ast::Type],
 ) -> Result<Instantiated, String> {
-    // 绑定类型参数（`T: type` → 实参类型）。实参个数不符 → 编译错误。
-    let mut bindings: HashMap<String, ast::Type> = HashMap::new();
-    let type_params: Vec<&ast::Param> = params
-        .iter()
-        .filter(|p| matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "type"))
-        .collect();
-    if type_params.len() != args.len() {
-        return Err(format!(
-            "类型函数 `{name}` 需要 {} 个类型实参，给出 {} 个",
-            type_params.len(),
-            args.len()
-        ));
+    // 参数分类：`T: type` = 类型参数；`n: comptime_int` = 编译期整数值参数
+    // （ADR-0012：惰性宽度字面量，实例化时按上下文收窄）。实参按全部参数对齐。
+    let is_type_param = |p: &ast::Param| matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "type");
+    let is_value_param = |p: &ast::Param| {
+        matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "comptime_int")
+    };
+    let type_params: Vec<&ast::Param> = params.iter().filter(|p| is_type_param(p)).collect();
+    let value_params: Vec<&ast::Param> = params.iter().filter(|p| is_value_param(p)).collect();
+    let total = type_params.len() + value_params.len();
+    if total != args.len() {
+        return Err(if value_params.is_empty() {
+            format!(
+                "类型函数 `{name}` 需要 {} 个类型实参，给出 {} 个",
+                type_params.len(),
+                args.len()
+            )
+        } else {
+            format!(
+                "类型函数 `{name}` 需要 {total} 个实参（{} 个类型 + {} 个 comptime_int），给出 {} 个",
+                type_params.len(),
+                value_params.len(),
+                args.len()
+            )
+        });
     }
-    for (p, a) in type_params.iter().zip(args.iter()) {
-        bindings.insert(p.name.clone(), a.clone());
+
+    let mut bindings: HashMap<String, ast::Type> = HashMap::new();
+    let mut value_bindings: HashMap<String, usize> = HashMap::new();
+    let mut ai = 0;
+    for p in params {
+        if is_type_param(p) {
+            // 类型参数须收类型实参（comptime_int 值是编译期整数值，非类型）
+            if let ast::Type::ComptimeInt(_) = &args[ai] {
+                return Err(format!(
+                    "类型函数 `{name}`：类型参数 `{}` 需要类型实参，得 comptime_int 值",
+                    p.name
+                ));
+            }
+            bindings.insert(p.name.clone(), args[ai].clone());
+            ai += 1;
+        } else if is_value_param(p) {
+            match &args[ai] {
+                ast::Type::ComptimeInt(v) => {
+                    value_bindings.insert(p.name.clone(), *v);
+                }
+                other => {
+                    return Err(format!(
+                        "类型函数 `{name}`：comptime_int 参数 `{}` 需要整数实参，得 {}",
+                        p.name,
+                        type_key(other)
+                    ));
+                }
+            }
+            ai += 1;
+        }
     }
 
     // 求值 return 表达式（D1：取块内最后一个 return——类型函数体通常为单 return）
@@ -170,13 +212,53 @@ pub fn instantiate(
                 span: span.clone(),
             }))
         }
-        // `return T;`（类型参数透传）或 `return i32;`（固定类型别名）
-        ast::Expr::Ident(id, _) => {
-            let t = subst(&ast::Type::Named(id.clone(), vec![]), &bindings);
+        // `return T;`（透传）/ `return i32;`（固定别名）/ `return [n]T;`（数组类型）
+        other => {
+            let t = eval_type_expr(other, &bindings, &value_bindings)?;
             Ok(Instantiated::Type(t))
         }
+    }
+}
+
+/// 类型值表达式求值（组 D）：`[n]T` 数组类型 / `T` 透传 / `i32` 固定类型。
+/// `struct {...}` 作为顶层 return 单独走 Class 分支（数组元素为 struct 暂不支持）。
+fn eval_type_expr(
+    e: &ast::Expr,
+    bindings: &HashMap<String, ast::Type>,
+    value_bindings: &HashMap<String, usize>,
+) -> Result<ast::Type, String> {
+    match e {
+        ast::Expr::ArrayType { len, elem, .. } => {
+            let n = eval_array_len(len, value_bindings)?;
+            let inner = eval_type_expr(elem, bindings, value_bindings)?;
+            Ok(ast::Type::Array(n, Box::new(inner)))
+        }
+        // `T`（类型参数）→ 实参类型；`i32`（固定名）→ 类型名自身
+        ast::Expr::Ident(id, _) => Ok(subst(&ast::Type::Named(id.clone(), vec![]), bindings)),
         other => Err(format!(
-            "类型函数 `{name}`：体不支持该形态（D1 支持 `return struct {{ ... }};` / `return T;`，得 {}）",
+            "类型函数：体不支持该形态（得 {}）",
+            expr_kind(other)
+        )),
+    }
+}
+
+/// 数组类型长度求值：`3` 字面量（收窄为 usize）/ `n` comptime_int 参数引用。
+fn eval_array_len(
+    e: &ast::Expr,
+    value_bindings: &HashMap<String, usize>,
+) -> Result<usize, String> {
+    match e {
+        ast::Expr::IntLit { text, .. } => text
+            .trim_end_matches(|c: char| c.is_alphabetic())
+            .replace('_', "")
+            .parse::<usize>()
+            .map_err(|_| format!("数组类型长度非法：`{text}`")),
+        ast::Expr::Ident(name, _) => value_bindings
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("数组类型长度引用未知的 comptime_int 参数 `{name}`")),
+        other => Err(format!(
+            "数组类型长度须为整数或 comptime_int 参数引用（得 {}）",
             expr_kind(other)
         )),
     }
@@ -186,6 +268,7 @@ pub fn instantiate(
 fn expr_kind(e: &ast::Expr) -> &'static str {
     match e {
         ast::Expr::StructType { .. } => "struct 类型字面量",
+        ast::Expr::ArrayType { .. } => "数组类型字面量",
         ast::Expr::Call { .. } => "调用",
         ast::Expr::IfExpr { .. } => "if 表达式",
         ast::Expr::SwitchExpr { .. } => "switch 表达式",

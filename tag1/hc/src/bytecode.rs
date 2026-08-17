@@ -254,6 +254,11 @@ fn encode_type(out: &mut Vec<u8>, t: &Type) {
             out.push(8);
             encode_type(out, inner);
         }
+        // comptime_int 字面量（组 D：类型实参位置；不落 IR，防御性编码/解码对称）
+        Type::ComptimeInt(v) => {
+            out.push(9);
+            push_u32(out, *v as u32);
+        }
     }
 }
 
@@ -814,6 +819,7 @@ fn decode_type(r: &mut Reader) -> Result<Type, String> {
         6 => Type::Array(r.u32()? as usize, Box::new(decode_type(r)?)),
         7 => Type::Infer,
         8 => Type::Owned(Box::new(decode_type(r)?)),
+        9 => Type::ComptimeInt(r.u32()? as usize),
         other => return Err(format!("未知 Type 标签 {other}")),
     })
 }

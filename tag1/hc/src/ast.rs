@@ -209,6 +209,9 @@ pub enum Type {
     Tuple(Vec<Type>),
     /// 定长数组 [N]T
     Array(usize, Box<Type>),
+    /// comptime_int 字面量（组 D：类型实参位置的整数字面量，`ArrayLen(i32, 3)` 的 `3`）。
+    /// 编译期任意精度字面量，实例化时按上下文收窄（ADR-0012）；无运行时表示。
+    ComptimeInt(usize),
     /// 推断（省略标注）
     Infer,
     /// 所有权标注包装：o T（仅记录形态）
@@ -372,6 +375,14 @@ pub enum Expr {
     /// 编译期求值 = 具体化后登记为 class。tag1 仅 `name: Type` 形态（值字段不在此）。
     StructType {
         fields: Vec<(String, Type)>,
+        span: Span,
+    },
+    /// 数组类型值（组 D 类型函数）：`[n]T`（`fn ArrayLen(T: type, n: comptime_int) type`）。
+    /// `len` = 编译期整数表达式（标识符/字面量）；`elem` = 元素类型值表达式。编译期求值 =
+    /// 长度收窄 + 元素替换后具体化为 `Type::Array`。
+    ArrayType {
+        len: Box<Expr>,
+        elem: Box<Expr>,
         span: Span,
     },
     /// Type.name（枚举常量 / 命名空间限定）
@@ -643,6 +654,11 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
         }
         // struct 类型字面量：字段为类型标注（无运行时值/自由变量）
         Expr::StructType { .. } => {}
+        // 数组类型值 `[n]T`：长度与元素类型值表达式均可能引用 comptime 参数
+        Expr::ArrayType { len, elem, .. } => {
+            visit_expr(len, scopes, fv);
+            visit_expr(elem, scopes, fv);
+        }
         Expr::Dot { base, .. } | Expr::Field { base, .. } => visit_expr(base, scopes, fv),
         Expr::Index { base, indices, .. } => {
             visit_expr(base, scopes, fv);

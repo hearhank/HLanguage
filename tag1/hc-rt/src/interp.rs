@@ -37,6 +37,7 @@ fn alloc_zeroed_bytes(n: i128) -> Option<Vec<u8>> {
 /// 渲染类型为源码串（E1 `types.fields` 元数据 + 诊断用）——对齐 06-02 类型语法
 fn fmt_type_str(t: &Type) -> String {
     match t.strip() {
+        Type::ComptimeInt(v) => format!("{v}"),
         Type::Named(n, args) => {
             if args.is_empty() {
                 n.clone()
@@ -2189,6 +2190,13 @@ impl Interp {
                 "TypeValue",
                 format!(
                     "类型值 `struct {{ ... }}` 仅 comptime 类型函数内可求值（第 {} 行第 {} 列）",
+                    span.line, span.col
+                ),
+            )),
+            Expr::ArrayType { span, .. } => Err(RtError::msg(
+                "TypeValue",
+                format!(
+                    "类型值 `[n]T` 仅 comptime 类型函数内可求值（第 {} 行第 {} 列）",
                     span.line, span.col
                 ),
             )),

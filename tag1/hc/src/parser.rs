@@ -13,6 +13,9 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     diags: Vec<Diagnostic>,
+    /// 当前函数返回 `type`（类型函数，组 D）：其体部 `return [n]T;` 的 `[` 按
+    /// 数组类型值表达式解析（`Expr::ArrayType`），而非数组字面量。
+    in_type_fn: bool,
 }
 
 impl Parser {
@@ -21,6 +24,7 @@ impl Parser {
             tokens,
             pos: 0,
             diags: Vec::new(),
+            in_type_fn: false,
         }
     }
 
@@ -454,7 +458,15 @@ impl Parser {
                 }
             }
         }
+        // 组 D：返回 `type` 的函数体按类型函数解析——`return [n]T;` 的 `[` 走
+        // 数组类型值表达式（`Expr::ArrayType`），长度/元素可为 comptime 参数引用。
+        let was_type_fn = self.in_type_fn;
+        self.in_type_fn = matches!(
+            ret.as_ref().map(|t| t.strip()),
+            Some(Type::Named(n, _)) if n == "type"
+        );
         let body = self.parse_block()?;
+        self.in_type_fn = was_type_fn;
         let end = self.span();
         Ok((name, params, ret, where_clause, body, start.merge(&end)))
     }
@@ -873,7 +885,19 @@ impl Parser {
             let mut a = Vec::new();
             if !self.at(&TokenKind::RParen) {
                 loop {
-                    a.push(self.parse_type()?);
+                    // 组 D：comptime_int 字面量实参（`ArrayLen(i32, 3)` 的 `3`）——编译期
+                    // 整数值，非类型名。实例化时按 `n: comptime_int` 参数绑定。
+                    if let TokenKind::Int(text) = self.peek() {
+                        let n = text
+                            .trim_end_matches(|c: char| c.is_alphabetic())
+                            .replace('_', "")
+                            .parse::<usize>()
+                            .map_err(|_| self.error_at(format!("invalid comptime_int arg `{text}`")))?;
+                        self.advance();
+                        a.push(Type::ComptimeInt(n));
+                    } else {
+                        a.push(self.parse_type()?);
+                    }
                     if self.at(&TokenKind::Comma) {
                         self.advance();
                     } else {
@@ -961,7 +985,12 @@ impl Parser {
                 let e = if self.at(&TokenKind::Semi) {
                     None
                 } else {
-                    Some(self.parse_expr()?)
+                    // 组 D：类型函数体 `return [n]T;` —— `[` 按数组类型值表达式解析
+                    Some(if self.in_type_fn && self.at(&TokenKind::LBracket) {
+                        self.parse_type_value_expr()?
+                    } else {
+                        self.parse_expr()?
+                    })
                 };
                 let end = self.span();
                 self.expect(&TokenKind::Semi, "`;` after return")?;
@@ -1214,7 +1243,12 @@ impl Parser {
                 ) {
                     None
                 } else {
-                    Some(self.parse_expr()?)
+                    // 组 D：类型函数体内 switch 臂 return `[n]T;` 同样走数组类型值
+                    Some(if self.in_type_fn && self.at(&TokenKind::LBracket) {
+                        self.parse_type_value_expr()?
+                    } else {
+                        self.parse_expr()?
+                    })
                 };
                 let end = self.span();
                 if self.at(&TokenKind::Semi) {
@@ -1835,6 +1869,32 @@ impl Parser {
         Ok(args)
     }
 
+    /// 组 D：类型值表达式（类型函数体 `return` 用）。`[` → 数组类型 `[n]T`；
+    /// 其它形态走普通表达式（`T` 标识符 / `struct { ... }` 类型字面量等）。
+    fn parse_type_value_expr(&mut self) -> Result<Expr, Diagnostic> {
+        if self.at(&TokenKind::LBracket) {
+            return self.parse_array_type_expr();
+        }
+        self.parse_expr()
+    }
+
+    /// 组 D：数组类型值 `[len]elem`（类型函数体 `return [n]T;`）。
+    /// `len` = 编译期整数表达式（标识符 `n` / 字面量 `3`）；`elem` = 元素类型值表达式
+    /// （标识符 / 嵌套数组 / struct 类型字面量）。
+    fn parse_array_type_expr(&mut self) -> Result<Expr, Diagnostic> {
+        let start = self.span();
+        self.expect(&TokenKind::LBracket, "`[` in array type expression")?;
+        let len = self.parse_expr()?;
+        self.expect(&TokenKind::RBracket, "`]` in array type expression")?;
+        let elem = self.parse_type_value_expr()?;
+        let end = self.span();
+        Ok(Expr::ArrayType {
+            len: Box::new(len),
+            elem: Box::new(elem),
+            span: start.merge(&end),
+        })
+    }
+
     fn parse_primary(&mut self) -> Result<Expr, Diagnostic> {
         let start = self.span();
         // 闭包：|v| expr / |v, w| expr / mut |v| { ... }
@@ -2328,6 +2388,7 @@ impl Expr {
             | Expr::TupleLit(_, span)
             | Expr::NamedLit { span, .. }
             | Expr::StructType { span, .. }
+            | Expr::ArrayType { span, .. }
             | Expr::Dot { span, .. }
             | Expr::Field { span, .. }
             | Expr::Index { span, .. }

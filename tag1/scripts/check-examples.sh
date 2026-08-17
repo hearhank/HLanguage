@@ -2,10 +2,12 @@
 # 完整示例套件回归门（CI 与本地共用）。
 #
 # 两部分（基线随功能扩增而更新，见 tag1/README.md）：
-#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（133/142 通过 + 1 跳过：
+#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（135/143 通过 + 1 跳过：
 #      23-tests 的 skip_example 自 F1 起实际触发 error.SkipTest → SKIP，不计入 passed/failed；
 #      130→132 为 H3 新增 91-orders-domain（[module] 领域约定，2 测试全绿）；
-#      132→133 为组 D（E1.2）comptime 类型函数：34-generics 由失败转全绿）
+#      132→133 为组 D（E1.2）comptime 类型函数：34-generics 由失败转全绿；
+#      133→135 为组 D（E1.2）D3/D4 最小切片：35-comptime-branch（comptime_int 值参数 +
+#      数组类型函数 `[n]T`）由失败转全绿，失败 9→8）
 #   2) compile：`hc test --mode=compile examples/` 断言 <= 55 mismatch
 #      （未实现原生内建/方法 → error.NotBuiltin/NoMethod 响亮中止；子集扩增时该数下降，属改进。
 #      52→53 为 D1 副作用：interpret 侧 fmt_int 修复使 63-template-render 转绿，原生侧

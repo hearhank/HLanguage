@@ -1406,6 +1406,10 @@ impl Checker {
             ),
             Type::Tuple(ts) => SType::Tuple(ts.iter().map(|x| self.ty_of(x)).collect()),
             Type::Array(n, inner) => SType::Array(*n, Box::new(self.ty_of(inner))),
+            // comptime_int 字面量（组 D）：惰性宽度整数——定型点收窄，此处记宽度
+            Type::ComptimeInt(_) => SType::Int {
+                width: IntWidth::Comptime,
+            },
             Type::Infer => SType::Infer,
             Type::Owned(inner) => self.ty_of(inner),
         }
@@ -1891,6 +1895,8 @@ impl Checker {
             // struct 类型字面量（E1.2 组 D）：类型值——comptime 类型函数体内求值；
             // 静态类型 = 元类型（无运行时表示），tag1 按 Unknown 放行（具体化由运行时登记）
             Expr::StructType { .. } => SType::Unknown,
+            // 数组类型值 `[n]T`（组 D）：同 struct 类型字面量——类型值，按 Unknown 放行
+            Expr::ArrayType { .. } => SType::Unknown,
             Expr::Dot { base, field, span } => {
                 // 实例访问（v1.append / p2.x / self.count）：parse_primary 把变量成员的第一个 `.` 解析为 Dot
                 if let Expr::Ident(n, _) = base.as_ref() {

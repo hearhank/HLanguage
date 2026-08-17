@@ -117,6 +117,8 @@
 
 > ✅ **组 D 最小切片（D1）已完成（2026-08-18）**：comptime **类型函数**——`fn Pair(T: type) type { return struct { first: T, second: T }; }` 解析/语义/具体化落地。AST 增 `Expr::StructType` + `NamedLit.ty_args`；`hc::comptime`（`is_type_fn`/`concrete_name`/`subst`/`instantiate`）三后端共享具体化引擎；interp 与 IR 各自**惰性具体化登记**（`Pair(i32)` → `Pair<@i32>`，类型表缓存；`return T;` 透传 = 实参类型同义）。类型函数体降级**跳过**（comptime-only，无运行时残留）；内建泛型（`Vec(T)` 等）回退基础名不受影响。示例 **34-generics** interp / IR / 原生编译三模式全绿（`5/3.5/3`，2 测试）；consistency 新增 `d1_comptime_type_application_consistent`；compile 门禁 55→53。**留 D2–D5**：`comptime { }` 块、comptime_int/float（35 例）、`anytype` 完整语义、嵌套/递归实例化、`comptime` 值函数（参数含 `type`/`anytype` 的编译期执行）。
 
+> ✅ **组 D D3/D4 最小切片已完成（2026-08-18）**：comptime_int 值参数 + 数组类型函数——`fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`。AST 增 `Type::ComptimeInt(usize)`（类型实参位置的整数字面量，惰性宽度）与 `Expr::ArrayType { len, elem }`（`[n]T` 数组类型值表达式；parser `in_type_fn` 标志下仅类型函数体 return 位置特殊解析，避免与数组字面量歧义）；`instantiate` 参数分类（`T: type` = 类型参数 / `n: comptime_int` = 值参数）+ 长度求值（字面量/参数引用）→ `Type::Array(n, elem)`；具体化名 `ArrayLen(i32, 3)` → `ArrayLen<@i32,3>`，数组产物 `type_key` = `[3]i32`。带 init 的 var-decl **惰性放行**（不调用 `concrete_type_name`，标注仅设 expected_ret——示例 35 靠 init 驱动）；`max_value` anytype 为普通运行时函数非类型函数。示例 **35-comptime-branch** interp / IR / 原生编译三模式全绿（2 测试）；comptime 单测 +8（值参数/数组形态含错误路径）；consistency 新增 `d35_comptime_array_type_fn_consistent`。**仍待 D2/D4**：`comptime { }` 块、comptime_float、`anytype` 完整语义、嵌套/递归实例化、`comptime` 值函数。
+
 ### E. E2.3 异步（依赖 A1 协作式路径 + 组 G；确定性 Future）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |

@@ -131,6 +131,7 @@ pub fn render_type(t: &Type) -> String {
             ts.iter().map(render_type).collect::<Vec<_>>().join(", ")
         ),
         Type::Array(n, t) => format!("[{n}]{}", render_type(t)),
+        Type::ComptimeInt(v) => format!("{v}"),
         Type::Infer => "_".to_string(),
         Type::Owned(inner) => format!("o {}", render_type(inner)),
     }

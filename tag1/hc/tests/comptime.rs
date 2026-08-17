@@ -201,3 +201,134 @@ fn instantiate_no_return_errors() {
     let err = instantiate("Bad", params, body, &[t_i32()]).unwrap_err();
     assert!(err.contains("不含 return"), "错误信息含 return 说明：{err}");
 }
+
+// ---------- 组 D：comptime_int 值参数 + 数组类型函数（示例 35） ----------
+
+fn t_comptime_int(v: usize) -> Type {
+    Type::ComptimeInt(v)
+}
+
+#[test]
+fn type_key_comptime_int() {
+    assert_eq!(type_key(&t_comptime_int(3)), "3");
+    assert_eq!(
+        type_key(&Type::Array(3, Box::new(t_i32()))),
+        "[3]i32",
+        "数组具体化名 = `[N]T` 规范串"
+    );
+}
+
+#[test]
+fn concrete_name_with_comptime_int() {
+    let args = vec![t_i32(), t_comptime_int(3)];
+    assert_eq!(
+        concrete_name("ArrayLen", &args),
+        "ArrayLen<@i32,3>",
+        "类型 + comptime_int 混合实参"
+    );
+}
+
+#[test]
+fn instantiate_array_type_returns_array() {
+    let prog = parse_source(
+        r#"
+        fn ArrayLen(T: type, n: comptime_int) type {
+            return [n]T;
+        }
+        "#,
+    )
+    .unwrap();
+    let (params, _, body) = find_fn(&prog, "ArrayLen");
+    let args = vec![t_i32(), t_comptime_int(3)];
+    match instantiate("ArrayLen", params, body, &args).unwrap() {
+        Instantiated::Type(t) => assert_eq!(t, Type::Array(3, Box::new(t_i32()))),
+        other => panic!("期望 Type::Array 具体化，得 {other:?}"),
+    }
+}
+
+#[test]
+fn instantiate_array_len_literal() {
+    // 长度直接写字面量（`[3]T`），不引用 comptime_int 参数
+    let prog = parse_source(
+        r#"
+        fn Fixed(T: type) type {
+            return [3]T;
+        }
+        "#,
+    )
+    .unwrap();
+    let (params, _, body) = find_fn(&prog, "Fixed");
+    match instantiate("Fixed", params, body, &[t_i32()]).unwrap() {
+        Instantiated::Type(t) => assert_eq!(t, Type::Array(3, Box::new(t_i32()))),
+        other => panic!("期望 Type::Array，得 {other:?}"),
+    }
+}
+
+#[test]
+fn instantiate_array_nested_elem() {
+    let prog = parse_source(
+        r#"
+        fn Grid(T: type, n: comptime_int) type {
+            return [n][2]T;
+        }
+        "#,
+    )
+    .unwrap();
+    let (params, _, body) = find_fn(&prog, "Grid");
+    let args = vec![t_i32(), t_comptime_int(2)];
+    match instantiate("Grid", params, body, &args).unwrap() {
+        Instantiated::Type(t) => assert_eq!(
+            t,
+            Type::Array(2, Box::new(Type::Array(2, Box::new(t_i32()))))
+        ),
+        other => panic!("期望嵌套数组，得 {other:?}"),
+    }
+}
+
+#[test]
+fn instantiate_value_arity_mismatch_errors() {
+    let prog = parse_source(
+        r#"
+        fn ArrayLen(T: type, n: comptime_int) type {
+            return [n]T;
+        }
+        "#,
+    )
+    .unwrap();
+    let (params, _, body) = find_fn(&prog, "ArrayLen");
+    let err = instantiate("ArrayLen", params, body, &[t_i32()]).unwrap_err();
+    assert!(err.contains("需要 2 个实参"), "错误信息含个数：{err}");
+}
+
+#[test]
+fn instantiate_value_type_mismatch_errors() {
+    let prog = parse_source(
+        r#"
+        fn ArrayLen(T: type, n: comptime_int) type {
+            return [n]T;
+        }
+        "#,
+    )
+    .unwrap();
+    let (params, _, body) = find_fn(&prog, "ArrayLen");
+    // comptime_int 参数收到类型实参 → 错误
+    let err = instantiate("ArrayLen", params, body, &[t_i32(), t_str()]).unwrap_err();
+    assert!(err.contains("需要整数实参"), "错误信息含类型说明：{err}");
+}
+
+#[test]
+fn instantiate_type_param_gets_comptime_int_errors() {
+    let prog = parse_source(
+        r#"
+        fn ArrayLen(T: type, n: comptime_int) type {
+            return [n]T;
+        }
+        "#,
+    )
+    .unwrap();
+    let (params, _, body) = find_fn(&prog, "ArrayLen");
+    // 类型参数收到 comptime_int 值 → 错误（类型参数须收类型实参）
+    let args = vec![t_comptime_int(3), t_comptime_int(3)];
+    let err = instantiate("ArrayLen", params, body, &args).unwrap_err();
+    assert!(err.contains("需要类型实参"), "错误信息含类型说明：{err}");
+}

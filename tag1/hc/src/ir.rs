@@ -1950,6 +1950,11 @@ impl<'a> LowerCtx<'a> {
             Expr::StructType { span, .. } => {
                 self.fail_void(t, "类型值 `struct { ... }`（仅 comptime 类型函数内可求值）", span);
             }
+            // 数组类型值 `[n]T`（组 D）：同 struct 类型字面量——仅 comptime 类型函数
+            // 体内编译期求值；运行时表达式位置 = 用法错误（类型函数体降级跳过）
+            Expr::ArrayType { span, .. } => {
+                self.fail_void(t, "类型值 `[n]T`（仅 comptime 类型函数内可求值）", span);
+            }
             Expr::Dot { base, field, span } => {
                 // 类型名（enum/class）限定 → 枚举常量（对齐 oracle：不做变体验证，全类型名同权）
                 if let Expr::Ident(bname, _) = base.as_ref() {

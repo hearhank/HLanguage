@@ -1634,6 +1634,37 @@ fn bump_g() void { g = g + 1; }
 }
 
 #[test]
+fn d35_comptime_array_type_fn_consistent() {
+    // 组 D（示例 35）：comptime_int 值参数 + 数组类型函数
+    // `fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`——`ArrayLen(i32, 3)`
+    // 即 `[3]i32`。interp == IR 双模式一致：类型应用初始化、`.len`、anytype 运行时函数。
+    assert_all_pass(
+        r#"
+fn ArrayLen(T: type, n: comptime_int) type {
+    return [n]T;
+}
+fn max_value(a: anytype, b: anytype) anytype {
+    if (a > b) { return a; }
+    return b;
+}
+[test] fn array_type_fn() void {
+    var arr: ArrayLen(i32, 3) = [1, 2, 3];
+    expect_eq(arr.len, 3);
+    expect_eq(arr[1], 2);
+}
+[test] fn comptime_int_scaled() void {
+    var arr: ArrayLen(f64, 2) = [0.5, 1.5];
+    expect(arr.len == 2);
+}
+[test] fn anytype_runtime_fn() void {
+    expect_eq(max_value(3, 7), 7);
+    expect(max_value(2.5, 1.5) > 2.49 and max_value(2.5, 1.5) < 2.51);
+}
+"#,
+    );
+}
+
+#[test]
 fn d1_comptime_type_application_consistent() {
     // 组 D（E1.2）：comptime 类型函数——`fn Pair(T: type) type` 惰性具体化。
     // interp == IR 双模式一致：类型应用构造、字段读写、`return T;` 透传别名、
