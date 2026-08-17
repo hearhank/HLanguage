@@ -49,5 +49,6 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | `05-open-questions-and-risks.md` | 开放问题与风险登记 |
 | `06-language-spec.md` | **语言规范总纲**（定位/双模式/入口/语法速查/文件索引）；规范正文按主题拆分：`06-01-syntax`（词法/声明/运算符/控制流/测试）、`06-02-types`（基础类型）、`06-03-extended-types`（扩展类型）、`06-04-functions`（函数/内建）、`06-05-interfaces`（接口/标量接口族/迭代/序列化内建）、`06-06-ownership`（所有权）、`06-07-errors`（错误）、`06-08-modules`（模块）、`06-09-meta`（元编程）、`06-10-concurrency`（并发） |
 | `07-bootstrap-plan.md` | **三块实现计划**：第一块语言系统（M0–M4，语言包）+ 第二块最小外围（M5–M7，共同构成最小功能集、不自举）+ 第三块扩展与自举（E1–E7，可自举）；功能模块拆分表 + 总体结构图 |
+| `08-mem-allocator-design.md` | **mem 标准库内存分配器设计**：Allocator 抽象 + 全局回退分配器 + Arena（方法集、内存归属规则、装箱/集合交互、tag1 差距清单） |
 
 相关文档：决策记录 `docs/adr/0001`–`0008`；术语表 `CONTEXT.md`；参考语言事实档案与功能比对 `RESEARCH/`（含 `h-vs-rust-comparison.md`）；review 裁定全录 `docs/review/2026-08-13-spec-examples-review.md`。

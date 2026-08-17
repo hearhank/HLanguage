@@ -89,7 +89,7 @@
 ## 10. 语法
 
 - C 风格：花括号、分号（三参考语言收敛一致，无争议）
-- 命名：标识符 `snake_case`；类型 `PascalCase`（Zig 第一）
+- 命名（2026-08-17 补定）：**类型与命名空间 `PascalCase`**（首字母大写；缩写词全大写，如 `HTTPRequest`/`TCPSocket`）；**标识符（变量/函数/方法/字段/参数）`snake_case`**；**常量 `SCREAMING_SNAKE`**（如 `FLAG_EXEC`）。类型 PascalCase（Zig 第一）沿既有定案
 
 ## 11. 标准库
 
@@ -109,7 +109,7 @@
 > 以下 26 项为语言特性清单。**状态说明**：`已定义` = 设计共识已确定，无需再议；`骨架已定` = 共识定了方向，细节待补；`待定义` = 由项目所有者逐项定义。每项标注参考语言的对应做法（按 Zig → Rust → TS 优先级）。
 
 ### 12.1 基础语法（部分定义）
-C 风格（花括号、分号）；标识符 `snake_case`，类型 `PascalCase`。
+C 风格（花括号、分号）；标识符（变量/函数/方法/字段/参数）`snake_case`，类型与命名空间 `PascalCase`（缩写词全大写，如 `HTTPRequest`），常量 `SCREAMING_SNAKE`（2026-08-17 补定，见 §10）。
 
 **测试函数（2026-08-13 Q8 定案；Q-R11 修订）**：`test fn 名称() !void { ... }` 标记为测试的函数（**可被普通代码调用/复用**），`hc test` 收集运行；测试失败 = error；**断言 API（Q-T1 定案）**：`expect` / `expect_eq` / `expect_neq` / `expect_error` / `expect_eq_slices`——归 std.debug、测试函数内隐式可用；**输出统计（Q-T2 定案）**：`[PASS]/[FAIL]/[SKIP] 文件::测试` 逐项 + `N passed, M failed, K skipped` 汇总；失败非零退出码；失败不中止；**隔离/串行/跳过（Q-T3 定案）**：测试函数独立作用域（退出自动销毁）；1.0 默认串行；`return error.SkipTest;` 标记跳过；**环境（Q-T4 定案）**：测试函数内隐式 `test_io`（独立 `Io.threaded()` 实例）+ `alloc`；其它运行时显式创建；**双模式（Q-T5 定案）**：`hc test` 默认脚本模式，`--mode=compile` 交叉验证；**示例测试形态（Q-T6 定案）**：S1 纯逻辑断言 / S2 main smoke / S3 局部逻辑 / S4 演示标注；输出不捕获（见 06 §2）。
 
@@ -287,15 +287,15 @@ Zig 无闭包，按参考规则取 Rust 第二；捕获模式与 H 语法体系�
 - 悬垂防护 = **双向引用注册**（Debug 抛错带位置、Release 裸读用户负责）
 - **无显式生命周期标注**（`'a` 式不进入语言）：接口/复杂类型的生命周期契约用文档约定，缺角由 Debug 检测兜底；若 1.0 暴露真实痛点，再以精简版演进（单一路径哲学）
 
-### 12.18 文件与 IO（已定义，2026-08-13；Q22c 修订）
-- **IO 是类型（类似 Allocator）**：需要 IO 功能的函数必须**显式传递** `io` 参数——无全局/隐式 IO（「没有隐藏控制」）
-- `io` 是接口（12.16）：`Io` 接口 + 标准库实现（`Io.Threaded`、`Io.Evented` 等）；**库函数 io 参数 = 虚拟类型制**（`io: *T where T: Io`，调用点 `&io`，2026-08-13 Q22c 定案）；**入口特例**：`fn main(io: Io)` 由编译器注入默认 IO 实现句柄（唯一例外）
+### 12.18 文件与 IO（已定义，2026-08-13；Q22c 修订；2026-08-17 修订形态）
+- **IO 环境 = 标准库模块（2026-08-17 定案，ADR-0010——修订 Q22c/12.18）**：`import H.std.{io}` 引入，函数直接调用（`io.print(...)`/`io.fs.*`/`io.net.*`）——无参数传递、无入口注入；「没有隐藏控制」仍成立（import + 显式调用可见）
+- `Io` 接口保留（2026-08-17）：并发 E2 的 `Io.threaded()/evented()` 显式切换机制仍是设计的一部分；入口注入取消（原 Q22c 虚拟类型制 `io: *T where T: Io` 不再作为入口形态）
 - 文件句柄关闭：**defer 式**——`defer f.close()` 保证作用域退出时关闭（清理动作在创建处显式可见，不用隐式析构）；`errdefer` 仅在错误返回路径执行
 - `defer`/`errdefer` 是通用作用域退出语句（Zig 式），不限于 IO
 - 错误一律 error union（无异常）；同步默认，事件循环式运行时为脚本模式库选项
 - 双模式下同一套 IO 标准库行为一致
 - 字节为中心：`&[u8]` 视图 + 文本编码函数（UTF-8 优先）
-- **程序环境（2026-08-14 定案）**：入口注入的 `io` 句柄提供——`io.args() &[&[u8]]`（命令行参数，0 号 = 程序名）、`io.env(name) ?&[u8]`（环境变量）、`io.stdin`/`io.stdout`/`io.stderr`（字节流：`read_all`/`write_all`）
+- **程序环境（2026-08-14 定案；2026-08-17 修订）**：`io` 模块提供——`io.env(name) ?&[u8]`（环境变量）、`io.stdin`/`io.stdout`/`io.stderr`（字节流：`read_all`/`write_all`）；**命令行参数经入口 `main(args)` 注入（0 号 = 程序名），`io.args()` 取消（ADR-0010）**
 - **退出（2026-08-14 定案）**：默认枚举 **`enum ExitType { Exit, Error }`** + `io.exit(t: ExitType, code: u8) !void`——`Exit` 正常静默退出、`Error` 错误退出（打印错误标记/位置）；`main` 返回 error → 等效 `io.exit(ExitType.Error, 1)`；正常返回 → `io.exit(ExitType.Exit, 0)`；测试失败 → 非零（Q-T2）
 
 ### 12.19 集合与字符串（已定义，2026-08-13；Q3 裁定修订）

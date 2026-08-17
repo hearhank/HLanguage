@@ -6,7 +6,7 @@
 
 | 模块 | 内容 | 参考 |
 |---|---|---|
-| `mem` | Allocator 抽象、全局回退分配器、Arena | Zig `std.mem` |
+| `mem` | Allocator 抽象、全局回退分配器、Arena（完整设计见 [`08-mem-allocator-design.md`](08-mem-allocator-design.md)） | Zig `std.mem` |
 | `io` | I/O + 并发统一接口（含 async/await 支持，2026-08-13 逆转） | Zig `std.Io` |
 | `time` | 时间与时区 | Zig `std.time` |
 | `debug` | 断言、日志、调试设施 | Zig `std.debug` |
@@ -53,10 +53,10 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 
 > 以下为 85 个示例中出现的标准库 API 形态——示例即规格，M7 细化实现时以此为准绳展开。标记「待定」的为示例中使用但归属未定（内建 or 标准库，M0 定）。
 
-### io（接口约束参数 `io: *T where T: Io`；入口编译器注入句柄，Q22c）
+### io（标准库模块，import 引入，函数直接调用；入口不再注入——2026-08-17 定案，见 ADR-0010）
 
 - `io.print(comptime 格式串, ...)` — 格式化输出（Q2 comptime 校验；Zig 式说明符）
-- **程序环境（2026-08-14 定案）**：`io.args() &[&[u8]]`（命令行参数，0 号 = 程序名）/ `io.env(name) ?&[u8]`（环境变量）/ `io.stdin`、`io.stdout`、`io.stderr`（字节流：read_all/write_all）/ `io.exit(t: ExitType, code: u8) !void`（`enum ExitType { Exit, Error }` 默认枚举：Exit 正常静默、Error 错误退出打印标记；main error → Error/1、正常 → Exit/0）
+- **程序环境（2026-08-14 定案；2026-08-17 修订为模块形态）**：`io.env(name) ?&[u8]`（环境变量）/ `io.stdin`、`io.stdout`、`io.stderr`（字节流：read_all/write_all）/ `io.exit(t: ExitType, code: u8) !void`（`enum ExitType { Exit, Error }` 默认枚举：Exit 正常静默、Error 错误退出打印标记；main error → Error/1、正常 → Exit/0）——形态：标准库模块函数 + 模块内环境状态；**命令行参数仅经入口 `main(args)` 注入，`io.args()` 取消（2026-08-17 定案）**
 - `io.fs.open(path) !File` / `io.fs.open_dir(path) !Dir` / `defer f.close()`
 - `io.fs.read_file(path, alloc) !&[u8]`（路径直读） / `io.fs.read_all(&f, alloc) !&[u8]`（句柄读）
 - `io.fs.write_all(&f, data) !void` ≡ `f.write_all(data)`（双语，Q20）
@@ -91,7 +91,7 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - `utf8.decode(data)`；`math.nan(f64)` / `math.inf(f32)` / `math.inf_neg(f64)`（类型参数 comptime 式）
 - 待定归属：`fmt_int(i32) String`、`parse_int(&[u8]) ?i32`、`min(a, b)`、`sqrt(x)`、`read_u64_le(&[u8]) u64`（57 使用）
 - `debug` 断言（Q-T1 定案，测试块内隐式可用）：`expect(cond)` / `expect_eq(a, b)` / `expect_neq(a, b)` / `expect_error(e, expr)` / `expect_eq_slices(a, b)`——均 `anyerror!void`
-- `test_io`（Q-T4 定案：test 块内隐式注入的 `Io.threaded()` 实例，每次测试独立创建/销毁）
+- `test_io`（Q-T4 定案）——**2026-08-17 取消**（ADR-0010）：测试直接调 `main()`；需要 io 的测试经 `import H.std.{io}` 使用环境
 
 ### 并发（12.21/12.24/Q14/Q20）
 

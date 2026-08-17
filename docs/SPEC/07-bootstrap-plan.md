@@ -90,7 +90,7 @@ graph TD
 
 ## 三、第二块：最小外围（M5–M7）
 
-> **目标**：与语言系统共同构成**第一部分最小功能集**（不自举）——最小标准库（四大支柱基础）、测试基建、基础工具链。**验收**：`hc build`/`hc run`/`hc test` 完整可用，示例套件双模式一致、测试全绿。
+> **目标**：与语言系统共同构成**第一部分最小功能集**（不自举）——最小标准库（四大支柱基础）、测试基建、基础工具链。**验收**：`hc build`/`hc run`/`hc test` 完整可用，示例套件双模式一致、测试全绿。**执行细表见 `09-part2-execution.md`**（2026-08-17 定案：io 入口调整 `main(args)` + import 导入取代 using（ADR-0010）；线程生命周期提前进第二部分（组 G）；代码管理组纳入第二块（组 H））。
 
 ### M5 最小标准库（四大支柱基础）
 
@@ -98,8 +98,8 @@ graph TD
 |---|---|---|
 | M5.1 mem | Allocator / Arena 实例 | 默认分配器、Arena 类型与实例（分配器机制在语言系统 M4.1，此处为库类型） |
 | M5.2 collections | 容器 | `Vec`/`String`（`u8[]` 别名）/`Map`/`Deque`（最小方法集：append/len/get/put/remove/迭代）；`Table` 构造 |
-| M5.3 serialize 库 | 序列化封装 | 内建序列化（M4.4）之上的库封装与辅助（解析辅助、格式辅助） |
-| M5.4 io 最小 | print / fs / net / 环境 | `io.print`（格式串）；`io.fs`（open/read/write/append/rename/remove/list_dir/**seek/pos/read_at/write_at**）；`io.net` 基础（TCP connect/listen/accept/帧读写）；**程序环境**（`io.args()`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)`） |
+| M5.3 serialize 库 | 序列化封装 | 内建序列化（M4.4）之上的库封装与辅助（解析辅助、格式辅助）——**描述补定（serialize 命名空间 + fmt_int/fmt_float + 解析辅助组）见 `09-part2-execution.md` §2.1** |
+| M5.4 io 最小 | print / fs / net / 环境 | `io.print`（格式串）；`io.fs`（open/read/write/append/rename/remove/list_dir/**seek/pos/read_at/write_at**）；`io.net` 基础（TCP connect/listen/accept/帧读写）；**程序环境**（`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)`；命令行参数经入口 `main(args)` 注入，`io.args()` 取消）——**形态（2026-08-17 定案，ADR-0010）**：标准库模块函数 + 模块内环境状态，`import H.std.{io}` 引入，main 不再注入 |
 | M5.5 时间/调试 | 基础工具 | `io.time.now()`/`sleep`；`debug` 断言（测试辅助） |
 
 ### M6 测试基建
@@ -112,18 +112,18 @@ graph TD
 
 | 模块 | 功能 | 详细说明 |
 |---|---|---|
-| M7.1 命令 | `hc build` / `hc run` / `hc test` | build：编译包内全部文件（静态链接）；run：脚本模式单文件/包运行；test：M6 测试体系 |
+| M7.1 命令 | `hc build` / `hc run` / `hc test` | build：编译包内全部文件（静态链接）；**库形态（`Kind::lib` 产出 lib/dll，构建参数选择）见 `09-part2-execution.md` 组 C**；run：脚本模式单文件/包运行（**目录形态见组 C**）；test：M6 测试体系 |
 | M7.2 包基础 | build.zon | 依赖清单 = H 数据字面量（`const build = Build{...}`）；单包 + 本地依赖；**指纹校验/注册中心 → 第三块** |
 
 ---
 
 ## 四、第一部分（最小功能集）明确不实现的功能
 
-> **脚本生成与多线程在第三块（第二部分）实现——最小功能集明确不实现（最小例子不必实现）**。注意区分：**脚本模式（`hc run` 解释执行）= 双模式核心承诺，属第一块语言系统 M3.2（必须实现）**；**脚本生成（`script` 块元编程）= 第三块 E1（最小集不实现）**；**多线程/并发/异步 = 第三块 E2（最小集不实现）**。
+> **脚本生成在第三块实现——最小功能集明确不实现（最小例子不必实现）**。注意区分：**脚本模式（`hc run` 解释执行）= 双模式核心承诺，属第一块语言系统 M3.2（必须实现）**；**脚本生成（`script` 块元编程）= 第三块 E1（最小集不实现）**；**并发/异步 = 第三块 E2**；**线程生命周期（仅 spawn/join/cancel/is_done/detach）= 2026-08-17 定案提前进第二部分（`09-part2-execution.md` 组 G）**。
 
 - **脚本生成（`script` 块）**：types 元数据/就地替换/实时预览——第三块 E1 实现；第一部分仅泛型 where 基础（comptime 泛型）
 - **comptime 完整**：`comptime { ... }` 块、类型即值/惰性实例化——第三块 E1
-- **多线程/并发/异步全部**：四模式类型、线程、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2
+- **多线程/并发/异步**：四模式类型、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2；**线程生命周期（仅 spawn/join/cancel/is_done/detach）2026-08-17 定案提前进第二部分**（`09-part2-execution.md` 组 G；四模式/async/@atomic/mutex 仍留第三块）
 - **标准库扩展**：UDP/HTTP、ipc、storage/archive、text、time 完整、rng、FFI（`extern fn`/`@cImport`/`hc cc`）
 - **系统编程**：K1–K6/K7–K11 缺口、H core（freestanding）
 - **工具链扩展**：LSP、format、lint、注册中心、供应链指纹校验

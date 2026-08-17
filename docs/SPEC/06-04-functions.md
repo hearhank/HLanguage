@@ -5,7 +5,7 @@
 ## 函数
 
 ```hc
-fn main(io: Io) !void {}   // 入口：io 显式传入（Q1）；!void 入口错误运行时报告；io 提供环境：io.args() / io.env(n) / io.stdin / io.stdout / io.stderr；退出 io.exit(ExitType.Exit|Error, code)（2026-08-14）
+fn main(args: o Vec<String>) !void {}   // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告；环境经 `import H.std.{io}`（io.env(n)/io.stdin/io.stdout/io.stderr）；退出 io.exit(ExitType.Exit|Error, code)（2026-08-14 定案；2026-08-17 修订入口形态，ADR-0010）
 fn fun(y: o *mut T) void {}          // o T：参数拥有（Q22b 类型标注制；退出销毁）
 fn add(a: *T) void where T: INumber {}  // 接口约束：where 子句在签名末尾（Q22b）
 fn f(x: &[u8]) !i32                   // 返回 error union

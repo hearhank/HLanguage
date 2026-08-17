@@ -10,7 +10,7 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 
 - 架构：共享前端 → 共享 IR → 双后端（字节码 VM 脚本模式 + LLVM 原生编译模式）
 - 入口：`fn main(io: Io) !void`——编译器注入 `io` 句柄（唯一例外；库函数 io 参数用虚拟类型制 `io: *T where T: Io`）
-- 程序环境（2026-08-14）：`io.args() &[&[u8]]`（0 号 = 程序名）/ `io.env(name) ?&[u8]` / `io.stdin`/`io.stdout`/`io.stderr`
+- 程序环境（2026-08-14；2026-08-17 修订）：`io.env(name) ?&[u8]` / `io.stdin`/`io.stdout`/`io.stderr`；**命令行参数经入口 `main(args)` 注入（0 号 = 程序名），`io.args()` 取消**
 - 退出（2026-08-14）：**语言内建枚举（L3）** `enum ExitType { Exit, Error }` + `io.exit(t: ExitType, code: u8) !void`——`Exit` 正常静默 / `Error` 错误退出（打印错误标记）；`main` 返回 error → `Error`/1、正常 → `Exit`/0；测试失败 → 非零
 
 ## 语法速查
