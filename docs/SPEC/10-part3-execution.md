@@ -115,6 +115,8 @@
 | D4 | `anytype` + comptime_int/float 完整语义（惰性宽度、编译期常量折叠） | 语义测试绿 | D2 | 1.5h |
 | D5 | 三后端对齐：类型值在 IR 的表示（编译期展开后无运行时残留）+ 一致性用例 | consistency 绿 | D3 | 2h |
 
+> ✅ **组 D 最小切片（D1）已完成（2026-08-18）**：comptime **类型函数**——`fn Pair(T: type) type { return struct { first: T, second: T }; }` 解析/语义/具体化落地。AST 增 `Expr::StructType` + `NamedLit.ty_args`；`hc::comptime`（`is_type_fn`/`concrete_name`/`subst`/`instantiate`）三后端共享具体化引擎；interp 与 IR 各自**惰性具体化登记**（`Pair(i32)` → `Pair<@i32>`，类型表缓存；`return T;` 透传 = 实参类型同义）。类型函数体降级**跳过**（comptime-only，无运行时残留）；内建泛型（`Vec(T)` 等）回退基础名不受影响。示例 **34-generics** interp / IR / 原生编译三模式全绿（`5/3.5/3`，2 测试）；consistency 新增 `d1_comptime_type_application_consistent`；compile 门禁 55→53。**留 D2–D5**：`comptime { }` 块、comptime_int/float（35 例）、`anytype` 完整语义、嵌套/递归实例化、`comptime` 值函数（参数含 `type`/`anytype` 的编译期执行）。
+
 ### E. E2.3 异步（依赖 A1 协作式路径 + 组 G；确定性 Future）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |

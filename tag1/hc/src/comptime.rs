@@ -101,6 +101,7 @@ pub fn subst(ty: &ast::Type, bindings: &HashMap<String, ast::Type>) -> ast::Type
 }
 
 /// 具体化产物
+#[derive(Debug)]
 pub enum Instantiated {
     /// 透传类型（`return T;` 或 `return SomeType;`）——具体化 = 实参/给定类型本身
     Type(ast::Type),

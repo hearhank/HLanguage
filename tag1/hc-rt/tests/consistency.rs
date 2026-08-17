@@ -1632,3 +1632,35 @@ fn bump_g() void { g = g + 1; }
 "#,
     );
 }
+
+#[test]
+fn d1_comptime_type_application_consistent() {
+    // 组 D（E1.2）：comptime 类型函数——`fn Pair(T: type) type` 惰性具体化。
+    // interp == IR 双模式一致：类型应用构造、字段读写、`return T;` 透传别名、
+    // 普通 anytype 运行时函数（非类型函数）。
+    assert_all_pass(
+        r#"
+fn Pair(T: type) type { return struct { first: T, second: T }; }
+fn Identity(T: type) type { return T; }
+fn max_value(a: anytype, b: anytype) anytype {
+    if (a > b) { return a; }
+    return b;
+}
+[test] fn type_application() void {
+    var p: Pair(i32) = Pair(i32){ first = 1, second = 2 };
+    expect_eq(p.first, 1);
+    expect_eq(p.second, 2);
+    p.second = 5;
+    expect_eq(p.second, 5);
+}
+[test] fn passthrough_alias() void {
+    var x: Identity(i32) = 42;
+    expect_eq(x, 42);
+}
+[test] fn anytype_runtime_fn() void {
+    expect_eq(max_value(3, 5), 5);
+    expect_eq(max_value(3.5, 2.5), 3.5);
+}
+"#,
+    );
+}

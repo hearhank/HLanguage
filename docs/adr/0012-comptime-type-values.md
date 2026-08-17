@@ -30,3 +30,11 @@
 - 选择「类型值 = 编译期对象（无运行时表示）+ 具体化」而非「类型即运行时值（如 C++ RTTI）」：零运行时开销、与双模式一致（interp/IR 同型）、无动态类型分发；代价是泛型无法做动态多态（如需则 1.x 用接口 + 具体化组合达成）
 - 选择「调用点具体化 + 缓存」而非「声明点全量实例化」：避免爆炸（只实例化用到的），对齐既有具体优先泛型；代价是实例化错误在调用点报告（位置稍远，编译器可附声明位置）
 - 未采用 C++ 模板式「文本替换后重解析」：H 有类型系统，类型对象为第一类编译期值，无需重解析；实例化 = 类型级求值
+
+---
+
+## 落地状态（2026-08-18）
+
+- **组 D D1（类型函数最小切片）已实现**：`fn Pair(T: type) type { return struct { first: T, second: T }; }` 解析/AST（`Expr::StructType` + `NamedLit.ty_args`）/语义（宽容放行）全落地；`hc::comptime` 具体化引擎（`is_type_fn`/`concrete_name`/`subst`/`instantiate`）三后端共享；interp 与 IR 各自惰性登记 `Pair(i32)` → `Pair<@i32>`（类型表缓存，纯查找 immutable）；`return T;` 透传 = 实参类型同义；类型函数体降级跳过（comptime-only，无运行时残留）；内建泛型（`Vec(T)` 等）回退基础名不受影响。
+- 示例 **34-generics** interp / IR / 原生编译三模式全绿；一致性 `d1_comptime_type_application_consistent`。
+- **待组 D2–D5**：`comptime { }` 块编译期求值、comptime_int/float（35 例）、`anytype` 完整语义、嵌套/递归实例化、`comptime` 值函数（参数含 `type`/`anytype` 触发编译期执行的普通函数）。
