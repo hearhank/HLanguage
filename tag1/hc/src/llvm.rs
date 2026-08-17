@@ -430,11 +430,13 @@ const MSGS: &[Msg] = &[
         key: "tuplearity",
         text: "error.TupleArity",
     },
-    // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用/方法需原生 ABI 改造（Phase 7），
+    // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用/方法需原生 ABI 改造（Phase 8），
     // 当前响亮拒绝（error.NotCallable / error.NoMethod），禁止静默误编译
+    // G4b（组 G 线程，定案 A）：spawn(f, …) 需把 callee 作为函数引用（FnRef）传递，
+    // 原生 ABI 无函数值表示 → 同一 NotCallable 边界（子集外特性，非静默降级）。
     Msg {
         key: "notcallable",
-        text: "error.NotCallable: closures/indirect calls not yet in native mode (Phase 7)",
+        text: "error.NotCallable: function refs/closures/threads (spawn) not yet in native mode (Phase 8)",
     },
     Msg {
         key: "nomethod",
@@ -5525,6 +5527,8 @@ impl BodyEmitter {
             // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用需原生 ABI 改造（Phase 8），
             // 当前响亮拒绝（error.NotCallable），禁止静默误编译。
             // 方法调用已由 Phase 7 内建/用户类分派覆盖；闭包仍在 Phase 8。
+            // G4b（定案 A）：组 G 线程 spawn 的 callee 即以 FnRef 传递 → 原生线程程序
+            // 在此响亮拒绝（error.NotCallable），属原生子集边界（非静默后端私语义）。
             IrInst::MakeClosure { .. } => self.abort_feature("notcallable"),
             IrInst::FnRef { .. } => self.abort_feature("notcallable"),
             IrInst::CallIndirect { .. } => self.abort_feature("notcallable"),
@@ -6073,5 +6077,28 @@ fn f() i32 {
             "{ll}"
         );
         assert!(ll.contains("call %Value @hc_make_arr(i64 0)"), "{ll}"); // Vec/Deque/Table 空 Arr 播种
+    }
+
+    // ---- 组 G 线程：原生子集边界（定案 A） ----
+
+    #[test]
+    fn g4b_thread_spawn_aborts_notcallable() {
+        // G4b 定案 A：原生保持响亮拒绝线程。spawn 的 callee 以 FnRef 传递 → 原生 ABI
+        // 无函数值表示（Phase 8），codegen 发射 @hc_abort_notcallable 运行时中止
+        // （error.NotCallable）——不静默误编译，属原生子集边界。
+        let ll = gen(
+            r#"
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn main() {
+    var th = spawn(add, 6, 7);
+    var r = th.join();
+}
+"#,
+        );
+        assert!(ll.contains("define void @hc_abort_notcallable"), "{ll}");
+        assert!(ll.contains("call void @hc_abort_notcallable"), "{ll}");
+        // 禁止静默：spawn 内建也不得落入 NotBuiltin 之前被跳过——FnRef 中止先于
+        // CallBuiltin spawn 执行（运行时首先命中 notcallable 中止块）。
+        assert!(ll.contains("c\"error.NotCallable: function refs/closures/threads (spawn) not yet in native mode (Phase 8)\\00\""), "{ll}");
     }
 }

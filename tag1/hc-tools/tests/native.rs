@@ -63,6 +63,44 @@ fn compile_and_run(src: &str) -> std::process::ExitStatus {
     Command::new(&exe_path).output().expect("run exe").status
 }
 
+/// 编译运行并捕获 stdout（同 `compile_and_run`，但返回 (退出状态, stdout 文本)）。
+/// 供中止断言使用：`hc_abort` 经 `puts` 打印错误消息到 stdout 后 `exit(1)`。
+fn compile_run_capture(src: &str) -> (std::process::ExitStatus, String) {
+    let dir = temp_dir();
+    let program = hc::parse_source(src).expect("parse");
+    let errs = hc::check_semantics(&program);
+    assert!(
+        !errs.iter().any(|d| d.is_error()),
+        "语义检查失败: {:?}",
+        errs
+    );
+    let module = hc::ir::lower(&program).expect("lower");
+    let table = hc::error_code_table(&program);
+    let ll = hc::llvm::codegen(&module, &table);
+
+    let ll_path = dir.join("prog.ll");
+    std::fs::write(&ll_path, ll).expect("write .ll");
+    let exe_name = if cfg!(windows) { "prog.exe" } else { "prog" };
+    let exe_path = dir.join(exe_name);
+    let out = Command::new("zig")
+        .arg("cc")
+        .arg(&ll_path)
+        .arg("-o")
+        .arg(&exe_path)
+        .output()
+        .expect("run zig cc");
+    assert!(
+        out.status.success(),
+        "zig cc 失败: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let run = Command::new(&exe_path).output().expect("run exe");
+    (
+        run.status,
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+    )
+}
+
 /// 测试驱动编译运行：源码（含 `test fn`）→ `codegen_tests` → `zig cc` → 运行 → 退出状态。
 fn compile_tests_and_run(src: &str) -> std::process::ExitStatus {
     let dir = temp_dir();
@@ -927,4 +965,29 @@ fn fmt_int_float_native() {
          }\n",
     );
     assert!(st.success(), "fmt_int/fmt_float 原生应运行并断言通过");
+}
+
+#[test]
+fn g4b_thread_spawn_aborts_notcallable() {
+    // G4b 定案 A：原生子集边界。spawn 的 callee 以 FnRef 传递 → 原生 ABI 无函数值
+    // 表示（Phase 8）→ 编译成功但运行时经 @hc_abort_notcallable 响亮中止
+    // （error.NotCallable），非零退出——不静默误编译。三后端（interp/IR/字节码）
+    // 线程一致（hc-rt/tests/thread.rs + hc/tests/ir.rs + bytecode.rs），native 记
+    // out-of-subset。
+    if !zig_cc_available() {
+        eprintln!("SKIP: zig cc 不可用");
+        return;
+    }
+    let (st, stdout) = compile_run_capture(
+        "fn add(a: i32, b: i32) i32 { return a + b; }\n\
+         fn main() {\n\
+             var th = spawn(add, 6, 7);\n\
+             var r = th.join();\n\
+         }\n",
+    );
+    assert!(!st.success(), "原生线程程序应中止（error.NotCallable），实际退出 {st}");
+    assert!(
+        stdout.contains("error.NotCallable"),
+        "应打印 error.NotCallable 边界消息，实际 stdout: {stdout:?}"
+    );
 }

@@ -1590,3 +1590,45 @@ class Node { mut x: i32 }
     assert_eq!(tw, 0, "tree-walking deinit 后 init 应失败: {tw}");
     assert_eq!(ir, 0, "IR deinit 后 init 应失败: {ir}");
 }
+
+#[test]
+fn g4b_thread_lifecycle_consistent() {
+    // 组 G 线程（G4b，定案 A）：interp == IR 双模式一致——spawn/join 返回值、
+    // is_done 状态迁移、cancel→Cancelled、detach 立即运行副作用、值复制捕获。
+    // 全部为确定性子集（无逃逸引用/无未 join 提升），共享 IrRuntime 跨 test fn 安全。
+    // 原生为 out-of-subset（hc-tools/tests/native.rs g4b_thread_spawn_aborts_notcallable）。
+    assert_all_pass(
+        r#"
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn bump(v: i32) i32 { return v + 1; }
+[test] fn spawn_join_value() void {
+    var th = spawn(add, 6, 7);
+    expect_eq(th.is_done(), false);
+    var r = th.join();
+    expect_eq(r, 13);
+    expect_eq(th.is_done(), true);
+}
+[test] fn spawn_value_capture() void {
+    var base: i32 = 41;
+    var th = spawn(bump, base);
+    var r = th.join();
+    expect_eq(r, 42);
+}
+[test] fn cancel_then_join() void {
+    var th = spawn(add, 1, 2);
+    th.cancel();
+    var r = th.join();
+    expect_error(error.Cancelled, r);
+    expect_eq(th.is_done(), true);
+}
+global g: i32 = 0;
+fn bump_g() void { g = g + 1; }
+[test] fn detach_runs_side_effect() void {
+    var th = spawn(bump_g);
+    th.detach();
+    expect_eq(g, 1);
+    expect_eq(th.is_done(), true);
+}
+"#,
+    );
+}
