@@ -96,3 +96,90 @@ fn arena_oom_still_catchable() {
         "[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(1 << 63) catch |err| {\n        try expect_eq(err, error.OutOfMemory);\n        return;\n    };\n}\n",
     );
 }
+
+// ---- E1：arena.init(T) typed 构造（M5.1/08 §4：按类型大小对齐后 bump + 字段默认值填充） ----
+
+#[test]
+fn arena_init_typed_default() {
+    // arena.init(T)：类型名构造——字段逐默认值 + bump 记账（堆上 class = 指针宽 8）
+    run_ok(
+        r#"
+class Node {
+    mut x: i32,
+    mut y: i32,
+}
+[test] fn t() !void {
+    var arena = Arena.init(alloc);
+    var node = arena.init(Node);
+    try expect_eq(node.x, 0);
+    try expect_eq(node.y, 0);
+    try expect_eq(arena.bytes(), 8);
+    try expect_eq(arena.blocks(), 1);
+}
+"#,
+    );
+}
+
+#[test]
+fn arena_init_typed_literal() {
+    // arena.init(T{...})：类型字面量构造——求值即实例 + bump 记账
+    run_ok(
+        r#"
+class Node {
+    mut x: i32,
+    mut y: i32,
+}
+[test] fn t() !void {
+    var arena = Arena.init(alloc);
+    var node = arena.init(Node{ x = 1, y = 2 });
+    try expect_eq(node.x, 1);
+    try expect_eq(node.y, 2);
+    try expect_eq(arena.bytes(), 8);
+    var node2 = arena.init(Node{ x = 3, y = 4 });
+    try expect_eq(node2.x, 3);
+    // 连续分配：第二次 bump 对齐到 16 处切，bytes 含对齐填充（8 + 16 = 24）
+    try expect_eq(arena.bytes(), 24);
+}
+"#,
+    );
+}
+
+#[test]
+fn arena_init_continuous_size() {
+    // 连续 class：arena.init 按布局总大小 bump（与 @sizeOf 同源）
+    run_ok(
+        r#"
+[continuous]
+class Point {
+    x: i32,
+    y: i32,
+}
+[test] fn t() !void {
+    var arena = Arena.init(alloc);
+    var p = arena.init(Point);
+    try expect_eq(p.x, 0);
+    try expect_eq(p.y, 0);
+    try expect_eq(@sizeOf(Point), 8);
+    try expect_eq(arena.bytes(), 8);
+}
+"#,
+    );
+}
+
+#[test]
+fn arena_init_after_deinit_errors() {
+    // deinit 后 init → ArenaDeinitialized（与 alloc 同规则）
+    run_main_err(
+        "class Node { mut x: i32 }\nfn main(io: Io) !void {\n    var arena = Arena.init(alloc);\n    arena.deinit();\n    var n = arena.init(Node);\n}\n",
+        "ArenaDeinitialized",
+    );
+}
+
+#[test]
+fn arena_init_unknown_type_errors() {
+    // 未知类型名 → UnknownType（不 bump、不静默 Void）
+    run_main_err(
+        "fn main(io: Io) !void {\n    var arena = Arena.init(alloc);\n    var n = arena.init(NoSuchType);\n}\n",
+        "UnknownType",
+    );
+}

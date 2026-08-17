@@ -4564,9 +4564,57 @@ impl Interp {
                 }
             }
             "init" => {
-                // arena.init(T)：类型构造（tag1：保留 Void；typed 构造归 G3/G4）
-                let _ = args;
-                Ok(Some(Value::Void))
+                // arena.init(T) / arena.init(T{...})（E1：typed 构造，对齐 alloc.init(T)
+                // 双形态；内存来源 arena——按类型大小对齐后 bump 记账 + 字段默认值填充）
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                // 无参构造 arena.init(T)：按类型建空实例（字段逐默认值，definite assignment M2.5）
+                if let Expr::Ident(tname, _) = &args[0] {
+                    let inst = if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
+                        let mut f = HashMap::new();
+                        for fd in fields {
+                            f.insert(fd.name.clone(), self.default_value(Some(&fd.ty))?);
+                        }
+                        Value::class(tname, f)
+                    } else if self.types.contains_key(tname) {
+                        // 枚举等：空变体
+                        Value::Enum {
+                            name: tname.clone(),
+                            variant: "__none__".into(),
+                            payload: None,
+                        }
+                    } else {
+                        return Err(RtError::msg(
+                            "UnknownType",
+                            format!("unknown type `{tname}`"),
+                        ));
+                    };
+                    let size = self.type_size_of(tname).unwrap_or(8);
+                    match arena.borrow_mut().bump(size) {
+                        Ok(_) => Ok(Some(inst)),
+                        Err(ArenaAllocErr::Deinit) => {
+                            Err(RtError::new("ArenaDeinitialized", Some(span.clone())))
+                        }
+                        Err(ArenaAllocErr::Oom) => Ok(Some(self.err_val("OutOfMemory"))),
+                    }
+                } else {
+                    // 带参构造 arena.init(T{...})：字面量求值即实例；按实例类型 bump 记账
+                    let v = self.eval(&args[0])?;
+                    let ty = match &v {
+                        Value::Class(c) => c.borrow().name.clone(),
+                        Value::Enum { name, .. } => name.clone(),
+                        _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                    };
+                    let size = self.type_size_of(&ty).unwrap_or(8);
+                    match arena.borrow_mut().bump(size) {
+                        Ok(_) => Ok(Some(v)),
+                        Err(ArenaAllocErr::Deinit) => {
+                            Err(RtError::new("ArenaDeinitialized", Some(span.clone())))
+                        }
+                        Err(ArenaAllocErr::Oom) => Ok(Some(self.err_val("OutOfMemory"))),
+                    }
+                }
             }
             "deinit" => {
                 if !args.is_empty() {

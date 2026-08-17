@@ -135,6 +135,8 @@
 | E1 | `arena.init(T)` 实现（interp）：bump 分配 + 字段默认值填充，对齐 `alloc.init(T)` 双形态；替换 Void 占位 | arena.rs 测试绿（typed 构造用例） | — | 1.5h |
 | E2 | IR 对齐 + 一致性 + 08 文档同步 | consistency 绿 | E1 | 1.5h |
 
+> ✅ **E1 已完成（2026-08-17）**：`call_arena_method("init")` 替换 Void 占位——`arena.init(T)` 类型名形态按类型建空实例（class 字段逐默认值 / enum 空变体，未知类型 `UnknownType`）+ 按 `type_size_of` bump 记账（堆上 class = 指针宽 8，连续 class = 布局总大小）；`arena.init(T{...})` 字面量形态求值即实例 + 按实例类型 bump。deinit 后 init → `ArenaDeinitialized`，OOM → `error.OutOfMemory`（对齐 alloc 规则）。arena.rs 新增 5 直测：typed_default / typed_literal（含二次 bump 对齐填充）/ continuous_size / after_deinit_errors / unknown_type_errors。全 workspace 绿。
+
 ### F. 测试空白补全（依赖：F2/F4 依赖 A5b——io 模块函数化后形态）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
