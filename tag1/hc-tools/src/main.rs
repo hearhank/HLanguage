@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use hc::ast::{Decl, Expr};
 use hc::diag;
 use hc_rt::Interp;
 
@@ -66,6 +67,8 @@ USAGE:
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
     hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
     hc init <name>             创建新项目骨架（build.zon + main.hc，组 H1）
+    hc pkg add <name> [--path <dir>] [--version <ver>]
+                              写本地依赖声明到 build.zon deps（组 H2）
     hc --version
     hc --help
 ";
@@ -224,6 +227,38 @@ fn run_cli() -> ExitCode {
                 return ExitCode::from(2);
             };
             init_project(name)
+        }
+        "pkg" => {
+            // H2：`hc pkg add <name> [--path <dir>] [--version <ver>]`——写本地依赖
+            if args.get(2).map(|s| s.as_str()) != Some("add") {
+                eprintln!("error: `hc pkg` 子命令暂仅支持 `add`\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
+            let Some(name) = args.get(3) else {
+                eprintln!("error: `hc pkg add` requires a package name\n\n{USAGE}");
+                return ExitCode::from(2);
+            };
+            let mut path: Option<String> = None;
+            let mut version: Option<String> = None;
+            let mut i = 4;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--path" => {
+                        i += 1;
+                        path = args.get(i).cloned();
+                    }
+                    "--version" => {
+                        i += 1;
+                        version = args.get(i).cloned();
+                    }
+                    other => {
+                        eprintln!("error: `hc pkg add` 未知选项 `{other}`");
+                        return ExitCode::from(2);
+                    }
+                }
+                i += 1;
+            }
+            pkg_add(name, &path, &version)
         }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
@@ -767,6 +802,27 @@ fn build_file(path: &Path, dll: bool) -> ExitCode {
                     continue; // 注册中心依赖归第三块
                 };
                 let dep_dir = dir.join(rel);
+                // H2：缺失依赖诊断——本地依赖 path 须指向存在的完整包
+                if !dep_dir.is_dir() {
+                    eprintln!(
+                        "error: 依赖 {} 路径不存在: {}（本地依赖 path 须指向包目录）",
+                        dep.name,
+                        dep_dir.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
+                if let Ok(Some(dm)) = buildzon::load_from_dir(&dep_dir) {
+                    // H2：版本声明检查（本地 path 权威，不符告警）
+                    if !dep.version.is_empty()
+                        && !dm.version.is_empty()
+                        && dep.version != dm.version
+                    {
+                        eprintln!(
+                            "[warn] 依赖 {} 声明版本 {} 与本地 {} 不符",
+                            dep.name, dep.version, dm.version
+                        );
+                    }
+                }
                 match build_lib(&dep_dir, &dep.name, dll) {
                     Ok((art, syms)) => {
                         // C4：dll 模式把依赖 dll 复制到 exe 目录——Windows 加载器仅在
@@ -956,6 +1012,182 @@ fn init_project(name: &str) -> ExitCode {
     println!("  {name}/main.hc");
     println!("运行：hc run {name}   测试：hc test {name}");
     ExitCode::SUCCESS
+}
+
+/// 从 `start` 起的源文本中查找字符 `ch`（build.zon 数据字面量字段为简单标量，
+/// 字符串值不含 `{`/`}`/`[`/`]`，粗扫描足够）。
+fn find_char(src: &str, start: usize, ch: u8) -> Option<usize> {
+    src.as_bytes()
+        .get(start..)
+        .and_then(|b| b.iter().position(|&c| c == ch))
+        .map(|i| start + i)
+}
+
+/// 从 `open` 指向的 `{` 起找匹配的 `}`（深度计数，返回 `}` 字节偏移）。
+fn find_block_close(src: &str, open: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// H2：定位 build.zon 的 `const build = Build{...}` 中 deps 数组。
+/// 返回（deps 数组 `[` 偏移、现有 Pkg 项（name, 干净 `Pkg{...}` span）、Build 字面量 span）。
+/// 解析失败返回可读错误文本；无 deps 字段时数组偏移 = None。
+///
+/// 注：parser 的 ArrayLit/NamedLit span.end 取 `]`/`}` 之后下一个 token（常含尾随
+/// 逗号），故本函数按字符扫描重算干净块边界（`find_block_close`）。
+fn locate_build_deps(
+    src: &str,
+) -> Result<(Option<usize>, Vec<(String, (usize, usize))>, (usize, usize)), String> {
+    let program = hc::parse_source(src).map_err(|diags| {
+        diags
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    let init = program
+        .decls
+        .iter()
+        .find_map(|d| match d {
+            Decl::Const { name, init, .. } if name == "build" => Some(init),
+            _ => None,
+        })
+        .ok_or_else(|| "build.zon: 缺少 `const build = Build{ ... }`".to_string())?;
+    let Expr::NamedLit {
+        ty,
+        fields,
+        span: build_span,
+    } = init
+    else {
+        return Err("build.zon: `build` 必须是 `Build{ ... }` 数据字面量".into());
+    };
+    if ty != "Build" {
+        return Err("build.zon: `build` 必须是 `Build{ ... }` 数据字面量".into());
+    }
+    let build_span = (build_span.start, build_span.end);
+    for (key, val) in fields {
+        if key == "deps" {
+            if let Expr::ArrayLit(items, span) = val {
+                let array_open = span.start; // `[` 偏移
+                let mut pkgs = Vec::new();
+                for item in items {
+                    if let Expr::NamedLit {
+                        ty,
+                        fields,
+                        span,
+                    } = item
+                    {
+                        if ty == "Pkg" {
+                            let mut pkg_name = String::new();
+                            for (k, v) in fields {
+                                if k == "name" {
+                                    if let Expr::StrLit { value, .. } = v {
+                                        pkg_name = value.clone();
+                                    }
+                                }
+                            }
+                            // 干净 Pkg 块：`Pkg` 起始 .. 匹配 `}` 之后
+                            let brace = find_char(src, span.start, b'{').unwrap_or(span.start);
+                            let close = find_block_close(src, brace).unwrap_or(span.end);
+                            pkgs.push((pkg_name, (span.start, close + 1)));
+                        }
+                    }
+                }
+                return Ok((Some(array_open), pkgs, build_span));
+            }
+        }
+    }
+    Ok((None, Vec::new(), build_span))
+}
+
+/// H2：`hc pkg add <name> [--path <dir>] [--version <ver>]`——在当前目录 build.zon
+/// 的 deps 数组中写入/更新本地依赖声明（`Pkg{ name, version, path }`）。
+///
+/// 缺失 build.zon 报错（提示先 `hc init`）；保留数组外注释与格式；已存在同名依赖
+/// → 替换其 Pkg 项（更新 path/version）。deps 数组按「既有 Pkg 原文 + 新项」重建。
+fn pkg_add(name: &str, path: &Option<String>, version: &Option<String>) -> ExitCode {
+    if name.is_empty()
+        || name == "." || name == ".."
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        eprintln!("error: `hc pkg add` 包名 `{name}` 非法（允许字母/数字/`-`/`_`）");
+        return ExitCode::from(2);
+    }
+    let zon_path = Path::new("build.zon");
+    let src = match std::fs::read_to_string(zon_path) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("error: 当前目录无 build.zon（先 `hc init <name>` 创建项目）");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (array_open, pkgs, build_span) = match locate_build_deps(&src) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ver = version
+        .clone()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "0.1.0".to_string());
+    let path_s = path.clone().unwrap_or_default();
+    let entry = format!("Pkg{{ name = \"{name}\", version = \"{ver}\", path = \"{path_s}\", }}");
+    let mut out = src;
+    match array_open {
+        Some(open) => {
+            // 重建 deps 数组：既有 Pkg 原文（替换同名项）+ 新项
+            let close = find_char(&out, open, b']').unwrap_or(out.len().saturating_sub(1));
+            let mut inner = String::new();
+            let mut replaced = false;
+            for (n, (ps, pe)) in &pkgs {
+                if n == name {
+                    inner.push_str(&format!("    {entry},\n"));
+                    replaced = true;
+                } else {
+                    inner.push_str(&format!("    {},\n", &out[*ps..*pe]));
+                }
+            }
+            if !replaced {
+                inner.push_str(&format!("    {entry},\n"));
+            }
+            out.replace_range(open..=close, &format!("[\n{inner}]"));
+        }
+        None => {
+            // 无 deps 字段：在 Build 字面量 `}` 前插入 deps 字段
+            let brace = find_char(&out, build_span.0, b'{').unwrap_or(build_span.0);
+            let close = find_block_close(&out, brace).unwrap_or(build_span.1);
+            out.insert_str(close, &format!("\n    deps = [ {entry}, ],"));
+        }
+    }
+    match std::fs::write(zon_path, &out) {
+        Ok(()) => {
+            println!("依赖 `{name}` 已写入 build.zon deps（version {ver}，path `{path_s}`）");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: 写入 build.zon 失败: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `hc errors file.hc`：输出错误码表（M2.6）——错误名 ↔ 码（包 ID + 包内码）+ 首次出现位置
@@ -1349,6 +1581,26 @@ fn load_deps_into(
             continue;
         };
         let dep_dir = dir.join(rel);
+        // H2：缺失依赖诊断——本地依赖 path 必须指向存在的完整包（build.zon + .hc）；
+        // 缺失/无清单 → 硬错误（不静默跳过），提示修正声明或 `hc pkg add` 重写
+        if !dep_dir.is_dir() {
+            eprintln!(
+                "{} 依赖 {} 路径不存在: {}（本地依赖 path 须指向包目录；修正 build.zon 或移除该声明）",
+                paint(err_color(), "31", "[FAIL]"),
+                dep.name,
+                dep_dir.display()
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        if !dep_dir.join("build.zon").exists() {
+            eprintln!(
+                "{} 依赖 {} 目录 {} 无 build.zon（本地依赖须为完整包：build.zon + .hc）",
+                paint(err_color(), "31", "[FAIL]"),
+                dep.name,
+                dep_dir.display()
+            );
+            return Err(ExitCode::FAILURE);
+        }
         let canon = std::fs::canonicalize(&dep_dir).unwrap_or_else(|_| dep_dir.clone());
         if !visited.insert(canon.clone()) {
             continue; // 已装载（防环）
@@ -1357,17 +1609,28 @@ fn load_deps_into(
             Ok(Some(m)) => m,
             Ok(None) => {
                 eprintln!(
-                    "[warn] 依赖 {} 目录 {} 无 build.zon",
+                    "{} 依赖 {} 目录 {} 无 build.zon",
+                    paint(err_color(), "31", "[FAIL]"),
                     dep.name,
                     canon.display()
                 );
-                continue;
+                return Err(ExitCode::FAILURE);
             }
             Err(e) => {
                 eprintln!("[warn] 依赖 {} 清单解析失败: {e}", dep.name);
                 continue;
             }
         };
+        // H2：版本声明检查——本地 path 权威，但声明版本与本地清单不符时告警
+        if !dep.version.is_empty()
+            && !dep_manifest.version.is_empty()
+            && dep.version != dep_manifest.version
+        {
+            eprintln!(
+                "[warn] 依赖 {} 声明版本 {} 与本地 {} 不符",
+                dep.name, dep.version, dep_manifest.version
+            );
+        }
         // 依赖包文件清单：缺省回退「该目录全部 .hc」
         let mut dep_files = if dep_manifest.files.is_empty() {
             dir_hc_files(&canon)

@@ -493,3 +493,169 @@ fn init_refuses_nonempty_dir_and_bad_name() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn pkg_add_writes_local_dep_and_run_green() {
+    // H2：`hc pkg add <name> --path <dir>` 写本地依赖声明 → `hc run` 链接依赖包
+    let root = std::env::temp_dir().join(format!(
+        "hc_cli_pkgadd_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(67) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let app = root.join("app");
+    let lib = root.join("lib");
+
+    // 1) hc init app（脚手架）
+    let out = Command::new(hc_bin())
+        .arg("init")
+        .arg("app")
+        .current_dir(&root)
+        .output()
+        .expect("hc init app");
+    assert!(out.status.success(), "hc init 应成功");
+
+    // 2) 依赖包 lib（Kind::lib + pub fn parse）
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::write(
+        lib.join("build.zon"),
+        "const build = Build{ name = \"lib\", version = \"0.1.0\", kind = Kind.lib, files = [\"json.hc\"], deps = [] };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        lib.join("json.hc"),
+        "import H.std.{io};\npub fn parse(json: String) i32 { return 42; }\n",
+    )
+    .unwrap();
+
+    // 3) hc pkg add jsonlib --path ../lib --version 0.2.0（app 目录下执行）
+    let out = Command::new(hc_bin())
+        .arg("pkg")
+        .arg("add")
+        .arg("jsonlib")
+        .arg("--path")
+        .arg("../lib")
+        .arg("--version")
+        .arg("0.2.0")
+        .current_dir(&app)
+        .output()
+        .expect("hc pkg add");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "pkg add 应成功: {stdout}{stderr}");
+    let zon = std::fs::read_to_string(app.join("build.zon")).unwrap();
+    assert!(
+        zon.contains("Pkg{ name = \"jsonlib\", version = \"0.2.0\", path = \"../lib\", }"),
+        "应写入依赖声明: {zon}"
+    );
+
+    // 4) 入口用依赖 + hc run 绿（依赖 pub 函数经包名前缀调用）
+    std::fs::write(
+        app.join("main.hc"),
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec(String)) !void { io.print(\"pkg = {}\\n\", parse(\"{}\")); }\n",
+    )
+    .unwrap();
+    let run = Command::new(hc_bin())
+        .arg("run")
+        .arg(&app)
+        .output()
+        .expect("run app");
+    let rs = String::from_utf8_lossy(&run.stdout).to_string();
+    assert!(run.status.success(), "app 应运行成功: {rs}");
+    assert!(rs.contains("pkg = 42"), "应调用依赖包函数: {rs}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn missing_local_dep_is_diagnosed() {
+    // H2：build.zon 声明本地依赖 path 指向不存在目录 → 装载硬错误（不静默跳过）
+    let root = std::env::temp_dir().join(format!(
+        "hc_cli_missing_dep_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(71) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let app = root.join("app");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::write(
+        app.join("build.zon"),
+        "const build = Build{ name = \"app\", version = \"0.1.0\", kind = Kind.exe, files = [\"main.hc\"], deps = [ Pkg{ name = \"ghost\", version = \"0.1.0\", path = \"../ghost\" } ] };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        app.join("main.hc"),
+        "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.print(\"hi\\n\"); }\n",
+    )
+    .unwrap();
+    let out = Command::new(hc_bin())
+        .arg("run")
+        .arg(&app)
+        .output()
+        .expect("run app missing dep");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!out.status.success(), "缺失依赖应失败");
+    assert!(
+        stderr.contains("依赖 ghost") && stderr.contains("路径不存在"),
+        "应诊断缺失依赖路径: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dep_version_mismatch_warns() {
+    // H2：版本声明——本地依赖声明版本与包清单不符 → 告警（本地 path 权威，不失败）
+    let root = std::env::temp_dir().join(format!(
+        "hc_cli_depver_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(83) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let app = root.join("app");
+    let lib = root.join("lib");
+    Command::new(hc_bin())
+        .arg("init")
+        .arg("app")
+        .current_dir(&root)
+        .output()
+        .expect("hc init app");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::write(
+        lib.join("build.zon"),
+        "const build = Build{ name = \"lib\", version = \"0.1.0\", kind = Kind.lib, files = [\"json.hc\"], deps = [] };\n",
+    )
+    .unwrap();
+    std::fs::write(lib.join("json.hc"), "pub fn parse(json: String) i32 { return 42; }\n").unwrap();
+    // pkg add 声明 9.9.9，与本地 0.1.0 不符 → 运行仍绿但告警
+    Command::new(hc_bin())
+        .arg("pkg")
+        .arg("add")
+        .arg("jsonlib")
+        .arg("--path")
+        .arg("../lib")
+        .arg("--version")
+        .arg("9.9.9")
+        .current_dir(&app)
+        .output()
+        .expect("hc pkg add");
+    std::fs::write(
+        app.join("main.hc"),
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec(String)) !void { io.print(\"n = {}\\n\", parse(\"{}\")); }\n",
+    )
+    .unwrap();
+    let run = Command::new(hc_bin())
+        .arg("run")
+        .arg(&app)
+        .output()
+        .expect("run app");
+    let rs = String::from_utf8_lossy(&run.stdout).to_string();
+    let re = String::from_utf8_lossy(&run.stderr).to_string();
+    assert!(run.status.success(), "版本不符仅告警，运行应成功: {rs}{re}");
+    assert!(
+        re.contains("版本") && re.contains("不符"),
+        "应告警版本不符: {re}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
