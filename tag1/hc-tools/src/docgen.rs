@@ -636,11 +636,8 @@ pub fn generate_project(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, Stri
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("untitled.hc");
-        let page = render_file_page(rel, &src)?;
-        let stem = rel.trim_end_matches(".hc");
-        let page_path = write_page(out_dir, &format!("{stem}.md"), &page)?;
-        generated.push(page_path);
-        // 索引行：文件文档首行或首声明
+        let mut page = render_file_page(rel, &src)?;
+        // 索引行摘要：文件文档首行（标题后的正文首行；nav 插入前取，避免混入链接）
         let first_line = page
             .lines()
             .nth(2)
@@ -652,7 +649,18 @@ pub fn generate_project(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, Stri
         } else {
             format!(" — {first_line}")
         };
-        index.push_str(&format!("- [{rel}]({stem}.md){desc}\n"));
+        // 顶层声明数（### 标题行；#### 嵌套成员不计数）
+        let decl_count = page.matches("\n### ").count();
+        // H5：项目页导航——标题行后插入「返回索引」链接 + 换行（原空行保留为间隔）
+        if let Some(pos) = page.find('\n') {
+            page.insert_str(pos + 1, "[← 返回索引](index.md)\n");
+        }
+        let stem = rel.trim_end_matches(".hc");
+        let page_path = write_page(out_dir, &format!("{stem}.md"), &page)?;
+        generated.push(page_path);
+        index.push_str(&format!(
+            "- [{rel}]({stem}.md){desc} · {decl_count} 声明\n"
+        ));
     }
     let index_path = write_page(out_dir, "index.md", &index)?;
     generated.push(index_path);

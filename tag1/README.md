@@ -103,7 +103,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **622 项测试**（579 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **623 项测试**（580 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -133,7 +133,7 @@ hc --help
 | hc-rt | `tests/thread.rs`（组 G 线程生命周期：spawn/join/cancel/is_done/detach + Q8 每线程 alloc） | 7 |
 | hc-rt | `tests/examples.rs`（43 示例回归） | 43 ✅ |
 | hc-tools | `src` 单元测试（CLI/buildzon/merge_modules + IR 退出码 + H4 docgen） | 27 |
-| hc-tools | `tests/cli.rs`（C1 包目录运行 + C3/C4 库形态 + F2 io.exit 端到端 + F4 io.stdin 管道读取 + H1 hc init 脚手架 + H2 pkg add 本地依赖与缺失/版本诊断 + H4 hc doc 目录/标准库/单文件页） | 19 |
+| hc-tools | `tests/cli.rs`（C1 包目录运行 + C3/C4 库形态 + F2 io.exit 端到端 + F4 io.stdin 管道读取 + H1 hc init 脚手架 + H2 pkg add 本地依赖与缺失/版本诊断 + H4 hc doc 目录/标准库/单文件页 + H5 格式回归） | 20 |
 | hc-tools | `tests/harness.rs`（F3 测试基建自测：收集/退出码/注入/汇总） | 5 |
 | hc-tools | `tests/native.rs`（M3.3 原生端到端，含 Phase 6 defer/errdefer/带标签 + 组 G 线程原生边界，zig 缺失自动 SKIP） | 39 |
 

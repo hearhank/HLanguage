@@ -712,6 +712,82 @@ fn doc_single_file_and_default_out() {
 }
 
 #[test]
+fn doc_format_regression_examples_wellformed() {
+    // H5：格式回归——`hc doc` 跑真实示例目录（01-basic，5 文件）：
+    // 索引列出全部文件 + 声明数，每个文件页含导航回链与 ## 声明，结构完整。
+    // 完整示例套件位于 tag1/../examples（examples_dir() 指向的 tag1/examples 为早期遗留）。
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join("01-syntax/01-basic");
+    let files: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read 01-basic")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path().extension().map_or(false, |x| x == "hc")
+                && e.file_type().map_or(false, |t| t.is_file())
+        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!files.is_empty(), "01-basic 应含 .hc 文件");
+
+    let out_dir = std::env::temp_dir().join(format!(
+        "hc_cli_docfmt_{}_{}",
+        std::process::id(),
+        std::process::id().wrapping_mul(53) % 100000
+    ));
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let out = Command::new(hc_bin())
+        .arg("doc")
+        .arg(&dir)
+        .arg("--out")
+        .arg(&out_dir)
+        .output()
+        .expect("hc doc 01-basic");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "hc doc 应成功: {stdout}{stderr}");
+
+    let index = std::fs::read_to_string(out_dir.join("index.md")).unwrap_or_default();
+    for f in &files {
+        let stem = f.trim_end_matches(".hc");
+        assert!(
+            index.contains(&format!("[{f}]({stem}.md)")),
+            "索引应链接 {f}: {index}"
+        );
+        let page = std::fs::read_to_string(out_dir.join(format!("{stem}.md")))
+            .unwrap_or_else(|_| panic!("应生成 {stem}.md"));
+        assert!(
+            page.starts_with(&format!("# `{stem}`")),
+            "文件页应含标题: {page}"
+        );
+        assert!(
+            page.contains("[← 返回索引](index.md)"),
+            "文件页应含导航回链: {page}"
+        );
+        assert!(page.contains("## 声明"), "文件页应含声明节: {page}");
+        // 索引声明数与页内 ### 标题数一致
+        let in_index = index
+            .lines()
+            .find(|l| l.contains(&format!("[{f}]({stem}.md)")))
+            .unwrap_or_default()
+            .to_string();
+        let page_count = page.matches("\n### ").count();
+        let index_count = in_index
+            .split("声明")
+            .next()
+            .map(|s| s.rsplit("· ").next().unwrap_or("").trim())
+            .and_then(|s| s.parse::<usize>().ok());
+        assert_eq!(
+            index_count,
+            Some(page_count),
+            "索引声明数应匹配页内 {f}: index={in_index}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
 fn dep_version_mismatch_warns() {
     // H2：版本声明——本地依赖声明版本与包清单不符 → 告警（本地 path 权威，不失败）
     let root = std::env::temp_dir().join(format!(
