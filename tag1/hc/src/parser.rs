@@ -128,27 +128,15 @@ impl Parser {
                 self.advance();
                 self.parse_const(start, is_pub)
             }
+            TokenKind::KwAsync => {
+                // 组 E E1：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型）
+                self.advance();
+                self.expect(&TokenKind::KwFn, "`fn` after `async`")?;
+                self.finish_fn_decl(start, &traits, is_pub, true)
+            }
             TokenKind::KwFn => {
                 self.advance();
-                let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
-                let (is_test, test_name) = traits
-                    .iter()
-                    .find_map(|t| match t {
-                        Trait::Test { name } => Some((true, name.clone())),
-                        _ => None,
-                    })
-                    .unwrap_or((false, None));
-                Ok(Decl::Fn {
-                    name,
-                    params,
-                    ret,
-                    where_clause,
-                    body,
-                    span,
-                    is_test,
-                    test_name,
-                    pub_: is_pub,
-                })
+                self.finish_fn_decl(start, &traits, is_pub, false)
             }
             TokenKind::KwClass | TokenKind::KwTree => {
                 self.advance();
@@ -422,6 +410,37 @@ impl Parser {
             init,
             pub_: is_pub,
             span: start,
+        })
+    }
+
+    /// 组 E E1：`fn`/`async fn` 共用的声明收尾——解析名/参/返回/where/体后构造 `Decl::Fn`。
+    /// is_async = true 时调用点返回 `Future(R)`（语义层按 FnSig.is_async 包装）。
+    fn finish_fn_decl(
+        &mut self,
+        start: Span,
+        traits: &[Trait],
+        is_pub: bool,
+        is_async: bool,
+    ) -> Result<Decl, Diagnostic> {
+        let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
+        let (is_test, test_name) = traits
+            .iter()
+            .find_map(|t| match t {
+                Trait::Test { name } => Some((true, name.clone())),
+                _ => None,
+            })
+            .unwrap_or((false, None));
+        Ok(Decl::Fn {
+            name,
+            params,
+            ret,
+            where_clause,
+            body,
+            span,
+            is_test,
+            test_name,
+            pub_: is_pub,
+            is_async,
         })
     }
 
@@ -1635,6 +1654,12 @@ impl Parser {
                 let e = self.parse_unary()?;
                 Ok(Expr::Try(Box::new(e), start))
             }
+            TokenKind::KwAwait => {
+                // 组 E E1：`await expr`——Future(R) 值 → R（协作式 Future，ADR-0011）
+                self.advance();
+                let e = self.parse_unary()?;
+                Ok(Expr::Await(Box::new(e), start))
+            }
             TokenKind::KwSpawn => {
                 // E2.2：`spawn(f, args...) o Thread(T)`——以普通调用形态解析
                 // （callee = Ident("spawn")），语义层按内建处理（is_builtin_fn "spawn"）。
@@ -2410,6 +2435,7 @@ impl Expr {
             | Expr::Orelse(_, _, span)
             | Expr::Unwrap(_, span)
             | Expr::Try(_, span)
+            | Expr::Await(_, span)
             | Expr::Catch(_, _, span)
             | Expr::Call { span, .. }
             | Expr::IfExpr { span, .. }

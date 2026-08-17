@@ -1609,6 +1609,12 @@ impl<'a> LowerCtx<'a> {
                 self.push(IrInst::Return { temp: a });
                 self.label(done);
             }
+            Expr::Await(inner, _) => {
+                // 组 E E1 占位：await 运行时语义（协作式 join，E2）未落地，先透传内层值。
+                // E1 范围 = parse + semantic；await 在语义层已按 Future(R)→R 定型。
+                let a = self.lower_expr(inner);
+                self.push(IrInst::Load { temp: t, slot: a });
+            }
             Expr::Catch(inner, kind, _) => {
                 // catch：错误值 → 处理分支；结果统一到目标槽
                 let a = self.lower_expr(inner);

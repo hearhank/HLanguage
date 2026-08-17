@@ -40,6 +40,8 @@ pub enum Decl {
         test_name: Option<String>,
         /// 跨包导出（默认私有；`pub` 管包边界）
         pub_: bool,
+        /// 组 E：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型，含错误联合）
+        is_async: bool,
     },
     Class {
         name: String,
@@ -420,6 +422,8 @@ pub enum Expr {
     Unwrap(Box<Expr>, Span),
     /// try expr
     Try(Box<Expr>, Span),
+    /// 组 E：`await expr`——Future(R) 值 → R（协作式 Future，对齐 ADR-0011）
+    Await(Box<Expr>, Span),
     /// expr catch 默认 / expr catch |err| { ... }
     Catch(Box<Expr>, Box<CatchKind>, Span),
     /// 调用 f(args)
@@ -678,7 +682,7 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
             visit_expr(a, scopes, fv);
             visit_expr(b, scopes, fv);
         }
-        Expr::Unwrap(inner, _) | Expr::Try(inner, _) | Expr::Move(inner, _) => {
+        Expr::Unwrap(inner, _) | Expr::Try(inner, _) | Expr::Move(inner, _) | Expr::Await(inner, _) => {
             visit_expr(inner, scopes, fv)
         }
         Expr::Catch(e, kind, _) => {

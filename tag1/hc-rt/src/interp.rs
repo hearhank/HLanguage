@@ -2551,6 +2551,11 @@ impl Interp {
                     other => Ok(other),
                 }
             }
+            Expr::Await(e, _) => {
+                // 组 E E1 占位：await 运行时语义（协作式 join，E2）未落地，先透传。
+                // E1 范围 = parse + semantic；await 在语义层已按 Future(R)→R 定型。
+                self.eval(e)
+            }
             Expr::Catch(e, kind, _) => {
                 let v = self.eval(e)?;
                 match &v {

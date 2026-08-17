@@ -254,6 +254,7 @@ fn collect_expr(e: &Expr, table: &mut ErrorCodeTable) {
         | Expr::Unary(_, inner, _)
         | Expr::Unwrap(inner, _)
         | Expr::Try(inner, _)
+        | Expr::Await(inner, _)
         | Expr::Orelse(inner, _, _) => {
             collect_expr(inner, table);
         }

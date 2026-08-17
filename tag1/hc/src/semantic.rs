@@ -153,6 +153,8 @@ struct FnSig {
     where_clause: Vec<(String, Type)>,
     /// 泛型参数名（where 键 + 参数/返回类型中的泛型标识符）
     generics: Vec<String>,
+    /// 组 E E1：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型，含错误联合）
+    is_async: bool,
 }
 
 /// 变量声明类型（静态推断 / definite assignment 跟踪 / 分配来源）
@@ -537,9 +539,11 @@ impl Checker {
                 ret,
                 where_clause,
                 is_test,
+                is_async,
                 ..
             } => {
-                let sig = self.make_sig(params.clone(), ret.clone(), where_clause.clone());
+                let sig =
+                    self.make_sig(params.clone(), ret.clone(), where_clause.clone(), *is_async);
                 // [test] fn 不进重载池（运行时按 test 名收集）
                 if !is_test {
                     // 兄弟文件（skip_entry）：跳过 main 与顶层函数（文件私有——对齐运行时
@@ -883,6 +887,7 @@ impl Checker {
         params: Vec<Param>,
         ret: Option<Type>,
         where_clause: Vec<(String, Type)>,
+        is_async: bool,
     ) -> FnSig {
         // 泛型参数名 = where 键 + 参数/返回类型中出现的泛型标识符
         let mut generics: Vec<String> = where_clause.iter().map(|(t, _)| t.clone()).collect();
@@ -899,11 +904,12 @@ impl Checker {
             ret,
             where_clause,
             generics,
+            is_async,
         }
     }
 
     fn register_sig(&mut self, qname: &str, m: &Method) {
-        let sig = self.make_sig(m.params.clone(), m.ret.clone(), m.where_clause.clone());
+        let sig = self.make_sig(m.params.clone(), m.ret.clone(), m.where_clause.clone(), false);
         self.funcs.entry(qname.to_string()).or_default().push(sig);
     }
 
@@ -1187,9 +1193,17 @@ impl Checker {
                 is_test,
                 span,
                 params,
+                is_async,
                 ..
             } => {
                 let _ = (name, is_test, span);
+                // 组 E E1：async fn 必须声明返回类型（调用点需 `Future(R)` 包装）
+                if *is_async && ret.is_none() {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "`async fn` must declare a return type (call sites wrap it in `Future(R)`)",
+                    ));
+                }
                 // 组 D D4：缓存 anytype 函数体——调用点具体化解析 `anytype` 返回类型用
                 // （ADR-0012 #5：anytype 参数 = 参数类型不预先绑定，调用点按实参类型实例化）
                 if params.iter().any(|p| matches!(p.ty.strip(), Type::Infer)) {
@@ -1416,6 +1430,10 @@ impl Checker {
                     "void" => return SType::Void,
                     "String" => return SType::Str,
                     "Allocator" | "ExitType" => return SType::Named(n.clone(), vec![]),
+                    // 组 E E1：Future(R)——async fn 调用返回类型；await 解包取 R
+                    "Future" => {
+                        return SType::Named(n.clone(), args.iter().map(|a| self.ty_of(a)).collect())
+                    }
                     _ => {}
                 }
                 if is_builtin_type(n) {
@@ -2176,6 +2194,20 @@ impl Checker {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!("`try` requires an error union value (got `{}`)", t.name()),
+                    ));
+                    t
+                }
+                _ => SType::Unknown,
+            },
+            Expr::Await(inner, span) => match self.expr_ty(inner, scopes, None) {
+                // 组 E E1：`await fut`——Future(R) 解包 → R（协作式 Future，ADR-0011）
+                Some(SType::Named(n, args)) if n == "Future" => {
+                    args.into_iter().next().unwrap_or(SType::Unknown)
+                }
+                Some(t) if t.definite() => {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("`await` requires a Future value (got `{}`)", t.name()),
                     ));
                     t
                 }
@@ -3359,6 +3391,12 @@ impl Checker {
                 .map(|r| self.substitute(&self.ty_of(r), &map))
         };
         let _ = args;
+        // 组 E E1：async fn 调用点返回 `Future(R)`——R 为声明返回类型（含错误联合）。
+        // 例：`async fn parse_json(data: &[u8]) !JsonValue` 调用点类型 = Future(!JsonValue)。
+        if sig.is_async {
+            let inner = ret_st.unwrap_or(SType::Unknown);
+            return Some(SType::Named("Future".to_string(), vec![inner]));
+        }
         ret_st
     }
 
@@ -4383,6 +4421,9 @@ fn collect_expr_errors(e: &Expr, out: &mut BodyErrors) {
                     out.propagates.push(n);
                 }
             }
+            collect_expr_errors(inner, out);
+        }
+        Expr::Await(inner, _) => {
             collect_expr_errors(inner, out);
         }
         Expr::ArrayLit(items, _) | Expr::TupleLit(items, _) => {
