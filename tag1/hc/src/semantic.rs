@@ -3445,6 +3445,50 @@ impl Checker {
                 let _ = self.expr_ty(&args[1], scopes, None);
                 Some(SType::Void)
             }
+            // K4（ADR-0014）：@ptrFromInt(addr) → 虚拟指针（整数地址 → 指针，元素类型未知）；
+            // @intFromPtr(p) → usize（指针 → 整数地址）。系统编程底层（物理地址访问，
+            // 与 volatile 组合 = MMIO 真地址读写）。指针无类型化——ptrFromInt 恒返回
+            // `*mut Unknown`，经 `@ptrCast`/注解定型（对齐 Zig 结果类型推断的退化形态）。
+            "ptrFromInt" => {
+                if args.len() != 1 {
+                    return Some(SType::Unknown);
+                }
+                match self.expr_ty(&args[0], scopes, None) {
+                    Some(SType::Int { .. }) | Some(SType::Unknown) | None => {
+                        Some(SType::Ptr(Box::new(SType::Unknown), true))
+                    }
+                    Some(t) => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "@ptrFromInt expects an integer argument (got `{}`)",
+                                t.name()
+                            ),
+                        ));
+                        Some(SType::Unknown)
+                    }
+                }
+            }
+            "intFromPtr" => {
+                if args.len() != 1 {
+                    return Some(SType::Unknown);
+                }
+                match self.expr_ty(&args[0], scopes, None) {
+                    Some(SType::Ptr(..)) | Some(SType::Unknown) | None => {
+                        Some(SType::Int { width: IntWidth::USize })
+                    }
+                    Some(t) => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "@intFromPtr expects a pointer argument (got `{}`)",
+                                t.name()
+                            ),
+                        ));
+                        Some(SType::Unknown)
+                    }
+                }
+            }
             _ => {
                 let _ = (span, scopes);
                 None

@@ -184,10 +184,12 @@
 |---|---|---|---|---|
 | H1 | ✅ K1 无标签 union（裸内存双关：字段重叠，无判别标签） | union 语义测试绿 | A4 | 2h |
 | H2 | ✅ K2 volatile：`@volatileLoad/Store`（LLVM volatile 语义，防优化掉） | volatile 测试绿（含 LLVM 发射断言） | — | 1.5h |
-| H3 | K4 `@ptrFromInt`/`@intFromPtr`（整数 ↔ 指针，物理地址 → 虚拟指针） | @ 内建测试绿 | — | 1h |
+| H3 | ✅ K4 `@ptrFromInt`/`@intFromPtr`（整数 ↔ 指针，物理地址 → 虚拟指针） | @ 内建测试绿 | — | 1h |
 | H4 | K5 `export fn`（符号导出）+ 链接脚本钩子（段布局/对齐） | export 测试绿（符号表断言） | — | 1.5h |
 | ⏸ H5 | K6 freestanding（裸机模式）——**移出本块（2026-08-18 ADR-0014）**，1.x 排期 | — | — | (2h) |
 | H6 | 文档同步：05 缺口表状态勾选 + 04 stdlib 系统编程扩展 + 02 里程碑 | 文档绿 | H1–H4 | 0.5h |
+
+> ✅ **组 H H3（K4 `@ptrFromInt`/`@intFromPtr`）已完成（2026-08-18）**：整数 ↔ 指针转换（物理地址 → 虚拟指针）。**语义**：`@ptrFromInt(addr) *mut Unknown`（指针无类型化——恒返回 `*mut Unknown`，经 `@ptrCast`/注解定型，对齐 Zig 结果类型推断的退化形态；非整数参数 → 编译错误）、`@intFromPtr(p) usize`（非指针参数 → 编译错误）。**运行时模型（round-trip 保真）**：`@intFromPtr(p)` 取 cell 地址（interp = `Rc::as_ptr` 堆地址；IR = cell 索引）登记进地址注册表，返回整数；`@ptrFromInt(addr)` 依注册表重建原指针（含 Ptr/Boxed 变体，写穿对原变量可见）；**未登记地址合成匿名槽（同地址幂等）**——interp/IR 以懒分配 cell 模拟虚拟地址空间（无真实物理内存，MMIO 地址 = 匿名槽），对齐原生 inttoptr 虚拟指针语义。**原生**：载荷搬运——`extractvalue %Value, 1` 取 i128 载荷 → 以 `T_INT`/`T_PTR` 重建 `%Value`（tag 交换）；真实栈槽地址 round-trip 原生安全（`@intFromPtr(&x)` → `@ptrFromInt` → 写穿 x 生效）；**任意物理地址 deref 原生 = 非法访问崩溃（inttoptr 到进程外地址，同 C/Zig 未定义行为）**——interp/IR 匿名槽安全，语义差异 = interp 无真实内存的固有边界。**测试**：llvm.rs 发射断言（extractvalue 载荷搬运 + hc_deref 写穿路径）；consistency +3（往返写穿 / 未登记地址幂等 / 未初始化匿名槽读 FAIL 一致）；frontend +3（round-trip clean、非整数、非指针编译错误）；smoke 三后端全绿（原生 round-trip exe 验证 + 匿名槽幂等）。`cargo test --workspace` 784 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。06-04 `@` 内建表已加 `@ptrFromInt`/`@intFromPtr` 行。
 
 > ✅ **组 H H2（K2 volatile）已完成（2026-08-18）**：`@volatileLoad(p) T` / `@volatileStore(p, v)` 机制级内建——防优化掉的读穿/写穿（LLVM volatile 语义，MMIO 场景）。**语义**：load 返回 pointee 类型（`SType::Ptr` 解包，非指针 → 编译错误）、store 返回 void；interp/IR 无优化器，volatile 透明 = 常规解引用/写穿（`p.*`/`p.* = v` 对齐），非指针 store 目标 → 运行时 `BadAssign`。**原生（真实 volatile）**：`CallBuiltin` 降级发射 `call @hc_volatile_load` / `@hc_volatile_store`，helper 内嵌 LLVM `load volatile %Value` / `store volatile %Value`（`inttoptr` 恢复槽地址 + volatile 访问）；helper 调用本身不标 readonly → 外部调用点亦不可省略/重排。**测试**：llvm.rs 发射断言（`define %Value @hc_volatile_load` + `load volatile`/`store volatile` 出现）；consistency +3（往返一致 / 读到普通赋值与 `p.* = v` 的写入 / 非指针 store FAIL 一致）；frontend +2（返回 pointee 类型 clean、非指针参数编译错误）；smoke 三后端 + 原生 exe 全绿。`cargo test --workspace` 777 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。**已知边界**：volatile 在 interp/IR 为语义透明（优化不可观测）；MMIO 真地址场景依赖 H3 `@ptrFromInt`（K4）落地后组合使用。06-04 `@` 内建表已加 volatile 行。
 

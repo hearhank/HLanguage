@@ -669,6 +669,56 @@ fn agg_volatile_store_non_pointer_fails() {
 }
 
 #[test]
+fn agg_ptr_from_int_roundtrip_write_through() {
+    // K4：@intFromPtr(p) → usize → @ptrFromInt 重建指针；写穿对原变量可见（round-trip 保真）
+    assert_all_pass(
+        r#"
+[test] fn ptr_roundtrip() void {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    var a: usize = @intFromPtr(p);
+    var q = @ptrFromInt(a);
+    q.* = 42;
+    expect_eq(x, 42);
+    var y: i32 = @volatileLoad(q);
+    expect_eq(y, 42);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_ptr_from_int_unknown_addr_idempotent() {
+    // K4：@ptrFromInt(未登记地址) 合成匿名槽——同地址幂等（两次调用同一槽，写读一致）
+    assert_all_pass(
+        r#"
+[test] fn ptr_unknown_addr() void {
+    var p1 = @ptrFromInt(0x40000000);
+    @volatileStore(p1, 7);
+    var p2 = @ptrFromInt(0x40000000);
+    var y: i32 = @volatileLoad(p2);
+    expect_eq(y, 7);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_ptr_from_int_uninit_slot_read_fails() {
+    // K4：@ptrFromInt(未登记地址) 合成匿名槽（初值 Void，语义层放行）；读穿未初始化槽
+    // → 断言失败（双模式一致 FAIL——运行时错误，非编译期拦截）
+    let src = r#"
+[test] fn ptr_uninit_read() void {
+    var p = @ptrFromInt(0x1000);
+    var y: i32 = @volatileLoad(p);
+    expect_eq(y, 0);
+}
+"#;
+    let (tw, ir) = assert_consistent(src);
+    assert_eq!((tw, ir), (0, 0));
+}
+
+#[test]
 fn agg_array_index_and_store() {
     // MakeArr/Index/StoreIndex：数组字面量 + 单索引读写
     assert_all_pass(

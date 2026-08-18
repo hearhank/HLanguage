@@ -310,6 +310,10 @@ pub struct Interp {
     error_locs: HashMap<String, Span>,
     /// M2.5/M4.7 Debug 悬垂标记：被取过地址的目标 cell 地址集合
     tracked: std::collections::HashSet<usize>,
+    /// K4（ADR-0014）：`@intFromPtr` 登记的整数地址 → 可重建值（Ptr/Boxed 的 Rc）。
+    /// `@ptrFromInt` 依此重建原指针（round-trip 保真）；未登记地址合成匿名槽（同地址
+    /// 幂等——对齐原生 inttoptr 虚拟指针语义；interp 无真实物理内存，MMIO 地址 = 匿名槽）。
+    addr_registry: std::collections::HashMap<usize, Value>,
     /// Debug 悬垂标记开关（Debug 默认开；Release 裸读，用户负责）
     debug_dangling: bool,
     /// G5/§8.3 Debug 泄漏检测：全局 alloc 分配记录表（`alloc.alloc(n)` 登记，
@@ -379,6 +383,7 @@ impl Interp {
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
             tracked: Default::default(),
+            addr_registry: HashMap::new(),
             debug_dangling: true,
             alloc_tracker: Rc::new(RefCell::new(Vec::new())),
             readonly_caps: Vec::new(),
@@ -4168,6 +4173,48 @@ impl Interp {
                     _ => return Err(RtError::new("BadAssign", Some(span.clone()))),
                 }
                 Ok(Some(Value::Void))
+            }
+            "@ptrFromInt" => {
+                // K4：@ptrFromInt(addr)——整数地址 → 虚拟指针。登记过（@intFromPtr）→ 重建
+                // 原指针（round-trip 保真）；未登记 → 合成匿名槽（同地址幂等）。取 Rc 堆地址
+                // 与 Debug 悬垂跟踪同源，槽经 Rc 存活（interp 无真实物理内存，MMIO 地址 = 匿名槽）。
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let n = self.eval(&args[0])?;
+                match n {
+                    Value::Int(i) => {
+                        let addr = i as usize;
+                        if let Some(v) = self.addr_registry.get(&addr) {
+                            return Ok(Some(v.clone()));
+                        }
+                        let cell = Rc::new(RefCell::new(Value::Void));
+                        self.addr_registry.insert(addr, Value::Ptr(cell.clone()));
+                        Ok(Some(Value::Ptr(cell)))
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            "@intFromPtr" => {
+                // K4：@intFromPtr(p)——指针 → 整数地址。取 cell/Boxed 的 Rc 堆地址（与悬垂
+                // 跟踪同源），登记进 addr_registry 供 @ptrFromInt 重建（round-trip 保真）。
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let p = self.eval(&args[0])?;
+                match &p {
+                    Value::Ptr(cell) => {
+                        let addr = Rc::as_ptr(cell) as usize;
+                        self.addr_registry.insert(addr, p.clone());
+                        Ok(Some(Value::Int(addr as i128)))
+                    }
+                    Value::Boxed(b) => {
+                        let addr = Rc::as_ptr(b) as usize;
+                        self.addr_registry.insert(addr, p.clone());
+                        Ok(Some(Value::Int(addr as i128)))
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
             }
             "@compileError" => {
                 // 语义层应已拦截（编译期错误）；运行时到达 = 未拦截路径

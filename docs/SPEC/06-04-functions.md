@@ -46,6 +46,7 @@ var hp: o *mut Point = box(p, alloc); // 装箱：值 → 堆引用（Q8，显�
 | 指针转换 | `@ptrCast(T, p)` | 指针类型转换——**显式放弃类型安全的唯一逃生舱**（替代 Rust unsafe / C 强转） |
 | 对齐 | `@alignCast(T, p)` | 对齐提升断言（Debug 检查） |
 | 内存访问（volatile） | `@volatileLoad(p) T` / `@volatileStore(p, v)` | 防优化掉的读穿/写穿（LLVM `load volatile`/`store volatile`，MMIO 场景）；K2（ADR-0014，2026-08-18 落地） |
+| 指针转换（地址） | `@ptrFromInt(addr) *mut Unknown` / `@intFromPtr(p) usize` | 整数 ↔ 指针转换（物理地址 → 虚拟指针）：`@intFromPtr(p)` 取地址（round-trip 保真）、`@ptrFromInt(addr)` 重建原指针/合成匿名槽（未登记地址同地址幂等）；`@ptrFromInt` 恒返回 `*mut Unknown`（经 `@ptrCast`/注解定型）；原生 = i128 载荷 tag 交换（真实地址往返安全，任意物理地址 deref 为未定义行为）；K4（ADR-0014，2026-08-18 落地） |
 | 溢出 | `@addWithOverflow(a, b)` / `@subWithOverflow` / `@mulWithOverflow` | 返回元组 `(T, bool)`（value, overflow）；不受模式影响 |
 | 编译期 | `@compileError("msg")` | 显式编译失败（comptime/脚本用） |
 | FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明（Q-S4 定案；第三块 E3） |

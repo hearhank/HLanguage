@@ -4171,6 +4171,10 @@ pub struct Ctx {
     /// G5（E3.3 rng）：全局伪随机数状态（xorshift64；`io.rng.seed` 重置——协作式
     /// 单线程执行下全局态安全；默认种子常量对齐 oracle）
     pub rng_state: u64,
+    /// K4（ADR-0014）：`@intFromPtr` 登记的整数地址 → 原值（Ptr/Boxed，round-trip 重建用）。
+    /// `@ptrFromInt` 依此重建原指针；未登记地址合成匿名槽（同地址幂等——对齐 interp
+    /// 合成 cell 与原生 inttoptr 虚拟指针语义）。
+    pub addr_registry: HashMap<i128, IrValue>,
 }
 
 /// io.ipc 管道共享态（协作式：读写均不阻塞；writer_open=false 且空缓冲 = 读端空切片）
@@ -10142,6 +10146,40 @@ fn call_builtin(
                 _ => return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer")),
             }
             Ok(IrValue::Void)
+        }
+        "@ptrFromInt" => {
+            // K4：@ptrFromInt(addr)——整数地址 → 虚拟指针。登记过（@intFromPtr）→ 重建
+            // 原指针（round-trip 保真，含 Ptr/Boxed 变体）；未登记 → 合成匿名槽（同地址
+            // 幂等，对齐 interp 语义）。IR 指针 = cell 索引（永不回收，地址稳定）。
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "@ptrFromInt"));
+            }
+            match deref_value(ctx, &args[0]).clone() {
+                IrValue::Int(i) => {
+                    if let Some(v) = ctx.addr_registry.get(&i) {
+                        return Ok(v.clone());
+                    }
+                    let cell = ctx.alloc(Cell::Value(IrValue::Void));
+                    ctx.addr_registry.insert(i, IrValue::Ptr(cell));
+                    Ok(IrValue::Ptr(cell))
+                }
+                _ => Err(IrError::msg("TypeError", "@ptrFromInt expects an integer")),
+            }
+        }
+        "@intFromPtr" => {
+            // K4：@intFromPtr(p)——指针 → 整数地址。cell 索引即地址（对齐 interp Rc 堆地址
+            // 的角色；登记原值进 addr_registry 供 @ptrFromInt 重建）。
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "@intFromPtr"));
+            }
+            match &args[0] {
+                IrValue::Ptr(cell) | IrValue::Boxed(cell) => {
+                    let addr = *cell as i128;
+                    ctx.addr_registry.insert(addr, args[0].clone());
+                    Ok(IrValue::Int(addr))
+                }
+                _ => Err(IrError::msg("TypeError", "@intFromPtr expects a pointer")),
+            }
         }
         "@compileError" => {
             let msg = if args.is_empty() {

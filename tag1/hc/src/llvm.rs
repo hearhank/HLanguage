@@ -4684,6 +4684,33 @@ impl BodyEmitter {
             self.emit(format!("call void @hc_volatile_store(%Value {p}, %Value {v})"));
             return;
         }
+        // K4：@ptrFromInt(addr)——整数载荷 → T_PTR 标记（虚拟指针）；@intFromPtr(p)——指针
+        // 载荷 → T_INT 标记。tag1 指针载荷 = i128 ptrtoint 地址，两内建 = 载荷搬运
+        // （extractvalue i128 载荷 → 以目标 tag 重建 %Value）。
+        if name == "@ptrFromInt" {
+            let Some(&nslot) = args.first() else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let n = self.r();
+            self.emit(format!("{n} = load %Value, %Value* %sp.{nslot}"));
+            let nd = self.r();
+            self.emit(format!("{nd} = extractvalue %Value {n}, 1"));
+            self.build_store(temp, T_PTR, nd);
+            return;
+        }
+        if name == "@intFromPtr" {
+            let Some(&pslot) = args.first() else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let p = self.r();
+            self.emit(format!("{p} = load %Value, %Value* %sp.{pslot}"));
+            let pd = self.r();
+            self.emit(format!("{pd} = extractvalue %Value {p}, 1"));
+            self.build_store(temp, T_INT, pd);
+            return;
+        }
         if name == "@addWithOverflow" || name == "@subWithOverflow" || name == "@mulWithOverflow" {
             let helper = match name {
                 "@addWithOverflow" => "hc_add_overflow",
@@ -5768,6 +5795,18 @@ mod tests {
         assert!(ll.contains("define void @hc_volatile_store"), "{ll}");
         assert!(ll.contains("load volatile %Value"), "{ll}");
         assert!(ll.contains("store volatile %Value"), "{ll}");
+    }
+
+    #[test]
+    fn ptr_from_int_int_from_ptr_emit_tag_swaps() {
+        // K4：@intFromPtr(p) 提取指针 i128 载荷 → 重建 T_INT 值；@ptrFromInt(a) 提取整数
+        // 载荷 → 重建 T_PTR 值（载荷搬运，extractvalue → insertvalue）。写穿重建指针经
+        // hc_deref 可见（与 AddrSlot 指针同一路径）。
+        let ll = gen(
+            "fn f() i32 { var x: i32 = 5; var p = &mut x; var a = @intFromPtr(p); var q = @ptrFromInt(a); @volatileStore(q, 9); return x; }",
+        );
+        assert!(ll.contains("extractvalue %Value"), "{ll}");
+        assert!(ll.contains("call %Value @hc_deref"), "{ll}");
     }
 
     #[test]

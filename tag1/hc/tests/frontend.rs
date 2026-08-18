@@ -508,6 +508,33 @@ fn k2_volatile_load_non_pointer_rejected() {
     );
 }
 
+#[test]
+fn k4_ptr_from_int_int_from_ptr_roundtrip_clean() {
+    // K4：@intFromPtr(p) → usize；@ptrFromInt(addr) → *mut Unknown（指针无类型化）。
+    // round-trip 重建指针 + volatile 写穿读穿——语义干净（无诊断）。
+    check_clean(
+        "[test] fn t() !void {\n    var x: i32 = 5;\n    var p = &mut x;\n    var a: usize = @intFromPtr(p);\n    var q = @ptrFromInt(a);\n    @volatileStore(q, 9);\n    var y: i32 = @volatileLoad(q);\n}\n",
+    );
+}
+
+#[test]
+fn k4_ptr_from_int_non_integer_rejected() {
+    // @ptrFromInt(非整数) → 编译错误（整数地址 → 指针）
+    check_has_error(
+        "[test] fn t() !void {\n    var q = @ptrFromInt(3.14);\n}\n",
+        "@ptrFromInt expects an integer argument",
+    );
+}
+
+#[test]
+fn k4_int_from_ptr_non_pointer_rejected() {
+    // @intFromPtr(非指针) → 编译错误（指针 → 整数地址）
+    check_has_error(
+        "[test] fn t() !void {\n    var a = @intFromPtr(5);\n}\n",
+        "@intFromPtr expects a pointer argument",
+    );
+}
+
 // ---------- M1.4 跨文件模块验收 ----------
 
 #[test]
