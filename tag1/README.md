@@ -103,7 +103,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **623 项测试**（580 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **746 项测试**（703 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -113,9 +113,11 @@ hc --help
 | hc | `tests/inferred_errors.rs`（`!T` 推断收集） | 6 |
 | hc | `tests/thread_capture.rs`（组 G3：spawn 捕获规则 Q18 绑定/逃逸 + Q19 冻结窗口） | 9 |
 | hc | `tests/ir.rs`（共享 IR，M3.1 + Phase 1 指针/Phase 2 聚合/Phase 3 switch+for + Phase 4 闭包方法重载 + Phase 5 全局 + Phase 6 defer/errdefer/带标签 + Phase 8 闭包捕获精确化 + 组 G4a 线程） | 100 |
+| hc | `tests/comptime.rs`（组 D comptime：类型函数/值函数/折叠引擎与语义单测） | 32 |
+| hc | `tests/async_future.rs`（组 E：async fn/await 解析与语义） | 8 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播 + io.exit/ExitType） | 22 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8 + 组 G 线程） | 69 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8 + 组 G 线程 + 组 D 值函数 + 组 E async） | 77 |
 | hc-rt | `tests/arena.rs`（arena.init typed 构造） | 13 |
 | hc-rt | `tests/box.rs`（box 内建） | 6 |
 | hc-rt | `tests/collection.rs`（collections） | 8 |
@@ -141,6 +143,8 @@ hc --help
 | hc-tools | `tests/cli.rs`（C1 包目录运行 + C3/C4 库形态 + F2 io.exit 端到端 + F4 io.stdin 管道读取 + H1 hc init 脚手架 + H2 pkg add 本地依赖与缺失/版本诊断 + H4 hc doc 目录/标准库/单文件页 + H5 格式回归） | 20 |
 | hc-tools | `tests/harness.rs`（F3 测试基建自测：收集/退出码/注入/汇总） | 5 |
 | hc-tools | `tests/native.rs`（M3.3 原生端到端，含 Phase 6 defer/errdefer/带标签 + 组 G 线程原生边界，zig 缺失自动 SKIP） | 39 |
+| hc-tools | `tests/scriptgen.rs`（组 B/C：script 生成 + validate/to_json 定制通道） | 11 |
+| hc-tools | `tests/comptime.rs`（组 D 端到端：comptime 块/值函数三模式 + expect_eq 断言） | 20 |
 
 补充：
 
