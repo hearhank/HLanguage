@@ -14,7 +14,7 @@
 //! magic "HBC2" · u32 version · u32 n_funcs
 //! 函数索引表（还原 IrModule.func_index）: u32 n_entries · { name · u32 n_idx · {u32 idx}* }*
 //! 函数 × n_funcs: name · u32 n_params · {u32 param}* · Type×n_param_ty
-//!   · u8×n_param_defaults · (present? Const)* × n_defaults · u32 n_slots · u8 is_test
+//!   · u8×n_param_defaults · (present? Const)* × n_defaults · u32 n_slots · u8 is_test · u8 exported
 //!   · u32 n_insts · { opcode u8 · 操作数 }*
 //! 闭包表（Phase 4）: u32 n_closures · 函数 × n_closures（同上格式）
 //! 全局表（Phase 5，还原 IrModule.globals）: u32 n_globals · { name } × n_globals
@@ -210,6 +210,7 @@ fn encode_func(out: &mut Vec<u8>, f: &IrFunc) {
     }
     push_u32(out, f.n_slots as u32);
     out.push(f.is_test as u8);
+    out.push(f.exported as u8);
     push_u32(out, f.body.len() as u32);
     for inst in &f.body {
         encode_inst(out, inst);
@@ -798,6 +799,7 @@ fn decode_func(r: &mut Reader) -> Result<IrFunc, String> {
     }
     let n_slots = r.u32()? as usize;
     let is_test = r.u8()? != 0;
+    let exported = r.u8()? != 0;
     let n_insts = r.u32()? as usize;
     let mut body = Vec::with_capacity(n_insts);
     for _ in 0..n_insts {
@@ -812,6 +814,7 @@ fn decode_func(r: &mut Reader) -> Result<IrFunc, String> {
         n_slots,
         body,
         is_test,
+        exported,
     })
 }
 
@@ -1246,6 +1249,7 @@ mod tests {
             defaults: vec![None, Some(IrConst::Int(42))],
             n_slots: 8,
             is_test: false,
+            exported: false,
             body: vec![
                 IrInst::Const {
                     temp: 0,
@@ -1423,6 +1427,7 @@ mod tests {
             defaults: vec![],
             n_slots: 1,
             is_test: true,
+            exported: true,
             body: vec![IrInst::ReturnVoid],
         };
         let c0 = IrFunc {
@@ -1433,6 +1438,7 @@ mod tests {
             defaults: vec![None, None],
             n_slots: 2,
             is_test: false,
+            exported: false,
             body: vec![IrInst::Return { temp: 1 }],
         };
         let mut error_codes = HashMap::new();
@@ -1488,6 +1494,9 @@ mod tests {
         assert_eq!(d.funcs[0].n_slots, 8);
         assert!(!d.funcs[0].is_test);
         assert!(d.funcs[1].is_test);
+        // K5：exported 标志往返（仅影响原生符号层，运行时透明）
+        assert!(!d.funcs[0].exported);
+        assert!(d.funcs[1].exported);
         assert_eq!(d.funcs[0].body.len(), m.funcs[0].body.len());
         assert_eq!(d.funcs[1].params, Vec::<usize>::new());
         assert_eq!(d.closures[0].name, "<closure>");
@@ -1539,6 +1548,7 @@ mod tests {
         push_u32(&mut bytes, 0); // n_defaults
         push_u32(&mut bytes, 1); // n_slots
         bytes.push(0); // is_test
+        bytes.push(0); // exported
         push_u32(&mut bytes, 1); // n_insts
         bytes.push(0xFF); // 非法 opcode
         push_u32(&mut bytes, 0); // n_closures
@@ -1563,6 +1573,7 @@ mod tests {
         push_u32(&mut bytes, 0); // n_defaults
         push_u32(&mut bytes, 2); // n_slots
         bytes.push(0); // is_test
+        bytes.push(0); // exported
         push_u32(&mut bytes, 1); // n_insts
         bytes.push(3); // Bin
         bytes.push(0xFF); // 非法 binop 标签

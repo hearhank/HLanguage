@@ -128,6 +128,7 @@ pub fn codegen_lib(
         );
     }
     emit_ext_decls(&mut out, &ext_decls);
+    emit_export_thunks(&mut out, module, &format!("{pkg}."));
     if dll_mode {
         out
     } else {
@@ -171,6 +172,7 @@ fn codegen_inner(
         );
     }
     emit_ext_decls(&mut out, &ext_decls);
+    emit_export_thunks(&mut out, module, prefix);
     if helpers {
         emit_main_wrapper(&mut out, module);
     }
@@ -207,6 +209,7 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
         );
     }
     emit_ext_decls(&mut out, &ext_decls);
+    emit_export_thunks(&mut out, module, "");
     emit_test_runner(&mut out, module, errors);
     out
 }
@@ -3926,6 +3929,46 @@ fn emit_ext_decls(out: &mut String, ext_decls: &[(String, usize)]) {
     }
 }
 
+/// K5（ADR-0014）：`export fn` 原生符号导出——链接器可见的干净符号。
+/// 每个导出函数发射外部 thunk `define %Value @"{name}"(<%Value × N>)`，
+/// 内部调用带 `prefix` 前缀的别名函数 `"{prefix}hc_fn{idx}"`（名称以 `%Value` 手性
+/// 转发，保留 H 的标签+载荷调用约定）。模块末尾附符号清单注释（符号表断言目标）：
+/// `; exports: a, b`；若导出 `_start` 则追加 `; entry: _start`（链接脚本入口钩子标记）。
+fn emit_export_thunks(out: &mut String, module: &IrModule, prefix: &str) {
+    let exports: Vec<(usize, &IrFunc)> = module
+        .funcs
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.exported)
+        .collect();
+    if exports.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = exports.iter().map(|(_, f)| f.name.as_str()).collect();
+    let _ = writeln!(out, "; exports: {}", names.join(", "));
+    if names.iter().any(|n| *n == "_start") {
+        out.push_str("; entry: _start\n");
+    }
+    for (idx, f) in exports {
+        let params = (0..f.params.len())
+            .map(|i| format!("%Value %p{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let args = (0..f.params.len())
+            .map(|i| format!("%Value %p{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "; export thunk: {}", f.name);
+        let _ = writeln!(out, "define %Value @\"{}\"({params}) {{", f.name);
+        let _ = writeln!(
+            out,
+            "  %r = call %Value @\"{prefix}hc_fn{idx}\"({args})",
+            prefix = prefix,
+        );
+        out.push_str("  ret %Value %r\n}\n\n");
+    }
+}
+
 // ---------- main 包装（原生 CRT 入口） ----------
 
 /// 发射对全部 `@__init__` 函数的调用（多文件合并 = 各模块 init 依次运行，entry 在前）。
@@ -5807,6 +5850,30 @@ mod tests {
         );
         assert!(ll.contains("extractvalue %Value"), "{ll}");
         assert!(ll.contains("call %Value @hc_deref"), "{ll}");
+    }
+
+    #[test]
+    fn export_fn_emits_thunk_and_manifest() {
+        // K5：`export fn` → 外部 thunk `define %Value @"add"` 调用别名 `@"hc_fn0"`
+        // + 符号清单注释 `; exports: add`；`_start` 导出 → `; entry: _start` 钩子。
+        let ll = gen(
+            "export fn add(a: i32, b: i32) i32 { return a + b; } fn main() i32 { return add(1, 2); }",
+        );
+        assert!(ll.contains("; exports: add"), "{ll}");
+        assert!(ll.contains("define %Value @\"add\"(%Value %p0, %Value %p1)"), "{ll}");
+        assert!(ll.contains("call %Value @\"hc_fn0\"(%Value %p0, %Value %p1)"), "{ll}");
+        assert!(ll.contains("ret %Value %r"), "{ll}");
+        // 非导出函数不产生 thunk
+        assert!(!ll.contains("define %Value @\"main\"("), "{ll}");
+    }
+
+    #[test]
+    fn export_start_marks_entry_hook() {
+        // K5：`_start` 导出 = 链接脚本入口钩子标记（freestanding 完整入口属 H5/K6）
+        let ll = gen("export fn _start() i32 { return 0; } fn main() i32 { return _start(); }");
+        assert!(ll.contains("; exports: _start"), "{ll}");
+        assert!(ll.contains("; entry: _start"), "{ll}");
+        assert!(ll.contains("define %Value @\"_start\"()"), "{ll}");
     }
 
     #[test]

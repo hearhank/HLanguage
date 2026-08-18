@@ -111,6 +111,14 @@ impl Parser {
         } else {
             false
         };
+        // K5（ADR-0014）：`export` 修饰符——原生符号级导出（链接器可见）；与 pub 正交，
+        // 仅作用于 `fn`/`async fn`（其它声明前缀 export → 下方报错）。
+        let is_export = if self.at(&TokenKind::KwExport) {
+            self.advance();
+            true
+        } else {
+            false
+        };
         // 特性标注（仅 class 前）：[continuous] [pad] [align(T)]
         let mut traits = Vec::new();
         while self.at(&TokenKind::LBracket) {
@@ -122,10 +130,20 @@ impl Parser {
         let start = self.span();
         match self.peek().clone() {
             TokenKind::KwGlobal => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 self.parse_global(start, is_pub)
             }
             TokenKind::KwConst => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 self.parse_const(start, is_pub)
             }
@@ -133,29 +151,54 @@ impl Parser {
                 // 组 E E1：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型）
                 self.advance();
                 self.expect(&TokenKind::KwFn, "`fn` after `async`")?;
-                self.finish_fn_decl(start, &traits, is_pub, true)
+                self.finish_fn_decl(start, &traits, is_pub, true, is_export)
             }
             TokenKind::KwFn => {
                 self.advance();
-                self.finish_fn_decl(start, &traits, is_pub, false)
+                self.finish_fn_decl(start, &traits, is_pub, false, is_export)
             }
             TokenKind::KwClass | TokenKind::KwTree => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 self.parse_class(start, traits, is_pub)
             }
             TokenKind::KwEnum => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 self.parse_enum(start, is_pub)
             }
             TokenKind::KwUnion => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 self.parse_union(start, is_pub)
             }
             TokenKind::KwInterface => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 self.parse_interface(start, is_pub)
             }
             TokenKind::KwNamespace => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 let name = self.expect_ident()?;
                 self.expect(&TokenKind::LBrace, "`{` after namespace name")?;
@@ -181,6 +224,11 @@ impl Parser {
                 })
             }
             TokenKind::KwUsing => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 let path = self.parse_path()?;
                 let alias = if self.is_ident("as") {
@@ -198,6 +246,11 @@ impl Parser {
                 })
             }
             TokenKind::KwImport => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 self.advance();
                 // 路径：`pkg.mod` / `H.std`（可含多段）；符号选择 `.{` 前止步
                 let path = self.parse_import_path()?;
@@ -243,6 +296,11 @@ impl Parser {
                 })
             }
             TokenKind::KwScript => {
+                if is_export {
+                    return Err(self.error_at(
+                        "`export` only applies to `fn`/`async fn` declarations (K5)",
+                    ));
+                }
                 // E1（ADR-0013）：script 块——解析为声明级占位，装载期求值替换。
                 // `close_end` = 块闭合 `}` 之后字节偏移：`parse_block` 消费 `}` 后 pos 指向
                 // 其后 token（EOF 恒为末 token 哨兵），故 `tokens[pos-1]` 即 `}` 本身。
@@ -420,12 +478,14 @@ impl Parser {
 
     /// 组 E E1：`fn`/`async fn` 共用的声明收尾——解析名/参/返回/where/体后构造 `Decl::Fn`。
     /// is_async = true 时调用点返回 `Future(R)`（语义层按 FnSig.is_async 包装）。
+    /// is_export = true 时标记 K5 原生符号导出（链接器可见 thunk）。
     fn finish_fn_decl(
         &mut self,
         start: Span,
         traits: &[Trait],
         is_pub: bool,
         is_async: bool,
+        is_export: bool,
     ) -> Result<Decl, Diagnostic> {
         let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
         let (is_test, test_name) = traits
@@ -446,6 +506,7 @@ impl Parser {
             test_name,
             pub_: is_pub,
             is_async,
+            exported: is_export,
         })
     }
 

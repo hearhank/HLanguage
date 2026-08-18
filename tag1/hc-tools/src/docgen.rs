@@ -167,10 +167,14 @@ fn render_fn_sig(
     is_test: bool,
     test_name: &Option<String>,
     pub_: bool,
+    exported: bool,
 ) -> String {
     let mut s = String::new();
     if pub_ {
         s.push_str("pub ");
+    }
+    if exported {
+        s.push_str("export ");
     }
     if is_test {
         match test_name {
@@ -314,9 +318,10 @@ fn render_decl(
             is_test,
             test_name,
             pub_,
+            exported,
             ..
         } => {
-            let sig = render_fn_sig(name, params, ret, *is_test, test_name, *pub_);
+            let sig = render_fn_sig(name, params, ret, *is_test, test_name, *pub_, *exported);
             out.push_str(&format!("{h} `{}`\n```hc\n{sig}\n```\n", decl_anchor(d)));
             if let Some(doc) = doc {
                 out.push_str(&format!("\n{doc}\n"));

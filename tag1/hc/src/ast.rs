@@ -42,6 +42,9 @@ pub enum Decl {
         pub_: bool,
         /// 组 E：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型，含错误联合）
         is_async: bool,
+        /// K5（ADR-0014）：`export fn`——原生符号级导出（链接器可见干净符号，
+        /// 生成外部 thunk；`_start` 导出 = 入口钩子）。与 `pub_` 正交（语言可见性 vs 符号导出）。
+        exported: bool,
     },
     Class {
         name: String,

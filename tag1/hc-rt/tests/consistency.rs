@@ -719,6 +719,23 @@ fn agg_ptr_from_int_uninit_slot_read_fails() {
 }
 
 #[test]
+fn agg_export_fn_transparent_at_runtime() {
+    // K5：`export fn` 运行时透明——导出仅影响原生符号层（thunk 生成 + 清单注释），
+    // interp/IR 双后端按普通函数调用，参数/返回/嵌套调用结果一致
+    assert_all_pass(
+        r#"
+export fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+[test] fn export_callable() void {
+    expect_eq(add(2, 3), 5);
+    expect_eq(add(add(1, 1), add(2, 2)), 6);
+}
+"#,
+    );
+}
+
+#[test]
 fn agg_array_index_and_store() {
     // MakeArr/Index/StoreIndex：数组字面量 + 单索引读写
     assert_all_pass(

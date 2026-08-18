@@ -185,9 +185,11 @@
 | H1 | ✅ K1 无标签 union（裸内存双关：字段重叠，无判别标签） | union 语义测试绿 | A4 | 2h |
 | H2 | ✅ K2 volatile：`@volatileLoad/Store`（LLVM volatile 语义，防优化掉） | volatile 测试绿（含 LLVM 发射断言） | — | 1.5h |
 | H3 | ✅ K4 `@ptrFromInt`/`@intFromPtr`（整数 ↔ 指针，物理地址 → 虚拟指针） | @ 内建测试绿 | — | 1h |
-| H4 | K5 `export fn`（符号导出）+ 链接脚本钩子（段布局/对齐） | export 测试绿（符号表断言） | — | 1.5h |
+| H4 | ✅ K5 `export fn`（符号导出）+ 链接脚本钩子（段布局/对齐） | export 测试绿（符号表断言） | — | 1.5h |
 | ⏸ H5 | K6 freestanding（裸机模式）——**移出本块（2026-08-18 ADR-0014）**，1.x 排期 | — | — | (2h) |
 | H6 | 文档同步：05 缺口表状态勾选 + 04 stdlib 系统编程扩展 + 02 里程碑 | 文档绿 | H1–H4 | 0.5h |
+
+> ✅ **组 H H4（K5 `export fn`）已完成（2026-08-18）**：原生符号级导出 + 链接脚本钩子。**语义**：`export fn` 与 `pub` 正交——`pub` 管语言层包边界可见性，`export` 管原生符号层（链接器可见干净符号）；K5 最小切片仅作用于 `fn`/`async fn`（作用于 `const`/`global`/`class`/`enum` 等 → 解析错误），`pub export fn` 组合修饰允许。**代码生成**：每个导出函数发射外部 thunk `define %Value @"{name}"(<%Value × N>)` 内部 `call` 带前缀别名 `"{prefix}hc_fn{idx}"`（label+载荷调用约定手性转发）；模块末尾符号清单注释 `; exports: a, b`（符号表断言目标），导出 `_start` 时追加 `; entry: _start`（链接脚本入口钩子标记）。**运行时透明**：export 仅影响原生符号层，interp/IR/字节码按普通函数调用——`exported` 标志进 IR `IrFunc` + 字节码（u8 标志，encode/decode 往返）。**测试**：llvm.rs 发射断言 +2（`; exports: add` + `define %Value @"add"` thunk + 调用别名 + 非导出函数无 thunk；`_start` 导出 → `; entry: _start`）；frontend +4（export fn clean、`_start` clean、`pub export` 组合、export 非 fn 解析错误）；consistency +1（导出函数运行时透明——双后端嵌套调用一致）；bytecode 往返断言 exported 标志。`cargo test --workspace` 791 全绿（+7）；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。06-04 函数表已加 export fn 行。
 
 > ✅ **组 H H3（K4 `@ptrFromInt`/`@intFromPtr`）已完成（2026-08-18）**：整数 ↔ 指针转换（物理地址 → 虚拟指针）。**语义**：`@ptrFromInt(addr) *mut Unknown`（指针无类型化——恒返回 `*mut Unknown`，经 `@ptrCast`/注解定型，对齐 Zig 结果类型推断的退化形态；非整数参数 → 编译错误）、`@intFromPtr(p) usize`（非指针参数 → 编译错误）。**运行时模型（round-trip 保真）**：`@intFromPtr(p)` 取 cell 地址（interp = `Rc::as_ptr` 堆地址；IR = cell 索引）登记进地址注册表，返回整数；`@ptrFromInt(addr)` 依注册表重建原指针（含 Ptr/Boxed 变体，写穿对原变量可见）；**未登记地址合成匿名槽（同地址幂等）**——interp/IR 以懒分配 cell 模拟虚拟地址空间（无真实物理内存，MMIO 地址 = 匿名槽），对齐原生 inttoptr 虚拟指针语义。**原生**：载荷搬运——`extractvalue %Value, 1` 取 i128 载荷 → 以 `T_INT`/`T_PTR` 重建 `%Value`（tag 交换）；真实栈槽地址 round-trip 原生安全（`@intFromPtr(&x)` → `@ptrFromInt` → 写穿 x 生效）；**任意物理地址 deref 原生 = 非法访问崩溃（inttoptr 到进程外地址，同 C/Zig 未定义行为）**——interp/IR 匿名槽安全，语义差异 = interp 无真实内存的固有边界。**测试**：llvm.rs 发射断言（extractvalue 载荷搬运 + hc_deref 写穿路径）；consistency +3（往返写穿 / 未登记地址幂等 / 未初始化匿名槽读 FAIL 一致）；frontend +3（round-trip clean、非整数、非指针编译错误）；smoke 三后端全绿（原生 round-trip exe 验证 + 匿名槽幂等）。`cargo test --workspace` 784 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。06-04 `@` 内建表已加 `@ptrFromInt`/`@intFromPtr` 行。
 

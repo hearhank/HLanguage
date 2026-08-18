@@ -147,6 +147,7 @@ impl<'a> Lexer<'a> {
             "using" => TokenKind::KwUsing,
             "import" => TokenKind::KwImport,
             "pub" => TokenKind::KwPub,
+            "export" => TokenKind::KwExport,
             "o" => TokenKind::KwO,
             "move" => TokenKind::KwMove,
             "mut" => TokenKind::KwMut,

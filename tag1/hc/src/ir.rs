@@ -71,6 +71,8 @@ pub struct IrFunc {
     pub n_slots: usize,
     pub body: Vec<IrInst>,
     pub is_test: bool,
+    /// K5（ADR-0014）：`export fn`——原生符号级导出（LLVM 外部 thunk 生成依据）
+    pub exported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -874,6 +876,7 @@ fn lower_decl(
             body,
             is_test,
             ret,
+            exported,
             ..
         } => {
             // E1.2 组 D：类型函数（返回 `type`）= comptime-only，跳过体降级
@@ -888,6 +891,7 @@ fn lower_decl(
                 params,
                 body,
                 *is_test,
+                *exported,
                 errors,
                 types,
                 funcs,
@@ -941,6 +945,7 @@ fn lower_decl(
                     &fname,
                     &m.params,
                     &m.body,
+                    false,
                     false,
                     errors,
                     types,
@@ -1003,6 +1008,7 @@ fn collect_ns_funcs(
                     params,
                     body,
                     false,
+                    false,
                     errors,
                     types,
                     funcs,
@@ -1062,6 +1068,7 @@ fn lower_func(
     params: &[Param],
     body: &Block,
     is_test: bool,
+    exported: bool,
     errors: &ErrorCodeTable,
     types: &TypeTable,
     funcs: &HashSet<String>,
@@ -1121,6 +1128,7 @@ fn lower_func(
         n_slots,
         body: ctx.insts,
         is_test,
+        exported,
     })
 }
 
@@ -1172,6 +1180,7 @@ fn lower_init_func(
         n_slots,
         body: ctx.insts,
         is_test: false,
+        exported: false,
     }))
 }
 
@@ -2419,6 +2428,7 @@ impl<'a> LowerCtx<'a> {
             n_slots,
             body: body_insts,
             is_test: false,
+            exported: false,
         });
         self.push(IrInst::MakeClosure {
             temp,

@@ -535,6 +535,42 @@ fn k4_int_from_ptr_non_pointer_rejected() {
     );
 }
 
+#[test]
+fn k5_export_fn_clean() {
+    // K5：`export fn` 解析 + 语义干净（与 pub 正交；函数仍可普通调用）
+    check_clean(
+        "export fn add(a: i32, b: i32) i32 {\n    return a + b;\n}\nfn main() i32 {\n    return add(2, 3);\n}\n",
+    );
+}
+
+#[test]
+fn k5_export_start_marks_entry() {
+    // K5：`export fn _start` = 链接脚本入口钩子（干净解析；_start 可普通调用）
+    check_clean(
+        "export fn _start() i32 {\n    return 0;\n}\nfn main() i32 {\n    return _start();\n}\n",
+    );
+}
+
+#[test]
+fn k5_export_pub_composable() {
+    // `pub export fn` 组合修饰（语言可见性 + 符号导出）——干净解析
+    check_clean(
+        "pub export fn f() i32 {\n    return 1;\n}\nfn main() i32 {\n    return f();\n}\n",
+    );
+}
+
+#[test]
+fn k5_export_non_fn_rejected() {
+    // K5 最小切片：export 仅作用于 fn/async fn；作用于其它声明 → 解析错误
+    let err = parse_source("export const X: i32 = 5;\nfn main() i32 {\n    return X;\n}\n")
+        .expect_err("export const should be a parse error");
+    assert!(
+        err.iter()
+            .any(|d| d.message.contains("`export` only applies to `fn`/`async fn` declarations")),
+        "{err:?}"
+    );
+}
+
 // ---------- M1.4 跨文件模块验收 ----------
 
 #[test]
