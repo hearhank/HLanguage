@@ -1200,12 +1200,50 @@ err:
 }
 "#;
 
+/// K2（ADR-0014）：@volatileLoad——LLVM `load volatile`（防优化掉副作用/重排，
+/// MMIO 场景）。非指针恒等（对齐 `hc_deref` 的 identity 分支）。
+const HC_VOLATILE_LOAD: &str = r#"define %Value @hc_volatile_load(%Value %v) {
+entry:
+  %t = extractvalue %Value %v, 0
+  %is_ptr = icmp eq i32 %t, 7
+  br i1 %is_ptr, label %deref, label %identity
+deref:
+  %d = extractvalue %Value %v, 1
+  %pp = inttoptr i128 %d to %Value*
+  %pv = load volatile %Value, %Value* %pp
+  ret %Value %pv
+identity:
+  ret %Value %v
+}
+"#;
+
+/// K2（ADR-0014）：@volatileStore——LLVM `store volatile`；非指针 → BadAssign（对齐 `hc_store_ptr`）。
+const HC_VOLATILE_STORE: &str = r#"define void @hc_volatile_store(%Value %p, %Value %v) {
+entry:
+  %t = extractvalue %Value %p, 0
+  %is_ptr = icmp eq i32 %t, 7
+  br i1 %is_ptr, label %sp, label %err
+sp:
+  %d = extractvalue %Value %p, 1
+  %pp = inttoptr i128 %d to %Value*
+  store volatile %Value %v, %Value* %pp
+  ret void
+err:
+  call void @hc_abort_badassign()
+  unreachable
+}
+"#;
+
 /// 比较前归一化：指针解引用、普通值恒等。与 [`HC_EQ_DISPATCH`] 配合，
 /// 让 `hc_eq` 在指针与非指针混合时对齐 `IrValue::value_eq`。
 fn emit_pointer_helpers(out: &mut String) {
     out.push_str(HC_DEREF);
     out.push('\n');
     out.push_str(HC_STORE_PTR);
+    out.push('\n');
+    out.push_str(HC_VOLATILE_LOAD);
+    out.push('\n');
+    out.push_str(HC_VOLATILE_STORE);
     out.push('\n');
 }
 
@@ -4619,6 +4657,33 @@ impl BodyEmitter {
             self.emit(format!("store %Value {v}, %Value* %sp.{temp}"));
             return;
         }
+        // K2：@volatileLoad(ptr)——读穿指针；@volatileStore(ptr, v)——写穿指针。
+        // 经 hc_volatile_load/hc_volatile_store（LLVM `load volatile`/`store volatile`，
+        // 防优化掉副作用，MMIO 场景）。调用本身不标 readonly → 外部调用点亦不可省略。
+        if name == "@volatileLoad" {
+            let Some(&vslot) = args.first() else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @hc_volatile_load(%Value {v})"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
+        if name == "@volatileStore" {
+            if args.len() != 2 {
+                self.abort_feature("builtin");
+                return;
+            }
+            let p = self.r();
+            self.emit(format!("{p} = load %Value, %Value* %sp.{}", args[0]));
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{}", args[1]));
+            self.emit(format!("call void @hc_volatile_store(%Value {p}, %Value {v})"));
+            return;
+        }
         if name == "@addWithOverflow" || name == "@subWithOverflow" || name == "@mulWithOverflow" {
             let helper = match name {
                 "@addWithOverflow" => "hc_add_overflow",
@@ -5690,6 +5755,19 @@ mod tests {
     fn try_catch_uses_err_channel() {
         let ll = gen("fn f() !i32 { return error.NotFound; } fn g() i32 { return f() catch 7; }");
         assert!(ll.contains("call i1 @hc_is_err"), "{ll}");
+    }
+
+    #[test]
+    fn volatile_load_store_emit_volatile_ops() {
+        // K2：@volatileLoad/@volatileStore → hc_volatile_load/hc_volatile_store——
+        // 内嵌 LLVM `load volatile`/`store volatile`（防优化掉副作用，MMIO 场景）
+        let ll = gen(
+            "fn f() i32 { var mut x: i32 = 5; var p = &mut x; @volatileStore(p, 7); return @volatileLoad(p); }",
+        );
+        assert!(ll.contains("define %Value @hc_volatile_load"), "{ll}");
+        assert!(ll.contains("define void @hc_volatile_store"), "{ll}");
+        assert!(ll.contains("load volatile %Value"), "{ll}");
+        assert!(ll.contains("store volatile %Value"), "{ll}");
     }
 
     #[test]

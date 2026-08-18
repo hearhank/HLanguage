@@ -621,6 +621,54 @@ union T {
 }
 
 #[test]
+fn agg_volatile_load_store_roundtrip() {
+    // K2：@volatileStore 写穿 + @volatileLoad 读穿——往返一致；写穿对变量可见
+    assert_all_pass(
+        r#"
+[test] fn volatile_roundtrip() void {
+    var mut x: i32 = 5;
+    var p = &mut x;
+    @volatileStore(p, 42);
+    var y: i32 = @volatileLoad(p);
+    expect_eq(y, 42);
+    expect_eq(x, 42);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_volatile_load_sees_plain_writes() {
+    // K2：volatile load 读到普通赋值 / `p.* = v` 的写入（同一槽，无缓存）
+    assert_all_pass(
+        r#"
+[test] fn volatile_reads_plain_writes() void {
+    var mut x: i32 = 7;
+    var p = &mut x;
+    x = 100;
+    var a: i32 = @volatileLoad(p);
+    expect_eq(a, 100);
+    p.* = 200;
+    var b: i32 = @volatileLoad(p);
+    expect_eq(b, 200);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_volatile_store_non_pointer_fails() {
+    // K2：@volatileStore 非指针目标 → BadAssign → 两模式测试均 FAIL
+    let src = r#"
+[test] fn volatile_bad_store() void {
+    @volatileStore(5, 7);
+}
+"#;
+    let (tw, ir) = assert_consistent(src);
+    assert_eq!((tw, ir), (0, 0));
+}
+
+#[test]
 fn agg_array_index_and_store() {
     // MakeArr/Index/StoreIndex：数组字面量 + 单索引读写
     assert_all_pass(

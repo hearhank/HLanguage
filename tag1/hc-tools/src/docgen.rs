@@ -835,6 +835,8 @@ const STDLIB: &[(&str, &[(&str, &str)])] = &[
             ("@typeOf(v) type", "值类型"),
             ("@intCast(T, x) T", "整数类型转换"),
             ("@ptrCast(T, p) T", "指针类型转换"),
+            ("@volatileLoad(p) T", "防优化掉读穿（MMIO）"),
+            ("@volatileStore(p, v)", "防优化掉写穿（MMIO）"),
             ("@compileError(msg)", "编译期错误"),
             ("@addWithOverflow(a, b) (T, bool)", "溢出检测加法"),
             ("@panic(msg)", "运行时中止"),

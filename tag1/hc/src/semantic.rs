@@ -3416,6 +3416,35 @@ impl Checker {
             }),
             "typeOf" => Some(SType::Str),
             "ptrCast" | "alignCast" => Some(SType::Unknown),
+            // K2（ADR-0014）：@volatileLoad/@volatileStore——机制级 volatile（LLVM volatile
+            // 语义，防优化掉副作用，MMIO 场景）。load 返回 pointee 类型；store 返回 void。
+            "volatileLoad" => {
+                if args.len() != 1 {
+                    return Some(SType::Unknown);
+                }
+                match self.expr_ty(&args[0], scopes, None) {
+                    Some(SType::Ptr(t, _)) => Some(*t),
+                    Some(SType::Unknown) | None => Some(SType::Unknown),
+                    Some(t) => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "@volatileLoad expects a pointer argument (got `{}`)",
+                                t.name()
+                            ),
+                        ));
+                        Some(SType::Unknown)
+                    }
+                }
+            }
+            "volatileStore" => {
+                if args.len() != 2 {
+                    return Some(SType::Unknown);
+                }
+                let _ = self.expr_ty(&args[0], scopes, None);
+                let _ = self.expr_ty(&args[1], scopes, None);
+                Some(SType::Void)
+            }
             _ => {
                 let _ = (span, scopes);
                 None

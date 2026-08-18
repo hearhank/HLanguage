@@ -484,6 +484,30 @@ fn k1_union_field_access_clean() {
     );
 }
 
+// ---------- K2 @volatileLoad/@volatileStore（ADR-0014）语义 ----------
+
+#[test]
+fn k2_volatile_load_returns_pointee() {
+    // @volatileLoad(ptr) 返回 pointee 类型——赋给 i32 无诊断
+    check_clean(
+        "[test] fn t() !void {\n\
+             var mut x: i32 = 5;\n\
+             var p = &mut x;\n\
+             var y: i32 = @volatileLoad(p);\n\
+             @volatileStore(p, y);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn k2_volatile_load_non_pointer_rejected() {
+    // @volatileLoad(非指针) → 编译错误
+    check_has_error(
+        "[test] fn t() !void {\n    var x = @volatileLoad(5);\n}\n",
+        "@volatileLoad expects a pointer argument",
+    );
+}
+
 // ---------- M1.4 跨文件模块验收 ----------
 
 #[test]

@@ -183,11 +183,13 @@
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
 | H1 | ✅ K1 无标签 union（裸内存双关：字段重叠，无判别标签） | union 语义测试绿 | A4 | 2h |
-| H2 | K2 volatile：`@volatileLoad/Store`（LLVM volatile 语义，防优化掉） | volatile 测试绿（含 LLVM 发射断言） | — | 1.5h |
+| H2 | ✅ K2 volatile：`@volatileLoad/Store`（LLVM volatile 语义，防优化掉） | volatile 测试绿（含 LLVM 发射断言） | — | 1.5h |
 | H3 | K4 `@ptrFromInt`/`@intFromPtr`（整数 ↔ 指针，物理地址 → 虚拟指针） | @ 内建测试绿 | — | 1h |
 | H4 | K5 `export fn`（符号导出）+ 链接脚本钩子（段布局/对齐） | export 测试绿（符号表断言） | — | 1.5h |
 | ⏸ H5 | K6 freestanding（裸机模式）——**移出本块（2026-08-18 ADR-0014）**，1.x 排期 | — | — | (2h) |
 | H6 | 文档同步：05 缺口表状态勾选 + 04 stdlib 系统编程扩展 + 02 里程碑 | 文档绿 | H1–H4 | 0.5h |
+
+> ✅ **组 H H2（K2 volatile）已完成（2026-08-18）**：`@volatileLoad(p) T` / `@volatileStore(p, v)` 机制级内建——防优化掉的读穿/写穿（LLVM volatile 语义，MMIO 场景）。**语义**：load 返回 pointee 类型（`SType::Ptr` 解包，非指针 → 编译错误）、store 返回 void；interp/IR 无优化器，volatile 透明 = 常规解引用/写穿（`p.*`/`p.* = v` 对齐），非指针 store 目标 → 运行时 `BadAssign`。**原生（真实 volatile）**：`CallBuiltin` 降级发射 `call @hc_volatile_load` / `@hc_volatile_store`，helper 内嵌 LLVM `load volatile %Value` / `store volatile %Value`（`inttoptr` 恢复槽地址 + volatile 访问）；helper 调用本身不标 readonly → 外部调用点亦不可省略/重排。**测试**：llvm.rs 发射断言（`define %Value @hc_volatile_load` + `load volatile`/`store volatile` 出现）；consistency +3（往返一致 / 读到普通赋值与 `p.* = v` 的写入 / 非指针 store FAIL 一致）；frontend +2（返回 pointee 类型 clean、非指针参数编译错误）；smoke 三后端 + 原生 exe 全绿。`cargo test --workspace` 777 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。**已知边界**：volatile 在 interp/IR 为语义透明（优化不可观测）；MMIO 真地址场景依赖 H3 `@ptrFromInt`（K4）落地后组合使用。06-04 `@` 内建表已加 volatile 行。
 
 > ✅ **组 H H1（K1 无标签 union）已完成（2026-08-18）**：`union { a: i32, b: f32 }` 裸内存双关（字段重叠、无判别标签，ADR-0014 定案）。**表示**：interp union 值 = `Value::Class(ClassData)`，带 `@union` 标记字段 + 所有声明字段零初始化；**写同步**——写字段 F 时把其他每个字段重新解释为 F 的字节（buffer 大小 = 写入字段宽度），读字段用 `bytes.get(..N)`，目标宽度 > 写入宽度 → `InvalidBytes: truncated union bytes` 错误；转换规则 int = `trunc i128 to iN` 后符号扩展、f32 = `trunc to i32` + `bitcast to float` + `fpext to double`、f64 = `trunc to i64` + `bitcast to double`、bool = `trunc to i8` + `icmp ne 0`。**约束**：union 仅允许标量字段（编译时错误）、union 字面量恰好接受一个字段。**引用类型**：`var b = a;` → 「cannot assign reference type」需 `copy(&a)`（对齐 Value::Class）。**原生边界（响亮拒绝）**：IR `UnionSync` 发射 `call void @hc_abort_builtin() + unreachable`——与闭包/notcallable 同类，编译期不拒、运行期在**首个 union 字面量处**中止（`error.NotBuiltin`），绝不静默误编译；门禁 compile mismatch 保持 60。**测试**：consistency 96 全绿（含 6 union：int 宽→窄/float↔int 重解释/bool 窄读/写同步/相等性/截断读失败）；frontend 56 全绿（含 5 union：声明解析、标量仅限、单字段字面量、未知字段、字段访问 clean）；bytecode union 往返（opcode 48 UnionSync + unions 表，`run_bc` == `run_ir`）。门禁基线不变（interpret 143/4/1、compile 60 mismatch）。**已知边界**：未加 union 示例（原生会中止），语义完全由一致性/前端/字节码套件覆盖。
 

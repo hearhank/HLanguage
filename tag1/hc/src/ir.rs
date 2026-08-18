@@ -10107,6 +10107,42 @@ fn call_builtin(
                 .ok_or_else(|| IrError::msg("ArityMismatch", name))?;
             Ok(deref_value(ctx, v).clone())
         }
+        "@volatileLoad" => {
+            // K2：@volatileLoad(ptr)——读穿指针。IR 参考解释器无优化器，volatile
+            // 透明 = deref_value（对齐 interp deref_checked）；原生 LLVM volatile 指令层体现。
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "@volatileLoad"));
+            }
+            Ok(deref_value(ctx, &args[0]).clone())
+        }
+        "@volatileStore" => {
+            // K2：@volatileStore(ptr, v)——写穿指针（对齐 StorePtr 写穿语义）
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", "@volatileStore"));
+            }
+            let t = args[0].clone();
+            let v = args[1].clone();
+            match t {
+                IrValue::Ptr(cell) => ctx.set_cell(cell, v),
+                IrValue::Boxed(cell) => {
+                    let data = match &ctx.cells[cell] {
+                        Cell::Boxed { data, .. } => Some(*data),
+                        _ => None,
+                    };
+                    match data {
+                        Some(d) => ctx.set_cell(d, v),
+                        None => {
+                            return Err(IrError::msg(
+                                "BadAssign",
+                                "@volatileStore to non-pointer",
+                            ))
+                        }
+                    }
+                }
+                _ => return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer")),
+            }
+            Ok(IrValue::Void)
+        }
         "@compileError" => {
             let msg = if args.is_empty() {
                 "compileError".to_string()

@@ -45,6 +45,7 @@ var hp: o *mut Point = box(p, alloc); // 装箱：值 → 堆引用（Q8，显�
 | 枚举转换 | `@intFromEnum(e) usize` / `@enumFromInt(E, i)` | 变体序索引（0 起）/ 反向；越界 Debug 检测；仅纯常量枚举；**返回 `usize`（平台宽度，L6 定案）——序列化/固定宽度场景显式 `@intCast`**（2026-08-14 定案） |
 | 指针转换 | `@ptrCast(T, p)` | 指针类型转换——**显式放弃类型安全的唯一逃生舱**（替代 Rust unsafe / C 强转） |
 | 对齐 | `@alignCast(T, p)` | 对齐提升断言（Debug 检查） |
+| 内存访问（volatile） | `@volatileLoad(p) T` / `@volatileStore(p, v)` | 防优化掉的读穿/写穿（LLVM `load volatile`/`store volatile`，MMIO 场景）；K2（ADR-0014，2026-08-18 落地） |
 | 溢出 | `@addWithOverflow(a, b)` / `@subWithOverflow` / `@mulWithOverflow` | 返回元组 `(T, bool)`（value, overflow）；不受模式影响 |
 | 编译期 | `@compileError("msg")` | 显式编译失败（comptime/脚本用） |
 | FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明（Q-S4 定案；第三块 E3） |

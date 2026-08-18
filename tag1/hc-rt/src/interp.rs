@@ -4145,6 +4145,30 @@ impl Interp {
                 )?;
                 Ok(Some(v))
             }
+            "@volatileLoad" => {
+                // K2：@volatileLoad(ptr)——读穿指针。interp 无优化器，volatile 透明 =
+                // 常规解引用（对齐 `p.*`）；原生在 LLVM volatile 指令层体现语义。
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let p = self.eval(&args[0])?;
+                Ok(Some(self.deref_checked(p, span)?))
+            }
+            "@volatileStore" => {
+                // K2：@volatileStore(ptr, v)——写穿指针（对齐 `p.* = v` 赋值路径）
+                if args.len() != 2 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let p = self.eval(&args[0])?;
+                self.check_dangling(&p, span)?;
+                let v = self.eval(&args[1])?;
+                match p {
+                    Value::Ptr(cell) => *cell.borrow_mut() = v,
+                    Value::Boxed(b) => *b.borrow_mut().data.borrow_mut() = v,
+                    _ => return Err(RtError::new("BadAssign", Some(span.clone()))),
+                }
+                Ok(Some(Value::Void))
+            }
             "@compileError" => {
                 // 语义层应已拦截（编译期错误）；运行时到达 = 未拦截路径
                 let msg = if args.is_empty() {
