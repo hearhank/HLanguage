@@ -19,7 +19,7 @@
 | 后端 | 入口 | 覆盖 | 一致性保障 |
 |---|---|---|---|
 | tree-walking 解释器 | `hc run <file.hc>`（默认） | 全语言 | — |
-| IR 参考解释器 | `hc run --ir <file.hc>` | 全语言（含 G1-G5 标准库：net/ipc/storage/archive/text/time/rng + io 差异项 + 线程生命周期 + 全核心标准库） | `hc-rt/tests/consistency.rs`（interp == IR，当前 77 用例） |
+| IR 参考解释器 | `hc run --ir <file.hc>` | 全语言（含 G1-G5 标准库：net/ipc/storage/archive/text/time/rng + io 差异项 + 线程生命周期 + 全核心标准库） | `hc-rt/tests/consistency.rs`（interp == IR，当前 90 用例） |
 | 字节码 VM | `hc run <file.hbc>` | 同 IR（`run_bytecode` = `decode` + 复用 `run_ir`，ADR-0004 唯一语义源） | 同上 |
 | LLVM 原生 | `hc build <file.hc>` | 未全标准库（**60 mismatch 边界所在**） | `hc test --mode=compile` 交叉验证 |
 

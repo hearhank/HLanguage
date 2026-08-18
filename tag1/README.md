@@ -103,7 +103,7 @@ hc --help
 
 ## 测试
 
-`cargo test --workspace` 共 **746 项测试**（703 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
+`cargo test --workspace` 共 **759 项测试**（716 单元/集成 + 43 示例回归），全部通过。逐测试文件明细：
 
 | crate | 测试文件 | 通过 |
 |---|---|---|
@@ -117,7 +117,7 @@ hc --help
 | hc | `tests/async_future.rs`（组 E：async fn/await 解析与语义） | 8 |
 | hc-rt | `tests/semantics.rs`（M2.2 类型检查） | 47 |
 | hc-rt | `tests/errors.rs`（错误码/传播 + io.exit/ExitType） | 22 |
-| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8 + 组 G 线程 + 组 D 值函数 + 组 E async） | 77 |
+| hc-rt | `tests/consistency.rs`（M3.4 双模式一致，含 Phase 1–8 + 组 G 线程 + 组 D 值函数 + 组 E async + 组 G 标准库 G1-G5） | 90 |
 | hc-rt | `tests/arena.rs`（arena.init typed 构造） | 13 |
 | hc-rt | `tests/box.rs`（box 内建） | 6 |
 | hc-rt | `tests/collection.rs`（collections） | 8 |

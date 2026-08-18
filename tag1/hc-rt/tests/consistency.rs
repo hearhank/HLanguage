@@ -18,6 +18,7 @@
 //! Phase 5 起含 global/const（`@__init__` 声明序初始化、跨 test fn 可变全局）。
 
 use std::collections::HashMap;
+use std::fs;
 use std::thread;
 
 use hc::ir::{lower, IrRuntime, IrValue};
@@ -1911,6 +1912,242 @@ fn pick(T: type, a: comptime_int, b: comptime_int) comptime_int {
 [test] fn if_branch_fold() void {
     expect_eq(pick(i32, 3, 9), 3);
     expect_eq(pick(String, 9, 3), 3);
+}
+"#,
+    );
+}
+
+// ---------- 组 G 标准库（G1-G5）interp == IR 一致性 ----------
+// 覆盖 Task #50「IR 后端同步 G1-G5 模块」的确定性可复原子集。原则：
+//   - 纯函数（io.text / io.archive / to_upper / rng 种子流）直接比对；
+//   - 有副作用的（io.net 回环 / io.ipc 管道与共享内存 / io.storage 文件 / io.fs 目录）
+//     各自创建并自清理，interp 与 IR 在同一进程内先后执行不互相污染；
+//   - 时间（io.time）只用单调不变量（PASS/FAIL 确定，值不比对）。
+
+#[test]
+fn g1_udp_loopback_consistent() {
+    // G1 net：UDP 双 socket 回环——bind(0) 取临时端口 → send_to 对端地址 → recv_from
+    // 取 [addr, data]。interp == IR 双模式一致（fmt_int + String.concat 拼对端地址）。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var s1 = try io.net.udp.bind(0);
+    var s2 = try io.net.udp.bind(0);
+    defer s1.close();
+    defer s2.close();
+    var p1 = try s1.local_port();
+    try s2.send_to("127.0.0.1:".concat(fmt_int(p1)), "ping-udp");
+    var r = try s1.recv_from(alloc);
+    try expect_eq_slices(r[1], "ping-udp");
+}
+"#,
+    );
+}
+
+#[test]
+fn g1_tcp_echo_consistent() {
+    // G1 net：TCP 回环 echo——listen(0) → connect → accept → write → shutdown → read_all。
+    // 无固定端口（ephemeral），interp 与 IR 各自建监听/连接，互不干扰。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var listener = try io.net.listen("127.0.0.1", 0, alloc);
+    var port = try listener.local_port();
+    var conn = try io.net.connect("127.0.0.1", port, alloc);
+    var accepted = try listener.accept();
+    try accepted.write("hello-net");
+    accepted.shutdown();
+    var reply = try conn.read_all();
+    try expect_eq_slices(reply, "hello-net");
+    conn.close();
+    accepted.close();
+    listener.close();
+}
+"#,
+    );
+}
+
+#[test]
+fn g2_str_upper_lower_consistent() {
+    // G2 io 差异项：String.to_upper/to_lower——ASCII 大小写转换（纯函数，非 ASCII 不变）。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    try expect_eq_slices("HeLLo 123".to_upper(), "HELLO 123");
+    try expect_eq_slices("HeLLo 123".to_lower(), "hello 123");
+    try expect_eq_slices("abc\xE9".to_upper(), "ABC\xE9");
+}
+"#,
+    );
+}
+
+#[test]
+fn g2_fs_list_dir_and_open_dir_consistent() {
+    // G2 io 差异项：io.fs.list_dir（路径形态）→ Vec(DirEntry)（name/is_dir）；
+    // io.fs.open_dir !Dir → dir.list_dir(alloc) → dir.close()。目录由 Rust 侧预建，
+    // interp/IR 双模式只读同一目录，测试后清理。
+    fs::create_dir_all("cons_g2_list").unwrap();
+    fs::write("cons_g2_list/alpha.txt", b"").unwrap();
+    assert_all_pass(
+        r#"
+[test] fn list_path() void {
+    var entries = io.fs.list_dir("cons_g2_list");
+    try expect(entries.len == 1);
+    try expect_eq_slices(entries[0].name, "alpha.txt");
+    try expect(!entries[0].is_dir);
+}
+[test] fn open_dir_handle() void {
+    var dir = try io.fs.open_dir("cons_g2_list");
+    var entries = try dir.list_dir(alloc);
+    try expect(entries.len == 1);
+    try expect_eq_slices(entries[0].name, "alpha.txt");
+    try dir.close();
+}
+"#,
+    );
+    let _ = fs::remove_file("cons_g2_list/alpha.txt");
+    let _ = fs::remove_dir("cons_g2_list");
+}
+
+#[test]
+fn g3_pipe_write_read_consistent() {
+    // G3 ipc：匿名管道——write → read 排空 → 再读空切片（进程内协作式，无持久状态）。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var pair = try io.ipc.pipe();
+    var reader = pair[0];
+    var writer = pair[1];
+    try writer.write("hello-ipc");
+    var data = try reader.read(alloc);
+    try expect_eq_slices(data, "hello-ipc");
+    var empty = try reader.read(alloc);
+    try expect(empty.len == 0);
+    try reader.close();
+    try writer.close();
+}
+"#,
+    );
+}
+
+#[test]
+fn g3_shm_write_read_consistent() {
+    // G3 ipc：命名共享内存——write 覆盖截断到 size → read 取当前内容。Shm 注册表
+    // 按后端实例隔离（interp 与 IR 各自持 registry），互不污染。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var s = try io.ipc.shm("cons_g3_shm", 8);
+    try s.write("hi");
+    var data = try s.read(alloc);
+    try expect_eq_slices(data, "hi");
+    try s.close();
+    var s2 = try io.ipc.shm("cons_g3_shm2", 4);
+    try s2.write("0123456789");
+    try expect_eq_slices(try s2.read(alloc), "0123");
+    try s2.close();
+}
+"#,
+    );
+}
+
+#[test]
+fn g4_storage_kv_consistent() {
+    // G4 storage：文件持久化键值存储——put → get / 缺失 → null / len / contains，
+    // 测试自清理（close 落盘后 io.fs.remove 删文件），interp/IR 各建各删不互扰。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var kv = try io.storage.open("cons_g4_kv.dat");
+    try kv.put("name", "hank");
+    var v = try kv.get("name");
+    try expect_eq_slices(v orelse "", "hank");
+    var miss = try kv.get("nope");
+    try expect_eq_slices(miss orelse "default", "default");
+    try expect_eq(kv.len(), 1);
+    try expect_eq(kv.contains("name"), true);
+    try expect_eq(kv.contains("z"), false);
+    try kv.close();
+    try io.fs.remove("cons_g4_kv.dat");
+}
+"#,
+    );
+}
+
+#[test]
+fn g4_archive_roundtrip_consistent() {
+    // G4 archive：RLE compress/decompress round-trip + 非法数据 error.InvalidFormat。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var c = try io.archive.compress("aaabbbccccc");
+    try expect(c.len < 11);
+    try expect_eq_slices(try io.archive.decompress(c), "aaabbbccccc");
+    try expect_eq_slices(try io.archive.decompress(try io.archive.compress("\x00\x01\x02\x03")), "\x00\x01\x02\x03");
+    try expect_error(error.InvalidFormat, io.archive.decompress("\x00"));
+}
+"#,
+    );
+}
+
+#[test]
+fn g5_text_ops_consistent() {
+    // G5 text：正则子集 matches/find/replace/split + 非法模式 error.InvalidFormat。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    try expect_eq(io.text.matches("^hello", "hello world"), true);
+    try expect_eq(io.text.matches("^world", "hello world"), false);
+    try expect_eq(io.text.find("world", "hello world") orelse -1, 6);
+    try expect_eq(io.text.find("xyz", "hello world") orelse -1, -1);
+    try expect_eq_slices(io.text.replace("\\s+", "a   b", "-"), "a-b");
+    try expect_eq_slices(io.text.replace("\\d+", "item-42-x7", "[n]"), "item-[n]-x[n]");
+    var parts = io.text.split(",", "a,b,c");
+    try expect_eq(parts.len(), 3);
+    try expect_eq_slices(parts[0], "a");
+    try expect_eq_slices(parts[2], "c");
+    try expect_error(error.InvalidFormat, io.text.matches("(", "x"));
+}
+"#,
+    );
+}
+
+#[test]
+fn g5_rng_determinism_consistent() {
+    // G5 rng：xorshift64* 种子流确定（seed(1) → 固定首值）；seed 可重置复现。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    io.rng.seed(1);
+    var a1 = io.rng.next();
+    try expect_eq(a1, 0xbafacf624f01c45d);
+    var a2 = io.rng.next();
+    io.rng.seed(1);
+    try expect_eq(io.rng.next(), a1);
+    try expect_eq(io.rng.next(), a2);
+    var i = 0;
+    while (i < 50) {
+        var v = io.rng.int(10);
+        try expect(v >= 0);
+        try expect(v < 10);
+        i += 1;
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn g5_time_monotonic_consistent() {
+    // G5 time：tick 单调 / elapsed 自 tick 起毫秒 ≥ 0（PASS/FAIL 确定，值不比对）。
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var t0 = io.time.tick();
+    try expect(t0 > 0);
+    var dt = io.time.elapsed(t0);
+    try expect(dt >= 0);
+    try expect(dt < 100000);
 }
 "#,
     );
