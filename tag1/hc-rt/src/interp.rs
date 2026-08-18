@@ -35,6 +35,12 @@ fn alloc_zeroed_bytes(n: i128) -> Option<Vec<u8>> {
     Some(v)
 }
 
+/// 组 F：四模式共享容器类型名（OneToOne/OneToMany/ManyToOne/ManyToMany——内建泛型
+/// 共享容器，写者数量由类型名保证；协作式单线程下四变体运行时行为相同）
+fn is_four_mode_type(name: &str) -> bool {
+    matches!(name, "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany")
+}
+
 /// 渲染类型为源码串（E1 `types.fields` 元数据 + 诊断用）——对齐 06-02 类型语法
 fn fmt_type_str(t: &Type) -> String {
     match t.strip() {
@@ -3604,6 +3610,10 @@ impl Interp {
                     // Table(i32) 类型实例化：空二维容器（init 填充）
                     return Ok(Value::vec(vec![], Value::Alloc));
                 }
+                // 组 F：四模式类型实例化 OneToOne(i32) → 空容器标记（init 构造真实容器）
+                if is_four_mode_type(name) {
+                    return Ok(Value::class(name, HashMap::new()));
+                }
                 // E1.2 组 D D4c：comptime 值函数调用（参数含 `T: type`）→ 编译期求值折叠
                 if let Some(v) = self.try_comptime_value_call(name, args, span)? {
                     return Ok(v);
@@ -4214,6 +4224,83 @@ impl Interp {
                         Ok(Some(Value::Int(addr as i128)))
                     }
                     _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            "@atomicLoad" => {
+                // Q-S3：@atomicLoad(T, p, order)——原子读。协作式单线程下无并发竞争，
+                // atomic 透明 = 常规解引用（对齐 @volatileLoad）。T 为类型名参数——直接
+                // 读 Ident 名不求值（对齐 @sizeOf）；order 内存序求值后丢弃。
+                if args.len() != 3 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let _ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let _ = self.eval(&args[2])?;
+                let p = self.eval(&args[1])?;
+                Ok(Some(self.deref_checked(p, span)?))
+            }
+            "@atomicStore" => {
+                // Q-S3：@atomicStore(T, p, v, order)——原子写（对齐 @volatileStore 写穿）。
+                if args.len() != 4 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let _ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let _ = self.eval(&args[3])?;
+                let p = self.eval(&args[1])?;
+                self.check_dangling(&p, span)?;
+                let v = self.eval(&args[2])?;
+                match p {
+                    Value::Ptr(cell) => *cell.borrow_mut() = v,
+                    Value::Boxed(b) => *b.borrow_mut().data.borrow_mut() = v,
+                    _ => return Err(RtError::new("BadAssign", Some(span.clone()))),
+                }
+                Ok(Some(Value::Void))
+            }
+            "@atomicRmw" => {
+                // Q-S3：@atomicRmw(T, p, op, v, order)——读改写，返回旧值。op 为内建枚举
+                // 变体（.add/.sub/.exchange/.cmpxchg；tag1 支持前三）。协作式下无竞争，
+                // 直接读改写（对齐常规 binop_values 语义）。T 为类型名参数——直接读
+                // Ident 名不求值（对齐 @sizeOf）。
+                if args.len() != 5 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let _ty = match &args[0] {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let _ = self.eval(&args[4])?;
+                let p = self.eval(&args[1])?;
+                let op = self.eval(&args[2])?;
+                let v = self.eval(&args[3])?;
+                let op_name = match self.deref_value(op) {
+                    Value::Enum { variant, .. } => variant,
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let v = self.deref_value(v);
+                match p {
+                    Value::Ptr(cell) => {
+                        let old = cell.borrow().clone();
+                        let new = match op_name.as_str() {
+                            "add" | "sub" => match (&old, &v) {
+                                (Value::Int(a), Value::Int(b)) => {
+                                    Value::Int(if op_name == "add" { a + b } else { a - b })
+                                }
+                                _ => {
+                                    return Err(RtError::new("TypeError", Some(span.clone())))
+                                }
+                            },
+                            "exchange" => v.clone(),
+                            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                        };
+                        *cell.borrow_mut() = new;
+                        Ok(Some(old))
+                    }
+                    _ => Err(RtError::new("BadAssign", Some(span.clone()))),
                 }
             }
             "@compileError" => {
@@ -5371,6 +5458,16 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_future_method(&v, m, args, span)
             }
+            // 组 F：四模式容器 init(alloc[, cap]) 构造（base 类型实例化标记 → 真实容器）
+            (Value::Class(c), "init") if is_four_mode_type(&c.borrow().name) => {
+                let name = c.borrow().name.clone();
+                Ok(Some(self.make_four_mode_container(&name, args, span)?))
+            }
+            // 组 F：四模式容器方法 write/read/try_read/close/send/recv
+            (Value::Class(c), m) if is_four_mode_type(&c.borrow().name) => {
+                let v = Value::Class(c.clone());
+                self.call_four_mode_method(&v, m, args, span)
+            }
             _ => Ok(None),
         }
     }
@@ -5550,6 +5647,157 @@ impl Interp {
             "is_done" => {
                 let done = self.thread_field_bool(self_v, "done");
                 Ok(Some(Value::Bool(done)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // ---------- 组 F：四模式共享容器（OneToOne/OneToMany/ManyToOne/ManyToMany） ----------
+
+    /// 四模式容器构造：`OneToOne(T).init(alloc[, cap])`。fields 布局：
+    /// `queue`（FIFO 元素数组）/ `closed`（结束标志）/ `alloc`（分配器引用）/
+    /// `cap`（仅通道形态 init(alloc, cap)——send/recv 有界）。
+    fn make_four_mode_container(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Value> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+        }
+        let alloc_v = {
+            let a = self.eval(&args[0])?;
+            self.deref_value(a)
+        };
+        let mut f = HashMap::new();
+        f.insert("queue".to_string(), Value::arr(vec![]));
+        f.insert("closed".to_string(), Value::Bool(false));
+        f.insert("alloc".to_string(), alloc_v);
+        if args.len() == 2 {
+            let cap = self.eval(&args[1])?;
+            let cap = self.deref_value(cap);
+            let cap_i = match cap {
+                Value::Int(i) => i.max(0),
+                _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+            };
+            f.insert("cap".to_string(), Value::Int(cap_i));
+        }
+        Ok(Value::class(name, f))
+    }
+
+    /// 四模式容器方法分派：write/read/try_read/close（共享内存形态，write/read 无容量
+    /// 概念）+ send/recv（通道形态，有界队列）。协作式单线程下四变体运行时行为相同——
+    /// 读者/写者数量是类型层契约，不引入真锁/真并发（ADR-0011 协作式模型）。
+    fn call_four_mode_method(
+        &mut self,
+        self_v: &Value,
+        m: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let tv = self.deref_value(self_v.clone());
+        let (queue, closed, cap, ccell) = match &tv {
+            Value::Class(c) => {
+                let d = c.borrow();
+                let queue = d
+                    .fields
+                    .get("queue")
+                    .cloned()
+                    .unwrap_or_else(|| Value::arr(vec![]));
+                let closed = matches!(d.fields.get("closed"), Some(Value::Bool(true)));
+                let cap = match d.fields.get("cap") {
+                    Some(Value::Int(i)) => Some(*i),
+                    _ => None,
+                };
+                (queue, closed, cap, c.clone())
+            }
+            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+        };
+        match m {
+            // write(v)：队尾追加；close 后报错
+            "write" => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if closed {
+                    return Ok(Some(self.err_val("Closed")));
+                }
+                let v = self.eval(&args[0])?;
+                if let Value::Arr(items) = &queue {
+                    items.borrow_mut().push(Rc::new(RefCell::new(v)));
+                }
+                Ok(Some(Value::Void))
+            }
+            // read()/recv() T：队首弹出。空读在协作式下不能阻塞 → 运行时错误
+            // （文档化偏差：真实并发阻塞至有值；本模型报错）
+            "read" | "recv" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if let Value::Arr(items) = &queue {
+                    let popped = {
+                        let mut it = items.borrow_mut();
+                        if it.is_empty() {
+                            return Ok(Some(self.err_val("Empty")));
+                        }
+                        it.remove(0)
+                    };
+                    let val = popped.borrow().clone();
+                    Ok(Some(val))
+                } else {
+                    Err(RtError::new("TypeError", Some(span.clone())))
+                }
+            }
+            // try_read() ?T：队首弹出或 null（空；close 后空亦 null）
+            "try_read" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if let Value::Arr(items) = &queue {
+                    let popped = {
+                        let mut it = items.borrow_mut();
+                        if it.is_empty() {
+                            return Ok(Some(Value::Opt(None)));
+                        }
+                        it.remove(0)
+                    };
+                    let val = popped.borrow().clone();
+                    Ok(Some(Value::Opt(Some(Rc::new(val)))))
+                } else {
+                    Err(RtError::new("TypeError", Some(span.clone())))
+                }
+            }
+            // send(v)：有界通道写；满（len >= cap）→ 报错（协作式不能阻塞）；close 后报错
+            "send" => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if closed {
+                    return Ok(Some(self.err_val("Closed")));
+                }
+                let v = self.eval(&args[0])?;
+                if let Value::Arr(items) = &queue {
+                    let mut it = items.borrow_mut();
+                    if let Some(cap) = cap {
+                        if it.len() as i128 >= cap {
+                            return Ok(Some(self.err_val("ChannelFull")));
+                        }
+                    }
+                    it.push(Rc::new(RefCell::new(v)));
+                }
+                Ok(Some(Value::Void))
+            }
+            // close()：置结束标志；此后 write/send 报错、try_read 返回 null
+            "close" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                ccell
+                    .borrow_mut()
+                    .fields
+                    .insert("closed".to_string(), Value::Bool(true));
+                Ok(Some(Value::Void))
             }
             _ => Ok(None),
         }

@@ -2,7 +2,7 @@
 # 完整示例套件回归门（CI 与本地共用）。
 #
 # 两部分（基线随功能扩增而更新，见 tag1/README.md）：
-#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（143/148 通过 + 1 跳过：
+#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（147/148 通过 + 1 跳过：
 #      23-tests 的 skip_example 自 F1 起实际触发 error.SkipTest → SKIP，不计入 passed/failed；
 #      130→132 为 H3 新增 91-orders-domain（[module] 领域约定，2 测试全绿）；
 #      132→133 为组 D（E1.2）comptime 类型函数：34-generics 由失败转全绿；
@@ -11,7 +11,9 @@
 #      135→142 为组 E E1：async/await 解析 + 语义落地——含 `async fn`/`await` 的 5 例
 #      （37/38/39/76/80）由双后端解析失败转为解释执行（async 体同步执行 + await 透传，
 #      E2 前近似正确），失败 8→5；
-#      142→143 为捕获语法解析落地：79-retry 由解析失败转全绿（retry_demo），失败 5→4）
+#      142→143 为捕获语法解析落地：79-retry 由解析失败转全绿（retry_demo），失败 5→4；
+#      143→147 为组 F（2026-08-18，ADR-0011 逆转）：四模式容器 37/76/77/78 由失败转全绿，
+#      失败 4→0）
 #   2) compile：`hc test --mode=compile examples/` 断言 <= 60 mismatch
 #      （未实现原生内建/方法 → error.NotBuiltin/NoMethod 响亮中止；子集扩增时该数下降，属改进。
 #      52→53 为 D1 副作用：interpret 侧 fmt_int 修复使 63-template-render 转绿，原生侧
@@ -30,15 +32,17 @@
 #      组 E E2-E4 后：5 例的 `[test]` 异步断言已在双后端（interpret + compile）全绿——
 #      IR 侧 async fn 调用同步执行 + await 透传（子集边界）对齐纯函数结果；剩余 58
 #      mismatch 中 5 例的文件级 MISMATCH 来自 `main` 函数特性而非 async：四模式容器
-#      （37/76 行 26/29，ManyToMany/OneToOne——组 F 延迟 1.x）、38/80（G1 net 已
-#      落地仍红：38 主函数旧 URL 形式 connect(url)/read_all(&conn) + JsonValue 类型
-#      未实现，80 主函数 https:// 网络不可达——仅 http:// 支持，均非 G1 范围）、
-#      Io.evented 原生构造器（39，interp-only E3）——58 保持，回落依赖 F/G 落地而非 E 组；
+#      （37/76 行 26/29，ManyToMany/OneToOne——组 F 已落地（2026-08-18 逆转），原生
+#      LLVM 仍为子集边界 error.Unsupported）、38/80（G1 net 已落地仍红：38 主函数旧
+#      URL 形式 connect(url)/read_all(&conn) + JsonValue 类型未实现，80 主函数 https://
+#      网络不可达——仅 http:// 支持，均非 G1 范围）、Io.evented 原生构造器（39，
+#      interp-only E3）——回落依赖原生 ABI 扩展而非 E/F 组；
 #      58→60 为捕获语法解析副作用：78-task-dispatch / 79-retry 由双解析失败转为可解析——
-#      04-concurrency 同组包级原生编译因 76 的 four_mode_types（组 F 四模式类型，延迟 1.x）
-#      在原生 LLVM 处 error.Unsupported 响亮拒绝 → 组内每个已解析文件均计入文件级 MISMATCH，
+#      04-concurrency 同组包级原生编译因 76 的 four_mode_types（组 F 四模式类型）在原生
+#      LLVM 处 error.Unsupported 响亮拒绝 → 组内每个已解析文件均计入文件级 MISMATCH，
 #      78/79 各 +1；79 单独原生编译已验证 MATCH（捕获语法本身原生可编），78 的失败模式由
-#      解析错误转为运行时 error.UndefinedName（组 F 四模式类型，延迟 1.x））
+#      解析错误转为运行时 error.UndefinedName（组 F）。组 F 落地后 60→57：77/78 级联计数
+#      消化、79 维持 MATCH，37/76 仍因四模式容器原生 LLVM 子集边界计入文件级 MISMATCH）
 #
 # 用法：bash tag1/scripts/check-examples.sh（工作目录不限，脚本自定位到 tag1/）
 set -euo pipefail

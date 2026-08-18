@@ -123,7 +123,7 @@ graph TD
 
 - **脚本生成（`script` 块）**：types 元数据/就地替换/受限子集——**2026-08-18 组 B 已落地**（`scriptgen.rs` 装载期展开 + `types.fields/type/all` + io/alloc 拒绝；实时预览留 I3、指纹校验留 I4）；comptime 泛型（组 D）仍待实现
 - **comptime 完整**：`comptime { ... }` 块、类型即值/惰性实例化——第三块 E1
-- **多线程/并发/异步**：四模式类型、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2；**线程生命周期（E2.2：spawn/join/cancel/is_done/detach + Q8 每线程 alloc + Q18/Q19 捕获规则）已于 2026-08-17 提前落地**（`09-part2-execution.md` 组 G 全完成；三后端 interp/IR/字节码一致，**原生为子集边界**——spawn 需函数引用，原生 ABI 留 Phase 8，`error.NotCallable` 响亮拒绝；四模式/async/@atomic/mutex 仍留第三块）
+- **多线程/并发/异步**：四模式类型、Future/async/await、通道、`Io.evented`、`@atomic` 原语——第三块 E2；**线程生命周期（E2.2：spawn/join/cancel/is_done/detach + Q8 每线程 alloc + Q18/Q19 捕获规则）已于 2026-08-17 提前落地**（`09-part2-execution.md` 组 G 全完成；三后端 interp/IR/字节码一致，**原生为子集边界**——spawn 需函数引用，原生 ABI 留 Phase 8，`error.NotCallable` 响亮拒绝；四模式/async/@atomic 已于第三块落地——组 E/F 2026-08-18，ADR-0011 逆转；真 OS 并行与 mutex 仍 1.x）
 - **标准库扩展**：UDP/HTTP、ipc、storage/archive、text、time 完整、rng、FFI（`extern fn`/`@cImport`/`hc cc`）
 - **系统编程**：K1–K6/K7–K11 缺口、H core（freestanding）
 - **工具链扩展**：LSP、format、lint、注册中心、供应链指纹校验
@@ -203,12 +203,12 @@ graph TD
 | ✅ T2（M3 后） | 双后端可运行 | 同一示例脚本/编译双模式运行一致 |
 | ✅ T3（M4 后） | **语言系统完整** | **语言包可用：语法/语义/双后端/运行时/内建全部就绪** |
 | ✅ T4（M5–M7 后） | **第一部分完成** | **最小功能集可用：`hc build`/`hc run`/`hc test` 完整**（不自举） |
-| ✅ T5（E1–E2 后） | 元编程 + 并发完整 | 脚本生成/泛型完整；线程/异步可用（四模式按 ADR-0011 延迟 1.x） |
+| ✅ T5（E1–E2 后） | 元编程 + 并发完整 | 脚本生成/泛型完整；线程/异步/四模式/@atomic 可用（组 G/E/F，2026-08-18；真 OS 并行 1.x） |
 | 🔄 T6（E3–E5 后） | 标准库 + 工具链完整 | 四大支柱完整；LSP/注册中心可用（E3 标准库已落地——组 G G1–G5；E4 系统编程 / E5 工具链待，G6 ffi 用户定跳过） |
 | ⏳ T7（E7 后） | **自举闭环** | 用 H 编译 H（stage2） |
 | ⏳ T8（E6 + 冻结） | 1.0 冻结 | 1.0 checklist 全绿 |
 
-> **状态注记（2026-08-18）**：T1–T5 已达成——第一块（语言系统，T1–T3）+ 第二块（最小外围，T4）经 `09-part2-execution.md` 完成注记收束；第三块元编程（组 B script / 组 C 序列化 / 组 D comptime 完整）与并发（组 G 线程 / 组 E 异步）落地，一致性套件 90 用例（interp == IR）+ 门禁 interpret 143/4/1、compile ≤60。T5 中「四模式」按 ADR-0011 延迟 1.x（需真 OS 线程语义），本块不实现。
+> **状态注记（2026-08-18）**：T1–T5 已达成——第一块（语言系统，T1–T3）+ 第二块（最小外围，T4）经 `09-part2-execution.md` 完成注记收束；第三块元编程（组 B script / 组 C 序列化 / 组 D comptime 完整）与并发（组 G 线程 / 组 E 异步 / **组 F 四模式 + @atomic——2026-08-18 ADR-0011 逆转落地**）完成，一致性套件 104 用例（interp == IR）+ 门禁 interpret 147/0/1、compile 57 mismatch。T5 中「四模式」已按组 F 落地（协作式透明实现），真 OS 并行与 `mutex` 仍 1.x。
 
 ## 七、与 02-milestones 的关系
 

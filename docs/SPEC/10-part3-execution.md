@@ -2,7 +2,7 @@
 
 > 状态：**执行中**（2026-08-18 启动）。源：`07-bootstrap-plan.md` §五（第三块 E1–E7）。关联：`02-milestones.md`（1.0 里程碑映射）、`04-stdlib-scope.md`（标准库扩展）、`05-open-questions-and-risks.md`（开放问题/系统编程缺口）、`09-part2-execution.md`（第二部分执行，A–H 全完成）、`docs/adr/0011–0014`（前置裁决定案）。执行规则：所有修改同步更新到 SPEC；**每功能点 ≤ 2h，超出即分解**；每子任务完成即提交（「先提交再继续」）。
 >
-> **当前执行范围（2026-08-18 用户定）**：至 **「H 编译 H」前**——组 A–J + K1–K4（H 语言编译器实现）；**K5/K6 自举闭环留后续**。按 ADR-0011/0014：**组 F（四模式/@atomic）延迟 1.x**、**H5（K6 freestanding）移出**。
+> **当前执行范围（2026-08-18 用户定）**：至 **「H 编译 H」前**——组 A–J + K1–K4（H 语言编译器实现）；**K5/K6 自举闭环留后续**。**组 F（四模式/@atomic）已于 2026-08-18 逆转落地**（ADR-0011 逆转，用户指令「完成并发和异步」）；按 ADR-0014：**H5（K6 freestanding）移出**。
 
 ## 0. 范围与规则
 
@@ -17,18 +17,18 @@
 
 - **E1 元编程最先**：评审 B1（`01-language-design.md`）明确「脚本生成**必须实现**（核心特性）」；且 E1 是 E7 自举的跳板——用 H 写编译器需要类型即值 / comptime / 代码生成能力
 - **顺序**：Phase 1 = 语言系统扩展（E1 元编程 → E2 并发/异步）→ Phase 2 = 外围（E3 标准库 / E4 系统编程 / E5 工具链）→ Phase 3 = E7 自举；E6 语言扩展与吃狗粮反馈贯穿
-- **示例回归联动**：现有 10 项失败示例是第三块验收信号——**E1 落地转绿 34/35，E2 落地转绿 37/38/39/76–80**（见 §4）
+- **示例回归联动**：现有 10 项失败示例是第三块验收信号——**E1 落地转绿 34/35，E2 落地转绿 37/38/39/76–80**（见 §4；E 组转绿异步断言、F 组转绿四模式 37/76/77/78，38/39/80 剩余为 main 特性——net 旧形式/`Io.evented` interp-only）
 
 ### 0.3 前置设计裁决（先定案再施工，每裁决 1 个 ADR + 描述补定）
 
 | # | 裁决 | 背景 | 建议方向 |
 |---|---|---|---|
-| 1 | **并发模型衔接** | 组 G 定案协作式延迟执行（单线程确定性）；四模式容器/`@atomic` 的「单写者无锁路径」「C11 五内存序」预设真并发 | 分两步：协作式模型上建 `async`/`Future`（保持确定性，`await` ≡ `join()` 复用 G 组机制）；**四模式 + @atomic 需要真 OS 线程则引入真并发**——破协作式前先一致性评估 + 用户裁决 |
+| 1 | **并发模型衔接** | 组 G 定案协作式延迟执行（单线程确定性）；四模式容器/`@atomic` 的「单写者无锁路径」「C11 五内存序」预设真并发 | 分两步：协作式模型上建 `async`/`Future`（保持确定性，`await` ≡ `join()` 复用 G 组机制）；**四模式 + @atomic 原定需真 OS 线程则引入真并发**——**已定案并逆转（2026-08-18）**：组 F 协作式透明落地（四变体运行时行为一致、原子透明，不破确定性）；真 OS 并行归 1.x |
 | 2 | **comptime 类型即值形态** | `fn List(T: type) type` 语法、类型作为值在编译期的表示、惰性实例化 | 仿 Zig `comptime` 块 + 类型值 = **编译期对象**（非运行时值）；实例化缓存；与既有泛型 where 约束（M2.3）衔接 |
 | 3 | **script 块语义** | `types` 元数据对象（`types.fields/type/all`，Q23）、「产物 = 代码字符串就地替换」插入点语义、构建时执行安全（评审 C3 供应链风险） | 脚本 = **H 核心子集**（受限分配器/IO）；产物替换 = 声明级插入点（AST 文本区间）；指纹校验（build.zon）+ 依赖来源审计 |
 | 4 | **K6 freestanding 范围** | 无 OS / 无 libc / 无默认分配器；标准库全部假设有 OS | 裁决是否 1.0 纳入（LLVM 后端专用目标）；K3 内联汇编已标注 1.x 不阻塞 |
 
-> ✅ **四项裁决已定案（2026-08-18）**：A1 → [ADR-0011](docs/adr/0011-concurrency-model-handoff.md)（async/Future 走协作式；四模式/@atomic 延迟 1.x → **组 F 移出本块**）；A2 → [ADR-0012](docs/adr/0012-comptime-type-values.md)（type = 编译期对象、实例化即具体化）；A3 → [ADR-0013](docs/adr/0013-script-block-semantics.md)（装载期求值 + 文本区间替换 + 受限子集 + 供应链信任）；A4 → [ADR-0014](docs/adr/0014-system-programming-scope.md)（K1–K5 纳入、K6 延迟 1.x → **H5 移出本块**）。§2.1 描述补定随各 ADR 落地。
+> ✅ **四项裁决已定案（2026-08-18）**：A1 → [ADR-0011](docs/adr/0011-concurrency-model-handoff.md)（async/Future 走协作式；四模式/@atomic **原延迟 1.x → 已于 2026-08-18 逆转落地（组 F）**）；A2 → [ADR-0012](docs/adr/0012-comptime-type-values.md)（type = 编译期对象、实例化即具体化）；A3 → [ADR-0013](docs/adr/0013-script-block-semantics.md)（装载期求值 + 文本区间替换 + 受限子集 + 供应链信任）；A4 → [ADR-0014](docs/adr/0014-system-programming-scope.md)（K1–K5 纳入、K6 延迟 1.x → **H5 移出本块**）。§2.1 描述补定随各 ADR 落地。
 
 ## 1. 描述充分性审查表（逐 E 模块判定）
 
@@ -37,9 +37,9 @@
 | E1.1 script 块 | ⚠️ 需补定 | 07 描述有 forms 但语义未定（types 对象 / 插入点 / 安全） | 裁决 #3 + 描述补定（§2.1） |
 | E1.2 comptime 完整 | ❌ 不充分 | 「泛型实例化完整」缺语法与类型值表示；`fn List(T: type) type` 现不可解析 | 裁决 #2 + 描述补定 |
 | E1.3 序列化定制 | ⚠️ 依赖 E1.1 | Q37/Q38 样板生成通道（数据定义 → 样板） | E1.1 落地后补定 |
-| E2.1 四模式类型 | ⏸ 延迟 1.x | 缓冲语义 / 单写者无锁路径需真并发（ADR-0011 已定案） | 1.x 排期（设计保留 06-10） |
+| E2.1 四模式类型 | ✅ 已落地（2026-08-18） | 协作式透明实现：单线程下四变体运行时行为一致（读者/写者数量 = 类型层契约）；ADR-0011 逆转 | 组 F F3/F4（方法集全：init/write/read/try_read/close/send/recv） |
 | E2.3 异步 | ✅ 基本充分 | 协作式上 `Future(R)` + `await` ≡ `join()` 可复用组 G 机制 | 落地时对齐 G 组捕获/取消语义 |
-| E2.4 原子 | ⏸ 延迟 1.x | 单线程协作式下 `@atomic` 无意义（ADR-0011 已定案） | 1.x 排期 |
+| E2.4 原子 | ✅ 已落地（2026-08-18） | 协作式透明：load = deref、store = 写穿、Rmw = add/sub/exchange（返回旧值）；内存序求值后丢弃 | 组 F F2（三内建三后端一致） |
 | E3 标准库扩展 | ✅ 充分 | net/ipc/storage/text/ffi 方法清单可直译（04-stdlib-scope 有明细） | 无 |
 | E4 系统编程 | ⚠️ 部分 | K1 无标签 union 已落地（H1）、K6 freestanding 已裁决 1.x（ADR-0014）、K3 asm 已标注 1.x；剩 K2/K4/K5（H2–H4） | 裁决 #4 + 05 缺口表 |
 | E5 工具链 | ✅ 充分 | format/lint/LSP/注册中心目标明确 | 无 |
@@ -52,7 +52,7 @@
 
 1. **comptime 类型即值**（[ADR-0012](docs/adr/0012-comptime-type-values.md)）——`type` = 元类型；类型对象 = **编译期值无运行时表示**；实例化 = 名字 + 实参列表的**具体化（monomorphization）+ 缓存**（对齐 M2.3 具体优先泛型）；`comptime { }` = 语义分析阶段求值（复用求值器子集，失败 = 编译错误）；comptime_int/float 惰性宽度；`anytype` 调用点推断。
 2. **script 块**（[ADR-0013](docs/adr/0013-script-block-semantics.md)）——`script { ... }` = **装载期求值 + 文本区间替换 + 重解析**：脚本块节点携带源码文本区间，求值产物字符串替换该区间后完整编译；脚本 = **受限 H 子集**（io/alloc/argv/网络不可用）；隐式 `types` 对象可见范围随块位置；依赖包脚本默认禁用（build.zon 信任声明）；失败 = 编译错误带块内 + 所属块位置；降级闸门 Q-S10 保留。
-3. **四模式类型**（[ADR-0011](docs/adr/0011-concurrency-model-handoff.md)）——**延迟 1.x**：需真 OS 线程语义，本块不实现；`write/read/try_read/close/send/recv` 方法集与缓冲语义设计保留（06-10），示例 76–80 转绿信号归 1.x。
+3. **四模式类型**（[ADR-0011](docs/adr/0011-concurrency-model-handoff.md)）——**✅ 已落地（2026-08-18，ADR-0011 逆转）**：协作式透明实现——单线程确定性模型下四变体运行时行为一致（读者/写者数量为类型层契约，不引入真锁/真并发）；`init(alloc)`/`init(alloc, cap)`（通道有界）/`write`（队尾追加，close 后 `error.Closed`）/`read`（空 `error.Empty`）/`try_read`（空 → null）/`close`/`send`（有界，满 `error.ChannelFull`）/`recv`（≡ read）方法集全落地；`@atomicLoad/Store/Rmw` 同批落地（透明 deref/写穿/add·sub·exchange，内存序求值后丢弃）；示例 37/76/77/78 转绿。真 OS 并行与 `mutex` 仍 1.x。
 
 ### 2.2 文档差异项 / 开放问题（登记归口）
 
@@ -144,18 +144,19 @@
 
 > ✅ **组 E 异步（E2.3，协作式 Future）已完成（2026-08-18）**：async/await + 单线程事件循环落地。**E1**：`async fn` 解析/语义——`Future(R)` 返回类型（R = 声明返回类型含错误联合 `Future(!R)`）、任意函数可 `await`（Q19 无 async 传染）、`await` 解包取 R。**E2**：`await` ≡ `join()`——async fn 调用点返回**惰性** `Future` 值（体延迟到 await），复用组 G Thread 协作式机制（`make_future`/`future_run` 镜像 thread_run）；协作式取消（`cancel` 置标志 → await 返回 `error.Cancelled`）、`is_done` 状态转移、await 幂等缓存；consistency `e2_async_await_consistent`（interp 惰性 == IR 急切，纯函数一致；副作用时序/取消为 interp 特有，IR 子集边界）。**E3**：`Io.threaded()`/`Io.evented()` 单线程事件循环——构造器写 `runtime` 字段（默认 io = threaded）、`io.poll()` 排空根回收队列（作用域退出提升的未 join 线程 → 运行到完成并返回计数；threaded 恒 0）；interp-only（原生构造器未实现 → 示例 39 main 计入 58 mismatch）。**E4**：示例 37/38/39/76/80 的 `[test]` 异步断言**双后端全绿**（interpret 142/5/1 保持；IR 侧 async fn 调用同步执行 + await 透传对齐纯函数），consistency +1（`e4_async_pointer_capture_consistent`，示例 37/76 `async_scope_binding` 模式 `&base` + Future(i32)）；hc-rt async.rs 直测 11（E2 7 + E3 4）。门禁基线不变（interpret 142/5/1、compile 58 mismatch——5 例文件级 MISMATCH 来自 `main` 特性：四模式容器 37/76 组 F 延迟、io.net/JsonValue 38/80 G1 net 待、Io.evented 39 interp-only）。
 
-### F. E2.1 四模式类型 + E2.4 原子（⏸ 延迟 1.x——ADR-0011 定案）
+### F. E2.1 四模式类型 + E2.4 原子（✅ 已完成，2026-08-18——ADR-0011 逆转）
 
-> **本组移出当前执行范围（2026-08-18 ADR-0011）**：四模式容器与 `@atomic*` 需真 OS 线程语义，协作式模型下无并发对象；破协作式违背确定性承诺与一致性套件可比性。设计保留（06-10、ADR-0007），排期 1.x。示例 76–80 转绿信号归 1.x。以下任务表为 1.x 排期预案（不排程）。
+> **本组已完成（2026-08-18）**：用户指令「完成并发和异步」主动逆转 ADR-0011 的「四模式/@atomic 延迟 1.x」裁决——协作式单线程模型下**透明落地**（无真并发对象，四变体运行时行为一致，读者/写者数量为类型层契约），不引入真锁/真 OS 线程、不破坏确定性承诺与一致性套件可比性。示例 37/76/77/78 转绿。**真 OS 并行与 `mutex`（F1/F5 真线程/无锁路径）仍归 1.x**。以下任务表为落地记录。
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| F1 | OS 线程后端接入（interp：真线程 + 同步原语；G 组协作式标记保留为默认模式） | 线程测试绿（真并发） | A1 | 2h |
-| F2 | `@atomicLoad/Store/Rmw` + C11 五内存序（@atomic 内建四后端对齐） | 原子测试绿 + consistency | F1 | 2h |
-| F3 | `OneToOne` 容器（write/read/try_read/close/send/recv） | 四模式测试绿（OneToOne） | F1 | 2h |
-| F4 | `OneToMany/ManyToOne/ManyToMany` + 有界缓冲语义（共享内存无容量、通道 `init(alloc, cap)`） | 四模式测试绿（全形态） | F3 | 2h |
-| F5 | 单写者无锁路径（读/写分离快路径） | 性能/正确性测试绿 | F4 | 2h |
-| F6 | 示例转绿（76–80）+ 文档（06-10） | 示例回归绿 | F5 | 1.5h |
+| ✅ F2 | `@atomicLoad/Store/Rmw`（协作式透明：load = deref、store = 写穿、Rmw add/sub/exchange 返回旧值；内存序求值后丢弃）三后端一致 | 原子测试绿 + consistency | — | 2h |
+| ✅ F3 | `OneToOne` 容器（init/write/read/try_read/close/send/recv） | 四模式测试绿（OneToOne） | F2 | 2h |
+| ✅ F4 | `OneToMany/ManyToOne/ManyToMany` + 有界缓冲语义（通道 `init(alloc, cap)`：send 满 `error.ChannelFull`、read 空 `error.Empty`、close 后 write `error.Closed`、try_read 空 → null） | 四模式测试绿（全形态） | F3 | 2h |
+| ✅ F6 | 示例转绿（37/76/77/78）+ 文档（06-10、ADR-0011 逆转注记） | 示例回归绿（147/0/1） | F4 | 1.5h |
+| ⏸ F1/F5 | 真 OS 线程后端 + 单写者无锁快路径 | — | — | 1.x |
+
+> ✅ **组 F（四模式类型 + @atomic，E2.1/E2.4）已完成（2026-08-18，ADR-0011 逆转）**：用户指令「完成并发和异步」主动逆转原「延迟 1.x」裁决。**运行时表示**：四模式容器 = `Value::Class`/`IrValue::Class` + 类名分派（复用 Thread 模式），fields `queue`（FIFO 元素数组）/`closed`（Bool 结束标志）/`alloc`/`cap`（仅通道形态 `init(alloc, cap)`）。**方法集**：`init(alloc)`/`init(alloc, cap)`（通道）/`write(v)`（队尾追加；close 后 `error.Closed`）/`read() T`（队首弹出；空 `error.Empty`）/`try_read() ?T`（队首弹出或 null）/`close()`/`send(v)`（有界；满 `error.ChannelFull`）/`recv() T`（同 read），全部取 `*Self`。**`@atomic*`**：`@atomicLoad(T,p,order)`/`@atomicStore(T,p,v,order)`/`@atomicRmw(T,p,op,v,order)`——协作式无竞争 → 透明：load = deref、store = 写穿、Rmw op = `.add/.sub/.exchange`（返回旧值），内存序五值求值后丢弃；类型参数 `T` 为编译期类型名（interp 仿 `@sizeOf` 直接读 Ident 不求值，IR `is_type_arg_pos` 降级 Const Str）。**实现**：interp `make_four_mode_container`/`call_four_mode_method` + 三原子臂；IR 镜像 `make_four_mode_ir`/`call_four_mode_method_ir` + `is_type_arg_pos` 类型参数降级（`OneToOne(i32)` 实例化）+ `call_builtin` 标记臂；semantic `is_builtin_type` + `call_at_builtin` 类型。**测试**：consistency `f_four_mode_and_atomic_consistent`（5 子测试：FIFO / try_read null / close 语义 / 通道有界 / atomic 往返）；示例 37/76/77/78 转绿（interpret **147/0/1**）；compile 60→**57 mismatch**（77/78 级联计数消化，37/76 仍因四模式容器原生 LLVM 子集边界 `error.Unsupported` 计入文件级 MISMATCH）。**1.x 保留**：真 OS 并行、`mutex`、单写者无锁快路径（F1/F5）。
 
 ### G. E3 标准库扩展（依赖：无特殊；逐模块独立）
 
@@ -229,12 +230,12 @@
 | K5 | 自举闭环 stage2：H 编译器（H 程序）用 stage1 编译自身；产物再编译产物（二次自举验证） | **用 H 编译 H 达成** | K4 | 2h |
 | K6 | 可复现构建 + 规范一致性（Rust/H 双实现交叉验证全语法/语义/内存/并发） | 一致性套件扩展绿 | K5 | 2h |
 
-**当前执行范围合计 ≈ 73.5h，45 个任务**（A 4 / B 10 / C 3 / D 9.5 / E 7 / G 11 / H 6.5 / I 7.5 / J 7 / K1–4 8）。**延迟/留后续**：F（四模式/@atomic）11.5h 6 任务 → 1.x（ADR-0011）；H5（K6 freestanding）2h → 1.x（ADR-0014）；K5/K6（自举闭环 + 可复现）4h 2 任务 → 后续。
+**当前执行范围合计 ≈ 73.5h，45 个任务**（A 4 / B 10 / C 3 / D 9.5 / E 7 / **F 6——✅ 已完成（2026-08-18，ADR-0011 逆转）** / G 11 / H 6.5 / I 7.5 / J 7 / K1–4 8）。**延迟/留后续**：F 组 1.x 余项 = 真 OS 并行 + `mutex` + 单写者无锁路径（F1/F5）；H5（K6 freestanding）2h → 1.x（ADR-0014）；K5/K6（自举闭环 + 可复现）4h 2 任务 → 后续。
 
 ## 4. 验收与门禁
 
 - **功能点级**：`cargo test` 相关套件绿 + 文档同步（本文件 §5 清单对应项）
-- **组级**：示例回归基线——现 interpret **143/4/1** + compile **60 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿（interpret 由 E1 前双解析失败转 143/4/1；4 项失败 = 四模式容器 37/76/77/78（组 F 延迟 1.x）——78 由解析错误转为运行时 `error.UndefinedName`，79 已随捕获语法解析落地转全绿）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动；60 中 5 例（37/38/39/76/80）文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76、**38/80（G1 net 已落地仍红：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达，仅 `http://` 支持）**、Io.evented 39（interp-only E3）；78/79 捕获语法解析副作用 +2，见 `tag1/scripts/check-examples.sh` 注释）
+- **组级**：示例回归基线——现 interpret **147/0/1** + compile **57 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿；**F 组已落地（2026-08-18 ADR-0011 逆转）**：四模式容器 37/76/77/78 由失败转全绿（0 失败）；compile mismatch 60→**57**（随原生 ABI 扩展下降，Phase 8 原生函数值/闭包，K4 H 后端编写时联动；57 中 5 例文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76 原生 LLVM `error.Unsupported` 响亮拒绝（原生子集边界）、**38/80（G1 net 已落地仍红：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达，仅 `http://` 支持）**、Io.evented 39（interp-only E3）；78/79 捕获语法解析副作用已随 F 组落地消化，见 `tag1/scripts/check-examples.sh` 注释）
 - **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**留后续执行**（当前范围至 K4，K5/K6 不排程）
 
 ## 5. 文档同步清单
@@ -246,7 +247,7 @@
 | ✅ `docs/adr/0011–0014` | 四个前置裁决 ADR | **A 组已完成（2026-08-18）** |
 | ✅ `06-language-spec.md` | comptime 类型即值 / script 块语法 | **A/B/D 组已完成（2026-08-18）** |
 | ✅ `06-08-modules.md` | 供应链指纹 / 依赖来源审计 | **A3/B4 已完成（2026-08-18）**；I4 注册中心 MVP 待 |
-| ✅ `06-10-concurrency.md` | 异步/四模式/原子（协作式衔接） | **E 组已完成（2026-08-18，组 E 注已补）**；F 组四模式/@atomic 延迟 1.x 已标注 |
+| ✅ `06-10-concurrency.md` | 异步/四模式/原子（协作式衔接） | **E/F 组已完成（2026-08-18）**：async 协作式 + 四模式/@atomic 已落地标注；真 OS 并行与 `mutex` 仍 1.x |
 | ⚠️ `04-stdlib-scope.md` | 标准库扩展明细（net/ipc/storage/text/ffi）+ 系统编程扩展 | G 组标准库已同步（2026-08-18）；H 组系统编程扩展待 |
 | ⚠️ `02-milestones.md` | M9/M10 状态勾选 | M3/M5 已按 tag1 实现勾选（2026-08-18）；M9/M10 待自举（K 组） |
 | `05-open-questions-and-risks.md` | 开放问题逐项关闭 | A/J 组（J 待） |
@@ -292,6 +293,17 @@
 - **E4**：示例 37/38/39/76/80 的 `[test]` 异步断言双后端全绿（IR 侧 async fn 同步执行 + await 透传对齐纯函数）。
 
 **测试**：hc-rt async.rs 直测 11（E2 7 + E3 4）；consistency 增 `e2_async_await_consistent` / `e4_async_pointer_capture_consistent`。`cargo test --workspace` 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch——5 例文件级 MISMATCH 来自 `main` 特性：四模式容器 37/76、38/80（G1 net 已落地仍红：38 旧 URL 形式 + `JsonValue` 未实现、80 `https://` 不可达）、`Io.evented` 39 interp-only）。
+
+### 组 F（E2.1 四模式类型 + E2.4 原子，2026-08-18——ADR-0011 逆转）
+
+**已落地**（用户指令「完成并发和异步」主动逆转 ADR-0011「延迟 1.x」裁决；协作式透明实现，不引入真 OS 线程、不破确定性）：
+- **运行时表示**：四模式容器 = `Value::Class`/`IrValue::Class` + 类名分派（复用 Thread 模式），fields `queue`（FIFO 元素数组）/`closed`（Bool 结束标志）/`alloc`/`cap`（仅通道形态 `init(alloc, cap)`）。
+- **方法集**（全取 `*Self`）：`init(alloc)`/`init(alloc, cap)`（通道）/`write(v)`（队尾追加；close 后 `error.Closed`）/`read() T`（队首弹出；空 `error.Empty`）/`try_read() ?T`（队首弹出或 null）/`close()`/`send(v)`（有界；满 `error.ChannelFull`）/`recv() T`（同 read）。
+- **`@atomic*`**：`@atomicLoad(T,p,order)`/`@atomicStore(T,p,v,order)`/`@atomicRmw(T,p,op,v,order)`——协作式无竞争 → 透明：load = deref、store = 写穿、Rmw op = `.add/.sub/.exchange`（返回旧值），内存序五值求值后丢弃；类型参数 `T` 为编译期类型名（interp 仿 `@sizeOf` 直接读 Ident 不求值；IR `is_type_arg_pos` 降级 Const Str）。
+- **实现**：interp `make_four_mode_container`/`call_four_mode_method` + 三原子臂；IR 镜像 `make_four_mode_ir`/`call_four_mode_method_ir` + `is_type_arg_pos` 类型参数降级（`OneToOne(i32)` 实例化）+ `call_builtin` 标记臂；semantic `is_builtin_type`（四模式名入内建类型）+ `call_at_builtin`（原子返回类型）。
+- **三后端一致**：interp（语义 oracle）== IR（共享语义源）；字节码 = decode + run_ir 自动继承；原生 LLVM 为子集边界（四模式容器 `error.Unsupported` 响亮拒绝，不静默误编译）。
+
+**测试**：consistency 增 `f_four_mode_and_atomic_consistent`（5 子测试：FIFO 写读 / try_read 空 → null + `.?` 解包 / close 语义（close 后 write 丢弃 `error.Closed`）/ 通道有界 `init(alloc,2)` send 满 `error.ChannelFull` / atomic store·load·rmw（add/sub/exchange 旧值断言））；示例 37/76/77/78 转绿（interpret **147/0/1**，0 失败）；compile 60→**57 mismatch**（77/78 级联计数消化；37/76 仍因四模式容器原生 LLVM 子集边界 `error.Unsupported` 计入文件级 MISMATCH）。`cargo test --workspace` 792 全绿。**1.x 保留**：真 OS 并行、`mutex`、单写者无锁快路径（F1/F5）。
 
 ### 组 G（E3 标准库扩展，2026-08-18）
 

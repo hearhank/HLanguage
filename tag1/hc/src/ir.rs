@@ -3750,6 +3750,11 @@ fn is_assert_builtin(name: &str) -> bool {
     )
 }
 
+/// 组 F：四模式共享容器类型名（对齐 oracle interp.rs `is_four_mode_type`）
+fn is_four_mode_type_ir(name: &str) -> bool {
+    matches!(name, "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany")
+}
+
 /// 自由内建（非 `@` 前缀；测试内隐式可用，普通函数体按名路由到 `CallBuiltin`）。
 /// 对齐 oracle `call_builtin`（interp.rs:2911）的用户可调内建面。
 fn is_free_builtin(name: &str) -> bool {
@@ -3771,6 +3776,8 @@ fn is_free_builtin(name: &str) -> bool {
             | "parse_int" | "parse_float"
             // 组 G 线程（E2.2）：spawn(f, args...) o Thread(T)——协作式延迟执行
             | "spawn"
+            // 组 F：四模式类型实例化 OneToOne(i32) → 空容器标记（init 构造真实容器）
+            | "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany"
     )
 }
 
@@ -3782,8 +3789,13 @@ fn is_type_arg_pos(name: &str, i: usize) -> bool {
         "@sizeOf" | "@alignOf" => i == 0,
         "@offsetOf" => i == 0 || i == 1,
         "@intCast" | "@enumFromInt" | "@ptrCast" | "@alignCast" => i == 0,
+        // 组 F（Q-S3）：@atomic* 首参为类型名 T（@atomicLoad(T,p,order) 等）
+        "@atomicLoad" | "@atomicStore" | "@atomicRmw" => i == 0,
         // alloc.init(ABC) / arena.init(ABC)：类型名参数（运行时按名建空实例）
         "alloc.init" | "arena.init" => i == 0,
+        // 组 F：四模式类型实例化 OneToOne(i32) 的类型参数——降级 Const Str、
+        // 运行时 call_builtin 忽略（对齐 oracle 的 eval_call 标记短路）
+        "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => i == 0,
         // math.nan/math.inf/math.inf_neg(f64)：类型名参数（运行时忽略，仅指示宽度）
         "math.nan" | "math.inf" | "math.inf_neg" => i == 0,
         _ => false,
@@ -8956,6 +8968,186 @@ fn thread_field_bool_ir(ctx: &Ctx, thread: usize, key: &str) -> bool {
     }
 }
 
+// ---- 组 F：四模式共享容器（对齐 oracle interp.rs `make_four_mode_container`/
+//      `call_four_mode_method`）----
+
+/// 四模式容器构造（对齐 oracle interp.rs `make_four_mode_container`）：字段布局
+/// queue=空 Arr / closed=false / alloc=构造时分配器引用 / cap（仅通道形态二参 init）。
+fn make_four_mode_ir(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(IrError::msg("ArityMismatch", format!("{name}.init")));
+    }
+    let alloc_v = deref_value(ctx, &args[0]).clone();
+    let queue_v = make_arr(ctx, vec![]);
+    let mut f = HashMap::new();
+    f.insert(
+        "queue".to_string(),
+        ctx.alloc(Cell::Value(queue_v)),
+    );
+    f.insert(
+        "closed".to_string(),
+        ctx.alloc(Cell::Value(IrValue::Bool(false))),
+    );
+    f.insert(
+        "alloc".to_string(),
+        ctx.alloc(Cell::Value(alloc_v)),
+    );
+    if args.len() == 2 {
+        let cap = deref_value(ctx, &args[1]).clone();
+        let cap_i = match cap {
+            IrValue::Int(i) => i.max(0),
+            _ => return Err(IrError::msg("TypeError", format!("{name}.init cap"))),
+        };
+        f.insert("cap".to_string(), ctx.alloc(Cell::Value(IrValue::Int(cap_i))));
+    }
+    Ok(IrValue::Class(ctx.alloc(Cell::Class {
+        name: name.into(),
+        fields: f,
+    })))
+}
+
+/// 四模式容器方法分派：write/read/try_read/close（共享内存形态）+ send/recv（通道
+/// 形态，有界队列）。协作式单线程下四变体运行时行为相同；空读/满 send 不阻塞而是
+/// 报 `error.Empty`/`error.ChannelFull`（文档化偏差，对齐 oracle interp.rs）。
+fn call_four_mode_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    m: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let c = match self_v {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "four-mode method on non-class")),
+    };
+    // 只读一次类字段（克隆 fields，随后可变借用安全）
+    let (queue, closed, cap) = {
+        let fields = match &ctx.cells[c] {
+            Cell::Class { fields, .. } => fields.clone(),
+            _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
+        };
+        let queue = fields
+            .get("queue")
+            .map(|fc| ctx.cell_value(*fc).clone())
+            .unwrap_or(IrValue::Arr(usize::MAX));
+        let closed = matches!(
+            fields.get("closed"),
+            Some(fc) if matches!(ctx.cell_value(*fc), IrValue::Bool(true))
+        );
+        let cap = match fields.get("cap") {
+            Some(fc) => match ctx.cell_value(*fc) {
+                IrValue::Int(i) => Some(*i),
+                _ => None,
+            },
+            _ => None,
+        };
+        (queue, closed, cap)
+    };
+    match m {
+        // write(v)：队尾追加；close 后报错
+        "write" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "write"));
+            }
+            if closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            let qc = match queue {
+                IrValue::Arr(qc) => qc,
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            };
+            let nc = ctx.alloc(Cell::Value(args[0].clone()));
+            match &mut ctx.cells[qc] {
+                Cell::Elems(e) => e.push(nc),
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        // read()/recv() T：队首弹出。空读在协作式下不能阻塞 → 运行时错误
+        "read" | "recv" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "read"));
+            }
+            let qc = match queue {
+                IrValue::Arr(qc) => qc,
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            };
+            let popped = match &mut ctx.cells[qc] {
+                Cell::Elems(e) => {
+                    if e.is_empty() {
+                        return Ok(Some(err_val(module, "Empty")));
+                    }
+                    e.remove(0)
+                }
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            };
+            Ok(Some(ctx.cell_value(popped).clone()))
+        }
+        // try_read() ?T：队首弹出或 null（空/close 后空亦 null）
+        "try_read" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "try_read"));
+            }
+            let qc = match queue {
+                IrValue::Arr(qc) => qc,
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            };
+            let popped = match &mut ctx.cells[qc] {
+                Cell::Elems(e) => {
+                    if e.is_empty() {
+                        return Ok(Some(opt_val(None)));
+                    }
+                    e.remove(0)
+                }
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            };
+            Ok(Some(opt_val(Some(ctx.cell_value(popped).clone()))))
+        }
+        // send(v)：有界通道写；满（len >= cap）→ 报错（协作式不能阻塞）；close 后报错
+        "send" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "send"));
+            }
+            if closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            let qc = match queue {
+                IrValue::Arr(qc) => qc,
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            };
+            let nc = ctx.alloc(Cell::Value(args[0].clone()));
+            match &mut ctx.cells[qc] {
+                Cell::Elems(e) => {
+                    if let Some(cap) = cap {
+                        if e.len() as i128 >= cap {
+                            return Ok(Some(err_val(module, "ChannelFull")));
+                        }
+                    }
+                    e.push(nc);
+                }
+                _ => return Err(IrError::msg("TypeError", "bad queue")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        // close()：置结束标志；此后 write/send 报错、try_read 返回 null
+        "close" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "close"));
+            }
+            match &mut ctx.cells[c] {
+                Cell::Class { fields, .. } => {
+                    if let Some(fc) = fields.get("closed").copied() {
+                        ctx.cells[fc] = Cell::Value(IrValue::Bool(true));
+                    }
+                }
+                _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- JSON 解析（Map.from_json / json.parse；对齐 oracle parse_json_*）----
 
 fn parse_json_value_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
@@ -9517,6 +9709,16 @@ fn call_builtin_method(
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Thread" => {
             call_thread_method_ir(ctx, module, &self_v, m, args)
         }
+        // 组 F：四模式容器——`init(alloc[, cap])` 构造真实容器；其余方法 FIFO 分派。
+        // 写者/读者数量为类型层契约，协作式单线程下四变体运行时行为相同
+        // （对齐 oracle interp.rs call_builtin_method 的 `is_four_mode_type` 分派）。
+        (IrValue::Class(c), "init") if is_four_mode_type_ir(&class_name(ctx, *c)) => {
+            let name = class_name(ctx, *c);
+            Ok(Some(make_four_mode_ir(ctx, &name, args)?))
+        }
+        (IrValue::Class(c), m) if is_four_mode_type_ir(&class_name(ctx, *c)) => {
+            call_four_mode_method_ir(ctx, module, &self_v, m, args)
+        }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Fs" => {
             call_fs_method_ir(ctx, module, m, args)
         }
@@ -9999,6 +10201,14 @@ fn call_builtin(
                 fields,
             })))
         }
+        // ---------- 组 F：四模式类型实例化（OneToOne(i32) → 空容器标记） ----------
+        // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
+        "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {
+            Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                name: name.into(),
+                fields: HashMap::new(),
+            })))
+        }
         // ---------- @ 内建 ----------
         "@intFromEnum" => {
             let v = deref_value(ctx, &args[0]);
@@ -10189,6 +10399,79 @@ fn call_builtin(
                     Ok(IrValue::Int(addr))
                 }
                 _ => Err(IrError::msg("TypeError", "@intFromPtr expects a pointer")),
+            }
+        }
+        "@atomicLoad" => {
+            // Q-S3：@atomicLoad(T, p, order)——原子读。协作式单线程无并发竞争，atomic
+            // 透明 = deref_value（对齐 @volatileLoad）；类型名/内存序参数已求值、忽略。
+            if args.len() != 3 {
+                return Err(IrError::msg("ArityMismatch", "@atomicLoad"));
+            }
+            Ok(deref_value(ctx, &args[1]).clone())
+        }
+        "@atomicStore" => {
+            // Q-S3：@atomicStore(T, p, v, order)——原子写（对齐 @volatileStore 写穿）。
+            if args.len() != 4 {
+                return Err(IrError::msg("ArityMismatch", "@atomicStore"));
+            }
+            let t = args[1].clone();
+            let v = args[2].clone();
+            match t {
+                IrValue::Ptr(cell) => ctx.set_cell(cell, v),
+                IrValue::Boxed(cell) => {
+                    let data = match &ctx.cells[cell] {
+                        Cell::Boxed { data, .. } => Some(*data),
+                        _ => None,
+                    };
+                    match data {
+                        Some(d) => ctx.set_cell(d, v),
+                        None => {
+                            return Err(IrError::msg(
+                                "BadAssign",
+                                "@atomicStore to non-pointer",
+                            ))
+                        }
+                    }
+                }
+                _ => return Err(IrError::msg("BadAssign", "@atomicStore to non-pointer")),
+            }
+            Ok(IrValue::Void)
+        }
+        "@atomicRmw" => {
+            // Q-S3：@atomicRmw(T, p, op, v, order)——读改写，返回旧值。op 为内建枚举
+            // 变体（.add/.sub/.exchange/.cmpxchg；tag1 支持前三）。协作式下无竞争。
+            if args.len() != 5 {
+                return Err(IrError::msg("ArityMismatch", "@atomicRmw"));
+            }
+            let op_name = match deref_value(ctx, &args[2]) {
+                IrValue::Enum { variant, .. } => variant.clone(),
+                _ => return Err(IrError::msg("TypeError", "@atomicRmw expects enum op")),
+            };
+            let v = deref_value(ctx, &args[3]).clone();
+            match args[1].clone() {
+                IrValue::Ptr(cell) => {
+                    let old = ctx.cell_value(cell).clone();
+                    let new = match op_name.as_str() {
+                        "add" | "sub" => match (&old, &v) {
+                            (IrValue::Int(a), IrValue::Int(b)) => IrValue::Int(if op_name == "add" {
+                                a + b
+                            } else {
+                                a - b
+                            }),
+                            _ => {
+                                return Err(IrError::msg(
+                                    "TypeError",
+                                    "@atomicRmw add/sub expects int",
+                                ))
+                            }
+                        },
+                        "exchange" => v.clone(),
+                        _ => return Err(IrError::msg("TypeError", "@atomicRmw bad op")),
+                    };
+                    ctx.set_cell(cell, new);
+                    Ok(old)
+                }
+                _ => Err(IrError::msg("BadAssign", "@atomicRmw expects pointer")),
             }
         }
         "@compileError" => {

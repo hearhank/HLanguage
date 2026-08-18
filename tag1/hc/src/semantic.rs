@@ -346,7 +346,10 @@ fn is_serialize_builtin(field: &str) -> bool {
 fn is_builtin_type(name: &str) -> bool {
     matches!(
         name,
-        "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "ExitType"
+        // 组 F（Q32 内建共享特例）：四模式共享容器类型——OneToOne/OneToMany/ManyToOne/
+        // ManyToMany 为内建泛型共享特例（方法取 *Self；不占用唯一写者槽）
+        "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany"
+            | "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "ExitType"
     )
 }
 
@@ -3482,6 +3485,58 @@ impl Checker {
                             span.clone(),
                             format!(
                                 "@intFromPtr expects a pointer argument (got `{}`)",
+                                t.name()
+                            ),
+                        ));
+                        Some(SType::Unknown)
+                    }
+                }
+            }
+            // 组 F（Q-S3）：@atomicLoad(T, p, order)——原子读，返回 pointee 类型。
+            // T 为类型名参数、order 为内存序枚举值（协作式下求值后丢弃）——均跳过检查，
+            // 对齐 @volatileLoad/@sizeOf 的类型参数处理。
+            "atomicLoad" => {
+                if args.len() != 3 {
+                    return Some(SType::Unknown);
+                }
+                match self.expr_ty(&args[1], scopes, None) {
+                    Some(SType::Ptr(t, _)) => Some(*t),
+                    Some(SType::Unknown) | None => Some(SType::Unknown),
+                    Some(t) => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "@atomicLoad expects a pointer argument (got `{}`)",
+                                t.name()
+                            ),
+                        ));
+                        Some(SType::Unknown)
+                    }
+                }
+            }
+            // 组 F（Q-S3）：@atomicStore(T, p, v, order)——原子写，返回 void。
+            "atomicStore" => {
+                if args.len() != 4 {
+                    return Some(SType::Unknown);
+                }
+                let _ = self.expr_ty(&args[1], scopes, None);
+                let _ = self.expr_ty(&args[2], scopes, None);
+                Some(SType::Void)
+            }
+            // 组 F（Q-S3）：@atomicRmw(T, p, op, v, order)——读改写，返回旧值
+            // （pointee 类型）。op 为内建枚举变体（.add/.sub/.exchange）。
+            "atomicRmw" => {
+                if args.len() != 5 {
+                    return Some(SType::Unknown);
+                }
+                match self.expr_ty(&args[1], scopes, None) {
+                    Some(SType::Ptr(t, _)) => Some(*t),
+                    Some(SType::Unknown) | None => Some(SType::Unknown),
+                    Some(t) => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "@atomicRmw expects a pointer argument (got `{}`)",
                                 t.name()
                             ),
                         ));

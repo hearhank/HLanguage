@@ -214,10 +214,10 @@ _Avoid_: 把泛型当脚本生成做
 
 ## 7. 并发模型（M5）
 
-> **组 G 已提前落地 E2.2 线程生命周期（2026-08-17，第二部分）**：`spawn(f, args...) o Thread(T)` / `join() !T` / `cancel() !void` / `is_done() bool` / `detach()` + 每线程 alloc（Q8）+ 捕获规则静态检查（Q18 绑定/逃逸 + Q19 冻结窗口）。并发模型 = **协作式延迟执行**（确定性、单线程）：spawn 立即返回句柄但不并发运行，join / detach / 程序结束时才执行到完成；cancel 置协作标志（运行点 = join/detach/程序结束）；未 join/未 detach 线程作用域退出 → 根回收队列，程序结束运行。三后端（interp / IR / 字节码）一致；**原生为子集边界**（spawn 需函数引用 FnRef，原生 ABI 未支持，Phase 8；`error.NotCallable` 响亮拒绝，不静默误编译——G4b 定案 A）。**以下四模式类型 / Future / async-await / @atomic / 通道均仍属第三块 E2 未实现**（示例 76–80 / 37–39 相应保持失败）。
+> **组 G 已提前落地 E2.2 线程生命周期（2026-08-17，第二部分）**：`spawn(f, args...) o Thread(T)` / `join() !T` / `cancel() !void` / `is_done() bool` / `detach()` + 每线程 alloc（Q8）+ 捕获规则静态检查（Q18 绑定/逃逸 + Q19 冻结窗口）。并发模型 = **协作式延迟执行**（确定性、单线程）：spawn 立即返回句柄但不并发运行，join / detach / 程序结束时才执行到完成；cancel 置协作标志（运行点 = join/detach/程序结束）；未 join/未 detach 线程作用域退出 → 根回收队列，程序结束运行。三后端（interp / IR / 字节码）一致；**原生为子集边界**（spawn 需函数引用 FnRef，原生 ABI 未支持，Phase 8；`error.NotCallable` 响亮拒绝，不静默误编译——G4b 定案 A）。**组 E/F 已落地（2026-08-18）**：Future / async-await / 四模式类型 / @atomic / 通道均已在第三块 E2 实现——组 E（async/await + Io 事件循环）、组 F（四模式容器 + @atomic 协作式透明，ADR-0011 逆转；示例 37/76/77/78 转绿）；真 OS 并行与 `mutex` 仍 1.x。
 
 **线程访问模式 (Thread access pattern)**:
-多线程共享数据的**内建泛型类型族**（共享内存容器）：`OneToOne(T)`（单读单写）、`OneToMany(T)`（单读多写）、`ManyToOne(T)`（多读单写）、`ManyToMany(T)`（多读多写）。写者数量由类型名保证（单写者无锁路径、多写者互斥）；用泛型（脚本生成）插入数据类型。**内建共享特例（Q32）**：容器方法取 `*Self`（只读引用）、内部同步——并发安全由类型内部保证，不依赖指针自由约束；用户类型不可模拟。**通道方法（2026-08-13 Q-R12 定案）**：`send(v)` / `recv() T`——线程间数据传输（与 write/read 同源），四模式类型即线程间传输通道。**缓冲与阻塞（2026-08-14 定案）**：共享内存容器（write/read）**无容量概念**——write 不阻塞（直接写共享槽 + 内部同步）、read 阻塞到有值；通道（send/recv）为**有界队列**——容量构造时指定（`init(alloc, cap)`），send 满时阻塞、recv 空时阻塞；close 后 write/send 报错、try_read/try_recv 返回 null。
+✅ **已落地（组 F，2026-08-18，ADR-0011 逆转）**。多线程共享数据的**内建泛型类型族**（共享内存容器）：`OneToOne(T)`（单读单写）、`OneToMany(T)`（单读多写）、`ManyToOne(T)`（多读单写）、`ManyToMany(T)`（多读多写）。写者数量由类型名保证（单写者无锁路径、多写者互斥——**协作式单线程下四变体运行时行为一致，读者/写者数量为类型层契约**）；用泛型（脚本生成）插入数据类型。**内建共享特例（Q32）**：容器方法取 `*Self`（只读引用）、内部同步——并发安全由类型内部保证，不依赖指针自由约束；用户类型不可模拟。**通道方法（2026-08-13 Q-R12 定案）**：`send(v)` / `recv() T`——线程间数据传输（与 write/read 同源），四模式类型即线程间传输通道。**缓冲与阻塞（2026-08-14 定案，协作式映射）**：共享内存容器（write/read）**无容量概念**——write 队尾追加、read 空 → `error.Empty`；通道（send/recv）为**有界队列**——容量构造时指定（`init(alloc, cap)`），send 满 → `error.ChannelFull`、recv ≡ read；close 后 write/send 报 `error.Closed`、try_read 返回 null。
 _Avoid_: 裸 Mutex/通道二选一
 
 **线程所有权 (Thread ownership)**:

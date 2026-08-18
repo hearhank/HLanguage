@@ -70,7 +70,7 @@ examples/
 
 76-threads-edge · 77-producer-consumer · 78-task-dispatch · 79-retry · 80-batch-async · 90-thread-lifecycle
 
-> 90-thread-lifecycle（组 G，2026-08-17 落地）：E2.2 线程生命周期提前纳入——`spawn(f, args...)` / `join()` / `cancel()` / `is_done()` / `detach()`，协作式延迟执行（确定性单线程），每线程独立 alloc（Q8），值复制/global 捕获安全。四模式类型 / async / @atomic / mutex 仍留第三块。
+> 90-thread-lifecycle（组 G，2026-08-17 落地）：E2.2 线程生命周期提前纳入——`spawn(f, args...)` / `join()` / `cancel()` / `is_done()` / `detach()`，协作式延迟执行（确定性单线程），每线程独立 alloc（Q8），值复制/global 捕获安全。**四模式类型 / async / @atomic 已于第三块落地（组 E/F，2026-08-18——37/38/39/76/77/78/80 相应转绿）**；mutex 与真 OS 并行仍留 1.x。
 
 ## 05-tools 实用工具（81–85、91）
 

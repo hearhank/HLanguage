@@ -51,8 +51,8 @@ var hp: o *mut Point = box(p, alloc); // 装箱：值 → 堆引用（Q8，显�
 | 溢出 | `@addWithOverflow(a, b)` / `@subWithOverflow` / `@mulWithOverflow` | 返回元组 `(T, bool)`（value, overflow）；不受模式影响 |
 | 编译期 | `@compileError("msg")` | 显式编译失败（comptime/脚本用） |
 | FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明（Q-S4 定案；第三块 E3） |
-| 原子操作 | `@atomicLoad(T, p, order)` / `@atomicStore(T, p, v, order)` / `@atomicRmw(T, p, op, v, order)` | 无锁原语（Q-S3 定案；第三块 E2）；`op` = `.add`/`.sub`/`.exchange`/`.cmpxchg` 等 |
+| 原子操作 | `@atomicLoad(T, p, order)` / `@atomicStore(T, p, v, order)` / `@atomicRmw(T, p, op, v, order)` | 无锁原语（Q-S3 定案；**组 F 已落地，2026-08-18——协作式透明实现**：load = deref、store = 写穿、Rmw `op` = `.add`/`.sub`/`.exchange`（返回旧值），内存序求值后丢弃；`.cmpxchg` 等 1.x） |
 
-- **内存序（Q-S3 定案，C11 五序子集）**：`relaxed` / `acquire` / `release` / `acq_rel` / `seq_cst`——**默认 `seq_cst`**（弱序需显式写）；四模式类型内部实现基于这些原语
+- **内存序（Q-S3 定案，C11 五序子集）**：`relaxed` / `acquire` / `release` / `acq_rel` / `seq_cst`——**默认 `seq_cst`**（弱序需显式写）；四模式类型内部实现基于这些原语；**组 F 落地后**：协作式单线程无竞争，内存序求值后丢弃，真并发语义归 1.x
 - `@` 前缀不与用户标识符冲突；转换显式可见（「没有隐藏控制」）
 - 其余 Zig 内建（`@bitCast`/`@mulAdd` 等）按需在 1.x 扩展（K4/K10 等系统编程缺口见 `05-open-questions`）

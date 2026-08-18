@@ -2393,3 +2393,59 @@ fn g5_time_monotonic_consistent() {
 "#,
     );
 }
+
+#[test]
+fn f_four_mode_and_atomic_consistent() {
+    // 组 F（ADR-0011 逆转）：四模式共享容器 + @atomic 内建——interp == IR 双模式一致。
+    // 四模式：init(alloc[, cap]) 构造 / write·read FIFO / try_read 空→null /
+    // send·recv 有界通道 / close 后 write 报 error.Closed（丢弃不达根）。
+    // @atomic：store/load 写穿读回、Rmw add/sub/exchange 返回旧值。
+    // 协作式单线程下四变体运行时行为相同（读者/写者数量是类型层契约）。
+    assert_all_pass(
+        r#"
+[test] fn four_mode_fifo() !void {
+    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
+    ch.write(1);
+    ch.write(2);
+    try expect_eq(ch.read(), 1);
+    try expect_eq(ch.read(), 2);
+}
+[test] fn four_mode_try_read_null() !void {
+    var ch: o ManyToOne(i32) = ManyToOne(i32).init(alloc);
+    var v = ch.try_read();
+    try expect(v == null);
+    ch.write(9);
+    var v2 = ch.try_read();
+    try expect(v2 != null);
+    try expect_eq(v2.?, 9);
+}
+[test] fn four_mode_close() !void {
+    var ch: o OneToMany(i32) = OneToMany(i32).init(alloc);
+    ch.close();
+    ch.write(3); // 返回 error.Closed → 丢弃（M3.4：非尾语句错误值不达根）
+    ch.write(4);
+    var dummy: i32 = 0; // 尾语句须非错误值表达式（块值规则）
+}
+[test] fn four_mode_channel_cap() !void {
+    var ch: o ManyToMany(i32) = ManyToMany(i32).init(alloc, 2);
+    ch.send(5);
+    ch.send(6);
+    try expect_eq(ch.recv(), 5);
+    try expect_eq(ch.recv(), 6);
+}
+[test] fn atomic_store_load_rmw() !void {
+    var x: i64 = 42;
+    @atomicStore(i64, &x, 7, .seq_cst);
+    try expect_eq(@atomicLoad(i64, &x, .acquire), 7);
+    var old = @atomicRmw(i64, &x, .add, 5, .seq_cst);
+    try expect_eq(old, 7);
+    try expect_eq(@atomicLoad(i64, &x, .seq_cst), 12);
+    old = @atomicRmw(i64, &x, .sub, 2, .seq_cst);
+    try expect_eq(old, 12);
+    old = @atomicRmw(i64, &x, .exchange, 100, .seq_cst);
+    try expect_eq(old, 10);
+    try expect_eq(@atomicLoad(i64, &x, .seq_cst), 100);
+}
+"#,
+    );
+}
