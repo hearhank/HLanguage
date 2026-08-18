@@ -255,6 +255,9 @@ pub struct Interp {
     tcp_listeners: HashMap<i64, std::net::TcpListener>,
     /// G1（E3.1）：UDP socket 注册表（UdpSocket 值持 fd）
     udp_sockets: HashMap<i64, std::net::UdpSocket>,
+    /// G2（io 差异项）：Dir 句柄注册表（fd → 目录路径；list_dir 时按路径重读）
+    dirs: HashMap<i64, String>,
+    next_dir_fd: i64,
     next_net_fd: i64,
     /// 程序参数（M5.4：io.args()；由 CLI 注入，默认取进程参数）
     pub args: Vec<String>,
@@ -318,6 +321,8 @@ impl Interp {
             tcp_streams: HashMap::new(),
             tcp_listeners: HashMap::new(),
             udp_sockets: HashMap::new(),
+            dirs: HashMap::new(),
+            next_dir_fd: 1,
             next_net_fd: 1,
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
@@ -1393,6 +1398,10 @@ impl Interp {
         net_fields.insert("udp".into(), Value::class("Udp", HashMap::new()));
         f.insert("net".into(), Value::class("Net", net_fields));
         f.insert("runtime".into(), Value::str(runtime));
+        // G2（io 差异项）：io.stdout/io.stderr 独立字节流（write_all 写真实句柄；
+        // 类名 Stdout/Stderr 供 call_builtin_method 分派，无 fd 注册表）
+        f.insert("stdout".into(), Value::class("Stdout", HashMap::new()));
+        f.insert("stderr".into(), Value::class("Stderr", HashMap::new()));
         Value::class("Io", f)
     }
 
@@ -4577,7 +4586,23 @@ impl Interp {
                 }
                 Ok(Some(Value::str_bytes(out)))
             }
-            (Value::Str(_), "len") => Ok(Some(Value::Int(self_v.display().len() as i128))),
+            (Value::Str(s), "len") => Ok(Some(Value::Int(s.borrow().len() as i128))),
+            // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
+            (Value::Str(s), "to_upper") | (Value::Str(s), "to_lower") => {
+                let upper = field == "to_upper";
+                let data = s.borrow();
+                let out: Vec<u8> = data
+                    .iter()
+                    .map(|&b| {
+                        if upper {
+                            b.to_ascii_uppercase()
+                        } else {
+                            b.to_ascii_lowercase()
+                        }
+                    })
+                    .collect();
+                Ok(Some(Value::str_bytes(out)))
+            }
             (Value::Arr(_a), "len") => {
                 if let Value::Arr(a) = self_v {
                     Ok(Some(Value::Int(a.borrow().len() as i128)))
@@ -5044,6 +5069,12 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_file_method(m, &v, args, span)
             }
+            // G2（io 差异项）：Dir 类方法 list_dir(alloc) / close()（DirEntry 仅持字段，
+            // .name/.is_dir 走 eval_field，无需方法分派）
+            (Value::Class(c), m) if c.borrow().name == "Dir" => {
+                let v = Value::Class(c.clone());
+                self.call_dir_method(m, &v, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();
@@ -5053,6 +5084,24 @@ impl Interp {
                         let trimmed = line.trim_end_matches(['\n', '\r']);
                         Ok(Some(Value::str(trimmed)))
                     }
+                }
+            }
+            // G2（io 差异项）：io.stdout.write_all(data) / io.stderr.write_all(data)
+            // ——写真实标准输出/错误流（stdout/stderr 为独立字节流，Q 程序环境形态）
+            (Value::Class(c), "write_all") if c.borrow().name == "Stdout" => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                use std::io::Write;
+                match std::io::stdout().lock().write_all(&data) {
+                    Ok(_) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            (Value::Class(c), "write_all") if c.borrow().name == "Stderr" => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                use std::io::Write;
+                match std::io::stderr().lock().write_all(&data) {
+                    Ok(_) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
             // M5.4 程序环境：io.env(name)
@@ -6176,19 +6225,111 @@ impl Interp {
                     Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
-            // io.fs.list_dir(path)：目录条目名
+            // G2（io 差异项）：io.fs.list_dir(path) / io.fs.list_dir(&dir, alloc)
+            // ——返回 Vec(DirEntry)，每条 {name, is_dir}（不再只是名字数组）。
+            // 双形态：第一参为 Str（路径）或 Dir 值（句柄）；Dir 值经 deref_value 剥 Ptr。
             "list_dir" => {
+                let a0 = args
+                    .get(0)
+                    .ok_or_else(|| RtError::new("ArityMismatch", Some(span.clone())))?;
+                let v0 = self.eval(a0)?;
+                let v0 = self.deref_value(v0);
+                match &v0 {
+                    Value::Class(c) if c.borrow().name == "Dir" => {
+                        let fd = self.dir_fd(&v0, span)?;
+                        let path = self
+                            .dirs
+                            .get(&fd)
+                            .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                            .clone();
+                        let entries = self.list_dir_entries(&path)?;
+                        Ok(Some(entries))
+                    }
+                    Value::Str(s) => {
+                        let path = String::from_utf8_lossy(&s.borrow()).into_owned();
+                        let entries = self.list_dir_entries(&path)?;
+                        Ok(Some(entries))
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            // G2（io 差异项）：io.fs.open_dir(path) !Dir——目录句柄。
+            // 读校验成功则注册 fd→path（供 dir.list_dir / dir.close），返回 Dir 值。
+            "open_dir" => {
                 let path = self.eval_path_arg(args, 0, span)?;
                 match std::fs::read_dir(&path) {
-                    Ok(rd) => {
-                        let names: Vec<Value> = rd
-                            .flatten()
-                            .map(|e| Value::str(&e.file_name().to_string_lossy()))
-                            .collect();
-                        Ok(Some(Value::arr(names)))
+                    Ok(_) => {
+                        let fd = self.next_dir_fd;
+                        self.next_dir_fd += 1;
+                        self.dirs.insert(fd, path);
+                        let mut fields = HashMap::new();
+                        fields.insert("_fd".into(), Value::Int(fd as i128));
+                        Ok(Some(Value::class("Dir", fields)))
                     }
                     Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// G2（io 差异项）：枚举目录路径为 Vec(DirEntry)——每条 = {name: 文件名, is_dir: 是否目录}。
+    /// 供 io.fs.list_dir（路径/句柄双形态）与 dir.list_dir(alloc) 共用。
+    fn list_dir_entries(&mut self, path: &str) -> Result<Value> {
+        match std::fs::read_dir(path) {
+            Ok(rd) => {
+                let entries: Vec<Value> = rd
+                    .flatten()
+                    .map(|e| {
+                        let mut fields = HashMap::new();
+                        fields.insert("name".into(), Value::str(&e.file_name().to_string_lossy()));
+                        fields.insert(
+                            "is_dir".into(),
+                            Value::Bool(e.file_type().map(|t| t.is_dir()).unwrap_or(false)),
+                        );
+                        Value::class("DirEntry", fields)
+                    })
+                    .collect();
+                Ok(Value::arr(entries))
+            }
+            Err(e) => Ok(self.err_val(&self.io_error_name(&e))),
+        }
+    }
+
+    /// Dir 值 → 注册表 fd（_fd 字段；先 deref_value 剥 Ptr）
+    fn dir_fd(&self, v: &Value, span: &Span) -> Result<i64> {
+        match self.deref_value(v.clone()) {
+            Value::Class(c) if c.borrow().name == "Dir" => match c.borrow().fields.get("_fd") {
+                Some(Value::Int(fd)) => Ok(*fd as i64),
+                _ => Err(RtError::new("BadFd", Some(span.clone()))),
+            },
+            _ => Err(RtError::new("TypeError", Some(span.clone()))),
+        }
+    }
+
+    /// G2（io 差异项）：Dir 类方法分派——`dir.list_dir(alloc) !Vec(DirEntry)`
+    ///（重开枚举）/ `dir.close()`（注销句柄）。
+    fn call_dir_method(
+        &mut self,
+        field: &str,
+        v: &Value,
+        _args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let fd = self.dir_fd(v, span)?;
+        match field {
+            "list_dir" => {
+                let path = self
+                    .dirs
+                    .get(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                let entries = self.list_dir_entries(&path)?;
+                Ok(Some(entries))
+            }
+            "close" => {
+                self.dirs.remove(&fd);
+                Ok(Some(Value::Void))
             }
             _ => Ok(None),
         }

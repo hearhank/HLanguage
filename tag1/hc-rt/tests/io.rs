@@ -94,18 +94,83 @@ fn io_fs_append_rename_remove() {
 
 #[test]
 fn io_fs_list_dir() {
-    // F4：fs 余项——list_dir 目录条目名（目录由 Rust 侧预建）
-    std::fs::create_dir_all("hc_f4_dir").unwrap();
-    std::fs::write("hc_f4_dir/alpha.txt", b"").unwrap();
+    // G2（io 差异项）：list_dir → Vec(DirEntry)——每条含 name/is_dir（文件 → is_dir false）
+    // 注：各用例用独立目录名，避免 Rust 测试并行执行互相干扰
+    std::fs::create_dir_all("hc_g2_list_dir").unwrap();
+    std::fs::write("hc_g2_list_dir/alpha.txt", b"").unwrap();
     run_ok(
         "[test] fn t() !void {
-    var names = io.fs.list_dir(\"hc_f4_dir\");
-    try expect(names.len == 1);
-    try expect_eq_slices(names[0], \"alpha.txt\");
+    var entries = io.fs.list_dir(\"hc_g2_list_dir\");
+    try expect(entries.len == 1);
+    try expect_eq_slices(entries[0].name, \"alpha.txt\");
+    try expect(!entries[0].is_dir);
 }\n",
     );
-    let _ = std::fs::remove_file("hc_f4_dir/alpha.txt");
-    let _ = std::fs::remove_dir("hc_f4_dir");
+    let _ = std::fs::remove_file("hc_g2_list_dir/alpha.txt");
+    let _ = std::fs::remove_dir("hc_g2_list_dir");
+}
+
+#[test]
+fn io_fs_list_dir_subdir_is_dir() {
+    // G2（io 差异项）：DirEntry.is_dir——子目录条目 → true
+    std::fs::create_dir_all("hc_g2_dir_sub/sub").unwrap();
+    run_ok(
+        "[test] fn t() !void {
+    var entries = io.fs.list_dir(\"hc_g2_dir_sub\");
+    try expect(entries.len == 1);
+    try expect_eq_slices(entries[0].name, \"sub\");
+    try expect(entries[0].is_dir);
+}\n",
+    );
+    let _ = std::fs::remove_dir_all("hc_g2_dir_sub");
+}
+
+#[test]
+fn io_fs_open_dir() {
+    // G2（io 差异项）：open_dir !Dir → dir.list_dir(alloc) → dir.close()
+    // 另验 io.fs.list_dir(&dir, alloc) 句柄形态（deref_value 剥 Ptr）
+    std::fs::create_dir_all("hc_g2_open_dir").unwrap();
+    std::fs::write("hc_g2_open_dir/alpha.txt", b"").unwrap();
+    run_ok(
+        "[test] fn t() !void {
+    var dir = try io.fs.open_dir(\"hc_g2_open_dir\");
+    var entries = try dir.list_dir(alloc);
+    try expect(entries.len == 1);
+    try expect_eq_slices(entries[0].name, \"alpha.txt\");
+    try expect(!entries[0].is_dir);
+    var entries2 = try io.fs.list_dir(&dir, alloc);
+    try expect(entries2.len == 1);
+    try dir.close();
+    var dir2 = try io.fs.open_dir(\"hc_g2_open_dir\");
+    try dir2.close();
+}\n",
+    );
+    let _ = std::fs::remove_file("hc_g2_open_dir/alpha.txt");
+    let _ = std::fs::remove_dir("hc_g2_open_dir");
+}
+
+#[test]
+fn io_str_to_upper_lower() {
+    // G2（io 差异项）：Str.to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
+    run_ok(
+        "[test] fn t() !void {
+    try expect_eq_slices(\"HeLLo 123\".to_upper(), \"HELLO 123\");
+    try expect_eq_slices(\"HeLLo 123\".to_lower(), \"hello 123\");
+    try expect_eq_slices(\"abc\\xE9\".to_upper(), \"ABC\\xE9\");
+}\n",
+    );
+}
+
+#[test]
+fn io_stdout_stderr_streams() {
+    // G2（io 差异项）：io.stdout / io.stderr 独立字节流——write_all 写真实句柄返回 void
+    run_ok(
+        "[test] fn t() !void {
+    io.stdout.write_all(\"G2-stdout\\n\");
+    io.stderr.write_all(\"G2-stderr\\n\");
+    try expect(true);
+}\n",
+    );
 }
 
 #[test]
