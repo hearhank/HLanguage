@@ -64,10 +64,11 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - `io.fs.read_int(path) !i64` / `io.fs.write_int(path, v) !void`
 - **随机访问（2026-08-14 定案）**：`f.seek(offset: usize) !void`（绝对定位游标）/ `f.pos() usize`（当前偏移）/ `f.read_at(buf, offset) !usize` / `f.write_at(data, offset) !void`（定位读写，不改游标）
 - `io.fs.list_dir(&dir, alloc) !Vec(DirEntry)`（DirEntry：name / is_dir）
-- `io.net.connect(url) !Conn` / `io.net.get(url) !&[u8]` / `io.net.read_all(&conn, alloc)`
-- `io.net.listen(port) !Server` / `io.net.accept(&server) !Conn`
-- `io.net.read_frame(&conn, alloc) !&[u8]` / `io.net.write_frame(&conn, data) !void`（长度前缀帧）
-- **UDP（2026-08-14 定案，进 1.0）**：`io.net.udp.bind(port) !UdpSocket` / `send_to(&sock, addr, data) !void` / `recv_from(&sock, alloc) !(Addr, &[u8])`（元组多值返回）/ `close()`
+- `io.net.connect(host, port, alloc) !TcpConn` / `conn.read_all() !&[u8]` / `conn.write(data) !void` / `conn.shutdown() !void` / `conn.close()`——**Q20 双语**（命名空间形式 ≡ 实例形式）：`io.net.read_all(&conn, alloc)` / `io.net.write(&conn, data)` / `io.net.shutdown(&conn)` / `io.net.close(&conn)` / `io.net.local_port(&conn)`
+- `io.net.listen(host, port, alloc) !TcpListener` / `listener.accept() !TcpConn` / `listener.local_port() u16` / `listener.close()`——双语 `io.net.accept(&server) !Conn`（0 端口 = 临时端口，`local_port()` 取实际值）
+- **HTTP 客户端（G1，2026-08-18 落地）**：`io.net.get(url) !&[u8]`——仅 `http://`（https/TLS 未实现 → `error.InvalidUrl`）；非 200 状态 → `error.Http{code}`；体按 Content-Length 截取
+- **HTTP 服务端（G1）**：`io.net.listen(host, port, alloc)` + `accept` + `read_all`/`write`（HTTP 为应用协议层，服务端以原始请求行/头字节对上）
+- **UDP（2026-08-14 定案，进 1.0；G1 2026-08-18 落地）**：`io.net.udp.bind(port) !UdpSocket` / `io.net.udp.bind(host, port) !UdpSocket`（port 首参整型字面量即 `bind(0, alloc)` 亦归此）/ `sock.send_to(addr, data) !void` / `sock.recv_from(alloc) !(Addr, &[u8])` / `sock.local_port() u16` / `sock.close()`——**Q20 双语**：`io.net.udp.send_to(&sock, addr, data)` / `io.net.udp.recv_from(&sock, alloc)` / `io.net.udp.close(&sock)`；recv_from 返回 **2 元素数组 `[addr_str, data]`**（无 `Value::Tuple`，Q20 简化）；空队列 200ms 读超时 → `error.TimedOut`
 - `io.time.now() i64` / `io.time.sleep(ms) void`
 
 ### 集合与字符串（Q15 构造；String = u8[] 别名 Q3）

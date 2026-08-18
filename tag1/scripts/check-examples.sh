@@ -29,9 +29,10 @@
 #      组 E E2-E4 后：5 例的 `[test]` 异步断言已在双后端（interpret + compile）全绿——
 #      IR 侧 async fn 调用同步执行 + await 透传（子集边界）对齐纯函数结果；剩余 58
 #      mismatch 中 5 例的文件级 MISMATCH 来自 `main` 函数特性而非 async：四模式容器
-#      （37/76 行 26/29，ManyToMany/OneToOne——组 F 延迟 1.x）、io.net/JsonValue
-#      （38/80，G1 net 待）、Io.evented 原生构造器（39，interp-only E3）——58 保持，
-#      回落依赖 F/G 落地而非 E 组）
+#      （37/76 行 26/29，ManyToMany/OneToOne——组 F 延迟 1.x）、38/80（G1 net 已
+#      落地仍红：38 主函数旧 URL 形式 connect(url)/read_all(&conn) + JsonValue 类型
+#      未实现，80 主函数 https:// 网络不可达——仅 http:// 支持，均非 G1 范围）、
+#      Io.evented 原生构造器（39，interp-only E3）——58 保持，回落依赖 F/G 落地而非 E 组）
 #
 # 用法：bash tag1/scripts/check-examples.sh（工作目录不限，脚本自定位到 tag1/）
 set -euo pipefail

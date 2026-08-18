@@ -63,7 +63,7 @@
 | 序列化 schema 演进（版本/迁移钩子） | 05 #4 | ✅ 已定案（组 C E1.3，2026-08-18，见 05 #4 设计） |
 | 注册中心治理（冲突/审计/失联） | 05 #5 | E5.2 MVP 起步 |
 | 跨线程引用传递（Send/Sync 式静态标记） | 05 #6 | E6.1 静态标记 |
-| `io.stdout`/`io.stderr` 独立流、`list_dir → Vec(DirEntry)`、`String.to_upper`、`io.fs.open_dir/Dir`、UDP | 09 §2.2（第二部分标注归口） | E3.1/E3 落地 |
+| `io.stdout`/`io.stderr` 独立流、`list_dir → Vec(DirEntry)`、`String.to_upper`、`io.fs.open_dir/Dir` | 09 §2.2（第二部分标注归口） | E3.1/E3 落地 |
 | Table 多索引（M8 记录） | 07 §八未实现表 | E6.1 |
 | 原生 ABI 函数值/闭包（Phase 8 原生改造） | 组 G4b 定案 A | Phase 8 原生 ABI（E7 前端行 或 E6） |
 | 跨包全局链接 / IR 参考解释器跨包 NoFunction | 组 C3/C4 已知限制 | E3/E7 后端行 |
@@ -161,12 +161,14 @@
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| G1 | net 完整：UDP（bind/send_to/recv_from）+ HTTP 客户端/服务端 | net 测试绿（UDP + HTTP） | — | 2h |
+| ✅ G1 | net 完整：UDP（bind/send_to/recv_from）+ HTTP 客户端/服务端 | net 测试绿（UDP + HTTP） | — | 2h |
 | G2 | io 差异项补全：`stdout`/`stderr` 独立流、`list_dir → Vec(DirEntry)`、`String.to_upper`、`fs.open_dir/Dir` | io 测试绿（差异项） | — | 1.5h |
 | G3 | ipc：管道、共享内存 | ipc 测试绿 | — | 1.5h |
 | G4 | storage/archive：键值存储接口、数据库连接抽象、归档与压缩 | storage 测试绿 | — | 2h |
 | G5 | text/time/rng：正则等文本处理、时间与时区完整、伪随机数 | text/time/rng 测试绿 | — | 2h |
 | G6 | ffi：`extern fn` + `@cImport`（Q-S4 内建 C 解析器）+ C 指针外置 + 错误码映射 + `hc cc` | ffi 测试绿（端到端 C 链接） | — | 2h |
+
+> ✅ **G1 net 已完成（2026-08-18）**：UDP（`io.net.udp.bind(port)` / `bind(host, port)` + `send_to`/`recv_from`/`local_port`/`close`，Q20 双语命名空间形式）——UdpSocket 值持 fd 注册表，读超时 200ms → `error.TimedOut`（空队列不挂起测试）；recv_from 返回 2 元素数组 `[addr, data]`（无 `Value::Tuple`）。HTTP 客户端 `io.net.get(url)`（仅 `http://`，非 200 → `error.Http{code}`，体按 Content-Length 截取）；HTTP 服务端复用 `io.net.listen`+`accept`+`read_all`/`write`（HTTP 为应用协议层）。**Q20 双语补齐**：`io.net.read_all(&conn, alloc)` / `write` / `shutdown` / `close` / `local_port` / `accept(&server)` 命名空间形式 ≡ 实例方法（解引用剥 Ptr 委托）。hc-rt net.rs 直测 6（UDP 3 + HTTP 2 + TCP 双语 1）全绿；门禁基线不变（interpret 142/5/1、compile 58 mismatch——示例 38/80 仍文件级 MISMATCH：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达（仅 `http://` 支持），均非 G1 范围）。
 
 ### H. E4 系统编程（依赖 A4 + 05 缺口表）
 
@@ -216,7 +218,7 @@
 ## 4. 验收与门禁
 
 - **功能点级**：`cargo test` 相关套件绿 + 文档同步（本文件 §5 清单对应项）
-- **组级**：示例回归基线——现 interpret **142/5/1** + compile **58 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿（interpret 由 E1 前双解析失败转 142/5/1；5 项失败 = 四模式容器 37/76/77（组 F 延迟 1.x）+ 78/79 解析错误，非 E 组范围）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动；58 中 5 例（37/38/39/76/80）文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76、io.net/JsonValue 38/80（G1 net 待）、Io.evented 39（interp-only E3））
+- **组级**：示例回归基线——现 interpret **142/5/1** + compile **58 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿（interpret 由 E1 前双解析失败转 142/5/1；5 项失败 = 四模式容器 37/76/77（组 F 延迟 1.x）+ 78/79 解析错误，非 E 组范围）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动；58 中 5 例（37/38/39/76/80）文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76、**38/80（G1 net 已落地仍红：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达，仅 `http://` 支持）**、Io.evented 39（interp-only E3））
 - **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**留后续执行**（当前范围至 K4，K5/K6 不排程）
 
 ## 5. 文档同步清单

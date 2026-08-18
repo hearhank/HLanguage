@@ -253,6 +253,8 @@ pub struct Interp {
     /// M5.4 io.net：TCP 流/监听器注册表（TcpConn/TcpListener 值持 fd）
     tcp_streams: HashMap<i64, std::net::TcpStream>,
     tcp_listeners: HashMap<i64, std::net::TcpListener>,
+    /// G1（E3.1）：UDP socket 注册表（UdpSocket 值持 fd）
+    udp_sockets: HashMap<i64, std::net::UdpSocket>,
     next_net_fd: i64,
     /// 程序参数（M5.4：io.args()；由 CLI 注入，默认取进程参数）
     pub args: Vec<String>,
@@ -315,6 +317,7 @@ impl Interp {
             next_fd: 1,
             tcp_streams: HashMap::new(),
             tcp_listeners: HashMap::new(),
+            udp_sockets: HashMap::new(),
             next_net_fd: 1,
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
@@ -1384,7 +1387,11 @@ impl Interp {
         let mut f = HashMap::new();
         f.insert("fs".into(), Value::class("Fs", HashMap::new()));
         f.insert("time".into(), Value::class("Time", HashMap::new()));
-        f.insert("net".into(), Value::class("Net", HashMap::new()));
+        // G1（E3.1）：`io.net.udp` 子命名空间（bind/send_to/recv_from）——UdpSocket 方法
+        // 由实例方法分派（sock.send_to/recv_from/close），命名空间形式委托同实现。
+        let mut net_fields = HashMap::new();
+        net_fields.insert("udp".into(), Value::class("Udp", HashMap::new()));
+        f.insert("net".into(), Value::class("Net", net_fields));
         f.insert("runtime".into(), Value::str(runtime));
         Value::class("Io", f)
     }
@@ -5019,6 +5026,12 @@ impl Interp {
                 self.call_time_method(m, args, span)
             }
             (Value::Class(c), m) if c.borrow().name == "Net" => self.call_net_method(m, args, span),
+            // G1（E3.1）：UDP——`io.net.udp` 命名空间（bind）与 UdpSocket 实例方法
+            (Value::Class(c), m) if c.borrow().name == "Udp" => self.call_udp_ns_method(m, args, span),
+            (Value::Class(c), m) if c.borrow().name == "UdpSocket" => {
+                let v = Value::Class(c.clone());
+                self.call_udp_socket_method(m, &v, args, span)
+            }
             (Value::Class(c), m) if c.borrow().name == "TcpConn" => {
                 let v = Value::Class(c.clone());
                 self.call_conn_method(m, &v, args, span)
@@ -5628,6 +5641,8 @@ impl Interp {
         match e.kind() {
             std::io::ErrorKind::NotFound => "NotFound".into(),
             std::io::ErrorKind::PermissionDenied => "PermissionDenied".into(),
+            // G1（E3.1）：UDP recv_from 读超时（200ms）/ 非阻塞 WouldBlock → error.TimedOut
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => "TimedOut".into(),
             _ => "Io".into(),
         }
     }
@@ -5697,8 +5712,205 @@ impl Interp {
                     Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
+            // G1（E3.1）：io.net.get(url) !&[u8]——HTTP GET 客户端，返回响应体字节
+            "get" => {
+                let url = self.eval_str_arg(args, 0, span)?;
+                let url = String::from_utf8_lossy(&url).to_string();
+                match self.http_get(&url) {
+                    Ok(body) => Ok(Some(Value::str_bytes(body))),
+                    Err(name) => Ok(Some(self.err_val(&name))),
+                }
+            }
+            // Q20 双语：命名空间形式 io.net.read_all(&conn, alloc) ≡ conn.read_all(alloc)
+            //（write/shutdown/close/local_port 同构；第一个实参解引用剥 Ptr → 实例方法）
+            "read_all" | "write" | "shutdown" | "close" | "local_port" => {
+                let conn = self.eval(&args[0])?;
+                let conn = self.deref_value(conn);
+                self.call_conn_method(field, &conn, &args[1..], span)
+            }
+            // io.net.accept(&server) !Conn ≡ server.accept()
+            "accept" => {
+                let srv = self.eval(&args[0])?;
+                let srv = self.deref_value(srv);
+                self.call_listener_method("accept", &srv, &args[1..], span)
+            }
             _ => Ok(None),
         }
+    }
+
+    // ---------- G1（E3.1）UDP：io.net.udp 命名空间 + UdpSocket 实例方法 ----------
+
+    /// UDP 绑定的共享实现：`udp_bind(host, port)` → UdpSocket 值（fd 注册表）；
+    /// 读超时 200ms（recv_from 空队列 → error.TimedOut，不阻塞挂起测试）。
+    fn udp_bind(&mut self, host: &str, port: u16, span: &Span) -> Result<Value> {
+        let addr = format!("{host}:{port}");
+        match std::net::UdpSocket::bind(&addr) {
+            Ok(sock) => {
+                let _ = sock.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+                let fd = self.next_net_fd;
+                self.next_net_fd += 1;
+                self.udp_sockets.insert(fd, sock);
+                let mut f = HashMap::new();
+                f.insert("fd".into(), Value::Int(fd as i128));
+                Ok(Value::class("UdpSocket", f))
+            }
+            Err(e) => Err(RtError::new(&self.io_error_name(&e), Some(span.clone()))),
+        }
+    }
+
+    /// 解析 UDP 对端地址串 "host:port" → (host, port)。
+    fn parse_udp_addr(&self, s: &str, span: &Span) -> Result<(String, u16)> {
+        match s.rsplit_once(':') {
+            Some((host, port)) => match port.parse::<u16>() {
+                Ok(p) => Ok((host.to_string(), p)),
+                Err(_) => Err(RtError::new("InvalidAddress", Some(span.clone()))),
+            },
+            None => Err(RtError::new("InvalidAddress", Some(span.clone()))),
+        }
+    }
+
+    /// `io.net.udp` 命名空间方法：bind(port) / bind(host, port) !UdpSocket；
+    /// 命名空间形式 send_to(&sock, addr, data) / recv_from(&sock, alloc) / close(&sock)
+    /// 委托实例方法（Q20 双语）。
+    fn call_udp_ns_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "bind" => {
+                // bind(port) / bind(host, port) / bind(host, port, alloc)——args[0] 为
+                // 整型字面量 → port 首参（bind(0, alloc) 亦归此，alloc 忽略）
+                let is_port_first = matches!(args[0], Expr::IntLit { .. });
+                let (host, port_i) = if is_port_first {
+                    ("127.0.0.1".to_string(), 0)
+                } else if args.len() >= 2 {
+                    let h = self.eval_str_arg(args, 0, span)?;
+                    (String::from_utf8_lossy(&h).to_string(), 1)
+                } else {
+                    ("127.0.0.1".to_string(), 0)
+                };
+                let port = self.eval_int_arg(args, port_i, span)? as u16;
+                Ok(Some(self.udp_bind(&host, port, span)?))
+            }
+            "send_to" | "recv_from" | "close" => {
+                let sock = self.eval(&args[0])?;
+                let sock = self.deref_value(sock);
+                self.call_udp_socket_method(field, &sock, &args[1..], span)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// UdpSocket 实例方法：send_to(addr, data) !void / recv_from(alloc) ![addr, data] /
+    /// local_port() !u16 / close() !void。recv_from 空队列（200ms 读超时）→ error.TimedOut。
+    fn call_udp_socket_method(
+        &mut self,
+        field: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let fd = self.net_fd(v, span)?;
+        match field {
+            "send_to" => {
+                let addr = self.eval_str_arg(args, 0, span)?;
+                let addr = String::from_utf8_lossy(&addr).to_string();
+                let (host, port) = self.parse_udp_addr(&addr, span)?;
+                let data = self.eval_str_arg(args, 1, span)?;
+                let sock = self
+                    .udp_sockets
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match sock.send_to(&data, (host.as_str(), port)) {
+                    Ok(_) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            "recv_from" => {
+                let sock = self
+                    .udp_sockets
+                    .get_mut(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                let mut buf = vec![0u8; 65536];
+                match sock.recv_from(&mut buf) {
+                    Ok((n, peer)) => {
+                        buf.truncate(n);
+                        let addr = peer.to_string();
+                        Ok(Some(Value::arr(vec![
+                            Value::str(&addr),
+                            Value::str_bytes(buf),
+                        ])))
+                    }
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            "local_port" => {
+                let sock = self
+                    .udp_sockets
+                    .get(&fd)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?;
+                match sock.local_addr() {
+                    Ok(a) => Ok(Some(Value::Int(a.port() as i128))),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
+            "close" => {
+                self.udp_sockets.remove(&fd);
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// G1（E3.1）：HTTP GET 客户端——`http://host[:port][/path]` → TCP connect →
+    /// `GET {path} HTTP/1.1` + Host 头 → 读响应 → 按 Content-Length 提取体。
+    fn http_get(&self, url: &str) -> std::result::Result<Vec<u8>, String> {
+        let rest = url.strip_prefix("http://").ok_or_else(|| "InvalidUrl".to_string())?;
+        let (authority, path) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, "/"),
+        };
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p.parse::<u16>().map_err(|_| "InvalidUrl".to_string())?),
+            None => (authority.to_string(), 80u16),
+        };
+        let mut stream = std::net::TcpStream::connect((host.as_str(), port))
+            .map_err(|e| self.io_error_name(&e))?;
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| self.io_error_name(&e))?;
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .map_err(|e| self.io_error_name(&e))?;
+        // 状态行 + 头段由第一个空行分隔；体按 Content-Length 取（无则取空行后全部）
+        let head_end = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|i| i + 4)
+            .ok_or_else(|| "BadResponse".to_string())?;
+        let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+        let body = &raw[head_end..];
+        if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
+            // 非 200：体返回给调用方诊断（错误名 = Http{code}）
+            let code = head.split_whitespace().nth(1).unwrap_or("000").to_string();
+            return Err(format!("Http{code}"));
+        }
+        let mut len: Option<usize> = None;
+        for line in head.lines() {
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                if let Ok(n) = v.trim().parse::<usize>() {
+                    len = Some(n);
+                }
+            }
+        }
+        Ok(match len {
+            Some(n) => body[..n.min(body.len())].to_vec(),
+            None => body.to_vec(),
+        })
     }
 
     fn call_conn_method(
