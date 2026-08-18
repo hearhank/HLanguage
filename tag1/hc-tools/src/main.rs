@@ -1,8 +1,8 @@
 //! hc 工具链 CLI（M7.1：`hc build` / `hc run` / `hc test`——tag1 子集）
 //!
 //! - `hc run <file.hc>`：脚本模式（tree-walking 解释器，全语言）
-//! - `hc run <file.hbc>`：字节码 VM（M3.2，装载 HBC2 字节码复用 IR 语义；标量子集）
-//! - `hc run --ir <file.hc>`：IR 参考解释器（标量子集，与字节码 VM 同语义源）
+//! - `hc run <file.hbc>`：字节码 VM（M3.2，装载 HBC2 字节码复用 IR 语义；全语言）
+//! - `hc run --ir <file.hc>`：IR 参考解释器（全语言，与字节码 VM 同语义源；interp == IR）
 //! - `hc test [file.hc|dir]`：收集并运行 `test fn`，输出 [PASS]/[FAIL]/[SKIP] + 汇总
 //! - `hc build <file.hc>`：原生编译（M3.3 LLVM 后端，emit-.ll + `zig cc`）
 //! - `hc check <file.hc>`：仅词法/语法/装载检查
@@ -62,8 +62,8 @@ H 语言工具链（tag1 垂直切片）
 
 USAGE:
     hc run <file.hc>           运行脚本模式（解释执行）
-    hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；标量子集）
-    hc run --ir <file.hc>      用 IR 参考解释器运行（标量子集）
+    hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；全语言，同 IR）
+    hc run --ir <file.hc>      用 IR 参考解释器运行（全语言，interp == IR）
     hc test [--mode=interpret|compile] [file.hc|dir]
                               运行 test fn（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
     hc check <file.hc>         仅检查（词法/语法/装载）
@@ -922,7 +922,7 @@ fn build_file(path: &Path, dll: bool) -> ExitCode {
     }
 
     // 回退：真实 HBC2 字节码 + 平台启动器（zig cc 缺失；M3.2 字节码 VM）
-    eprintln!("[warn] 未检测到 zig cc——回退字节码 VM（M3.2 标量子集；原生后端需要 zig）");
+    eprintln!("[warn] 未检测到 zig cc——回退字节码 VM（M3.2 全语言；原生后端需要 zig）");
     if !siblings.is_empty() {
         eprintln!(
             "[warn] 检测到 {} 个同包兄弟文件——字节码回退仅编译入口文件，多文件需 zig 原生后端",
@@ -1434,7 +1434,7 @@ fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
     }
 }
 
-// ---------- `hc run --ir`：IR 参考解释器过渡模式（M3.2 字节码 VM 的过渡形态） ----------
+// ---------- `hc run --ir`：IR 参考解释器（与字节码 VM 共用唯一语义源，全语言） ----------
 
 /// G5/§8.3 Debug 泄漏检测：程序退出时报告泄漏清单（打印到 stderr；不改变退出码——
 /// 泄漏是资源缺陷，`hc test` 的通过判定仍以断言为准，报告作为 Debug 观测面）。

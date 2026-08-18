@@ -52,7 +52,7 @@ fn main(io: Io) !void {
 # 脚本模式（tree-walking 解释器，全语言）
 cargo run -p hc-tools -- run examples/hello.hc
 
-# 原生编译（LLVM IR + zig cc，M3.1–Phase 6 子集）
+# 原生编译（LLVM IR + zig cc；原生后端未全标准库，边界见 ADR-0004）
 cargo run -p hc-tools -- build examples/hello.hc
 ```
 
@@ -60,8 +60,8 @@ cargo run -p hc-tools -- build examples/hello.hc
 
 ```
 hc run <file.hc>           运行脚本模式（解释执行）
-hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；M3.1–Phase 6 子集）
-hc run --ir <file.hc>      用 IR 参考解释器运行（M3.1–Phase 6 子集）
+hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；全语言，同 IR）
+hc run --ir <file.hc>      用 IR 参考解释器运行（全语言，interp == IR）
 hc test [--mode=interpret|compile] [file.hc|dir]
                           运行 `[test]` 测试函数（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
 hc check <file.hc>         仅检查（词法/语法/装载）
@@ -95,9 +95,9 @@ hc --help
 | 后端 | 入口 | 覆盖 |
 |---|---|---|
 | tree-walking 解释器 | `hc run <file.hc>`（默认） | **全语言** |
-| IR 参考解释器 | `hc run --ir <file.hc>` | M3.1–Phase 6 子集（唯一语义源） |
-| 字节码 VM | `hc run <file.hbc>`（HBC2） | M3.1–Phase 6 子集，复用 IR 语义 |
-| LLVM 原生 | `hc build <file.hc>` | M3.1–Phase 6 子集（emit-.ll + zig cc） |
+| IR 参考解释器 | `hc run --ir <file.hc>` | **全语言**（含 G1-G5 标准库；唯一语义源） |
+| 字节码 VM | `hc run <file.hbc>`（HBC2） | **全语言**（同 IR，复用 `run_ir`） |
+| LLVM 原生 | `hc build <file.hc>` | 未全标准库（`compile mismatch ≤ 52` 边界，ADR-0004） |
 
 四个后端共享同一语义源（`IrModule` + `run_ir`，ADR-0004），禁止后端私语义 —— 这是「双模式一致」承诺的根基。
 
