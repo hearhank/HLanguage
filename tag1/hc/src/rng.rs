@@ -1,0 +1,12 @@
+//! 伪随机数（G5 io.rng）——xorshift64* 纯函数共享层（ADR-0004 语义唯一源）
+
+/// xorshift64*——`io.rng.next` 底层；state=0 时原地保持 0（调用方 seed 守卫：
+/// 0 种子回退默认常量）。
+pub fn xorshift64(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+}

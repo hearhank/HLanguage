@@ -14,6 +14,9 @@ pub mod ir;
 pub mod lexer;
 pub mod llvm;
 pub mod parser;
+pub mod regex;
+pub mod rle;
+pub mod rng;
 pub mod semantic;
 pub mod token;
 
