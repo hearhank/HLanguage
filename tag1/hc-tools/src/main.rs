@@ -79,6 +79,8 @@ USAGE:
     hc fmt <file.hc|dir> [--check]
                               格式化 .hc 源码（token 级重排，AST 保真；默认原地写回，
                               --check 仅报告将改动的文件，组 I1）
+    hc lex <file.hc>          转储 token 流（K1 对照：`{start} {end} {line} {col} {kind:?}`，
+                              与 H 版 lexer 输出逐行 diff）
     hc --version
     hc --help
 ";
@@ -302,6 +304,10 @@ fn run_cli() -> ExitCode {
             // I1：`hc fmt <file.hc|dir> [--check]`——token 级格式化，AST 保真
             fmt_command(&args[2..])
         }
+        "lex" => {
+            // K1：`hc lex <file.hc>`——转储 token 流（Rust 参考实现，H 版 lexer 对照基准）
+            lex_command(&args[2..])
+        }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(2)
@@ -314,6 +320,29 @@ fn read_source(path: &Path) -> Result<String, ExitCode> {
         eprintln!("error: cannot read {}: {e}", path.display());
         ExitCode::FAILURE
     })
+}
+
+/// K1：`hc lex <file.hc>`——Rust 参考 lexer 输出 token 流。
+///
+/// 每 token 一行，格式 `{start} {end} {line} {col} {kind:?}`（`kind:?` 为 Rust Debug 形态，
+/// 如 `KwFn` / `Ident("main")` / `Str("hi\\n")` / `Char(120)`）。H 版 lexer（stage1/lexer.hc）
+/// 输出同一格式，对照测试（hc-tools/tests/k1_lexer.rs）逐行 diff。
+fn lex_command(args: &[String]) -> ExitCode {
+    let Some(path_str) = args.first() else {
+        eprintln!("error: `hc lex` requires a file\n\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    let source = match read_source(Path::new(path_str)) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    for tok in hc::lexer::lex(&source) {
+        println!(
+            "{} {} {} {} {:?}",
+            tok.span.start, tok.span.end, tok.span.line, tok.span.col, tok.kind
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /// 旧字节码镜像魔数（tag1 过渡形态：镜像 = 魔数 + 源码；仅保留读取兼容，
