@@ -226,6 +226,19 @@ enum TypeDef {
     },
 }
 
+/// G3（E3.2 ipc）：匿名管道——读写两端共享同一缓冲（写端写追加、读端读排空；
+/// 协作式模型下 read 不阻塞，空缓冲返回空切片；writer_open 标记写端关闭）
+struct Pipe {
+    buf: Vec<u8>,
+    writer_open: bool,
+}
+
+/// G3（E3.2 ipc）：命名共享内存——进程内注册表形态（定长字节区，id 定位；
+/// write 覆盖内容截断到 size，read 取当前内容）
+struct Shm {
+    data: Vec<u8>,
+}
+
 pub struct Interp {
     pub source: String,
     funcs: HashMap<String, Vec<FnDef>>,
@@ -257,6 +270,11 @@ pub struct Interp {
     udp_sockets: HashMap<i64, std::net::UdpSocket>,
     /// G2（io 差异项）：Dir 句柄注册表（fd → 目录路径；list_dir 时按路径重读）
     dirs: HashMap<i64, String>,
+    /// G3（E3.2 ipc）：管道/共享内存注册表（Pipe 两端持同一 pipe_id；Shm 命名区域）
+    pipes: HashMap<i64, Rc<RefCell<Pipe>>>,
+    shms: HashMap<i64, Rc<RefCell<Shm>>>,
+    next_pipe_fd: i64,
+    next_shm_fd: i64,
     next_dir_fd: i64,
     next_net_fd: i64,
     /// 程序参数（M5.4：io.args()；由 CLI 注入，默认取进程参数）
@@ -322,6 +340,10 @@ impl Interp {
             tcp_listeners: HashMap::new(),
             udp_sockets: HashMap::new(),
             dirs: HashMap::new(),
+            pipes: HashMap::new(),
+            shms: HashMap::new(),
+            next_pipe_fd: 1,
+            next_shm_fd: 1,
             next_dir_fd: 1,
             next_net_fd: 1,
             args: std::env::args().skip(1).collect(),
@@ -1402,6 +1424,9 @@ impl Interp {
         // 类名 Stdout/Stderr 供 call_builtin_method 分派，无 fd 注册表）
         f.insert("stdout".into(), Value::class("Stdout", HashMap::new()));
         f.insert("stderr".into(), Value::class("Stderr", HashMap::new()));
+        // G3（E3.2 ipc）：`io.ipc.pipe()` / `io.ipc.shm(name, size)`——进程内 IPC 原语
+        //（管道/共享内存；Pipe/Shm 方法由类名分派，见 call_pipe_method/call_shm_method）
+        f.insert("ipc".into(), Value::class("Ipc", HashMap::new()));
         Value::class("Io", f)
     }
 
@@ -5075,6 +5100,20 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_dir_method(m, &v, args, span)
             }
+            // G3（E3.2 ipc）：io.ipc 命名空间 pipe()/shm()；Pipe 两端/Shm 实例方法
+            (Value::Class(c), m) if c.borrow().name == "Ipc" => self.call_ipc_method(m, args, span),
+            (Value::Class(c), m) if c.borrow().name == "PipeReader" => {
+                let v = Value::Class(c.clone());
+                self.call_pipe_method(true, m, &v, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "PipeWriter" => {
+                let v = Value::Class(c.clone());
+                self.call_pipe_method(false, m, &v, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "Shm" => {
+                let v = Value::Class(c.clone());
+                self.call_shm_method(m, &v, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();
@@ -6329,6 +6368,171 @@ impl Interp {
             }
             "close" => {
                 self.dirs.remove(&fd);
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // ---------- G3（E3.2 ipc）：管道 + 共享内存 ----------
+
+    /// io.ipc 命名空间分派：`pipe()`（匿名管道 → `[reader, writer]`）/ `shm(name, size) !Shm`
+    ///（命名共享内存）。进程内 IPC 原语——真实 OS 进程/共享内存依赖 FFI（G6 跳过）与
+    /// 进程模块（无），以注册表 + 类名分派承载（Q20 双语），协作式模型下读写均不阻塞。
+    fn call_ipc_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "pipe" => {
+                let pid = self.next_pipe_fd;
+                self.next_pipe_fd += 1;
+                self.pipes.insert(
+                    pid,
+                    Rc::new(RefCell::new(Pipe {
+                        buf: Vec::new(),
+                        writer_open: true,
+                    })),
+                );
+                let reader = {
+                    let mut fld = HashMap::new();
+                    fld.insert("pipe".into(), Value::Int(pid as i128));
+                    Value::class("PipeReader", fld)
+                };
+                let writer = {
+                    let mut fld = HashMap::new();
+                    fld.insert("pipe".into(), Value::Int(pid as i128));
+                    Value::class("PipeWriter", fld)
+                };
+                Ok(Some(Value::arr(vec![reader, writer])))
+            }
+            "shm" => {
+                // name 参数当前仅用于形态约束（命名共享内存的标识语义），区域本体按 id 注册
+                let _name = self.eval_path_arg(args, 0, span)?;
+                let size = self.eval_int_arg(args, 1, span)?;
+                let size = size.max(0) as usize;
+                let id = self.next_shm_fd;
+                self.next_shm_fd += 1;
+                self.shms.insert(id, Rc::new(RefCell::new(Shm { data: vec![0u8; size] })));
+                let mut fld = HashMap::new();
+                fld.insert("shm".into(), Value::Int(id as i128));
+                Ok(Some(Value::class("Shm", fld)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Pipe 值 → 管道 id（`pipe` 字段；先 deref_value 剥 Ptr）
+    fn pipe_id_of(&self, v: &Value, span: &Span) -> Result<i64> {
+        match self.deref_value(v.clone()) {
+            Value::Class(c) if c.borrow().name == "PipeReader" || c.borrow().name == "PipeWriter" => {
+                match c.borrow().fields.get("pipe") {
+                    Some(Value::Int(id)) => Ok(*id as i64),
+                    _ => Err(RtError::new("BadFd", Some(span.clone()))),
+                }
+            }
+            _ => Err(RtError::new("TypeError", Some(span.clone()))),
+        }
+    }
+
+    /// Pipe 类方法分派（is_reader 区分读写端）：写端 `write(data) !void` / `close() !void`；
+    /// 读端 `read(alloc) !&[u8]`（排空可读字节；空且写端开 → 空切片，不阻塞）/
+    /// `read_all(alloc) !&[u8]` / `is_closed() bool` / `close() !void`。
+    /// `close` 幂等：读端 close 注销注册表（管道随之拆除）、写端 close 仅置 writer_open=false；
+    /// 管道已注销后再 close 为 no-op（不报 BadFd）。
+    fn call_pipe_method(
+        &mut self,
+        is_reader: bool,
+        field: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let pid = self.pipe_id_of(v, span)?;
+        match field {
+            "close" => {
+                if let Some(pipe) = self.pipes.get(&pid).cloned() {
+                    if is_reader {
+                        self.pipes.remove(&pid);
+                    } else {
+                        pipe.borrow_mut().writer_open = false;
+                    }
+                }
+                Ok(Some(Value::Void))
+            }
+            "write" if !is_reader => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                let pipe = self
+                    .pipes
+                    .get(&pid)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                pipe.borrow_mut().buf.extend_from_slice(&data);
+                Ok(Some(Value::Void))
+            }
+            "read" | "read_all" if is_reader => {
+                let pipe = self
+                    .pipes
+                    .get(&pid)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                let out = std::mem::take(&mut pipe.borrow_mut().buf);
+                Ok(Some(Value::str_bytes(out)))
+            }
+            "is_closed" if is_reader => {
+                let pipe = self
+                    .pipes
+                    .get(&pid)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                let closed = !pipe.borrow().writer_open;
+                Ok(Some(Value::Bool(closed)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Shm 值 → 共享内存 id（`shm` 字段）
+    fn shm_id_of(&self, v: &Value, span: &Span) -> Result<i64> {
+        match self.deref_value(v.clone()) {
+            Value::Class(c) if c.borrow().name == "Shm" => match c.borrow().fields.get("shm") {
+                Some(Value::Int(id)) => Ok(*id as i64),
+                _ => Err(RtError::new("BadFd", Some(span.clone()))),
+            },
+            _ => Err(RtError::new("TypeError", Some(span.clone()))),
+        }
+    }
+
+    /// Shm 类方法分派：`write(data) !void`（覆盖内容，截断到 size）/ `read(alloc) !&[u8]`
+    /// / `close() !void`（注销句柄）。
+    fn call_shm_method(
+        &mut self,
+        field: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let id = self.shm_id_of(v, span)?;
+        let shm = self
+            .shms
+            .get(&id)
+            .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+            .clone();
+        let mut s = shm.borrow_mut();
+        match field {
+            "write" => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                let cap = s.data.capacity();
+                let take = data.len().min(cap);
+                s.data.clear();
+                s.data.extend_from_slice(&data[..take]);
+                Ok(Some(Value::Void))
+            }
+            "read" => Ok(Some(Value::str_bytes(s.data.clone()))),
+            "close" => {
+                self.shms.remove(&id);
                 Ok(Some(Value::Void))
             }
             _ => Ok(None),

@@ -163,7 +163,7 @@
 |---|---|---|---|---|
 | ✅ G1 | net 完整：UDP（bind/send_to/recv_from）+ HTTP 客户端/服务端 | net 测试绿（UDP + HTTP） | — | 2h |
 | ✅ G2 | io 差异项补全：`stdout`/`stderr` 独立流、`list_dir → Vec(DirEntry)`、`String.to_upper`、`fs.open_dir/Dir` | io 测试绿（差异项） | — | 1.5h |
-| G3 | ipc：管道、共享内存 | ipc 测试绿 | — | 1.5h |
+| ✅ G3 | ipc：管道、共享内存 | ipc 测试绿 | — | 1.5h |
 | G4 | storage/archive：键值存储接口、数据库连接抽象、归档与压缩 | storage 测试绿 | — | 2h |
 | G5 | text/time/rng：正则等文本处理、时间与时区完整、伪随机数 | text/time/rng 测试绿 | — | 2h |
 | G6 | ffi：`extern fn` + `@cImport`（Q-S4 内建 C 解析器）+ C 指针外置 + 错误码映射 + `hc cc` | ffi 测试绿（端到端 C 链接） | — | 2h |
@@ -171,6 +171,8 @@
 > ✅ **G1 net 已完成（2026-08-18）**：UDP（`io.net.udp.bind(port)` / `bind(host, port)` + `send_to`/`recv_from`/`local_port`/`close`，Q20 双语命名空间形式）——UdpSocket 值持 fd 注册表，读超时 200ms → `error.TimedOut`（空队列不挂起测试）；recv_from 返回 2 元素数组 `[addr, data]`（无 `Value::Tuple`）。HTTP 客户端 `io.net.get(url)`（仅 `http://`，非 200 → `error.Http{code}`，体按 Content-Length 截取）；HTTP 服务端复用 `io.net.listen`+`accept`+`read_all`/`write`（HTTP 为应用协议层）。**Q20 双语补齐**：`io.net.read_all(&conn, alloc)` / `write` / `shutdown` / `close` / `local_port` / `accept(&server)` 命名空间形式 ≡ 实例方法（解引用剥 Ptr 委托）。hc-rt net.rs 直测 6（UDP 3 + HTTP 2 + TCP 双语 1）全绿；门禁基线不变（interpret 142/5/1、compile 58 mismatch——示例 38/80 仍文件级 MISMATCH：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达（仅 `http://` 支持），均非 G1 范围）。
 
 > ✅ **G2 io 差异项补全 已完成（2026-08-18）**：`io.stdout` / `io.stderr` 独立字节流（Stdout/Stderr 类值，`write_all(data)` 写真实句柄，返回 void；无 fd 注册表，类名分派）；`String.to_upper` / `to_lower`（ASCII 大小写转换，非 ASCII 字节不变）；`io.fs.list_dir` 改为返回 `Vec(DirEntry)`——每条 `{name, is_dir}`（不再裸文件名数组），路径形态 `list_dir(path)` 与句柄形态 `list_dir(&dir, alloc)` 双支持（Dir 值 deref 剥 Ptr）；`io.fs.open_dir(path) !Dir`（读校验 → fd→路径注册表，`dir.list_dir(alloc)` 重开枚举 / `dir.close()` 注销）。hc-rt io.rs 直测 9→13（新增 open_dir / DirEntry.is_dir / to_upper_lower / stdout-stderr 4 例，原 list_dir 改 DirEntry 形态）；示例 82-directory / 85-grep-tool 主函数（此前按 G2 目标形态书写、open_dir 未实现时仅测试占位绿）现可实际运行。门禁基线不变（interpret 142/5/1、compile 58 mismatch）。
+
+> ✅ **G3 ipc 已完成（2026-08-18）**：进程内 IPC 原语——`io.ipc.pipe() !(PipeReader, PipeWriter)`（匿名管道 → 2 元素数组 `[reader, writer]`，同 UDP recv_from 约定）：写端 `writer.write(data) !void` / `writer.close() !void`（置写端关闭标记）；读端 `reader.read(alloc) !&[u8]`（排空可读字节；空且写端开 → 空切片，不阻塞——协作式模型）/ `read_all(alloc)` / `is_closed() bool`（写端已关）/ `close() !void`（注销管道；close 幂等，管道已拆除后再 close 为 no-op）。`io.ipc.shm(name, size) !Shm`（命名共享内存，定长字节区）：`shm.write(data) !void`（覆盖内容、截断到 size）/ `shm.read(alloc) !&[u8]` / `shm.close() !void`。设计取舍：真实 OS 进程/共享内存依赖 FFI 与进程模块 → 1.x；Interp 全局 pipe/shm 注册表（`Rc<RefCell<>>`），经 `spawn` 传 Pipe 值即可在 H 线程间传数据（协作式模型下无阻塞读）。hc-rt ipc.rs 直测 6 全绿（pipe 流/累积排空/关闭语义/线程生产者 + shm 流/定长截断）；门禁基线不变（interpret 142/5/1、compile 58 mismatch——无示例用 ipc）。
 
 ### H. E4 系统编程（依赖 A4 + 05 缺口表）
 

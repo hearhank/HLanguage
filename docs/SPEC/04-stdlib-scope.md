@@ -70,6 +70,7 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - **HTTP 服务端（G1）**：`io.net.listen(host, port, alloc)` + `accept` + `read_all`/`write`（HTTP 为应用协议层，服务端以原始请求行/头字节对上）
 - **UDP（2026-08-14 定案，进 1.0；G1 2026-08-18 落地）**：`io.net.udp.bind(port) !UdpSocket` / `io.net.udp.bind(host, port) !UdpSocket`（port 首参整型字面量即 `bind(0, alloc)` 亦归此）/ `sock.send_to(addr, data) !void` / `sock.recv_from(alloc) !(Addr, &[u8])` / `sock.local_port() u16` / `sock.close()`——**Q20 双语**：`io.net.udp.send_to(&sock, addr, data)` / `io.net.udp.recv_from(&sock, alloc)` / `io.net.udp.close(&sock)`；recv_from 返回 **2 元素数组 `[addr_str, data]`**（无 `Value::Tuple`，Q20 简化）；空队列 200ms 读超时 → `error.TimedOut`
 - `io.time.now() i64` / `io.time.sleep(ms) void`
+- **ipc（G3 2026-08-18 落地；进程内 IPC 原语——真实 OS 进程/共享内存依赖 FFI 与进程模块，1.x）**：`io.ipc.pipe() !(PipeReader, PipeWriter)`（匿名管道 → **2 元素数组 `[reader, writer]`**，同 UDP recv_from 约定）——写端 `writer.write(data) !void` / `writer.close() !void`（置写端关闭标记）；读端 `reader.read(alloc) !&[u8]`（排空可读字节；空且写端开 → 空切片，不阻塞——协作式模型）/ `reader.read_all(alloc) !&[u8]` / `reader.is_closed() bool`（写端已关）/ `reader.close() !void`（注销管道；**close 幂等**，管道已拆除后再 close 为 no-op）。`io.ipc.shm(name, size) !Shm`（命名共享内存，定长字节区）——`shm.write(data) !void`（覆盖内容、截断到 size）/ `shm.read(alloc) !&[u8]` / `shm.close() !void`。跨执行上下文：pipe/shm 注册表为 Interp 全局，经 `spawn` 传 Pipe 值可在 H 线程间传数据。
 
 ### 集合与字符串（Q15 构造；String = u8[] 别名 Q3）
 
