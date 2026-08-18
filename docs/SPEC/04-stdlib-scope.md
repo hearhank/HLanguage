@@ -109,7 +109,7 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 
 ## 系统编程扩展（内核/驱动方向，2026-08-14 评估补充）
 
-内核编程场景的标准库缺口——可自建，但应纳入 std；**1.x 候选，不阻塞 1.0 用户态系统编程**。前提：需先补齐 `05-open-questions-and-risks.md` 系统编程缺口 K1–K6（union/volatile/asm/int↔ptr/符号导出/裸机），否则以下模块在内核场景不可用。
+内核编程场景的标准库缺口——可自建，但应纳入 std；**1.x 候选，不阻塞 1.0 用户态系统编程**。前提：需先补齐 `05-open-questions-and-risks.md` 系统编程缺口 K1–K6（union/volatile/asm/int↔ptr/符号导出/裸机），否则以下模块在内核场景不可用。**2026-08-18 组 H（ADR-0014）落地 K1/K2/K4/K5**（无标签 union / `@volatileLoad/Store` / `@ptrFromInt`/`@intFromPtr` / `export fn`）——`mem.bitmap`/`collections.intrusive`/`io.ring`/`mem.page` 的底层机器前提已就绪；剩 K3 asm 与 K6 裸机（1.x），本表模块仍列 1.x。
 
 | 模块 | 内容 | 内核场景 |
 |---|---|---|

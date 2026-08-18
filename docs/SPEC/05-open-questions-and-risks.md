@@ -80,18 +80,18 @@ from_bytes(b):
 
 ## 系统编程缺口（内核编程场景，2026-08-14 评估登记）
 
-以「完成操作系统内核编程」为验收场景的评估结论：**数据结构本体足够**（class/Continuous/packed/align/枚举/切片/指针自由/位运算/原子原语/显式分配器/error union）；**6 项底层机器能力缺失使 1.0 无法承担内核编程**（评估全文见 2026-08-14 会话记录）。落点：本表 + `04-stdlib-scope.md` 系统编程扩展 + `02-milestones.md` 缺口小节。
+以「完成操作系统内核编程」为验收场景的评估结论：**数据结构本体足够**（class/Continuous/packed/align/枚举/切片/指针自由/位运算/原子原语/显式分配器/error union）；**6 项底层机器能力缺失使 1.0 无法承担内核编程**（评估全文见 2026-08-14 会话记录）。**2026-08-18 组 H（ADR-0014）落地 4/6**：K1 无标签 union / K2 volatile / K4 整数↔指针 / K5 符号导出均已就绪；剩 K3 asm 与 K6 freestanding（1.x）。落点：本表 + `04-stdlib-scope.md` 系统编程扩展 + `02-milestones.md` 缺口小节。
 
-### 阻断性缺口（6 项——内核无法开工）
+### 阻断性缺口（6 项——内核无法开工；2026-08-18 组 H 落地 4/6）
 
 | # | 缺口 | 内核场景 | 状态/建议 |
 |---|---|---|---|
-| K1 | **无标签 union（裸内存双关）** | 页表项/寄存器多视图、调度上下文、FXSAVE 区、C 头中 union 对接（`@cImport` 无法映射）——合一式 enum 带判别标签，不能在同一内存上叠加多种解释 | 需设计决策（union 语义：无标签、字段重叠）；建议 1.0 纳入（M2 类型系统） |
-| K2 | **volatile 访问** | MMIO 寄存器（读清标志/轮询就绪位）、设备内存写顺序——无 volatile 会被 LLVM 后端优化掉（视为无副作用） | 机制级：`@volatileLoad`/`@volatileStore` 或 volatile 类型修饰；建议 1.0 纳入（M4 语义 + M5 后端） |
+| K1 | **无标签 union（裸内存双关）** | 页表项/寄存器多视图、调度上下文、FXSAVE 区、C 头中 union 对接（`@cImport` 无法映射）——合一式 enum 带判别标签，不能在同一内存上叠加多种解释 | ✅ **已落地（H1，2026-08-18 ADR-0014）**：无标签 union——字段内存重叠、无判别标签；见 06-02 类型 |
+| K2 | **volatile 访问** | MMIO 寄存器（读清标志/轮询就绪位）、设备内存写顺序——无 volatile 会被 LLVM 后端优化掉（视为无副作用） | ✅ **已落地（H2，2026-08-18 ADR-0014）**：机制级 `@volatileLoad`/`@volatileStore`——LLVM `load volatile`/`store volatile`（防优化掉）；见 06-04 `@` 内建表 |
 | K3 | **内联汇编 asm** | cli/sti、hlt、cpuid、rdmsr/wrmsr、CR3 切换、上下文切换、原子指令扩展（cmpxchg16b） | 已标注 1.x（h-vs-rust 表）；需设计语法（Zig asm 式）；1.0 明确不支持特权指令 |
-| K4 | **整数 ↔ 指针转换**（`@ptrFromInt`/`@intFromPtr`） | 物理地址 → 虚拟指针（MMIO 基址）、页框号 ↔ 地址换算、位图索引——`@ptrCast` 仅指针↔指针 | 机制级：补两个 @ 内建；建议 1.0 纳入（M4/M5） |
-| K5 | **符号导出与段控制** | `_start` 入口导出、IDT 条目固定段布局、页表页对齐 | 机制级：`export fn`（目前仅 `extern fn` 导入）+ 链接脚本钩子；建议 1.0 纳入（M8） |
-| K6 | **freestanding（裸机模式）** | 无 OS/无 libc/无默认分配器；自定义 panic/启动代码——标准库全部假设有 OS（Io/spawn/默认分配器回退） | 需设计决策：无 std 目标（LLVM 后端专用）；1.0 范围裁决 |
+| K4 | **整数 ↔ 指针转换**（`@ptrFromInt`/`@intFromPtr`） | 物理地址 → 虚拟指针（MMIO 基址）、页框号 ↔ 地址换算、位图索引——`@ptrCast` 仅指针↔指针 | ✅ **已落地（H3，2026-08-18 ADR-0014）**：`@ptrFromInt(addr) *mut Unknown` / `@intFromPtr(p) usize`——地址注册表 + 匿名槽（interp/IR）与 i128 载荷 tag 交换（原生）；见 06-04 `@` 内建表 |
+| K5 | **符号导出与段控制** | `_start` 入口导出、IDT 条目固定段布局、页表页对齐 | ✅ **已落地（H4，2026-08-18 ADR-0014）**：`export fn`——原生符号级导出（外部 thunk + 清单注释）；`_start` 导出 = 链接脚本入口钩子标记（段布局/页对齐细节 1.x 随 freestanding 补齐）；见 06-04 函数表 |
+| K6 | **freestanding（裸机模式）** | 无 OS/无 libc/无默认分配器；自定义 panic/启动代码——标准库全部假设有 OS（Io/spawn/默认分配器回退） | 需设计决策：无 std 目标（LLVM 后端专用）；1.0 范围裁决（ADR-0014 移出本块，1.x） |
 
 ### 重要缺失（5 项——可绕行但痛苦）
 
