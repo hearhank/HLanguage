@@ -226,7 +226,7 @@
 ## 4. 验收与门禁
 
 - **功能点级**：`cargo test` 相关套件绿 + 文档同步（本文件 §5 清单对应项）
-- **组级**：示例回归基线——现 interpret **142/5/1** + compile **58 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿（interpret 由 E1 前双解析失败转 142/5/1；5 项失败 = 四模式容器 37/76/77（组 F 延迟 1.x）+ 78/79 解析错误，非 E 组范围）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动；58 中 5 例（37/38/39/76/80）文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76、**38/80（G1 net 已落地仍红：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达，仅 `http://` 支持）**、Io.evented 39（interp-only E3））
+- **组级**：示例回归基线——现 interpret **143/4/1** + compile **60 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿（interpret 由 E1 前双解析失败转 143/4/1；4 项失败 = 四模式容器 37/76/77/78（组 F 延迟 1.x）——78 由解析错误转为运行时 `error.UndefinedName`，79 已随捕获语法解析落地转全绿）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动；60 中 5 例（37/38/39/76/80）文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76、**38/80（G1 net 已落地仍红：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达，仅 `http://` 支持）**、Io.evented 39（interp-only E3）；78/79 捕获语法解析副作用 +2，见 `tag1/scripts/check-examples.sh` 注释）
 - **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**留后续执行**（当前范围至 K4，K5/K6 不排程）
 
 ## 5. 文档同步清单
@@ -236,14 +236,14 @@
 | 文件 | 同步内容 | 时机 |
 |---|---|---|
 | ✅ `docs/adr/0011–0014` | 四个前置裁决 ADR | **A 组已完成（2026-08-18）** |
-| `06-language-spec.md` | comptime 类型即值 / script 块语法 | A/B/D 组 |
-| `06-08-modules.md` | 供应链指纹 / 依赖来源审计 | A3/B4/I4 |
-| `06-10-concurrency.md` | 异步/四模式/原子（协作式衔接） | E/F 组 |
-| `04-stdlib-scope.md` | 标准库扩展明细（net/ipc/storage/text/ffi）+ 系统编程扩展 | G/H 组 |
-| `02-milestones.md` | M9/M10 状态勾选 | E/F/K 组 |
-| `05-open-questions-and-risks.md` | 开放问题逐项关闭 | A/J 组 |
-| `07-bootstrap-plan.md` | 实现状态表与测试基线更新 | 各组完成时 |
-| `CONTEXT.md` | 术语（comptime/script/异步/原子/裸机） | 各组完成时 |
+| ✅ `06-language-spec.md` | comptime 类型即值 / script 块语法 | **A/B/D 组已完成（2026-08-18）** |
+| ✅ `06-08-modules.md` | 供应链指纹 / 依赖来源审计 | **A3/B4 已完成（2026-08-18）**；I4 注册中心 MVP 待 |
+| ✅ `06-10-concurrency.md` | 异步/四模式/原子（协作式衔接） | **E 组已完成（2026-08-18，组 E 注已补）**；F 组四模式/@atomic 延迟 1.x 已标注 |
+| ⚠️ `04-stdlib-scope.md` | 标准库扩展明细（net/ipc/storage/text/ffi）+ 系统编程扩展 | G 组标准库已同步（2026-08-18）；H 组系统编程扩展待 |
+| ⚠️ `02-milestones.md` | M9/M10 状态勾选 | M3/M5 已按 tag1 实现勾选（2026-08-18）；M9/M10 待自举（K 组） |
+| `05-open-questions-and-risks.md` | 开放问题逐项关闭 | A/J 组（J 待） |
+| ✅ `07-bootstrap-plan.md` | 实现状态表与测试基线更新 | **T1–T5 状态已标注（2026-08-18）** |
+| ✅ `CONTEXT.md` | 术语（comptime/script/异步/原子/裸机） | **各组完成时已同步** |
 
 ---
 
@@ -258,4 +258,40 @@
 - **B5**：三后端一致——展开在降级前完成（IR/字节码/native 对展开后 AST 无感知）；`run`/`run --ir`/`build`（native）/`check`/`test`/`errors` 全部走 `parse_with_scripts`。验证：interpret `hc run` 与 `hc run --ir` 同输出；native 产物（`hc build` + 运行）同输出。
 - **B6**：示例 33/36 由 stub 转为真实生成（types.fields 驱动生成字段计数函数，测试断言联动）；81 修复展开回归（脚本块补字符串产物占位）。**计划标误**：34/35 属组 D（comptime），非本组。
 
-**测试**：`hc-tools/tests/scriptgen.rs` 10 项（生成端到端 / types 元数据 / 多轮展开 / check / --ir / test 模式 / io·alloc 负例 / 非字符串产物）。`cargo test --workspace` 全绿；示例回归 132/10/1（基线 ≥125/≤11），compile 55 mismatch（基线 ≤55）。
+**测试**：`hc-tools/tests/scriptgen.rs` 10 项（生成端到端 / types 元数据 / 多轮展开 / check / --ir / test 模式 / io·alloc 负例 / 非字符串产物）。`cargo test --workspace` 全绿；示例回归 143/4/1（基线 ≥125/≤11），compile 60 mismatch（基线 ≤60）。
+
+### 组 C（E1.3 序列化定制，2026-08-18）
+
+**已落地**：C1/C2——脚本从 `types.fields` 生成**校验 + to_json 样板**（String 非空 / i32 ≥ 0 / ?String null 守卫；JSON String 带引号 / i32 裸值 / ?String → `null`），示例 36 扩为「字段统计 + 校验 + 序列化」三合一；`hc-tools/tests/scriptgen.rs` 定制通道端到端测试（`hc run` 与 `hc run --ir` 一致）；schema 版本/迁移钩子设计定案（05 #4）。**已知边界**：生成的样板用 String 方法（`.concat`/`.len`）与 `fmt_int`——原生运行时 String 方法属 Phase 7 缺口，示例 interpret/IR 全绿、原生计入 compile mismatch（见 tag1/README.md）。
+
+### 组 D（E1.2 comptime 完整，2026-08-18）
+
+**已落地**（组 D 完结）：
+- **D1**：comptime **类型函数**（`fn Pair(T: type) type { return struct { first: T, second: T }; }`）解析/语义/具体化——AST 增 `Expr::StructType` + `NamedLit.ty_args`；`hc::comptime`（`is_type_fn`/`concrete_name`/`subst`/`instantiate`）三后端共享引擎；interp/IR **惰性具体化登记**；类型函数体降级跳过（无运行时残留）。示例 34 三模式全绿。
+- **D2**：`comptime { }` 块**装载期编译期求值**（`hc-tools/src/comptimegen.rs`，script 展开后、语义检查前）：受限 Interp（io/alloc/argv 禁用）求值块体，结果丢弃；失败 = 编译错误；块内可见完整 `types` 元数据。
+- **D3**：嵌套/递归实例化——`map_type_apps` 深度遍历 + `instantiating` in-progress 守卫；`PairPair(i32)` / `LinkedList(T)` 自引用可用（Optional 默认 None 终止）。consistency +2。
+- **D4**：`comptime_int`（惰性宽度整数 + 收窄点诊断 + `expect_eq` 折叠）/ `comptime_float`（惰性宽度浮点 + 折叠）最小切片 + **D4b anytype 完整语义**（调用点按实参具体类型实例化，返回 `anytype` 重求值体 return 类型，`(qname, 具体化键)` 惰性缓存）+ **D4c comptime 值函数**（参数含 `T: type` 的普通函数调用点编译期求值，`try_comptime_value_call` + 自递归守卫）。示例 35 三模式全绿。
+- **D5**：三后端类型值表示——comptime 值函数**运行时调用点 IR 折叠**（`collect_value_fns` + `LowerCtx.value_fns` + `try_fold_comptime_value_call`/`eval_const_block` 常量求值，折叠成功发射 `Const`，无类型值/调用残留）；原生经共享 IR 继承折叠。
+
+**测试**：comptime 单测逐切片扩展（hc 语义 + hc-tools 端到端，见组内注）；consistency 增 `d1_comptime_type_application_consistent` / `d35_comptime_array_type_fn_consistent` / `d3_nested_instantiation_consistent` / `d3_recursive_instantiation_consistent` / `d4b_anytype_concrete_consistent` / `d5_comptime_value_fn_consistent`（共 +6）。`cargo test --workspace` 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。**已知边界**：内建泛型外层嵌套 `Vec(List(i32))` 仍退化裸名 `Vec`；comptime_int 无 bignum（i128 上限，偏离 ADR 任意精度）；值函数体引用类型参数值 → UndefinedName（最小切片）。
+
+### 组 E（E2.3 异步，2026-08-18）
+
+**已落地**：
+- **E1**：`async fn` 解析/语义——`Future(R)` 返回类型（R = 声明返回类型含错误联合 `Future(!R)`）、任意函数可 `await`（Q19 无 async 传染）、`await` 解包取 R。
+- **E2**：`await` ≡ `join()`——async fn 调用点返回**惰性** `Future` 值（体延迟到 await），复用组 G Thread 协作式机制（`make_future`/`future_run` 镜像 thread_run）；协作式取消（`cancel` → `error.Cancelled`）、`is_done` 状态转移、await 幂等缓存。
+- **E3**：`Io.threaded()`/`Io.evented()` 单线程事件循环——构造器写 `runtime` 字段（默认 io = threaded）、`io.poll()` 排空根回收队列（未 join 线程运行到完成）；interp-only（原生构造器未实现）。
+- **E4**：示例 37/38/39/76/80 的 `[test]` 异步断言双后端全绿（IR 侧 async fn 同步执行 + await 透传对齐纯函数）。
+
+**测试**：hc-rt async.rs 直测 11（E2 7 + E3 4）；consistency 增 `e2_async_await_consistent` / `e4_async_pointer_capture_consistent`。`cargo test --workspace` 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch——5 例文件级 MISMATCH 来自 `main` 特性：四模式容器 37/76、38/80（G1 net 已落地仍红：38 旧 URL 形式 + `JsonValue` 未实现、80 `https://` 不可达）、`Io.evented` 39 interp-only）。
+
+### 组 G（E3 标准库扩展，2026-08-18）
+
+**已落地**（G6 ffi 按用户决定跳过）：
+- **G1 net**：UDP（`io.net.udp.bind(port)`/`bind(host, port)` + `send_to`/`recv_from`/`local_port`/`close`，Q20 双语；空队列 200ms 读超时 → `error.TimedOut`；`recv_from` 返回 2 元素数组）+ HTTP 客户端 `io.net.get(url)`（仅 `http://`，非 200 → `error.Http{code}`）+ HTTP 服务端（`io.net.listen`+`accept`+`read_all`/`write`）+ Q20 双语补齐（命名空间形式 ≡ 实例方法）。hc-rt net.rs 直测 6。
+- **G2 io 差异项**：`io.stdout`/`io.stderr` 独立字节流；`String.to_upper`/`to_lower`（ASCII）；`io.fs.list_dir` → `Vec(DirEntry)`（`{name, is_dir}`，路径/句柄双形态）；`io.fs.open_dir(path) !Dir`（fd→路径注册表，`dir.list_dir`/`dir.close`）。hc-rt io.rs 直测 9→13。
+- **G3 ipc**：`io.ipc.pipe() ![PipeReader, PipeWriter]`（匿名管道：`write`/`close`/`read`（排空不阻塞）/`read_all`/`is_closed`，close 幂等）+ `io.ipc.shm(name, size) !Shm`（定长共享内存：`write` 截断/`read`/`close`）。进程内注册表，跨 H 线程经 spawn 传值。hc-rt ipc.rs 直测 6。
+- **G4 storage/archive**：`io.storage.open(path) !KvStore`（文件持久化键值：`put`/`get !?&[u8]`/`contains`/`remove`/`len`/`close` 落盘+注销幂等）+ `io.archive.compress`/`decompress`（RLE：token 0x00 字面跑 / 0x01 重复跑，round-trip 保真，非法 → `error.InvalidFormat`）。hc-rt storage.rs 直测 7。
+- **G5 text/time/rng**：`io.text.*` 正则（字面量/`.`/`[...]` 范围与取反/`\d` `\w` `\s`/分组/`*` `+` `?` `{n,m}`/`|`/`^` `$`/`\n` `\t` `\r` `\xNN` 及转义；记忆化集合回溯无灾难性回溯；非法 → `error.InvalidFormat`）+ `io.time.tick`/`elapsed` 单调测量 + `io.rng.seed`/`next`（xorshift64*）/`int`（拒绝采样）/`float`（高 53 位；命名空间类名 `RngNs` 避开示例用户类）。hc-rt text_rng.rs 直测 10。
+
+**测试**：hc-rt 标准库直测合计 42（net 6 + io 13 + ipc 6 + storage 7 + text_rng 10）；IR 后端同步 G1-G5（Q20 双语，消除 interp-only 私语义——`hc::comptime` 提取正则/RLE/xorshift64 纯函数共享层）；consistency 增 g1–g5 共 11 用例（79→90）。`cargo test --workspace` 全绿；门禁基线不变（interpret 143/4/1、compile 60 mismatch）。
