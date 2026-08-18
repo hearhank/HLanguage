@@ -239,6 +239,92 @@ struct Shm {
     data: Vec<u8>,
 }
 
+/// G4（E3.3 storage）：文件持久化的键值存储（KvStore 值持 store id → 注册表）。
+/// 内存中持有 entries；`close` 时以二进制格式落盘（u32 键长 + 键 + u32 值长 + 值，
+/// 均小端）——缺文件视为空库，close 即建。
+struct KvStore {
+    path: String,
+    entries: HashMap<Vec<u8>, Vec<u8>>,
+}
+
+/// G4（E3.3 archive）：RLE 压缩——token `0x00` = 字面跑（次字节 = 长度-1，后随该长
+/// 原始字节）、`0x01` = 重复跑（次字节 = 计数-1，再一字节 = 值）。长度域 u8
+/// （0..=255 → 实际 1..=256）。连续 ≥3 的相同字节 → 重复跑；否则聚合为字面跑
+/// （至多 256 字节，遇起始 ≥3 的相同段即断）。round-trip 对任意输入保真。
+fn encode_rle(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        // 自 i 起的相同字节跑长（≤256）
+        let b = data[i];
+        let mut j = i + 1;
+        while j < data.len() && data[j] == b && j - i < 256 {
+            j += 1;
+        }
+        let run = j - i;
+        if run >= 3 {
+            out.push(0x01);
+            out.push((run - 1) as u8);
+            out.push(b);
+            i = j;
+        } else {
+            // 聚合字面跑：至多 256 字节；遇起始 ≥3 的相同段即断
+            let start = i;
+            let mut k = i;
+            while k < data.len() && k - start < 256 {
+                let nb = data[k];
+                let mut kk = k + 1;
+                while kk < data.len() && data[kk] == nb && kk - k < 256 {
+                    kk += 1;
+                }
+                if kk - k >= 3 {
+                    break;
+                }
+                k += 1;
+            }
+            let lits = (k - start).max(1);
+            out.push(0x00);
+            out.push((lits - 1) as u8);
+            out.extend_from_slice(&data[start..start + lits]);
+            i = start + lits;
+        }
+    }
+    out
+}
+
+/// G4（E3.3 archive）：RLE 解压（encode_rle 逆）；非法 token/越界 → Err（InvalidFormat）。
+fn decode_rle(data: &[u8]) -> std::result::Result<Vec<u8>, ()> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        match data[i] {
+            0x00 => {
+                if i + 1 >= data.len() {
+                    return Err(());
+                }
+                let len = data[i + 1] as usize + 1;
+                i += 2;
+                if i + len > data.len() {
+                    return Err(());
+                }
+                out.extend_from_slice(&data[i..i + len]);
+                i += len;
+            }
+            0x01 => {
+                if i + 2 >= data.len() {
+                    return Err(());
+                }
+                let count = data[i + 1] as usize + 1;
+                let val = data[i + 2];
+                out.extend(std::iter::repeat(val).take(count));
+                i += 3;
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(out)
+}
+
 pub struct Interp {
     pub source: String,
     funcs: HashMap<String, Vec<FnDef>>,
@@ -277,6 +363,9 @@ pub struct Interp {
     next_shm_fd: i64,
     next_dir_fd: i64,
     next_net_fd: i64,
+    /// G4（E3.3 storage）：键值存储注册表（KvStore 值持 store id）
+    stores: HashMap<i64, Rc<RefCell<KvStore>>>,
+    next_store_fd: i64,
     /// 程序参数（M5.4：io.args()；由 CLI 注入，默认取进程参数）
     pub args: Vec<String>,
     /// 错误名 → 首次出现位置（M2.6 错误码表；根作用域未处理错误报告定位用）
@@ -346,6 +435,8 @@ impl Interp {
             next_shm_fd: 1,
             next_dir_fd: 1,
             next_net_fd: 1,
+            stores: HashMap::new(),
+            next_store_fd: 1,
             args: std::env::args().skip(1).collect(),
             error_locs: HashMap::new(),
             tracked: Default::default(),
@@ -1427,6 +1518,10 @@ impl Interp {
         // G3（E3.2 ipc）：`io.ipc.pipe()` / `io.ipc.shm(name, size)`——进程内 IPC 原语
         //（管道/共享内存；Pipe/Shm 方法由类名分派，见 call_pipe_method/call_shm_method）
         f.insert("ipc".into(), Value::class("Ipc", HashMap::new()));
+        // G4（E3.3 storage）：`io.storage.open(path) !KvStore`——文件持久化键值存储；
+        // `io.archive.compress/decompress`——RLE 压缩（KvStore 方法见 call_store_method）
+        f.insert("storage".into(), Value::class("Storage", HashMap::new()));
+        f.insert("archive".into(), Value::class("Archive", HashMap::new()));
         Value::class("Io", f)
     }
 
@@ -5114,6 +5209,18 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_shm_method(m, &v, args, span)
             }
+            // G4（E3.3 storage）：io.storage 命名空间 open；KvStore 实例方法
+            (Value::Class(c), m) if c.borrow().name == "Storage" => {
+                self.call_storage_method(m, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "KvStore" => {
+                let v = Value::Class(c.clone());
+                self.call_store_method(m, &v, args, span)
+            }
+            // G4（E3.3 archive）：io.archive 命名空间 compress/decompress
+            (Value::Class(c), m) if c.borrow().name == "Archive" => {
+                self.call_archive_method(m, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();
@@ -6534,6 +6641,188 @@ impl Interp {
             "close" => {
                 self.shms.remove(&id);
                 Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // ---------- G4（E3.3 storage）文件持久化键值存储 ----------
+
+    /// io.storage.open(path) !KvStore——打开/创建文件持久化的键值存储。
+    /// 文件存在则装载既有条目（二进制格式：u32 键长 + 键 + u32 值长 + 值，小端）；
+    /// 缺文件视为空库（close 时创建）。KvStore 值持 `store` id → 注册表。
+    fn call_storage_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "open" => {
+                let path = self.eval_path_arg(args, 0, span)?;
+                let mut entries = HashMap::new();
+                if let Ok(bytes) = std::fs::read(&path) {
+                    let mut i = 0usize;
+                    while i < bytes.len() {
+                        // 格式：u32 键长 + 键 + u32 值长 + 值（vlen 不紧跟 klen——键在中间）
+                        if i + 4 > bytes.len() {
+                            return Ok(Some(self.err_val("InvalidFormat")));
+                        }
+                        let klen = u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+                        i += 4;
+                        if i + klen + 4 > bytes.len() {
+                            return Ok(Some(self.err_val("InvalidFormat")));
+                        }
+                        let key = bytes[i..i + klen].to_vec();
+                        i += klen;
+                        let vlen = u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+                        i += 4;
+                        if i + vlen > bytes.len() {
+                            return Ok(Some(self.err_val("InvalidFormat")));
+                        }
+                        let val = bytes[i..i + vlen].to_vec();
+                        entries.insert(key, val);
+                        i += vlen;
+                    }
+                }
+                let id = self.next_store_fd;
+                self.next_store_fd += 1;
+                self.stores
+                    .insert(id, Rc::new(RefCell::new(KvStore { path, entries })));
+                let mut fld = HashMap::new();
+                fld.insert("store".into(), Value::Int(id as i128));
+                Ok(Some(Value::class("KvStore", fld)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// KvStore 值 → 注册表 id（`store` 字段；先 deref_value 剥 Ptr）
+    fn store_id_of(&self, v: &Value, span: &Span) -> Result<i64> {
+        match self.deref_value(v.clone()) {
+            Value::Class(c) if c.borrow().name == "KvStore" => match c.borrow().fields.get("store")
+            {
+                Some(Value::Int(id)) => Ok(*id as i64),
+                _ => Err(RtError::new("BadFd", Some(span.clone()))),
+            },
+            _ => Err(RtError::new("TypeError", Some(span.clone()))),
+        }
+    }
+
+    /// KvStore 落盘：二进制格式（u32 键长 + 键 + u32 值长 + 值，小端）写回 path。
+    fn persist_store(&self, store: &KvStore) -> std::io::Result<()> {
+        let mut out = Vec::new();
+        for (k, v) in &store.entries {
+            out.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            out.extend_from_slice(k);
+            out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+            out.extend_from_slice(v);
+        }
+        std::fs::write(&store.path, out)
+    }
+
+    /// KvStore 实例方法：`put(key, value) !void` / `get(key) !?&[u8]`（缺失 → null）/
+    /// `contains(key) bool` / `remove(key) !void`（幂等）/ `len() usize` /
+    /// `close() !void`（落盘 + 注销注册表；已关闭再 close 为 no-op）。
+    fn call_store_method(
+        &mut self,
+        field: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let id = self.store_id_of(v, span)?;
+        match field {
+            "put" => {
+                let key = self.eval_str_arg(args, 0, span)?;
+                let value = self.eval_str_arg(args, 1, span)?;
+                let store = self
+                    .stores
+                    .get(&id)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                store.borrow_mut().entries.insert(key, value);
+                Ok(Some(Value::Void))
+            }
+            "get" => {
+                let key = self.eval_str_arg(args, 0, span)?;
+                let store = self
+                    .stores
+                    .get(&id)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                let s = store.borrow();
+                match s.entries.get(&key) {
+                    Some(val) => Ok(Some(Value::Opt(Some(Rc::new(Value::str_bytes(
+                        val.clone(),
+                    )))))),
+                    None => Ok(Some(Value::Opt(None))),
+                }
+            }
+            "contains" => {
+                let key = self.eval_str_arg(args, 0, span)?;
+                let store = self
+                    .stores
+                    .get(&id)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                let has = store.borrow().entries.contains_key(&key);
+                Ok(Some(Value::Bool(has)))
+            }
+            "remove" => {
+                let key = self.eval_str_arg(args, 0, span)?;
+                let store = self
+                    .stores
+                    .get(&id)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                store.borrow_mut().entries.remove(&key);
+                Ok(Some(Value::Void))
+            }
+            "len" => {
+                let store = self
+                    .stores
+                    .get(&id)
+                    .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
+                    .clone();
+                let n = store.borrow().entries.len() as i128;
+                Ok(Some(Value::Int(n)))
+            }
+            "close" => {
+                if let Some(store) = self.stores.remove(&id) {
+                    let s = store.borrow();
+                    if let Err(e) = self.persist_store(&s) {
+                        return Ok(Some(self.err_val(&self.io_error_name(&e))));
+                    }
+                }
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // ---------- G4（E3.3 archive）RLE 压缩 ----------
+
+    /// io.archive.compress(data) !&[u8] / io.archive.decompress(data) !&[u8]——
+    /// RLE 压缩（encode_rle/decode_rle）。含重复字节的输入明显变短；round-trip 保真
+    /// （任意字节）；非法压缩数据 → error.InvalidFormat。
+    fn call_archive_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "compress" => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                Ok(Some(Value::str_bytes(encode_rle(&data))))
+            }
+            "decompress" => {
+                let data = self.eval_str_arg(args, 0, span)?;
+                match decode_rle(&data) {
+                    Ok(out) => Ok(Some(Value::str_bytes(out))),
+                    Err(_) => Ok(Some(self.err_val("InvalidFormat"))),
+                }
             }
             _ => Ok(None),
         }
