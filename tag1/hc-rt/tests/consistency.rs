@@ -1655,6 +1655,23 @@ async fn outer(n: i32) i32 { return await inner(n) + 1; }
 }
 
 #[test]
+fn e4_async_pointer_capture_consistent() {
+    // 组 E E4：async fn 指针参数 + await（示例 37/76 `async_scope_binding` 模式）——
+    // interp（lazy，&base 捕获 + Future(i32)）== IR（eager 同步执行 + await 透传）在纯
+    // 函数下结果一致；IR 侧经 37/76 示例 compile 模式实证可运行。
+    assert_all_pass(
+        r#"
+async fn async_add(b: *i32, n: i32) i32 { return b.* + n; }
+[test] fn async_scope_binding() void {
+    var base = 10;
+    var fut: Future(i32) = async_add(&base, 5);
+    expect_eq(await fut, 15);
+}
+"#,
+    );
+}
+
+#[test]
 fn d35_comptime_array_type_fn_consistent() {
     // 组 D（示例 35）：comptime_int 值参数 + 数组类型函数
     // `fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`——`ArrayLen(i32, 3)`

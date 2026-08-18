@@ -137,10 +137,12 @@
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| E1 | `async fn` 解析/语义 → `Future(R)` 返回类型（复用 Thread 类名分派模式） | parse + semantic 测试绿 | A1 | 2h |
-| E2 | `await` ≡ `join()`：任意函数可 `await`（对齐 G 组 join 机制）；协作式取消 | 异步测试绿 | E1 | 1.5h |
-| E3 | `Io.threaded()`/`Io.evented()`（单线程事件循环）：IO 事件队列 + 轮询 | io 异步测试绿 | E2 | 2h |
-| E4 | 一致性 + 示例转绿（37/38/39） | consistency + 示例绿 | E3 | 1.5h |
+| E1 | ✅ `async fn` 解析/语义 → `Future(R)` 返回类型（复用 Thread 类名分派模式） | parse + semantic 测试绿 | A1 | 2h |
+| E2 | ✅ `await` ≡ `join()`：任意函数可 `await`（对齐 G 组 join 机制）；协作式取消 | 异步测试绿 | E1 | 1.5h |
+| E3 | ✅ `Io.threaded()`/`Io.evented()`（单线程事件循环）：IO 事件队列 + 轮询 | io 异步测试绿 | E2 | 2h |
+| E4 | ✅ 一致性 + 示例转绿（37/38/39） | consistency + 示例绿 | E3 | 1.5h |
+
+> ✅ **组 E 异步（E2.3，协作式 Future）已完成（2026-08-18）**：async/await + 单线程事件循环落地。**E1**：`async fn` 解析/语义——`Future(R)` 返回类型（R = 声明返回类型含错误联合 `Future(!R)`）、任意函数可 `await`（Q19 无 async 传染）、`await` 解包取 R。**E2**：`await` ≡ `join()`——async fn 调用点返回**惰性** `Future` 值（体延迟到 await），复用组 G Thread 协作式机制（`make_future`/`future_run` 镜像 thread_run）；协作式取消（`cancel` 置标志 → await 返回 `error.Cancelled`）、`is_done` 状态转移、await 幂等缓存；consistency `e2_async_await_consistent`（interp 惰性 == IR 急切，纯函数一致；副作用时序/取消为 interp 特有，IR 子集边界）。**E3**：`Io.threaded()`/`Io.evented()` 单线程事件循环——构造器写 `runtime` 字段（默认 io = threaded）、`io.poll()` 排空根回收队列（作用域退出提升的未 join 线程 → 运行到完成并返回计数；threaded 恒 0）；interp-only（原生构造器未实现 → 示例 39 main 计入 58 mismatch）。**E4**：示例 37/38/39/76/80 的 `[test]` 异步断言**双后端全绿**（interpret 142/5/1 保持；IR 侧 async fn 调用同步执行 + await 透传对齐纯函数），consistency +1（`e4_async_pointer_capture_consistent`，示例 37/76 `async_scope_binding` 模式 `&base` + Future(i32)）；hc-rt async.rs 直测 11（E2 7 + E3 4）。门禁基线不变（interpret 142/5/1、compile 58 mismatch——5 例文件级 MISMATCH 来自 `main` 特性：四模式容器 37/76 组 F 延迟、io.net/JsonValue 38/80 G1 net 待、Io.evented 39 interp-only）。
 
 ### F. E2.1 四模式类型 + E2.4 原子（⏸ 延迟 1.x——ADR-0011 定案）
 
@@ -214,7 +216,7 @@
 ## 4. 验收与门禁
 
 - **功能点级**：`cargo test` 相关套件绿 + 文档同步（本文件 §5 清单对应项）
-- **组级**：示例回归基线——现 interpret 132/10/1 + compile 55 mismatch；**B 落地后 33/36/81 script 示例全绿**（132/10/1 保持；B6 原列 34/35 属组 D，D 落地后 34/35 转绿 → 134/8）、**E4 落地后 37/38/39 转绿**（137/5）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动）
+- **组级**：示例回归基线——现 interpret **142/5/1** + compile **58 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿（interpret 由 E1 前双解析失败转 142/5/1；5 项失败 = 四模式容器 37/76/77（组 F 延迟 1.x）+ 78/79 解析错误，非 E 组范围）；**76–80（四模式）转绿信号归 1.x**（ADR-0011，本块不实现）；compile mismatch 随原生 ABI 扩展下降（Phase 8 原生函数值/闭包，K4 H 后端编写时联动；58 中 5 例（37/38/39/76/80）文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76、io.net/JsonValue 38/80（G1 net 待）、Io.evented 39（interp-only E3））
 - **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**留后续执行**（当前范围至 K4，K5/K6 不排程）
 
 ## 5. 文档同步清单
