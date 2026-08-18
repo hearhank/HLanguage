@@ -262,6 +262,11 @@ fn collect_strings(module: &IrModule) -> Vec<String> {
                     push_str(name, &mut seen, &mut out);
                     push_str(variant, &mut seen, &mut out);
                 }
+                IrInst::UnionSync { written, .. } => {
+                    push_str(written, &mut seen, &mut out);
+                    push_str("@union", &mut seen, &mut out);
+                    push_str("@w", &mut seen, &mut out);
+                }
                 IrInst::MatchTest { pattern, .. } => {
                     // 模式描述符需字符串全局：Ident（bool/null/枚举变体）与 Str 模式。
                     // Error 模式在 codegen 期解析为错误码，无需字符串。
@@ -5296,6 +5301,11 @@ impl BodyEmitter {
                 }
                 self.emit(format!("store %Value {cls}, %Value* %sp.{temp}"));
             }
+            // K1 union 原生后端临时取舍（ADR-0014）：union 写字段需运行时字节重解释同步
+            // 其余字段（tag 感知截断/位重读）。与闭包/notcallable 同类——响亮拒绝，禁止
+            // 静默误编译。所有 union 值必经 MakeClass + UnionSync（构造即触发本中止），
+            // 故原生 union 程序在首个字面量处中止，绝不产生错误字段布局的可观察行为。
+            IrInst::UnionSync { .. } => self.abort_feature("builtin"),
             IrInst::MakeEnum {
                 temp,
                 name,

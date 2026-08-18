@@ -136,6 +136,11 @@ pub enum TypeKind {
     Enum {
         variants: Vec<EnumVariant>,
     },
+    /// K1（ADR-0014）：无标签 union——字段内存重叠、无判别标签。
+    /// 语义对齐 C 风格 union：大小 = 最大字段、对齐 = 最大对齐；仅标量字段。
+    Union {
+        fields: Vec<FieldDecl>,
+    },
     Interface {
         supers: Vec<Type>,
         methods: Vec<Method>,
@@ -487,6 +492,62 @@ impl Checker {
                 let info = TypeInfo {
                     kind: TypeKind::Enum {
                         variants: variants.clone(),
+                    },
+                    continuous: false,
+                };
+                if skip_flat {
+                    if !prefix.is_empty() {
+                        self.types.insert(format!("{prefix}{name}"), info);
+                    }
+                } else if prefix.is_empty() {
+                    self.types.insert(name.clone(), info);
+                } else {
+                    self.types.insert(format!("{prefix}{name}"), info.clone());
+                    self.types.insert(name.clone(), info);
+                }
+            }
+            Decl::Union {
+                name,
+                fields,
+                span,
+                ..
+            } => {
+                // 命名规范（Q22）：类型名 PascalCase（首字母大写）
+                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "union `{name}` 命名必须首字母大写（PascalCase，如 `{}{}`）",
+                            name[..1].to_uppercase(),
+                            &name[1..]
+                        ),
+                    ));
+                }
+                // K1 语义（ADR-0014）：仅标量字段——内存双关工具，引用/堆字段编译错误
+                for fd in fields {
+                    if let Type::Named(n, _) = fd.ty.strip() {
+                        if !Self::is_scalar_ty_name(n) {
+                            self.diags.push(Diagnostic::error(
+                                fd.span.clone(),
+                                format!(
+                                    "union `{name}` 字段 `{}` 必须为标量类型（i8..u128/f32/f64/bool，得 `{n}`）",
+                                    fd.name
+                                ),
+                            ));
+                        }
+                    } else {
+                        self.diags.push(Diagnostic::error(
+                            fd.span.clone(),
+                            format!(
+                                "union `{name}` 字段 `{}` 必须为标量类型（内存双关工具；得非标量形态）",
+                                fd.name
+                            ),
+                        ));
+                    }
+                }
+                let info = TypeInfo {
+                    kind: TypeKind::Union {
+                        fields: fields.clone(),
                     },
                     continuous: false,
                 };
@@ -1089,6 +1150,29 @@ impl Checker {
         }
     }
 
+    /// K1 标量类型名（union 字段限定；与运行时 scalar_size 宽度表同源）
+    fn is_scalar_ty_name(n: &str) -> bool {
+        matches!(
+            n,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f16"
+                | "f32"
+                | "f64"
+                | "f128"
+                | "bool"
+        )
+    }
+
     /// 类型是否为值类型（标量/连续 class/元组/纯常量枚举/定长数组？——数组为引用类型）
     fn type_is_value(&self, t: &Type) -> bool {
         match t.strip() {
@@ -1122,6 +1206,10 @@ impl Checker {
                         // 纯常量枚举（变体均无负载）= 值类型
                         if let TypeKind::Enum { variants } = &info.kind {
                             return variants.iter().all(|v| v.payload.is_none());
+                        }
+                        // K1 union（仅标量字段）= 值类型（无堆内容，赋值即复制）
+                        if let TypeKind::Union { .. } = &info.kind {
+                            return true;
                         }
                         false
                     }
@@ -1492,11 +1580,17 @@ impl Checker {
         }
     }
 
-    /// 类字段类型查询（已解引用）
+    /// 类字段类型查询（已解引用；K1 union 字段同走此路径——字段读取经字节重解释）
     fn class_field_ty(&self, t: &SType, field: &str) -> Option<SType> {
         match t {
             SType::Named(cn, _) => {
                 if let Some(TypeKind::Class { fields, .. }) = self.types.get(cn).map(|i| &i.kind) {
+                    if let Some(fd) = fields.iter().find(|f| f.name == *field) {
+                        return Some(self.ty_of(&fd.ty));
+                    }
+                }
+                if let Some(TypeKind::Union { fields, .. }) = self.types.get(cn).map(|i| &i.kind)
+                {
                     if let Some(fd) = fields.iter().find(|f| f.name == *field) {
                         return Some(self.ty_of(&fd.ty));
                     }
@@ -2078,6 +2172,14 @@ impl Checker {
                             self.types.get(n).map(|i| &i.kind)
                         {
                             // 字段类型
+                            if let Some(fd) = fields.iter().find(|f| f.name == *field) {
+                                return Some(self.ty_of(&fd.ty));
+                            }
+                        }
+                        // K1 union：字段类型（读取经字节重解释）
+                        if let Some(TypeKind::Union { fields, .. }) =
+                            self.types.get(n).map(|i| &i.kind)
+                        {
                             if let Some(fd) = fields.iter().find(|f| f.name == *field) {
                                 return Some(self.ty_of(&fd.ty));
                             }
@@ -2717,6 +2819,16 @@ impl Checker {
                         ));
                     }
                 }
+                // K1 union：字段存在性校验（无方法）
+                if let Some(TypeKind::Union { fields, .. }) = self.types.get(n).map(|i| &i.kind) {
+                    let has_field = fields.iter().any(|f| f.name == *field);
+                    if !has_field {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("union `{n}` has no field `{field}`"),
+                        ));
+                    }
+                }
             }
             Some(SType::Tuple(ts)) => {
                 if let Ok(i) = field.parse::<usize>() {
@@ -2786,6 +2898,13 @@ impl Checker {
             }) => Some(variants.clone()),
             _ => None,
         };
+        let union_fields: Option<Vec<FieldDecl>> = match self.types.get(ty) {
+            Some(TypeInfo {
+                kind: TypeKind::Union { fields },
+                ..
+            }) => Some(fields.clone()),
+            _ => None,
+        };
         if let Some(fdecls) = class_fields {
             for (name, expr) in fields {
                 match fdecls.iter().find(|f| f.name == *name) {
@@ -2846,6 +2965,32 @@ impl Checker {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!("enum `{ty}` has no variant `{name}`"),
+                        ));
+                    }
+                }
+            }
+        } else if let Some(ufields) = union_fields {
+            // K1 union 字面量：恰一个字段（构造时其余字段 = 该字段字节重解释）
+            if fields.len() != 1 {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!(
+                        "union literal `{ty}` expects exactly one field (got {})",
+                        fields.len()
+                    ),
+                ));
+            }
+            if let Some((name, expr)) = fields.first() {
+                match ufields.iter().find(|f| f.name == *name) {
+                    Some(fd) => {
+                        let exp = self.ty_of(&fd.ty);
+                        let act = self.expr_ty(expr, scopes, Some(&exp));
+                        self.check_assignable(&Some(exp), &act, &expr.span(), "union field");
+                    }
+                    None => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("union `{ty}` has no field `{name}`"),
                         ));
                     }
                 }

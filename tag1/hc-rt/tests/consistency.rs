@@ -494,6 +494,132 @@ class Point {
     );
 }
 
+// ---------- K1 无标签 union（ADR-0014）：字段字节重解释双模式一致 ----------
+
+#[test]
+fn agg_union_int_wider_to_narrower() {
+    // 写 i32 → 读 i8/i16/bool（窄字段取低字节，符号扩展/非零判定）
+    assert_all_pass(
+        r#"
+union U {
+    a: i32,
+    b: i16,
+    c: i8,
+    d: bool,
+}
+[test] fn union_int_wider_to_narrower() void {
+    var u = U{ a = 0x03040506 }; // 字节 06 05 04 03
+    expect_eq(u.c, 6);           // 低 i8 = 6
+    expect_eq(u.b, 0x0506);      // 低 i16 = 1286
+    expect_eq(u.d, true);        // 低字节 6 ≠ 0
+    u.a = 0x00010000;            // 字节 00 00 01 00
+    expect_eq(u.b, 0);           // 低 i16 = 0
+    expect_eq(u.d, false);       // 低字节 0
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_union_float_int_reinterpret() {
+    // f32 ↔ i32 同位重解释（1.0f32 位型 = 1065353216）
+    assert_all_pass(
+        r#"
+union Num {
+    i: i32,
+    f: f32,
+}
+[test] fn union_float_int() void {
+    var n = Num{ f = 1.0 };
+    expect_eq(n.i, 1065353216);
+    n.i = 1065353216;
+    expect_eq(n.f, 1.0);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_union_bool_int_narrow() {
+    // i8 ↔ bool（bool 写 1 字节 / 读低字节非零）
+    assert_all_pass(
+        r#"
+union B {
+    i: i8,
+    b: bool,
+}
+[test] fn union_bool_int() void {
+    var u = B{ b = true };
+    expect_eq(u.i, 1);
+    u.i = 0;
+    expect_eq(u.b, false);
+    u.i = 3;
+    expect_eq(u.b, true);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_union_write_syncs_others() {
+    // 写任意字段 → 其余字段重解释同步（读任意字段 = 最后写入字节）
+    assert_all_pass(
+        r#"
+union U {
+    a: i32,
+    b: bool,
+}
+[test] fn union_write_sync() void {
+    var u = U{ a = 256 };        // 字节 00 01 00 00
+    expect_eq(u.b, false);
+    u.a = 1;                      // 字节 01 00 00 00
+    expect_eq(u.b, true);
+    u.a = 0;
+    expect_eq(u.b, false);
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_union_equality() {
+    // 同字节 union 相等；不同字节不等（字段同步后全同态）
+    assert_all_pass(
+        r#"
+union Num {
+    i: i32,
+    f: f32,
+}
+[test] fn union_eq() void {
+    var a = Num{ i = 1 };
+    var b = Num{ i = 1 };
+    expect_eq(a, b);
+    var c = Num{ i = 2 };
+    expect_neq(a, c);
+    var d = Num{ i = 1065353216 };
+    expect_neq(a, d);   // f = 1.0 ≠ a.f
+}
+"#,
+    );
+}
+
+#[test]
+fn agg_union_truncated_read_fails() {
+    // 窄写入后读宽字段：字节不足（truncated union bytes）→ 两模式测试均 FAIL
+    let src = r#"
+union T {
+    a: i8,
+    b: i32,
+}
+[test] fn union_truncated() void {
+    var t = T{ a = 5 };
+    expect_eq(t.b, 5);
+}
+"#;
+    let (tw, ir) = assert_consistent(src);
+    assert_eq!((tw, ir), (0, 0));
+}
+
 #[test]
 fn agg_array_index_and_store() {
     // MakeArr/Index/StoreIndex：数组字面量 + 单索引读写

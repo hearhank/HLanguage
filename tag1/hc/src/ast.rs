@@ -58,6 +58,14 @@ pub enum Decl {
         pub_: bool,
         span: Span,
     },
+    /// K1（ADR-0014）：无标签 union——字段内存重叠、无判别标签，语义对齐 C 风格 union。
+    /// 大小 = 最大字段（对齐 = 最大对齐）；仅标量字段（内存双关工具，引用类型编译错误）。
+    Union {
+        name: String,
+        fields: Vec<FieldDecl>,
+        pub_: bool,
+        span: Span,
+    },
     Interface {
         name: String,
         supers: Vec<Type>,
@@ -118,6 +126,7 @@ impl Decl {
             | Decl::Fn { pub_, .. }
             | Decl::Class { pub_, .. }
             | Decl::Enum { pub_, .. }
+            | Decl::Union { pub_, .. }
             | Decl::Interface { pub_, .. }
             | Decl::Namespace { pub_, .. } => *pub_,
             Decl::Using { .. } | Decl::Import { .. } | Decl::Script { .. } | Decl::Comptime { .. } => false,

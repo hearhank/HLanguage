@@ -51,6 +51,9 @@ pub struct IrModule {
     /// [continuous] 类名（扁平 + 全限定）：`DeepCopy` 指令运行时门——仅连续类值
     /// 语义深拷贝，标量/数组/非连续类恒等（引用别名）。由 `TypeTable.classes` 汇集。
     pub continuous: HashSet<String>,
+    /// K1 无标签 union（扁平 + 全限定）→ 字段声明（名 + 类型，声明序）：`UnionSync`
+    /// 与 `store_field` 写路径字节重解释同步用（ADR-0014）。
+    pub unions: HashMap<String, Vec<(String, Type)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +259,12 @@ pub enum IrInst {
         ty: String,
         fields: Vec<(String, usize)>,
     },
+    /// K1 无标签 union（ADR-0014）：union 字面量构造后，把 `written` 字段字节
+    /// 重解释同步其余字段（对齐 interp `union_sync_fields`）。
+    UnionSync {
+        class: usize,
+        written: String,
+    },
     /// temp = 枚举值（Type.variant 常量 或 Type{variant = payload}）
     MakeEnum {
         temp: usize,
@@ -422,8 +431,17 @@ pub struct TypeTable {
     pub classes: HashMap<String, ClassInfo>,
     /// enum 名（扁平 + 全限定）→ 变体集
     pub enums: HashMap<String, EnumInfo>,
+    /// K1 无标签 union 名（扁平 + 全限定）→ 字段声明（ADR-0014）
+    pub unions: HashMap<String, UnionInfo>,
     /// namespace 名（扁平 + 全限定）
     pub namespaces: std::collections::HashSet<String>,
+}
+
+/// K1 无标签 union（ADR-0014）：字段（名 + 标量类型，声明序）——字段内存重叠，
+/// size = 最大字段宽度；`@union` 标记 + 写字段字节重解释同步其余字段。
+#[derive(Debug, Default, Clone)]
+pub struct UnionInfo {
+    pub fields: Vec<(String, Type)>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -488,6 +506,22 @@ fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String]) {
                     tt.enums.insert(q, tt.enums[name].clone());
                 }
             }
+            // K1 无标签 union（ADR-0014）：登记字段声明（扁平 + 全限定）
+            Decl::Union { name, fields, .. } => {
+                let ui = UnionInfo {
+                    fields: fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect(),
+                };
+                tt.unions.insert(name.clone(), ui);
+                if !path.is_empty() {
+                    let mut q = path.join(".");
+                    q.push('.');
+                    q.push_str(name);
+                    tt.unions.insert(q, tt.unions[name].clone());
+                }
+            }
             Decl::Namespace { name, decls, .. } => {
                 tt.namespaces.insert(name.clone());
                 let mut p = path.to_vec();
@@ -525,6 +559,10 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
     // 枚举变体序（Phase 7）：`@intFromEnum`/`@enumFromInt` 运行时分派
     for (n, ei) in &types.enums {
         module.enum_variants.insert(n.clone(), ei.variants.clone());
+    }
+    // K1 无标签 union（ADR-0014）：字段声明表（扁平 + 全限定）→ 写路径字节重解释同步
+    for (n, ui) in &types.unions {
+        module.unions.insert(n.clone(), ui.fields.clone());
     }
     // [continuous] 类名集（扁平 + 全限定）：DeepCopy 指令运行时门
     for (n, ci) in &types.classes {
@@ -919,6 +957,7 @@ fn lower_decl(
             }
         }
         Decl::Enum { .. }
+        | Decl::Union { .. }
         | Decl::Interface { .. }
         | Decl::Using { .. }
         | Decl::Import { .. }
@@ -2021,6 +2060,44 @@ impl<'a> LowerCtx<'a> {
                         temp: t,
                         ty,
                         fields: f,
+                    });
+                } else if self.types.unions.contains_key(&ty) {
+                    // K1 union 字面量（ADR-0014）：`Foo { field = v }`——单字段。
+                    // 运行时形态 = `Cell::Class` + `@union` 标记；缺省字段落标量零值，
+                    // 构造后 `UnionSync` 把 `written` 字段字节重解释同步其余字段。
+                    if fields.len() != 1 {
+                        self.fail_void(t, "union 字面量应为单字段（K1）", span);
+                        return t;
+                    }
+                    let (fname, fval) = &fields[0];
+                    let fvt = self.lower_expr(fval);
+                    // 先克隆字段表释放 `self.types` 借用，再可变借用 `self` 降级默认值
+                    let ufields: Vec<(String, Type)> = self
+                        .types
+                        .unions
+                        .get(&ty)
+                        .map(|u| u.fields.clone())
+                        .unwrap_or_default();
+                    let mut fs: Vec<(String, usize)> = Vec::with_capacity(ufields.len() + 2);
+                    for (fdname, fdty) in &ufields {
+                        let dt = self.lower_default_value(fdty);
+                        fs.push((fdname.clone(), dt));
+                    }
+                    let mk = self.alloc_slot();
+                    self.push(IrInst::Const {
+                        temp: mk,
+                        val: IrConst::Bool(true),
+                    });
+                    fs.push(("@union".to_string(), mk));
+                    fs.push((fname.clone(), fvt));
+                    self.push(IrInst::MakeClass {
+                        temp: t,
+                        ty: ty.clone(),
+                        fields: fs,
+                    });
+                    self.push(IrInst::UnionSync {
+                        class: t,
+                        written: fname.clone(),
                     });
                 } else if self.types.enums.contains_key(&ty) {
                     if fields.len() != 1 {
@@ -5657,6 +5734,21 @@ fn exec_body(
                 let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
                 let v = ctx.get(&frame, *value).clone();
                 store_field(ctx, &bv, field, v)?;
+                // K1 union 写路径：字段写后字节重解释同步其余字段（对齐 interp assign_class_field）
+                if let IrValue::Class(c) = bv {
+                    if let Cell::Class { fields, .. } = &ctx.cells[c] {
+                        if fields.contains_key("@union") {
+                            union_sync_ir(ctx, module, c, field)?;
+                        }
+                    }
+                }
+            }
+            IrInst::UnionSync { class, written } => {
+                let c = match ctx.get(&frame, *class) {
+                    IrValue::Class(c) => *c,
+                    _ => return Err(IrError::msg("TypeError", "union sync on non-class")),
+                };
+                union_sync_ir(ctx, module, c, written)?;
             }
             IrInst::Index { temp, base, index } => {
                 let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
@@ -6468,6 +6560,126 @@ fn scalar_size_ir(ty: &str) -> Option<usize> {
         "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
         _ => None,
     }
+}
+
+// ---------- K1 无标签 union（ADR-0014，2026-08-18）----------
+// 运行时形态 = `Cell::Class` + `@union` 标记；写字段 → 字节重解释同步其余字段
+// （C 风格内存双关）。helper 对齐 interp `union_write_scalar`/`union_read_scalar`/
+// `union_sync_fields`。
+
+/// 类型名（union 字段须为标量 → `Type::Named(n, _)`）
+fn union_ty_name(t: &Type) -> Option<String> {
+    match t.strip() {
+        Type::Named(n, _) => Some(n.clone()),
+        _ => None,
+    }
+}
+
+/// 标量值 → 小端字节（i128/u128 全 16 字节，对齐 interp union_write_scalar）
+fn write_scalar_ir(out: &mut [u8], n: &str, v: &IrValue) {
+    match (n, v) {
+        ("i8" | "u8", IrValue::Int(i)) => out[0] = *i as u8,
+        ("i16" | "u16", IrValue::Int(i)) => {
+            out[..2].copy_from_slice(&(*i as i16).to_le_bytes())
+        }
+        ("i32" | "u32", IrValue::Int(i)) => {
+            out[..4].copy_from_slice(&(*i as i32).to_le_bytes())
+        }
+        ("i64" | "u64" | "isize" | "usize", IrValue::Int(i)) => {
+            out[..8].copy_from_slice(&(*i as i64).to_le_bytes())
+        }
+        ("i128" | "u128", IrValue::Int(i)) => {
+            out[..16].copy_from_slice(&i.to_le_bytes())
+        }
+        ("f32", IrValue::Float(f)) => out[..4].copy_from_slice(&(*f as f32).to_le_bytes()),
+        ("f64" | "f16" | "f128", IrValue::Float(f)) => {
+            out[..8].copy_from_slice(&f.to_le_bytes())
+        }
+        ("bool", IrValue::Bool(b)) => out[0] = if *b { 1 } else { 0 },
+        _ => {}
+    }
+}
+
+/// 小端字节 → 标量值（对齐 interp union_read_scalar）
+fn read_scalar_ir(bytes: &[u8], n: &str) -> R<IrValue> {
+    let trunc = |msg: &str| IrError::msg("InvalidBytes", msg);
+    match n {
+        "i8" | "u8" => Ok(IrValue::Int(bytes.first().copied().unwrap_or(0) as i128)),
+        "i16" | "u16" => {
+            let b = bytes.get(..2).ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(i16::from_le_bytes(b.try_into().unwrap()) as i128))
+        }
+        "i32" | "u32" => {
+            let b = bytes.get(..4).ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(i32::from_le_bytes(b.try_into().unwrap()) as i128))
+        }
+        "i64" | "u64" | "isize" | "usize" => {
+            let b = bytes.get(..8).ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(i64::from_le_bytes(b.try_into().unwrap()) as i128))
+        }
+        "i128" | "u128" => {
+            let b = bytes.get(..16).ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(i128::from_le_bytes(b.try_into().unwrap())))
+        }
+        "f32" => {
+            let b = bytes.get(..4).ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Float(f32::from_le_bytes(b.try_into().unwrap()) as f64))
+        }
+        "f64" | "f16" | "f128" => {
+            let b = bytes.get(..8).ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Float(f64::from_le_bytes(b.try_into().unwrap())))
+        }
+        "bool" => Ok(IrValue::Bool(bytes.first().copied().unwrap_or(0) != 0)),
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// K1 union 写字段同步（IR 运行时）：写 `written` 字段后，把该字段字节重解释为
+/// 其余每个字段的类型（C 风格 union 语义，字段全标量）。`c` = `Cell::Class` 索引。
+fn union_sync_ir(ctx: &mut Ctx, module: &IrModule, c: usize, written: &str) -> R<()> {
+    let (cname, fields) = match &ctx.cells[c] {
+        Cell::Class { name, fields } => (name.clone(), fields.clone()),
+        _ => return Err(IrError::msg("TypeError", "union sync on non-class")),
+    };
+    let decls = module.unions.get(&cname).cloned().ok_or_else(|| {
+        IrError::msg(
+            "TypeError",
+            format!("`{cname}` 不是 union 类型"),
+        )
+    })?;
+    let wcell = fields.get(written).copied().ok_or_else(|| {
+        IrError::msg("NoField", format!("union `{cname}` has no field `{written}`"))
+    })?;
+    let wv = ctx.cell_value(wcell).clone();
+    let wty = decls
+        .iter()
+        .find(|(n, _)| n == written)
+        .map(|(_, t)| t.clone())
+        .ok_or_else(|| {
+            IrError::msg(
+                "NoField",
+                format!("union `{cname}` has no field `{written}`"),
+            )
+        })?;
+    let wname = union_ty_name(&wty).ok_or_else(|| {
+        IrError::msg("TypeError", "union 字段必须为标量类型")
+    })?;
+    let width = scalar_size_ir(&wname)
+        .ok_or_else(|| IrError::msg("TypeError", format!("字段 `{wname}` 无标量宽度")))?;
+    let mut buf = vec![0u8; width];
+    write_scalar_ir(&mut buf, &wname, &wv);
+    for (fdname, fdty) in &decls {
+        if fdname == written {
+            continue;
+        }
+        let Some(fname) = union_ty_name(fdty) else { continue };
+        let dv = read_scalar_ir(&buf, &fname)?;
+        let nc = ctx.alloc(Cell::Value(dv));
+        if let Cell::Class { fields: fs, .. } = &mut ctx.cells[c] {
+            fs.insert(fdname.clone(), nc);
+        }
+    }
+    Ok(())
 }
 
 /// 调用函数值（Fn 引用 / Closure；对齐 oracle `call_closure_value` interp.rs:1504-1511）

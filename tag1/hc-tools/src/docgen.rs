@@ -201,6 +201,7 @@ fn decl_span(d: &Decl) -> &Span {
         | Decl::Fn { span, .. }
         | Decl::Class { span, .. }
         | Decl::Enum { span, .. }
+        | Decl::Union { span, .. }
         | Decl::Interface { span, .. }
         | Decl::Namespace { span, .. }
         | Decl::Using { span, .. }
@@ -231,6 +232,7 @@ fn decl_anchor(d: &Decl) -> String {
         }
         Decl::Class { name, .. } => format!("class {name}"),
         Decl::Enum { name, .. } => format!("enum {name}"),
+        Decl::Union { name, .. } => format!("union {name}"),
         Decl::Interface { name, .. } => format!("interface {name}"),
         Decl::Namespace {
             name, is_module, ..
@@ -421,6 +423,31 @@ fn render_decl(
                         Some(t) => format!("{}({})", v.name, render_type(t)),
                         None => v.name.clone(),
                     })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            sig.push_str(" }");
+            out.push_str(&format!("{h} `{}`\n```hc\n{sig}\n```\n", decl_anchor(d)));
+            if let Some(doc) = doc {
+                out.push_str(&format!("\n{doc}\n"));
+            }
+            out.push('\n');
+        }
+        Decl::Union {
+            name,
+            fields,
+            pub_,
+            ..
+        } => {
+            let mut sig = String::new();
+            if *pub_ {
+                sig.push_str("pub ");
+            }
+            sig.push_str(&format!("union {name} {{ "));
+            sig.push_str(
+                &fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.name, render_type(&f.ty)))
                     .collect::<Vec<_>>()
                     .join(", "),
             );

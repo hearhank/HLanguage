@@ -554,3 +554,28 @@ fn main() void {
     assert_consistent(src, "main", &[]);
     assert_eq!(run_bc(src, "main", &[]).unwrap(), IrValue::Void);
 }
+
+#[test]
+fn union_round_trip() {
+    // K1 union（ADR-0014）：union 表 + UnionSync（opcode 48）经字节码往返一致
+    let src = r#"
+union Num {
+    i: i32,
+    f: f32,
+    b: bool,
+}
+fn read_b(x: i32) bool {
+    var n = Num{ i = x };
+    return n.b;
+}
+fn main() i32 {
+    if (read_b(1) != true) { return 1; }
+    if (read_b(256) != false) { return 2; }
+    return 0;
+}
+"#;
+    assert_consistent(src, "main", &[]);
+    assert_eq!(run_bc(src, "main", &[]).unwrap(), IrValue::Int(0));
+    assert_consistent(src, "read_b", &[IrValue::Int(1)]);
+    assert_eq!(run_bc(src, "read_b", &[IrValue::Int(1)]).unwrap(), IrValue::Bool(true));
+}

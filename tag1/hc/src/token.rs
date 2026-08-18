@@ -55,6 +55,7 @@ pub enum TokenKind {
     KwErrdefer,
     KwClass,
     KwEnum,
+    KwUnion,
     KwTree,
     KwInterface,
     KwWhere,

@@ -88,6 +88,7 @@ impl Parser {
                 TokenKind::KwFn
                     | TokenKind::KwClass
                     | TokenKind::KwEnum
+                    | TokenKind::KwUnion
                     | TokenKind::KwInterface
                     | TokenKind::KwNamespace
                     | TokenKind::KwUsing
@@ -145,6 +146,10 @@ impl Parser {
             TokenKind::KwEnum => {
                 self.advance();
                 self.parse_enum(start, is_pub)
+            }
+            TokenKind::KwUnion => {
+                self.advance();
+                self.parse_union(start, is_pub)
             }
             TokenKind::KwInterface => {
                 self.advance();
@@ -658,6 +663,49 @@ impl Parser {
         Ok(Decl::Enum {
             name,
             variants,
+            pub_: is_pub,
+            span: start.merge(&end),
+        })
+    }
+
+    /// K1（ADR-0014）：无标签 union 声明解析——仅字段（无方法/无接口），
+    /// 字段语法同 class（`name: Type,`）。字段内存重叠语义在语义/运行时层落实。
+    fn parse_union(&mut self, start: Span, is_pub: bool) -> Result<Decl, Diagnostic> {
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace, "`{` to open union body")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            // 字段：name: Type,（union 无方法；`pub` 成员标注同 class——属性默认私有）
+            let member_pub = if self.at(&TokenKind::KwPub) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            if self.at(&TokenKind::KwMut) {
+                self.advance();
+            }
+            let fstart = self.span();
+            let fname = self.expect_ident()?;
+            self.expect(&TokenKind::Colon, "`:` after union field name")?;
+            let fty = self.parse_type()?;
+            fields.push(FieldDecl {
+                name: fname,
+                ty: fty,
+                pub_: member_pub,
+                span: fstart,
+            });
+            if self.at(&TokenKind::Comma) {
+                self.advance();
+            } else if !self.at(&TokenKind::RBrace) {
+                return Err(self.error_at("expected `,` or `}` after union field"));
+            }
+        }
+        self.expect(&TokenKind::RBrace, "`}` to close union body")?;
+        let end = self.span();
+        Ok(Decl::Union {
+            name,
+            fields,
             pub_: is_pub,
             span: start.merge(&end),
         })

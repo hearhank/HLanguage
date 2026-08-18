@@ -20,6 +20,7 @@
 //! 全局表（Phase 5，还原 IrModule.globals）: u32 n_globals · { name } × n_globals
 //! 枚举变体表（Phase 7）: u32 n_enums · { name · u32 n_var · {str}* }*
 //! [continuous] 类名表（P11d）: u32 n_cont · { name }*（DeepCopy 指令运行时门）
+//! K1 union 表（H1/ADR-0014）: u32 n_unions · { name · u32 n_f · { fname · Type }* }*
 //! ```
 //! 常量载荷保留全精度：`i128` 16 字节、`f64` 8 字节、字符串长度前缀。
 
@@ -28,8 +29,9 @@ use crate::ir::{run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrP
 use std::collections::{HashMap, HashSet};
 
 pub const MAGIC: [u8; 4] = *b"HBC2";
+/// v7：H1 增 K1 union 表（UnionSync 写路径字节重解释）+ opcode 48。
 /// v6：P11d 增 [continuous] 类名表（DeepCopy 指令运行时门）+ opcode 47。
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 // ---------- 常量 / 运算符 / 指令 标签 ----------
 
@@ -165,6 +167,19 @@ pub fn encode(module: &IrModule) -> Vec<u8> {
     push_u32(&mut out, cont.len() as u32);
     for name in cont {
         push_str(&mut out, name);
+    }
+    // K1 无标签 union 表（H1/ADR-0014）：union 名 → 字段（名 + 类型，声明序）；
+    // `UnionSync`/`store_field` 写路径字节重解释同步用。排序保证编码确定性。
+    let mut uf: Vec<(&String, &Vec<(String, Type)>)> = module.unions.iter().collect();
+    uf.sort_by(|a, b| a.0.cmp(b.0));
+    push_u32(&mut out, uf.len() as u32);
+    for (name, fields) in uf {
+        push_str(&mut out, name);
+        push_u32(&mut out, fields.len() as u32);
+        for (fname, fty) in fields {
+            push_str(&mut out, fname);
+            encode_type(&mut out, fty);
+        }
     }
     out
 }
@@ -422,6 +437,11 @@ fn encode_inst(out: &mut Vec<u8>, inst: &IrInst) {
                 push_str(out, k);
                 push_u32(out, *v as u32);
             }
+        }
+        IrInst::UnionSync { class, written } => {
+            out.push(48);
+            push_u32(out, *class as u32);
+            push_str(out, written);
         }
         IrInst::MakeEnum { temp, name, variant, payload } => {
             out.push(27);
@@ -724,6 +744,20 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
     for _ in 0..n_cont {
         continuous.insert(r.str()?);
     }
+    // K1 无标签 union 表（H1/ADR-0014）：union 名 → 字段（名 + 类型，声明序）
+    let n_unions = r.u32()? as usize;
+    let mut unions = HashMap::with_capacity(n_unions);
+    for _ in 0..n_unions {
+        let name = r.str()?;
+        let n_f = r.u32()? as usize;
+        let mut fields = Vec::with_capacity(n_f);
+        for _ in 0..n_f {
+            let fname = r.str()?;
+            let fty = decode_type(&mut r)?;
+            fields.push((fname, fty));
+        }
+        unions.insert(name, fields);
+    }
     Ok(IrModule {
         funcs,
         closures,
@@ -732,6 +766,7 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
         error_codes,
         enum_variants,
         continuous,
+        unions,
     })
 }
 
@@ -953,6 +988,10 @@ fn decode_inst(r: &mut Reader) -> Result<IrInst, String> {
                 }
                 v
             },
+        },
+        48 => IrInst::UnionSync {
+            class: r.u32()? as usize,
+            written: r.str()?,
         },
         27 => IrInst::MakeEnum {
             temp: r.u32()? as usize,
@@ -1326,6 +1365,11 @@ mod tests {
                     ty: "Rect".to_string(),
                     fields: vec![("w".to_string(), 0), ("h".to_string(), 1)],
                 },
+                // K1 union：UnionSync（opcode 48）紧随 MakeClass 构造
+                IrInst::UnionSync {
+                    class: 7,
+                    written: "i".to_string(),
+                },
                 IrInst::MakeEnum {
                     temp: 7,
                     name: "Color".to_string(),
@@ -1399,6 +1443,14 @@ mod tests {
             "Kind".to_string(),
             vec!["A".to_string(), "B".to_string(), "C".to_string()],
         );
+        let mut unions = HashMap::new();
+        unions.insert(
+            "Num".to_string(),
+            vec![
+                ("i".to_string(), Type::Named("i32".into(), vec![])),
+                ("f".to_string(), Type::Named("f32".into(), vec![])),
+            ],
+        );
         IrModule {
             funcs: vec![f0, f1],
             closures: vec![c0],
@@ -1407,6 +1459,7 @@ mod tests {
             error_codes,
             enum_variants,
             continuous: HashSet::from(["Point".to_string()]),
+            unions,
         }
     }
 

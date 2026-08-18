@@ -41,7 +41,7 @@
 | E2.3 异步 | ✅ 基本充分 | 协作式上 `Future(R)` + `await` ≡ `join()` 可复用组 G 机制 | 落地时对齐 G 组捕获/取消语义 |
 | E2.4 原子 | ⏸ 延迟 1.x | 单线程协作式下 `@atomic` 无意义（ADR-0011 已定案） | 1.x 排期 |
 | E3 标准库扩展 | ✅ 充分 | net/ipc/storage/text/ffi 方法清单可直译（04-stdlib-scope 有明细） | 无 |
-| E4 系统编程 | ⚠️ 部分 | K1 无标签 union 需设计、K6 freestanding 需裁决、K3 asm 已标注 1.x | 裁决 #4 + 05 缺口表 |
+| E4 系统编程 | ⚠️ 部分 | K1 无标签 union 已落地（H1）、K6 freestanding 已裁决 1.x（ADR-0014）、K3 asm 已标注 1.x；剩 K2/K4/K5（H2–H4） | 裁决 #4 + 05 缺口表 |
 | E5 工具链 | ✅ 充分 | format/lint/LSP/注册中心目标明确 | 无 |
 | E6 语言扩展 | ⚠️ 待裁决 | 开放问题 #1/#3/#4/#5/#6 逐项裁决 | §2.2 登记 |
 | E7 自举 | ⚠️ 大工程 | 07 §五已给渐进路线（H lexer → parser → 语义 → 后端） | 分阶段（组 J） |
@@ -182,12 +182,14 @@
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| H1 | K1 无标签 union（裸内存双关：字段重叠，无判别标签） | union 语义测试绿 | A4 | 2h |
+| H1 | ✅ K1 无标签 union（裸内存双关：字段重叠，无判别标签） | union 语义测试绿 | A4 | 2h |
 | H2 | K2 volatile：`@volatileLoad/Store`（LLVM volatile 语义，防优化掉） | volatile 测试绿（含 LLVM 发射断言） | — | 1.5h |
 | H3 | K4 `@ptrFromInt`/`@intFromPtr`（整数 ↔ 指针，物理地址 → 虚拟指针） | @ 内建测试绿 | — | 1h |
 | H4 | K5 `export fn`（符号导出）+ 链接脚本钩子（段布局/对齐） | export 测试绿（符号表断言） | — | 1.5h |
 | ⏸ H5 | K6 freestanding（裸机模式）——**移出本块（2026-08-18 ADR-0014）**，1.x 排期 | — | — | (2h) |
 | H6 | 文档同步：05 缺口表状态勾选 + 04 stdlib 系统编程扩展 + 02 里程碑 | 文档绿 | H1–H4 | 0.5h |
+
+> ✅ **组 H H1（K1 无标签 union）已完成（2026-08-18）**：`union { a: i32, b: f32 }` 裸内存双关（字段重叠、无判别标签，ADR-0014 定案）。**表示**：interp union 值 = `Value::Class(ClassData)`，带 `@union` 标记字段 + 所有声明字段零初始化；**写同步**——写字段 F 时把其他每个字段重新解释为 F 的字节（buffer 大小 = 写入字段宽度），读字段用 `bytes.get(..N)`，目标宽度 > 写入宽度 → `InvalidBytes: truncated union bytes` 错误；转换规则 int = `trunc i128 to iN` 后符号扩展、f32 = `trunc to i32` + `bitcast to float` + `fpext to double`、f64 = `trunc to i64` + `bitcast to double`、bool = `trunc to i8` + `icmp ne 0`。**约束**：union 仅允许标量字段（编译时错误）、union 字面量恰好接受一个字段。**引用类型**：`var b = a;` → 「cannot assign reference type」需 `copy(&a)`（对齐 Value::Class）。**原生边界（响亮拒绝）**：IR `UnionSync` 发射 `call void @hc_abort_builtin() + unreachable`——与闭包/notcallable 同类，编译期不拒、运行期在**首个 union 字面量处**中止（`error.NotBuiltin`），绝不静默误编译；门禁 compile mismatch 保持 60。**测试**：consistency 96 全绿（含 6 union：int 宽→窄/float↔int 重解释/bool 窄读/写同步/相等性/截断读失败）；frontend 56 全绿（含 5 union：声明解析、标量仅限、单字段字面量、未知字段、字段访问 clean）；bytecode union 往返（opcode 48 UnionSync + unions 表，`run_bc` == `run_ir`）。门禁基线不变（interpret 143/4/1、compile 60 mismatch）。**已知边界**：未加 union 示例（原生会中止），语义完全由一致性/前端/字节码套件覆盖。
 
 ### I. E5 工具链扩展（依赖：无特殊；与语言扩展并行）
 

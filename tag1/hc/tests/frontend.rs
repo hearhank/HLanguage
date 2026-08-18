@@ -125,6 +125,18 @@ class Rect: IShape { w: f32, h: f32, fn area(self: *Self) f32 { return self.w * 
 }
 
 #[test]
+fn parse_union_decl() {
+    // K1（ADR-0014）：无标签 union 声明解析——仅字段，无方法
+    let src = r#"
+union Kind { player: i32, enemy: f32, active: bool }
+pub union Num { i: i32, f: f64 }
+"#;
+    let program = parse_source(src).expect("parse unions");
+    assert_eq!(program.decls.len(), 2);
+    assert!(matches!(&program.decls[0], hc::ast::Decl::Union { name, .. } if name == "Kind"));
+}
+
+#[test]
 fn parse_test_fn_and_assertions() {
     let src = r#"
 fn add(a: i32, b: i32) i32 { return a + b; }
@@ -424,6 +436,52 @@ fn m24_return_owned_param_must_move() {
 fn m24_return_global_ref_ok() {
     // 返回 global 引用 → 合法（global 归根作用域，比函数长命）
     check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\n[test] fn t() !void {}\n");
+}
+
+// ---------- K1 无标签 union（ADR-0014）语义 ----------
+
+#[test]
+fn k1_union_scalar_only_rejected() {
+    // union 字段仅限标量（内存双关工具；引用类型编译错误）
+    check_has_error(
+        "union Bad { s: String }\n[test] fn t() !void {}\n",
+        "必须为标量类型",
+    );
+    check_has_error(
+        "union Bad { v: Vec(i32) }\n[test] fn t() !void {}\n",
+        "必须为标量类型",
+    );
+}
+
+#[test]
+fn k1_union_literal_single_field() {
+    // union 字面量恰好接受一个字段
+    check_has_error(
+        "union U { a: i32, b: i32 }\n[test] fn t() !void {\n    var u = U{ a = 1, b = 2 };\n}\n",
+        "expects exactly one field",
+    );
+}
+
+#[test]
+fn k1_union_literal_unknown_field() {
+    // union 字面量字段必须存在
+    check_has_error(
+        "union U { a: i32 }\n[test] fn t() !void {\n    var u = U{ x = 1 };\n}\n",
+        "has no field",
+    );
+}
+
+#[test]
+fn k1_union_field_access_clean() {
+    // 合法 union：构造 + 字段读/写（写同步重解释在运行时，语义层通过）
+    check_clean(
+        "union Num { i: i32, f: f32, b: bool }\n\
+         [test] fn t() !void {\n\
+             var n = Num{ i = 1 };\n\
+             var x = n.b;\n\
+             n.i = 2;\n\
+         }\n",
+    );
 }
 
 // ---------- M1.4 跨文件模块验收 ----------

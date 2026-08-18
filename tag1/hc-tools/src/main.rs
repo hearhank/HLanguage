@@ -441,6 +441,7 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
     let mut error_codes = entry.error_codes;
     let mut enum_variants = entry.enum_variants;
     let mut continuous = entry.continuous;
+    let mut unions = entry.unions;
     for m in siblings {
         let offset = funcs.len();
         let coffset = closures.len();
@@ -485,6 +486,8 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
         enum_variants.extend(m.enum_variants);
         // [continuous] 类名表：并入兄弟（跨文件类同判连续）
         continuous.extend(m.continuous);
+        // K1 union 表：并入兄弟（同名同定义，覆盖等价）
+        unions.extend(m.unions);
     }
     hc::ir::IrModule {
         funcs,
@@ -494,6 +497,7 @@ fn merge_modules(entry: hc::ir::IrModule, siblings: Vec<hc::ir::IrModule>) -> hc
         error_codes,
         enum_variants,
         continuous,
+        unions,
     }
 }
 

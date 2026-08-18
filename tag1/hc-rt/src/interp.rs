@@ -13,7 +13,8 @@ use hc::comptime::{self, Instantiated};
 use hc::token::Span;
 
 use crate::value::{
-    ArenaAllocErr, ArenaState, BoxedData, ClosureData, LeakRecord, MapData, Value, VecData,
+    ArenaAllocErr, ArenaState, BoxedData, ClassData, ClosureData, LeakRecord, MapData, Value,
+    VecData,
 };
 
 pub const MAX_CALL_DEPTH: usize = 1000;
@@ -220,6 +221,11 @@ enum TypeDef {
     },
     Enum {
         variants: Vec<EnumVariant>,
+    },
+    /// K1（ADR-0014）：无标签 union——字段内存重叠；运行时值以
+    /// `Value::Class` + `@union` 标记表示，写字段同步重解释所有字段
+    Union {
+        fields: Vec<FieldDecl>,
     },
     Interface {
         supers: Vec<Type>,
@@ -876,6 +882,17 @@ impl Interp {
             Decl::Enum { name, variants, .. } => {
                 let type_def = TypeDef::Enum {
                     variants: variants.clone(),
+                };
+                if !skip_flat {
+                    self.types.insert(name.clone(), type_def.clone());
+                }
+                if !prefix.is_empty() {
+                    self.types.insert(format!("{prefix}.{name}"), type_def);
+                }
+            }
+            Decl::Union { name, fields, .. } => {
+                let type_def = TypeDef::Union {
+                    fields: fields.clone(),
                 };
                 if !skip_flat {
                     self.types.insert(name.clone(), type_def.clone());
@@ -2418,6 +2435,31 @@ impl Interp {
                             ))
                         }
                     }
+                    Some(TypeDef::Union { fields: uf }) => {
+                        // K1 union 字面量：`Foo { field = v }`——单字段，其余字段 = 该字段字节重解释。
+                        // 运行时形态 = `Value::Class` + `@union` 标记（写路径同步重解释）。
+                        if fields.len() != 1 {
+                            return Err(RtError::msg(
+                                "BadUnionLiteral",
+                                "union literal takes exactly one field",
+                            ));
+                        }
+                        let (fname, fval) = &fields[0];
+                        // 先克隆字段声明，结束对 self.types 的借用，才能 self.eval
+                        let uf = uf.clone();
+                        let v = self.eval(fval)?;
+                        let mut f = HashMap::new();
+                        f.insert("@union".into(), Value::Bool(true));
+                        for fd in &uf {
+                            f.insert(fd.name.clone(), Self::union_default_value(&fd.ty));
+                        }
+                        f.insert(fname.clone(), v.clone());
+                        let c = Value::class(&ty, f);
+                        if let Value::Class(cr) = &c {
+                            self.union_sync_fields(&mut cr.borrow_mut(), fname, &v)?;
+                        }
+                        Ok(c)
+                    }
                     _ => Err(RtError::msg("UnknownType", format!("unknown type `{ty}`"))),
                 }
             }
@@ -3144,7 +3186,7 @@ impl Interp {
                 self.check_dangling(&b, span)?;
                 let b = self.deref_value(b);
                 if let Value::Class(c) = b {
-                    c.borrow_mut().fields.insert(field.clone(), new_v);
+                    self.assign_class_field(c, field, new_v)?;
                 } else {
                     return Err(RtError::new("TypeError", Some(span.clone())));
                 }
@@ -3160,7 +3202,7 @@ impl Interp {
                 self.check_dangling(&b, span)?;
                 let b = self.deref_value(b);
                 if let Value::Class(c) = b {
-                    c.borrow_mut().fields.insert(field.clone(), new_v);
+                    self.assign_class_field(c, field, new_v)?;
                 } else {
                     return Err(RtError::new("TypeError", Some(span.clone())));
                 }
@@ -7673,6 +7715,18 @@ impl Interp {
                     }
                 }
                 Some(TypeDef::Interface { .. }) => Some(8),
+                // K1 无标签 union（ADR-0014）：size = 最大字段宽度
+                Some(TypeDef::Union { fields }) => {
+                    let mut max_s = 0usize;
+                    for fd in fields {
+                        if let Type::Named(n, _) = fd.ty.strip() {
+                            if let Some(s) = Self::union_scalar_width(n) {
+                                max_s = max_s.max(s);
+                            }
+                        }
+                    }
+                    Some(max_s)
+                }
                 _ => None,
             },
         }
@@ -7849,6 +7903,159 @@ impl Interp {
             }
             _ => Ok(Value::Void),
         }
+    }
+
+    // ---------- K1 无标签 union（ADR-0014，2026-08-18）----------
+    // 运行时形态 = `Value::Class` + `@union` 标记；字段值保持「写字段 → 字节重解释
+    // 同步其余字段」的不变式，读任意字段即返回已同步值（C 风格内存双关）。
+
+    /// union 字段默认值（零值占位：构造时未写字段 = Int(0)/Float(0.0)/Bool(false)）
+    fn union_default_value(ty: &Type) -> Value {
+        match ty.strip() {
+            Type::Named(n, _) => match n.as_str() {
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                | "u64" | "u128" | "usize" => Value::Int(0),
+                "f16" | "f32" | "f64" | "f128" => Value::Float(0.0),
+                "bool" => Value::Bool(false),
+                _ => Value::Void,
+            },
+            _ => Value::Void,
+        }
+    }
+
+    /// union 标量字段字节宽度（i128/u128/f128 = 16 字节；余同 type_size_of）
+    fn union_scalar_width(n: &str) -> Option<usize> {
+        match n {
+            "i8" | "u8" | "bool" => Some(1),
+            "i16" | "u16" | "f16" => Some(2),
+            "i32" | "u32" | "f32" => Some(4),
+            "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
+            "i128" | "u128" | "f128" => Some(16),
+            _ => None,
+        }
+    }
+
+    /// 标量值 → 小端字节（union 专用：i128/u128 全 16 字节，纠正 write_scalar 的 8 字节近似）
+    fn union_write_scalar(out: &mut [u8], n: &str, v: &Value) {
+        match (n, v) {
+            ("i8" | "u8", Value::Int(i)) => out[0] = *i as u8,
+            ("i16" | "u16", Value::Int(i)) => {
+                out[..2].copy_from_slice(&(*i as i16).to_le_bytes())
+            }
+            ("i32" | "u32", Value::Int(i)) => {
+                out[..4].copy_from_slice(&(*i as i32).to_le_bytes())
+            }
+            ("i64" | "u64" | "isize" | "usize", Value::Int(i)) => {
+                out[..8].copy_from_slice(&(*i as i64).to_le_bytes())
+            }
+            ("i128" | "u128", Value::Int(i)) => {
+                out[..16].copy_from_slice(&i.to_le_bytes())
+            }
+            ("f32", Value::Float(f)) => out[..4].copy_from_slice(&(*f as f32).to_le_bytes()),
+            ("f64" | "f16" | "f128", Value::Float(f)) => {
+                out[..8].copy_from_slice(&f.to_le_bytes())
+            }
+            ("bool", Value::Bool(b)) => out[0] = if *b { 1 } else { 0 },
+            _ => {}
+        }
+    }
+
+    /// 小端字节 → 标量值（union 专用）
+    fn union_read_scalar(bytes: &[u8], n: &str) -> Result<Value> {
+        match n {
+            "i8" | "u8" => Ok(Value::Int(bytes.first().copied().unwrap_or(0) as i128)),
+            "i16" | "u16" => {
+                let b = bytes
+                    .get(..2)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
+                Ok(Value::Int(i16::from_le_bytes(b.try_into().unwrap()) as i128))
+            }
+            "i32" | "u32" => {
+                let b = bytes
+                    .get(..4)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
+                Ok(Value::Int(i32::from_le_bytes(b.try_into().unwrap()) as i128))
+            }
+            "i64" | "u64" | "isize" | "usize" => {
+                let b = bytes
+                    .get(..8)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
+                Ok(Value::Int(i64::from_le_bytes(b.try_into().unwrap()) as i128))
+            }
+            "i128" | "u128" => {
+                let b = bytes
+                    .get(..16)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
+                Ok(Value::Int(i128::from_le_bytes(b.try_into().unwrap())))
+            }
+            "f32" => {
+                let b = bytes
+                    .get(..4)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
+                Ok(Value::Float(f32::from_le_bytes(b.try_into().unwrap()) as f64))
+            }
+            "f64" | "f16" | "f128" => {
+                let b = bytes
+                    .get(..8)
+                    .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
+                Ok(Value::Float(f64::from_le_bytes(b.try_into().unwrap())))
+            }
+            "bool" => Ok(Value::Bool(bytes.first().copied().unwrap_or(0) != 0)),
+            _ => Ok(Value::Void),
+        }
+    }
+
+    /// K1 union 写字段同步：写 `written` 字段后，把该字段字节重解释为其余每个字段的类型。
+    /// 维持「读任意字段 = 写后字节重解释」的 C 风格 union 语义（字段全标量，ADR-0014）。
+    fn union_sync_fields(&self, c: &mut ClassData, written: &str, v: &Value) -> Result<()> {
+        let Some(TypeDef::Union { fields }) = self.types.get(&c.name) else {
+            return Err(RtError::msg(
+                "TypeError",
+                format!("`{}` 不是 union 类型", c.name),
+            ));
+        };
+        let wty = fields
+            .iter()
+            .find(|f| f.name == written)
+            .map(|f| f.ty.strip())
+            .ok_or_else(|| {
+                RtError::msg(
+                    "NoField",
+                    format!("union `{}` has no field `{written}`", c.name),
+                )
+            })?;
+        let wname = match wty {
+            Type::Named(n, _) => n.clone(),
+            _ => return Err(RtError::msg("TypeError", "union 字段必须为标量类型")),
+        };
+        let width = Self::union_scalar_width(&wname)
+            .ok_or_else(|| RtError::msg("TypeError", format!("字段 `{wname}` 无标量宽度")))?;
+        let mut buf = vec![0u8; width];
+        Self::union_write_scalar(&mut buf, &wname, v);
+        for fd in fields {
+            if fd.name == written {
+                continue;
+            }
+            let fname = match fd.ty.strip() {
+                Type::Named(n, _) => n.clone(),
+                _ => continue,
+            };
+            let dv = Self::union_read_scalar(&buf, &fname)?;
+            c.fields.insert(fd.name.clone(), dv);
+        }
+        Ok(())
+    }
+
+    /// 字段写入统一入口（K1：union 标记 → 写 + 同步重解释；class → 普通覆盖写）
+    fn assign_class_field(&mut self, c: Rc<RefCell<ClassData>>, field: &str, v: Value) -> Result<()> {
+        if c.borrow().fields.contains_key("@union") {
+            let mut cd = c.borrow_mut();
+            cd.fields.insert(field.to_string(), v.clone());
+            self.union_sync_fields(&mut cd, field, &v)?;
+        } else {
+            c.borrow_mut().fields.insert(field.to_string(), v);
+        }
+        Ok(())
     }
 
     /// 标量值 → 小端字节（写入 out 前 size 字节；size 由 scalar_size 决定）
