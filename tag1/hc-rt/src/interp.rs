@@ -1672,7 +1672,8 @@ impl Interp {
 
     fn exec_if(&mut self, ifs: &IfStmt) -> Result<Flow> {
         let cond = self.eval(&ifs.cond)?;
-        // optional 捕获：if (maybe) |v| { ... }——Some 绑定 v，None 走 else
+        // 捕获：if (maybe) |v| { ... }——Some 绑定 v，None 走 else；
+        // 错误联合：else |err| 绑定 err 走 else；无 err_capture 但有 else → 错误丢弃
         if let Some((_, name)) = &ifs.capture {
             match self.deref_value(cond) {
                 Value::Opt(Some(v)) => {
@@ -1683,10 +1684,36 @@ impl Interp {
                     return r;
                 }
                 Value::Opt(None) => {
+                    // 错误捕获存在：null 非错误路径不进入 else（else 体仅在错误路径执行）
+                    if ifs.err_capture.is_some() {
+                        return Ok(Flow::None);
+                    }
                     if let Some(else_b) = &ifs.else_b {
                         return self.exec_stmt(else_b);
                     }
                     return Ok(Flow::None);
+                }
+                err @ Value::Err { .. } => {
+                    if let Some((_, en)) = &ifs.err_capture {
+                        self.push_scope();
+                        self.bind(en, err);
+                        let r = if let Some(else_b) = &ifs.else_b {
+                            self.exec_stmt(else_b)
+                        } else {
+                            Ok(Flow::None)
+                        };
+                        let _ = self.pop_scope(Self::is_err_path(&r));
+                        return r;
+                    }
+                    if let Some(else_b) = &ifs.else_b {
+                        return self.exec_stmt(else_b);
+                    }
+                    // 无 else 捕获：错误值绑到 then（保持旧 other 行为）
+                    self.push_scope();
+                    self.bind(name, err);
+                    let r = self.exec_block(&ifs.then_b);
+                    let _ = self.pop_scope(Self::is_err_path(&r));
+                    return r;
                 }
                 other => {
                     self.push_scope();
@@ -1709,10 +1736,28 @@ impl Interp {
     fn exec_while(&mut self, w: &WhileStmt) -> Result<Flow> {
         loop {
             let cond = self.eval(&w.cond)?;
-            if !cond.as_bool() {
-                return Ok(Flow::None);
-            }
+            // optional 捕获：while (maybe) |v|——Some 绑定 v 并循环，None 退出；
+            // 错误联合错误值（无 else 捕获）→ 沿调用链传播
+            let bind: Option<(String, Value)> = match &w.capture {
+                Some((_, name)) => match self.deref_value(cond) {
+                    Value::Opt(Some(v)) => Some((name.clone(), (*v).clone())),
+                    Value::Opt(None) => return Ok(Flow::None),
+                    err @ Value::Err { .. } => {
+                        return Err(RtError::signal(Flow::Return(err)));
+                    }
+                    other => Some((name.clone(), other)),
+                },
+                None => {
+                    if !cond.as_bool() {
+                        return Ok(Flow::None);
+                    }
+                    None
+                }
+            };
             self.push_scope();
+            if let Some((name, val)) = &bind {
+                self.bind(name, val.clone());
+            }
             let r = self.exec_block_inner(&w.body);
             let _ = self.pop_scope(Self::is_err_path(&r));
             match r {

@@ -206,6 +206,68 @@ fn pick(x: ?i32) i32 {
 }
 
 #[test]
+fn while_optional_capture() {
+    // while (maybe) |v|：Some 绑定 v 并循环，None 退出（含 step 前置/后置两种文法）
+    assert_all_pass(
+        r#"
+fn next(x: i32) ?i32 {
+    if (x < 5) {
+        return x;
+    }
+    return null;
+}
+[test] fn while_cap() void {
+    var mut n: i32 = 0;
+    var mut sum: i32 = 0;
+    while (next(n)) |v| {
+        sum += v;
+        n += 1;
+    }
+    expect_eq(n, 5);
+    expect_eq(sum, 10);
+}
+[test] fn while_cap_with_step_after() void {
+    var mut n: i32 = 0;
+    var mut sum: i32 = 0;
+    while (next(n)) |v| : (n += 1) {
+        sum += v;
+    }
+    expect_eq(n, 5);
+    expect_eq(sum, 10);
+}
+"#,
+    );
+}
+
+#[test]
+fn if_error_union_capture() {
+    // if (e!T) |v| else |err|：成功绑定负载走 then，错误绑定 err 走 else
+    assert_all_pass(
+        r#"
+fn may_fail(x: i32) !i32 {
+    if (x > 0) {
+        return x;
+    }
+    return error.Negative;
+}
+fn try_it(x: i32) !i32 {
+    if (may_fail(x)) |v| {
+        return v;
+    } else |err| {
+        return err;
+    }
+}
+[test] fn if_err_cap() void {
+    var a = try_it(5) catch |e| { -1; };
+    expect_eq(a, 5);
+    var b = try_it(-1) catch |e| { 99; };
+    expect_eq(b, 99);
+}
+"#,
+    );
+}
+
+#[test]
 fn while_with_step() {
     assert_all_pass(
         r#"

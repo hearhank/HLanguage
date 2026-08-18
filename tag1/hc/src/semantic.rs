@@ -1664,10 +1664,11 @@ impl Checker {
                 self.check_condition(ct.as_ref(), &ifs.cond.span());
                 // G3 Q18：条件体内 join 不保证执行 → 非直线路径（不视为绑定）
                 self.conditional_depth += 1;
-                // optional 捕获：if (maybe) |v|
+                // 捕获：if (maybe) |v|——optional → 内层类型；错误联合 → 成功负载类型
                 if let Some((_, n)) = &ifs.capture {
                     let cap_ty = match &ct {
                         Some(SType::Optional(inner)) => Some(inner.as_ref().clone()),
+                        Some(SType::ErrorUnion(_, inner)) => Some(inner.as_ref().clone()),
                         _ => None,
                     };
                     scopes.push(HashMap::new());
@@ -1686,7 +1687,30 @@ impl Checker {
                     self.check_block(&ifs.then_b, scopes, err_constraint.clone(), ret_ty.clone());
                 }
                 if let Some(else_b) = &ifs.else_b {
-                    self.check_stmt(else_b, scopes, err_constraint, ret_ty);
+                    // 错误捕获：else |err|——err 绑定为错误联合值（错误值，无负载）
+                    if let Some((_, en)) = &ifs.err_capture {
+                        let err_ty = match &ct {
+                            Some(SType::ErrorUnion(e, _)) => Some(SType::ErrorUnion(
+                                e.clone(),
+                                Box::new(SType::Unknown),
+                            )),
+                            _ => Some(SType::ErrorUnion(None, Box::new(SType::Unknown))),
+                        };
+                        scopes.push(HashMap::new());
+                        scopes.last_mut().unwrap().insert(
+                            en.clone(),
+                            VarInfo {
+                                ty: err_ty,
+                                pending_fields: None,
+                                source: AllocSource::Unknown,
+                                thread: None,
+                            },
+                        );
+                        self.check_stmt(else_b, scopes, err_constraint, ret_ty);
+                        scopes.pop();
+                    } else {
+                        self.check_stmt(else_b, scopes, err_constraint, ret_ty);
+                    }
                 }
                 self.conditional_depth -= 1;
             }
@@ -1694,7 +1718,28 @@ impl Checker {
                 let ct = self.expr_ty(&w.cond, scopes, None);
                 self.check_condition(ct.as_ref(), &w.cond.span());
                 self.conditional_depth += 1;
-                self.check_block(&w.body, scopes, err_constraint, ret_ty);
+                // optional 捕获：while (maybe) |v|——Some 绑定 v 并循环
+                if let Some((_, n)) = &w.capture {
+                    let cap_ty = match &ct {
+                        Some(SType::Optional(inner)) => Some(inner.as_ref().clone()),
+                        Some(SType::ErrorUnion(_, inner)) => Some(inner.as_ref().clone()),
+                        _ => None,
+                    };
+                    scopes.push(HashMap::new());
+                    scopes.last_mut().unwrap().insert(
+                        n.clone(),
+                        VarInfo {
+                            ty: cap_ty,
+                            pending_fields: None,
+                            source: AllocSource::Unknown,
+                            thread: None,
+                        },
+                    );
+                    self.check_block(&w.body, scopes, err_constraint, ret_ty);
+                    scopes.pop();
+                } else {
+                    self.check_block(&w.body, scopes, err_constraint, ret_ty);
+                }
                 self.conditional_depth -= 1;
             }
             Stmt::For(f) => {
@@ -2478,6 +2523,7 @@ impl Checker {
                 | SType::Str
                 | SType::Ptr(_, _)
                 | SType::Optional(_)
+                | SType::ErrorUnion(_, _)
                 | SType::Generic(_)
                 | SType::Infer
                 | SType::Unknown => {}

@@ -3169,15 +3169,29 @@ impl<'a> LowerCtx<'a> {
                 let c = self.lower_expr(&ifs.cond);
                 let l_else = self.new_label();
                 let l_end = self.new_label();
+                // 错误捕获：if (e!T) |v| else |err|——错误值走 l_err（绑定 err）。
+                // 仅当存在 then 捕获才分流（`if (x) else |err|` 无捕获 → 维持普通 if 语义，
+                // 对齐解释器 exec_if）。
+                let l_err = if ifs.capture.is_some() && ifs.err_capture.is_some() {
+                    Some(self.new_label())
+                } else {
+                    None
+                };
                 match &ifs.capture {
-                    // optional 捕获：null → else；否则绑定 cond 值到捕获名（对齐解释器 exec_if）
+                    // 捕获：if (maybe) |v| / if (e!T) |v|——错误 → l_err；
+                    // null → else；否则解包负载绑定捕获名（对齐解释器 exec_if）
                     Some((_, name)) => {
+                        if let Some(le) = l_err {
+                            self.push(IrInst::JumpIfErr { temp: c, label: le });
+                        }
                         self.push(IrInst::JumpIfNull {
                             temp: c,
                             label: l_else,
                         });
                         self.push_scope();
-                        self.bind(name, c);
+                        let u = self.alloc_slot();
+                        self.push(IrInst::Unwrap { temp: u, a: c });
+                        self.bind(name, u);
                         for stmt in &ifs.then_b.stmts {
                             self.lower_stmt(stmt);
                         }
@@ -3201,10 +3215,29 @@ impl<'a> LowerCtx<'a> {
                     Some(else_b) => {
                         self.push(IrInst::Jump { label: l_end });
                         self.label(l_else);
-                        self.lower_stmt(else_b);
+                        if let Some(le) = l_err {
+                            // err_capture：null 非错误路径不进入 else（else 体仅在
+                            // 错误路径执行，err 绑定在作用域内）
+                            self.push(IrInst::Jump { label: l_end });
+                            self.label(le);
+                            if let Some((_, en)) = &ifs.err_capture {
+                                self.push_scope();
+                                self.bind(en, c);
+                            }
+                            self.lower_stmt(else_b);
+                            if ifs.err_capture.is_some() {
+                                self.pop_scope();
+                            }
+                        } else {
+                            self.lower_stmt(else_b);
+                        }
                     }
                     None => {
                         self.label(l_else);
+                        if let Some(le) = l_err {
+                            // err_capture 但无 else（解析器不会产生，防御兜底）
+                            self.label(le);
+                        }
                     }
                 }
                 self.label(l_end);
@@ -3214,26 +3247,63 @@ impl<'a> LowerCtx<'a> {
                 // continue 目标：步进（如有）→ 重测条件（对齐 oracle exec_while）
                 let l_cont = self.new_label();
                 let l_end = self.new_label();
+                // optional 捕获：错误值沿调用链传播（对齐 oracle exec_while `Flow::Return`）
+                let l_err = if w.capture.is_some() {
+                    Some(self.new_label())
+                } else {
+                    None
+                };
                 self.label(l_top);
                 let c = self.lower_expr(&w.cond);
-                self.push(IrInst::JumpIfNot {
-                    temp: c,
-                    label: l_end,
-                });
-                let defer_depth = self.defers.len();
-                self.loops.push(LoopCtx {
-                    break_label: l_end,
-                    continue_label: l_cont,
-                    label: w.label.clone(),
-                    defer_depth_at_entry: defer_depth,
-                });
-                self.lower_block(&w.body);
-                self.loops.pop();
+                if let Some((_, name)) = &w.capture {
+                    if let Some(le) = l_err {
+                        self.push(IrInst::JumpIfErr { temp: c, label: le });
+                    }
+                    // null → 退出循环；否则解包负载绑定捕获名
+                    self.push(IrInst::JumpIfNull {
+                        temp: c,
+                        label: l_end,
+                    });
+                    self.push_scope();
+                    let u = self.alloc_slot();
+                    self.push(IrInst::Unwrap { temp: u, a: c });
+                    self.bind(name, u);
+                    let defer_depth = self.defers.len();
+                    self.loops.push(LoopCtx {
+                        break_label: l_end,
+                        continue_label: l_cont,
+                        label: w.label.clone(),
+                        defer_depth_at_entry: defer_depth,
+                    });
+                    self.lower_block(&w.body);
+                    self.loops.pop();
+                    self.pop_scope();
+                } else {
+                    self.push(IrInst::JumpIfNot {
+                        temp: c,
+                        label: l_end,
+                    });
+                    let defer_depth = self.defers.len();
+                    self.loops.push(LoopCtx {
+                        break_label: l_end,
+                        continue_label: l_cont,
+                        label: w.label.clone(),
+                        defer_depth_at_entry: defer_depth,
+                    });
+                    self.lower_block(&w.body);
+                    self.loops.pop();
+                }
                 self.label(l_cont);
                 if let Some(step) = &w.step {
                     let _ = self.lower_expr(step);
                 }
                 self.push(IrInst::Jump { label: l_top });
+                if let Some(le) = l_err {
+                    // 错误传播：return 错误值（errdefer 按值判定）
+                    self.label(le);
+                    self.emit_defers(0, ErrPath::Value(c));
+                    self.push(IrInst::Return { temp: c });
+                }
                 self.label(l_end);
             }
             Stmt::Return(e, _) => match e {

@@ -3,7 +3,7 @@
 **覆盖范围以 ADR-0004 分层明示为准**（2026-08-18 修正）：
 
 - **`hc run --ir` / 字节码 VM（`hc run <file.hbc>`）**：全语言（含 G1-G5 标准库），与 tree-walking 同面；不在此列。
-- **`hc build`（LLVM 原生）**：未全标准库——`compile mismatch ≤ 52` 边界（ADR-0004）。对原生后端未覆盖的构造，降级**不静默丢弃**：
+- **`hc build`（LLVM 原生）**：未全标准库——`compile mismatch ≤ 60` 边界（ADR-0004）。对原生后端未覆盖的构造，降级**不静默丢弃**：
   - 编译期（`ir::lower`）：一律返回 `error.Unsupported`，带行列 + 「请用默认 tree-walking 模式」提示，进程非零退出；
   - 运行期：未实现的原生内建/方法以 `error.NotBuiltin` / `error.NoMethod` / `error.Unsupported` 响亮中止。
 

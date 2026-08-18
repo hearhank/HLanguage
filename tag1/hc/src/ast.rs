@@ -281,6 +281,8 @@ pub struct IfStmt {
     pub cond: Expr,
     /// optional 捕获：if (maybe) |v| { ... }
     pub capture: Option<(CaptureMode, String)>,
+    /// 错误捕获：if (e!T) |v| { ... } else |err| { ... }
+    pub err_capture: Option<(CaptureMode, String)>,
     pub then_b: Block,
     pub else_b: Option<Box<Stmt>>, // Block 或 If（else if）
     pub span: Span,
@@ -291,6 +293,8 @@ pub struct WhileStmt {
     /// 循环标签（`:label while`），供 `break :label` / `continue :label` 定位
     pub label: Option<String>,
     pub cond: Expr,
+    /// optional 捕获：while (maybe) |v| { ... }——Some 绑定 v 并循环，None 退出
+    pub capture: Option<(CaptureMode, String)>,
     pub step: Option<Expr>,
     pub body: Block,
     pub span: Span,

@@ -2,7 +2,7 @@
 # 完整示例套件回归门（CI 与本地共用）。
 #
 # 两部分（基线随功能扩增而更新，见 tag1/README.md）：
-#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（142/148 通过 + 1 跳过：
+#   1) interpret：`hc test examples/` 断言 >= 125 passed 且 <= 11 failed（143/148 通过 + 1 跳过：
 #      23-tests 的 skip_example 自 F1 起实际触发 error.SkipTest → SKIP，不计入 passed/failed；
 #      130→132 为 H3 新增 91-orders-domain（[module] 领域约定，2 测试全绿）；
 #      132→133 为组 D（E1.2）comptime 类型函数：34-generics 由失败转全绿；
@@ -10,8 +10,9 @@
 #      数组类型函数 `[n]T`）由失败转全绿，失败 9→8；
 #      135→142 为组 E E1：async/await 解析 + 语义落地——含 `async fn`/`await` 的 5 例
 #      （37/38/39/76/80）由双后端解析失败转为解释执行（async 体同步执行 + await 透传，
-#      E2 前近似正确），失败 8→5）
-#   2) compile：`hc test --mode=compile examples/` 断言 <= 58 mismatch
+#      E2 前近似正确），失败 8→5；
+#      142→143 为捕获语法解析落地：79-retry 由解析失败转全绿（retry_demo），失败 5→4）
+#   2) compile：`hc test --mode=compile examples/` 断言 <= 60 mismatch
 #      （未实现原生内建/方法 → error.NotBuiltin/NoMethod 响亮中止；子集扩增时该数下降，属改进。
 #      52→53 为 D1 副作用：interpret 侧 fmt_int 修复使 63-template-render 转绿，原生侧
 #      String.from/replace/find 仍缺 → 该例由双失败转为 mismatch。
@@ -32,7 +33,12 @@
 #      （37/76 行 26/29，ManyToMany/OneToOne——组 F 延迟 1.x）、38/80（G1 net 已
 #      落地仍红：38 主函数旧 URL 形式 connect(url)/read_all(&conn) + JsonValue 类型
 #      未实现，80 主函数 https:// 网络不可达——仅 http:// 支持，均非 G1 范围）、
-#      Io.evented 原生构造器（39，interp-only E3）——58 保持，回落依赖 F/G 落地而非 E 组）
+#      Io.evented 原生构造器（39，interp-only E3）——58 保持，回落依赖 F/G 落地而非 E 组；
+#      58→60 为捕获语法解析副作用：78-task-dispatch / 79-retry 由双解析失败转为可解析——
+#      04-concurrency 同组包级原生编译因 76 的 four_mode_types（组 F 四模式类型，延迟 1.x）
+#      在原生 LLVM 处 error.Unsupported 响亮拒绝 → 组内每个已解析文件均计入文件级 MISMATCH，
+#      78/79 各 +1；79 单独原生编译已验证 MATCH（捕获语法本身原生可编），78 的失败模式由
+#      解析错误转为运行时 error.UndefinedName（组 F 四模式类型，延迟 1.x））
 #
 # 用法：bash tag1/scripts/check-examples.sh（工作目录不限，脚本自定位到 tag1/）
 set -euo pipefail
@@ -67,8 +73,8 @@ if [ -z "$mismatch" ]; then
     echo "::error::无法解析 compile mismatch 汇总（可能缺少 zig cc）"
     exit 1
 fi
-if [ "$mismatch" -gt 58 ]; then
-    echo "::error::编译交叉验证回归：$mismatch mismatch（基线 <=58）"
+if [ "$mismatch" -gt 60 ]; then
+    echo "::error::编译交叉验证回归：$mismatch mismatch（基线 <=60）"
     exit 1
 fi
 echo "compile OK: $mismatch mismatch"

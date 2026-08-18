@@ -7,7 +7,7 @@
 | tree-walking 解释器 | `hc run <file.hc>`（默认） | 全语言 |
 | IR 参考解释器 | `hc run --ir <file.hc>` | 全语言（含 G1-G5 标准库；唯一语义源） |
 | 字节码 VM | `hc run <file.hbc>`（HBC2） | 全语言（同 IR，复用 `run_ir`） |
-| LLVM 原生 | `hc build <file.hc>` | 未全标准库（`compile mismatch ≤ 52` 边界，见 ADR-0004） |
+| LLVM 原生 | `hc build <file.hc>` | 未全标准库（`compile mismatch ≤ 60` 边界，见 ADR-0004） |
 
 > 2026-08-18 修正：IR/字节码 由「M3.1–Phase 6 子集」升格为**全语言**——G1-G5 模块
 >（net/ipc/storage/archive/text/time/rng + io 差异项 + 线程生命周期）已同步进 IR 后端

@@ -1146,8 +1146,13 @@ impl Parser {
             None
         };
         let then_b = self.parse_body_or_stmt()?;
+        let mut err_capture = None;
         let else_b = if self.at(&TokenKind::KwElse) {
             self.advance();
+            // 错误捕获：else |err| { ... }
+            if self.at(&TokenKind::Pipe) {
+                err_capture = Some(self.parse_capture()?);
+            }
             if self.at(&TokenKind::KwIf) {
                 let inner = self.parse_if_stmt()?;
                 Some(Box::new(Stmt::Block(inner_as_block(inner))))
@@ -1161,6 +1166,7 @@ impl Parser {
         Ok(Stmt::If(IfStmt {
             cond,
             capture,
+            err_capture,
             then_b,
             else_b,
             span: bspan,
@@ -1187,6 +1193,11 @@ impl Parser {
         self.expect(&TokenKind::LParen, "`(` after while")?;
         let cond = self.parse_expr()?;
         self.expect(&TokenKind::RParen, "`)` after while condition")?;
+        // optional 捕获：while (maybe) |v| { ... }（step 前后均可，对齐 Zig）
+        let mut capture = None;
+        if self.at(&TokenKind::Pipe) {
+            capture = Some(self.parse_capture()?);
+        }
         let step = if self.at(&TokenKind::Colon) {
             self.advance();
             self.expect(&TokenKind::LParen, "`(` in continue step")?;
@@ -1196,11 +1207,15 @@ impl Parser {
         } else {
             None
         };
+        if capture.is_none() && self.at(&TokenKind::Pipe) {
+            capture = Some(self.parse_capture()?);
+        }
         let body = self.parse_body_or_stmt()?;
         let bspan = body.span.clone();
         Ok(Stmt::While(WhileStmt {
             label,
             cond,
+            capture,
             step,
             body,
             span: bspan,
