@@ -27,6 +27,7 @@ mod docgen;
 mod scriptgen;
 mod comptimegen;
 mod fmtgen;
+mod astdump;
 
 /// ANSI 颜色开关：仅当目标流为终端且未设置 NO_COLOR 时启用。
 /// 重定向/管道（CI、check-examples.sh 捕获）下自动关闭，保证 grep 解析不受污染。
@@ -308,6 +309,10 @@ fn run_cli() -> ExitCode {
             // K1：`hc lex <file.hc>`——转储 token 流（Rust 参考实现，H 版 lexer 对照基准）
             lex_command(&args[2..])
         }
+        "parse" => {
+            // K2：`hc parse <file.hc>`——转储 AST（Rust 参考实现，H 版 parser 对照基准）
+            parse_command(&args[2..])
+        }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(2)
@@ -341,6 +346,33 @@ fn lex_command(args: &[String]) -> ExitCode {
             "{} {} {} {} {:?}",
             tok.span.start, tok.span.end, tok.span.line, tok.span.col, tok.kind
         );
+    }
+    ExitCode::SUCCESS
+}
+
+/// K2：`hc parse <file.hc>`——Rust 参考 parser 输出 AST 转储。
+///
+/// 每 AST 节点一行 `{depth} {Tag} {payload} {start} {end}`，后序（子节点先于父节点），
+/// 见 [`astdump::dump_program`]。H 版 parser（stage1/parser.hc）输出同一格式，
+/// 对照测试（hc-tools/tests/k2_parser.rs）逐行 diff。
+fn parse_command(args: &[String]) -> ExitCode {
+    let Some(path_str) = args.first() else {
+        eprintln!("error: `hc parse` requires a file\n\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    let source = match read_source(Path::new(path_str)) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let program = match hc::parse_source(&source) {
+        Ok(p) => p,
+        Err(diags) => {
+            eprint!("{}", diag::render(&diags, &source));
+            return ExitCode::FAILURE;
+        }
+    };
+    for line in astdump::dump_program(&program) {
+        println!("{line}");
     }
     ExitCode::SUCCESS
 }
