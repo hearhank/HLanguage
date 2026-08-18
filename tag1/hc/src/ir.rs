@@ -20,6 +20,9 @@
 use crate::ast::*;
 use crate::comptime::{self, Instantiated};
 use crate::errorcodes::ErrorCodeTable;
+use crate::regex::{parse_regex, RegexMatcher};
+use crate::rle::{decode_rle, encode_rle};
+use crate::rng::xorshift64;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, Write};
@@ -4002,6 +4005,32 @@ pub struct Ctx {
     /// 组 G：当前执行深度（`exec_body` 每次进入时刷新）。线程 fn 以 `cur_depth + 1`
     /// 起步，对齐 oracle 共享 `call_depth` 的 StackOverflow 防护（非独立栈）。
     pub cur_depth: usize,
+    /// G1（E3.1）：UDP socket 注册表（UdpSocket 值持 fd；对齐 oracle udp_sockets）
+    pub udp_sockets: HashMap<i64, std::net::UdpSocket>,
+    /// G2（io 差异项）：Dir 句柄注册表（fd → 目录路径；Dir 值持 `_fd`，list_dir 按路径重读）
+    pub dirs: HashMap<i64, String>,
+    /// G3（E3.2 ipc）：管道注册表（pid → 共享缓冲 + 写端开标志；PipeReader/PipeWriter
+    /// 共享同一 pid，协作式模型下读写均不阻塞）
+    pub pipes: HashMap<i64, PipeIr>,
+    /// G3（E3.2 ipc）：共享内存注册表（id → 定长字节区；Shm 值持 `shm` id）
+    pub shms: HashMap<i64, Vec<u8>>,
+    /// 下一管道/共享内存/目录/存储描述符（对齐 oracle 计数器从 1 起步）
+    pub next_pipe_fd: i64,
+    pub next_shm_fd: i64,
+    pub next_dir_fd: i64,
+    pub next_store_fd: i64,
+    /// G4（E3.3 storage）：键值存储注册表（id → (路径, 键值)；KvStore 值持 `store` id）
+    pub stores: HashMap<i64, (String, HashMap<Vec<u8>, Vec<u8>>)>,
+    /// G5（E3.3 rng）：全局伪随机数状态（xorshift64；`io.rng.seed` 重置——协作式
+    /// 单线程执行下全局态安全；默认种子常量对齐 oracle）
+    pub rng_state: u64,
+}
+
+/// io.ipc 管道共享态（协作式：读写均不阻塞；writer_open=false 且空缓冲 = 读端空切片）
+#[derive(Debug, Default)]
+pub struct PipeIr {
+    pub buf: Vec<u8>,
+    pub writer_open: bool,
 }
 
 impl Ctx {
@@ -4898,6 +4927,8 @@ impl IrRuntime {
             return Ok(());
         }
         self.inited = true;
+        // G5：rng 默认状态（对齐 oracle Interp::new——seed(0) 亦回退该常量）
+        self.ctx.rng_state = 0x9e37_79b9_7f4a_7c15;
         // 预分配全部全局 cell（声明序）——即使无全局也继续（保险：`@__init__` 仍须执行）。
         // Phase 7：隐式环境名（alloc/io/pi/Vec…）预置内建值（对齐 oracle 隐式环境注入）。
         for name in &module.globals {
@@ -6009,7 +6040,9 @@ fn make_map_with(ctx: &mut Ctx, fields: HashMap<String, usize>, alloc: IrValue) 
     IrValue::Map(ctx.alloc(Cell::Map { fields, alloc }))
 }
 
-/// M5.4 Io 实例（含 fs/time/net 子模块——对齐 oracle `io_value` interp.rs:1023-1029）
+/// M5.4 Io 实例（含 fs/time/net 子模块 + G1-G5 扩展——对齐 oracle `io_value_with_runtime`
+/// interp.rs:2016-2043）。net 含 `udp` 子命名空间；stdout/stderr 独立字节流；
+/// ipc/storage/archive/text/rng 各命名空间类名供 call_builtin_method 分派。
 fn io_value_ir(ctx: &mut Ctx) -> IrValue {
     let fs = ctx.alloc(Cell::Class {
         name: "Fs".into(),
@@ -6021,15 +6054,66 @@ fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         fields: HashMap::new(),
     });
     let time_cell = ctx.alloc(Cell::Value(IrValue::Class(time)));
+    // G1（E3.1）：`io.net.udp` 子命名空间（bind/send_to/recv_from）——UdpSocket 实例
+    // 方法由类名分派，命名空间形式委托同实现（对齐 oracle net_fields 含 udp）。
+    let udp = ctx.alloc(Cell::Class {
+        name: "Udp".into(),
+        fields: HashMap::new(),
+    });
+    let udp_cell = ctx.alloc(Cell::Value(IrValue::Class(udp)));
+    let mut net_fields = HashMap::new();
+    net_fields.insert("udp".into(), udp_cell);
     let net = ctx.alloc(Cell::Class {
         name: "Net".into(),
-        fields: HashMap::new(),
+        fields: net_fields,
     });
     let net_cell = ctx.alloc(Cell::Value(IrValue::Class(net)));
     let mut fields = HashMap::new();
     fields.insert("fs".into(), fs_cell);
     fields.insert("time".into(), time_cell);
     fields.insert("net".into(), net_cell);
+    fields.insert("runtime".into(), ctx.alloc(Cell::Value(str_val("threaded"))));
+    // G2（io 差异项）：io.stdout/io.stderr 独立字节流（write_all 写真实句柄；
+    // 类名 Stdout/Stderr 供分派，无 fd 注册表）
+    let stdout = ctx.alloc(Cell::Class {
+        name: "Stdout".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("stdout".into(), ctx.alloc(Cell::Value(IrValue::Class(stdout))));
+    let stderr = ctx.alloc(Cell::Class {
+        name: "Stderr".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("stderr".into(), ctx.alloc(Cell::Value(IrValue::Class(stderr))));
+    // G3（E3.2 ipc）：io.ipc.pipe() / io.ipc.shm(name, size)——进程内 IPC 原语
+    let ipc = ctx.alloc(Cell::Class {
+        name: "Ipc".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("ipc".into(), ctx.alloc(Cell::Value(IrValue::Class(ipc))));
+    // G4（E3.3 storage/archive）：io.storage.open(path) / io.archive.compress/decompress
+    let storage = ctx.alloc(Cell::Class {
+        name: "Storage".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("storage".into(), ctx.alloc(Cell::Value(IrValue::Class(storage))));
+    let archive = ctx.alloc(Cell::Class {
+        name: "Archive".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("archive".into(), ctx.alloc(Cell::Value(IrValue::Class(archive))));
+    // G5（E3.3 text/rng）：io.text.* 正则；io.rng.* 伪随机数（类名 RngNs 避开示例
+    // 84-rng 的用户类 Rng——内建方法先于用户方法分派）
+    let text = ctx.alloc(Cell::Class {
+        name: "Text".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("text".into(), ctx.alloc(Cell::Value(IrValue::Class(text))));
+    let rng = ctx.alloc(Cell::Class {
+        name: "RngNs".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert("rng".into(), ctx.alloc(Cell::Value(IrValue::Class(rng))));
     IrValue::Class(ctx.alloc(Cell::Class {
         name: "Io".into(),
         fields,
@@ -6775,6 +6859,202 @@ fn register_file_ir(ctx: &mut Ctx, f: std::fs::File) -> IrValue {
     }))
 }
 
+// ---- G1-G5 注册表句柄解析（Dir/Pipe/Shm/KvStore）----
+
+/// Dir 值 → 注册表 fd（`_fd` 字段；先 deref_value 剥 Ptr）
+fn dir_fd_ir(ctx: &Ctx, v: &IrValue) -> R<i64> {
+    match deref_value(ctx, v) {
+        IrValue::Class(c) => match &ctx.cells[*c] {
+            Cell::Class { fields, .. } => match fields.get("_fd") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(fd) => Ok(*fd as i64),
+                    _ => Err(IrError::msg("BadFd", "bad dir descriptor")),
+                },
+                _ => Err(IrError::msg("BadFd", "bad dir descriptor")),
+            },
+            _ => Err(IrError::msg("BadFd", "bad dir descriptor")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected Dir")),
+    }
+}
+
+/// Pipe 值 → 管道 id（`pipe` 字段；先 deref_value 剥 Ptr）
+fn pipe_id_ir(ctx: &Ctx, v: &IrValue) -> R<i64> {
+    match deref_value(ctx, v) {
+        IrValue::Class(c) => match &ctx.cells[*c] {
+            Cell::Class { fields, .. } => match fields.get("pipe") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(id) => Ok(*id as i64),
+                    _ => Err(IrError::msg("BadFd", "bad pipe descriptor")),
+                },
+                _ => Err(IrError::msg("BadFd", "bad pipe descriptor")),
+            },
+            _ => Err(IrError::msg("BadFd", "bad pipe descriptor")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected pipe")),
+    }
+}
+
+/// Shm 值 → 共享内存 id（`shm` 字段）
+fn shm_id_ir(ctx: &Ctx, v: &IrValue) -> R<i64> {
+    match deref_value(ctx, v) {
+        IrValue::Class(c) => match &ctx.cells[*c] {
+            Cell::Class { fields, .. } => match fields.get("shm") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(id) => Ok(*id as i64),
+                    _ => Err(IrError::msg("BadFd", "bad shm descriptor")),
+                },
+                _ => Err(IrError::msg("BadFd", "bad shm descriptor")),
+            },
+            _ => Err(IrError::msg("BadFd", "bad shm descriptor")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected Shm")),
+    }
+}
+
+/// KvStore 值 → 注册表 id（`store` 字段；先 deref_value 剥 Ptr）
+fn store_id_ir(ctx: &Ctx, v: &IrValue) -> R<i64> {
+    match deref_value(ctx, v) {
+        IrValue::Class(c) => match &ctx.cells[*c] {
+            Cell::Class { fields, .. } => match fields.get("store") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(id) => Ok(*id as i64),
+                    _ => Err(IrError::msg("BadFd", "bad store descriptor")),
+                },
+                _ => Err(IrError::msg("BadFd", "bad store descriptor")),
+            },
+            _ => Err(IrError::msg("BadFd", "bad store descriptor")),
+        },
+        _ => Err(IrError::msg("TypeError", "expected KvStore")),
+    }
+}
+
+// ---- G1-G5 网络/文件系统共享实现（对齐 oracle interp.rs 对应函数）----
+
+/// 解析 UDP 对端地址串 "host:port" → (host, port)。
+fn parse_udp_addr_ir(s: &str) -> std::result::Result<(String, u16), &'static str> {
+    match s.rsplit_once(':') {
+        Some((host, port)) => match port.parse::<u16>() {
+            Ok(p) => Ok((host.to_string(), p)),
+            Err(_) => Err("InvalidAddress"),
+        },
+        None => Err("InvalidAddress"),
+    }
+}
+
+/// UDP 绑定共享实现：`udp_bind(host, port)` → UdpSocket 值（fd 注册表）；
+/// 读超时 200ms（recv_from 空队列 → error.TimedOut，不阻塞挂起测试）。
+fn udp_bind_ir(ctx: &mut Ctx, module: &IrModule, host: &str, port: u16) -> R<IrValue> {
+    let addr = format!("{host}:{port}");
+    match std::net::UdpSocket::bind(&addr) {
+        Ok(sock) => {
+            let _ = sock.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+            let fd = ctx.next_net_fd;
+            ctx.next_net_fd += 1;
+            ctx.udp_sockets.insert(fd, sock);
+            let mut fields = HashMap::new();
+            fields.insert(
+                "fd".into(),
+                ctx.alloc(Cell::Value(IrValue::Int(fd as i128))),
+            );
+            Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "UdpSocket".into(),
+                fields,
+            })))
+        }
+        Err(e) => Ok(err_val(module, &io_error_name_ir(&e))),
+    }
+}
+
+/// G1（E3.1）：HTTP GET 客户端——`http://host[:port][/path]` → TCP connect →
+/// `GET {path} HTTP/1.1` + Host 头 → 读响应 → 按 Content-Length 提取体。
+fn http_get_ir(url: &str) -> std::result::Result<Vec<u8>, String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or_else(|| "InvalidUrl".to_string())?;
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (
+            h.to_string(),
+            p.parse::<u16>().map_err(|_| "InvalidUrl".to_string())?,
+        ),
+        None => (authority.to_string(), 80u16),
+    };
+    let mut stream = std::net::TcpStream::connect((host.as_str(), port))
+        .map_err(|e| io_error_name_ir(&e))?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| io_error_name_ir(&e))?;
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .map_err(|e| io_error_name_ir(&e))?;
+    // 状态行 + 头段由第一个空行分隔；体按 Content-Length 取（无则取空行后全部）
+    let head_end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .ok_or_else(|| "BadResponse".to_string())?;
+    let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+    let body = &raw[head_end..];
+    if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
+        // 非 200：体返回给调用方诊断（错误名 = Http{code}）
+        let code = head
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("000")
+            .to_string();
+        return Err(format!("Http{code}"));
+    }
+    let mut len: Option<usize> = None;
+    for line in head.lines() {
+        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            if let Ok(n) = v.trim().parse::<usize>() {
+                len = Some(n);
+            }
+        }
+    }
+    Ok(match len {
+        Some(n) => body[..n.min(body.len())].to_vec(),
+        None => body.to_vec(),
+    })
+}
+
+/// G2（io 差异项）：枚举目录路径为 Vec(DirEntry)——每条 = {name: 文件名, is_dir: 是否目录}。
+/// 供 io.fs.list_dir（路径/句柄双形态）与 dir.list_dir(alloc) 共用。
+fn list_dir_entries_ir(ctx: &mut Ctx, module: &IrModule, path: &str) -> R<IrValue> {
+    match std::fs::read_dir(path) {
+        Ok(rd) => {
+            let entries: Vec<IrValue> = rd
+                .flatten()
+                .map(|e| {
+                    let mut fields = HashMap::new();
+                    fields.insert(
+                        "name".into(),
+                        ctx.alloc(Cell::Value(str_val(&e.file_name().to_string_lossy()))),
+                    );
+                    fields.insert(
+                        "is_dir".into(),
+                        ctx.alloc(Cell::Value(IrValue::Bool(
+                            e.file_type().map(|t| t.is_dir()).unwrap_or(false),
+                        ))),
+                    );
+                    IrValue::Class(ctx.alloc(Cell::Class {
+                        name: "DirEntry".into(),
+                        fields,
+                    }))
+                })
+                .collect();
+            Ok(make_arr(ctx, entries))
+        }
+        Err(e) => Ok(err_val(module, &io_error_name_ir(&e))),
+    }
+}
+
 // ---- io.fs / io.time / io.net 方法族（对齐 oracle call_fs_method 等）----
 
 fn call_fs_method_ir(
@@ -6895,14 +7175,49 @@ fn call_fs_method_ir(
             }
         }
         "list_dir" => {
+            // G2（io 差异项）：双形态——第一参为 Str（路径）或 Dir 值（句柄）；
+            // 返回 Vec(DirEntry)，每条 {name, is_dir}（对齐 oracle call_fs_method）。
+            let v0 = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "list_dir"))?;
+            let v0d = deref_value(ctx, v0);
+            match v0d {
+                IrValue::Class(c) if class_name(ctx, *c) == "Dir" => {
+                    let fd = dir_fd_ir(ctx, v0d)?;
+                    let path = ctx
+                        .dirs
+                        .get(&fd)
+                        .ok_or_else(|| IrError::msg("BadFd", "bad dir"))?
+                        .clone();
+                    let entries = list_dir_entries_ir(ctx, module, &path)?;
+                    Ok(Some(entries))
+                }
+                IrValue::Str(s) => {
+                    let path = String::from_utf8_lossy(s).into_owned();
+                    let entries = list_dir_entries_ir(ctx, module, &path)?;
+                    Ok(Some(entries))
+                }
+                _ => Err(IrError::msg("TypeError", "list_dir expects path or Dir")),
+            }
+        }
+        // G2（io 差异项）：io.fs.open_dir(path) !Dir——目录句柄。
+        // 读校验成功则注册 fd→path（供 dir.list_dir / dir.close），返回 Dir 值。
+        "open_dir" => {
             let path = path_arg_ir(ctx, args, 0)?;
             match std::fs::read_dir(&path) {
-                Ok(rd) => {
-                    let names: Vec<IrValue> = rd
-                        .flatten()
-                        .map(|e| str_val(&e.file_name().to_string_lossy()))
-                        .collect();
-                    Ok(Some(make_arr(ctx, names)))
+                Ok(_) => {
+                    let fd = ctx.next_dir_fd;
+                    ctx.next_dir_fd += 1;
+                    ctx.dirs.insert(fd, path);
+                    let mut fields = HashMap::new();
+                    fields.insert(
+                        "_fd".into(),
+                        ctx.alloc(Cell::Value(IrValue::Int(fd as i128))),
+                    );
+                    Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: "Dir".into(),
+                        fields,
+                    }))))
                 }
                 Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
             }
@@ -7021,6 +7336,23 @@ fn call_time_method_ir(ctx: &mut Ctx, field: &str, args: &[IrValue]) -> R<Option
             std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
             Ok(Some(IrValue::Void))
         }
+        // G5（E3.3 time 完整）：单调测量——tick()（纳秒计数，epoch 基准）/ elapsed(tick)
+        //（自 tick 起毫秒数）。时区完整留 1.x（需 tz 库）。
+        "tick" => {
+            let ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as i128;
+            Ok(Some(IrValue::Int(ns)))
+        }
+        "elapsed" => {
+            let tick = int_arg_ir(ctx, args, 0)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as i128;
+            Ok(Some(IrValue::Int((now - tick).max(0) / 1_000_000)))
+        }
         _ => Ok(None),
     }
 }
@@ -7077,6 +7409,628 @@ fn call_net_method_ir(
                 }
                 Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
             }
+        }
+        // G1（E3.1）：io.net.get(url) !&[u8]——HTTP GET 客户端，返回响应体字节
+        "get" => {
+            let url = str_arg_ir(ctx, args, 0)?;
+            let url = String::from_utf8_lossy(&url).to_string();
+            match http_get_ir(&url) {
+                Ok(body) => Ok(Some(str_bytes_val(body))),
+                Err(name) => Ok(Some(err_val(module, &name))),
+            }
+        }
+        // Q20 双语：命名空间形式 io.net.read_all(&conn, alloc) ≡ conn.read_all(alloc)
+        //（write/shutdown/close/local_port 同构；第一个实参解引用剥 Ptr → 实例方法）
+        "read_all" | "write" | "shutdown" | "close" | "local_port" => {
+            let conn = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", field))?;
+            let conn = deref_value(ctx, conn).clone();
+            call_conn_method_ir(ctx, module, &conn, field, &args[1..])
+        }
+        // io.net.accept(&server) !Conn ≡ server.accept()
+        "accept" => {
+            let srv = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "accept"))?;
+            let srv = deref_value(ctx, srv).clone();
+            call_listener_method_ir(ctx, module, &srv, "accept", &args[1..])
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G1（E3.1）UDP：io.net.udp 命名空间 + UdpSocket 实例 ----
+
+/// io.net.udp 命名空间分派：`bind(port)` / `bind(host, port) !UdpSocket`；
+/// send_to/recv_from/close 命名空间形式（第一实参为 socket）委托实例方法。
+/// bind 首参为整型 → port 首参（bind(0, alloc) 亦归此，alloc 忽略）。
+fn call_udp_ns_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "bind" => {
+            let is_port_first = args
+                .first()
+                .map(|a| matches!(deref_value(ctx, a), IrValue::Int(_)))
+                .unwrap_or(false);
+            let (host, port_i) = if is_port_first {
+                ("127.0.0.1".to_string(), 0)
+            } else if args.len() >= 2 {
+                let h = str_arg_ir(ctx, args, 0)?;
+                (String::from_utf8_lossy(&h).to_string(), 1)
+            } else {
+                ("127.0.0.1".to_string(), 0)
+            };
+            let port = int_arg_ir(ctx, args, port_i)? as u16;
+            Ok(Some(udp_bind_ir(ctx, module, &host, port)?))
+        }
+        "send_to" | "recv_from" | "close" => {
+            let sock = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", field))?;
+            let sock = deref_value(ctx, sock).clone();
+            call_udp_socket_method_ir(ctx, module, &sock, field, &args[1..])
+        }
+        _ => Ok(None),
+    }
+}
+
+/// UdpSocket 实例方法：send_to(addr, data) !void / recv_from(alloc) ![addr, data] /
+/// local_port() !u16 / close() !void。recv_from 空队列（200ms 读超时）→ error.TimedOut。
+fn call_udp_socket_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let fd = net_fd_ir(ctx, self_v)?;
+    match field {
+        "send_to" => {
+            let addr = str_arg_ir(ctx, args, 0)?;
+            let addr = String::from_utf8_lossy(&addr).to_string();
+            let (host, port) = parse_udp_addr_ir(&addr).map_err(|e| IrError::msg(e, "udp addr"))?;
+            let data = str_arg_ir(ctx, args, 1)?;
+            let sock = ctx
+                .udp_sockets
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad udp socket"))?;
+            match sock.send_to(&data, (host.as_str(), port)) {
+                Ok(_) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "recv_from" => {
+            let sock = ctx
+                .udp_sockets
+                .get_mut(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad udp socket"))?;
+            let mut buf = vec![0u8; 65536];
+            match sock.recv_from(&mut buf) {
+                Ok((n, peer)) => {
+                    buf.truncate(n);
+                    let addr = peer.to_string();
+                    Ok(Some(make_arr(
+                        ctx,
+                        vec![str_val(&addr), str_bytes_val(buf)],
+                    )))
+                }
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "local_port" => {
+            let sock = ctx
+                .udp_sockets
+                .get(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad udp socket"))?;
+            match sock.local_addr() {
+                Ok(a) => Ok(Some(IrValue::Int(a.port() as i128))),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
+        "close" => {
+            ctx.udp_sockets.remove(&fd);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G2（io 差异项）Dir：open_dir 返回的目录句柄 ----
+
+/// Dir 类方法分派：`dir.list_dir(alloc) !Vec(DirEntry)`（重开枚举）/
+/// `dir.close()`（注销句柄）。
+fn call_dir_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    _args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let fd = dir_fd_ir(ctx, self_v)?;
+    match field {
+        "list_dir" => {
+            let path = ctx
+                .dirs
+                .get(&fd)
+                .ok_or_else(|| IrError::msg("BadFd", "bad dir"))?
+                .clone();
+            let entries = list_dir_entries_ir(ctx, module, &path)?;
+            Ok(Some(entries))
+        }
+        "close" => {
+            ctx.dirs.remove(&fd);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G3（E3.2 ipc）：管道 + 共享内存 ----
+
+/// io.ipc 命名空间分派：`pipe()`（匿名管道 → `[reader, writer]`）/ `shm(name, size) !Shm`
+///（命名共享内存）。进程内 IPC 原语——注册表 + 类名分派承载（Q20 双语），协作式模型下
+/// 读写均不阻塞。
+fn call_ipc_method_ir(
+    ctx: &mut Ctx,
+    _module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "pipe" => {
+            let pid = ctx.next_pipe_fd;
+            ctx.next_pipe_fd += 1;
+            ctx.pipes.insert(
+                pid,
+                PipeIr {
+                    buf: Vec::new(),
+                    writer_open: true,
+                },
+            );
+            let reader = {
+                let mut fld = HashMap::new();
+                fld.insert("pipe".into(), ctx.alloc(Cell::Value(IrValue::Int(pid as i128))));
+                IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "PipeReader".into(),
+                    fields: fld,
+                }))
+            };
+            let writer = {
+                let mut fld = HashMap::new();
+                fld.insert("pipe".into(), ctx.alloc(Cell::Value(IrValue::Int(pid as i128))));
+                IrValue::Class(ctx.alloc(Cell::Class {
+                    name: "PipeWriter".into(),
+                    fields: fld,
+                }))
+            };
+            Ok(Some(make_arr(ctx, vec![reader, writer])))
+        }
+        "shm" => {
+            // name 参数当前仅用于形态约束（命名共享内存的标识语义），区域本体按 id 注册
+            let _name = path_arg_ir(ctx, args, 0)?;
+            let size = int_arg_ir(ctx, args, 1)?.max(0) as usize;
+            let id = ctx.next_shm_fd;
+            ctx.next_shm_fd += 1;
+            ctx.shms.insert(id, vec![0u8; size]);
+            let mut fld = HashMap::new();
+            fld.insert("shm".into(), ctx.alloc(Cell::Value(IrValue::Int(id as i128))));
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Shm".into(),
+                fields: fld,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Pipe 类方法分派（is_reader 区分读写端）：写端 `write(data) !void` / `close() !void`；
+/// 读端 `read(alloc) !&[u8]`（排空可读字节；空且写端开 → 空切片，不阻塞）/
+/// `read_all(alloc) !&[u8]` / `is_closed() bool` / `close() !void`。
+/// `close` 幂等：读端 close 注销注册表（管道随之拆除）、写端 close 仅置 writer_open=false；
+/// 管道已注销后再 close 为 no-op（不报 BadFd）。
+fn call_pipe_method_ir(
+    ctx: &mut Ctx,
+    _module: &IrModule,
+    is_reader: bool,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let pid = pipe_id_ir(ctx, self_v)?;
+    match field {
+        "close" => {
+            if is_reader {
+                ctx.pipes.remove(&pid);
+            } else if let Some(pipe) = ctx.pipes.get_mut(&pid) {
+                pipe.writer_open = false;
+            }
+            Ok(Some(IrValue::Void))
+        }
+        "write" if !is_reader => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let pipe = ctx
+                .pipes
+                .get_mut(&pid)
+                .ok_or_else(|| IrError::msg("BadFd", "bad pipe"))?;
+            pipe.buf.extend_from_slice(&data);
+            Ok(Some(IrValue::Void))
+        }
+        "read" | "read_all" if is_reader => {
+            let pipe = ctx
+                .pipes
+                .get_mut(&pid)
+                .ok_or_else(|| IrError::msg("BadFd", "bad pipe"))?;
+            let out = std::mem::take(&mut pipe.buf);
+            Ok(Some(str_bytes_val(out)))
+        }
+        "is_closed" if is_reader => {
+            let pipe = ctx
+                .pipes
+                .get(&pid)
+                .ok_or_else(|| IrError::msg("BadFd", "bad pipe"))?;
+            Ok(Some(IrValue::Bool(!pipe.writer_open)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Shm 类方法分派：`write(data) !void`（覆盖内容，截断到 size）/ `read(alloc) !&[u8]`
+/// / `close() !void`（注销句柄）。
+fn call_shm_method_ir(
+    ctx: &mut Ctx,
+    _module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let id = shm_id_ir(ctx, self_v)?;
+    match field {
+        "write" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            let shm = ctx
+                .shms
+                .get_mut(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad shm"))?;
+            let cap = shm.capacity();
+            let take = data.len().min(cap);
+            shm.clear();
+            shm.extend_from_slice(&data[..take]);
+            Ok(Some(IrValue::Void))
+        }
+        "read" => {
+            let shm = ctx
+                .shms
+                .get(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad shm"))?;
+            Ok(Some(str_bytes_val(shm.clone())))
+        }
+        "close" => {
+            ctx.shms.remove(&id);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G4（E3.3 storage）文件持久化键值存储 ----
+
+/// io.storage.open(path) !KvStore——打开/创建文件持久化的键值存储。
+/// 文件存在则装载既有条目（二进制格式：u32 键长 + 键 + u32 值长 + 值，小端）；
+/// 缺文件视为空库（close 时创建）。KvStore 值持 `store` id → 注册表。
+fn call_storage_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "open" => {
+            let path = path_arg_ir(ctx, args, 0)?;
+            let mut entries = HashMap::new();
+            if let Ok(bytes) = std::fs::read(&path) {
+                let mut i = 0usize;
+                while i < bytes.len() {
+                    // 格式：u32 键长 + 键 + u32 值长 + 值（vlen 不紧跟 klen——键在中间）
+                    if i + 4 > bytes.len() {
+                        return Ok(Some(err_val(module, "InvalidFormat")));
+                    }
+                    let klen = u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+                    i += 4;
+                    if i + klen + 4 > bytes.len() {
+                        return Ok(Some(err_val(module, "InvalidFormat")));
+                    }
+                    let key = bytes[i..i + klen].to_vec();
+                    i += klen;
+                    let vlen = u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+                    i += 4;
+                    if i + vlen > bytes.len() {
+                        return Ok(Some(err_val(module, "InvalidFormat")));
+                    }
+                    let val = bytes[i..i + vlen].to_vec();
+                    entries.insert(key, val);
+                    i += vlen;
+                }
+            }
+            let id = ctx.next_store_fd;
+            ctx.next_store_fd += 1;
+            ctx.stores.insert(id, (path, entries));
+            let mut fld = HashMap::new();
+            fld.insert("store".into(), ctx.alloc(Cell::Value(IrValue::Int(id as i128))));
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "KvStore".into(),
+                fields: fld,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// KvStore 实例方法：`put(key, value) !void` / `get(key) !?&[u8]`（缺失 → null）/
+/// `contains(key) bool` / `remove(key) !void`（幂等）/ `len() usize` /
+/// `close() !void`（落盘 + 注销注册表；已关闭再 close 为 no-op）。
+fn call_store_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let id = store_id_ir(ctx, self_v)?;
+    match field {
+        "put" => {
+            let key = str_arg_ir(ctx, args, 0)?;
+            let value = str_arg_ir(ctx, args, 1)?;
+            let store = ctx
+                .stores
+                .get_mut(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad store"))?;
+            store.1.insert(key, value);
+            Ok(Some(IrValue::Void))
+        }
+        "get" => {
+            let key = str_arg_ir(ctx, args, 0)?;
+            let store = ctx
+                .stores
+                .get(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad store"))?;
+            match store.1.get(&key) {
+                Some(val) => Ok(Some(opt_val(Some(str_bytes_val(val.clone()))))),
+                None => Ok(Some(IrValue::Opt(None))),
+            }
+        }
+        "contains" => {
+            let key = str_arg_ir(ctx, args, 0)?;
+            let store = ctx
+                .stores
+                .get(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad store"))?;
+            Ok(Some(IrValue::Bool(store.1.contains_key(&key))))
+        }
+        "remove" => {
+            let key = str_arg_ir(ctx, args, 0)?;
+            let store = ctx
+                .stores
+                .get_mut(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad store"))?;
+            store.1.remove(&key);
+            Ok(Some(IrValue::Void))
+        }
+        "len" => {
+            let store = ctx
+                .stores
+                .get(&id)
+                .ok_or_else(|| IrError::msg("BadFd", "bad store"))?;
+            Ok(Some(IrValue::Int(store.1.len() as i128)))
+        }
+        "close" => {
+            if let Some((path, entries)) = ctx.stores.remove(&id) {
+                // 落盘：二进制格式（u32 键长 + 键 + u32 值长 + 值，小端）写回 path
+                let mut out = Vec::new();
+                for (k, v) in &entries {
+                    out.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                    out.extend_from_slice(k);
+                    out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                    out.extend_from_slice(v);
+                }
+                if let Err(e) = std::fs::write(&path, out) {
+                    return Ok(Some(err_val(module, &io_error_name_ir(&e))));
+                }
+            }
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G4（E3.3 archive）RLE 压缩 ----
+
+/// io.archive.compress(data) !&[u8] / io.archive.decompress(data) !&[u8]——
+/// RLE 压缩（encode_rle/decode_rle 共享层）。非法压缩数据 → error.InvalidFormat。
+fn call_archive_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "compress" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            Ok(Some(str_bytes_val(encode_rle(&data))))
+        }
+        "decompress" => {
+            let data = str_arg_ir(ctx, args, 0)?;
+            match decode_rle(&data) {
+                Ok(out) => Ok(Some(str_bytes_val(out))),
+                Err(_) => Ok(Some(err_val(module, "InvalidFormat"))),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G5（E3.3 text）正则文本处理 ----
+
+/// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制
+/// 全串）/ `find(pattern, text) ?int`（首个匹配起点；无 → null）/
+/// `replace(pattern, text, repl) &[u8]`（替换全部非重叠匹配，每处取最长）/
+/// `split(pattern, text) Vec(&[u8])`（按匹配分割，含空段）。非法模式 →
+/// error.InvalidFormat。
+fn call_text_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "matches" => {
+            let pat = str_arg_ir(ctx, args, 0)?;
+            let text = str_arg_ir(ctx, args, 1)?;
+            let ast = match parse_regex(&pat) {
+                Some(a) => a,
+                None => return Ok(Some(err_val(module, "InvalidFormat"))),
+            };
+            let mut m = RegexMatcher::new(&ast, &text);
+            Ok(Some(IrValue::Bool(m.find_at(0).is_some())))
+        }
+        "find" => {
+            let pat = str_arg_ir(ctx, args, 0)?;
+            let text = str_arg_ir(ctx, args, 1)?;
+            let ast = match parse_regex(&pat) {
+                Some(a) => a,
+                None => return Ok(Some(err_val(module, "InvalidFormat"))),
+            };
+            let mut m = RegexMatcher::new(&ast, &text);
+            match m.find_at(0) {
+                Some((s, _e)) => Ok(Some(opt_val(Some(IrValue::Int(s as i128))))),
+                None => Ok(Some(IrValue::Opt(None))),
+            }
+        }
+        "replace" => {
+            let pat = str_arg_ir(ctx, args, 0)?;
+            let text = str_arg_ir(ctx, args, 1)?;
+            let repl = str_arg_ir(ctx, args, 2)?;
+            let ast = match parse_regex(&pat) {
+                Some(a) => a,
+                None => return Ok(Some(err_val(module, "InvalidFormat"))),
+            };
+            let mut m = RegexMatcher::new(&ast, &text);
+            let mut out: Vec<u8> = Vec::new();
+            let mut last = 0usize;
+            let mut cur = 0usize;
+            loop {
+                let mf = m.find_at(cur);
+                match mf {
+                    Some((s, e)) => {
+                        out.extend_from_slice(&text[last.min(text.len())..s]);
+                        out.extend_from_slice(&repl);
+                        if e > s {
+                            last = e;
+                            cur = e;
+                            if e == text.len() {
+                                break;
+                            }
+                        } else {
+                            // 空匹配：复制该位置字节后前进，避免死循环
+                            last = s + 1;
+                            cur = s + 1;
+                            if s < text.len() {
+                                out.push(text[s]);
+                            }
+                            if cur > text.len() {
+                                break;
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+            out.extend_from_slice(&text[last.min(text.len())..]);
+            Ok(Some(str_bytes_val(out)))
+        }
+        "split" => {
+            let pat = str_arg_ir(ctx, args, 0)?;
+            let text = str_arg_ir(ctx, args, 1)?;
+            let ast = match parse_regex(&pat) {
+                Some(a) => a,
+                None => return Ok(Some(err_val(module, "InvalidFormat"))),
+            };
+            let mut m = RegexMatcher::new(&ast, &text);
+            let mut parts: Vec<IrValue> = Vec::new();
+            let mut start = 0usize;
+            let mut cur = 0usize;
+            loop {
+                match m.find_at(cur) {
+                    Some((s, e)) => {
+                        parts.push(str_bytes_val(text[start..s].to_vec()));
+                        if e > s {
+                            start = e;
+                            cur = e;
+                            if e == text.len() {
+                                break; // 匹配到末尾：尾空段由最后 push 补
+                            }
+                        } else {
+                            // 空匹配：不消耗字符（该位置字节归下一段），仅前进搜索游标
+                            start = s;
+                            cur = s + 1;
+                            if cur > text.len() {
+                                break;
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+            parts.push(str_bytes_val(text[start.min(text.len())..].to_vec()));
+            let alloc = implicit_env_value(ctx, "alloc");
+            Ok(Some(make_vec_with(ctx, parts, alloc)))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---- G5（E3.3 rng）伪随机数 ----
+
+/// io.rng.* —— `seed(v)`（重置状态；0 → 回退默认）/ `next() int`（下个原始
+/// 64 位）/ `int(n) int`（[0, n) 均匀，拒绝采样免模偏差）/ `float() f64`
+/// （[0, 1)，高 53 位均匀）。全局态在 Ctx（协作式单线程执行下安全）；
+/// 命名空间类名 RngNs 避开示例 84-rng 的用户类 Rng。
+fn call_rng_method_ir(
+    ctx: &mut Ctx,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "seed" => {
+            let v = int_arg_ir(ctx, args, 0)?;
+            ctx.rng_state = if v == 0 { 0x9e37_79b9_7f4a_7c15 } else { v as u64 };
+            Ok(Some(IrValue::Void))
+        }
+        "next" => {
+            let n = xorshift64(&mut ctx.rng_state);
+            Ok(Some(IrValue::Int(n as i128)))
+        }
+        "int" => {
+            let bound = int_arg_ir(ctx, args, 0)?;
+            if bound <= 0 {
+                return Ok(Some(IrValue::Int(0)));
+            }
+            let b = bound as u64;
+            let threshold = b.wrapping_neg() % b;
+            let mut v = xorshift64(&mut ctx.rng_state);
+            while v < threshold {
+                v = xorshift64(&mut ctx.rng_state);
+            }
+            Ok(Some(IrValue::Int((v % b) as i128)))
+        }
+        "float" => {
+            let v = xorshift64(&mut ctx.rng_state) >> 11;
+            let f = (v as f64) / ((1u64 << 53) as f64);
+            Ok(Some(IrValue::Float(f)))
         }
         _ => Ok(None),
     }
@@ -7999,6 +8953,21 @@ fn call_builtin_method(
             Ok(Some(str_bytes_val(out)))
         }
         (IrValue::Str(_), "len") => Ok(Some(IrValue::Int(self_v.display(ctx).len() as i128))),
+        // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
+        (IrValue::Str(s), "to_upper") | (IrValue::Str(s), "to_lower") => {
+            let upper = method == "to_upper";
+            let out: Vec<u8> = s
+                .iter()
+                .map(|&b| {
+                    if upper {
+                        b.to_ascii_uppercase()
+                    } else {
+                        b.to_ascii_lowercase()
+                    }
+                })
+                .collect();
+            Ok(Some(str_bytes_val(out)))
+        }
         (IrValue::Arr(c), "len") => Ok(Some(IrValue::Int(ctx.elems_len(*c) as i128))),
         (IrValue::Arr(c), "append") => {
             let v = args
@@ -8269,6 +9238,43 @@ fn call_builtin_method(
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "File" => {
             call_file_method_ir(ctx, module, &self_v, m, args)
+        }
+        // ---- G1-G5 模块分派（Q20 双语：interp/IR 同一套类名）----
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Udp" => {
+            call_udp_ns_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "UdpSocket" => {
+            call_udp_socket_method_ir(ctx, module, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Dir" => {
+            call_dir_method_ir(ctx, module, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Ipc" => {
+            call_ipc_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "PipeReader" => {
+            call_pipe_method_ir(ctx, module, true, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "PipeWriter" => {
+            call_pipe_method_ir(ctx, module, false, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Shm" => {
+            call_shm_method_ir(ctx, module, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Storage" => {
+            call_storage_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "KvStore" => {
+            call_store_method_ir(ctx, module, &self_v, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Archive" => {
+            call_archive_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Text" => {
+            call_text_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "RngNs" => {
+            call_rng_method_ir(ctx, m, args)
         }
         // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
         (IrValue::Class(_), "to_bytes") => Err(IrError::msg(
