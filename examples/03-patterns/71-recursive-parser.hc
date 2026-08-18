@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 微型表达式：数字 / 括号嵌套（语法可扩展 + -）
 //   - AST 节点从 arena 分配（统一回收，49 延伸）——避开复杂所有权链接
 
-const ParseError = error{ UnexpectedToken, UnexpectedEnd };
+const ParseError = error{UnexpectedToken, UnexpectedEnd};
 
 enum Kind {
     num,
@@ -32,7 +32,7 @@ fn parse(io: *T, data: &[u8], pos: *usize, arena: *Arena) ParseError!*Node where
 
     if (is_digit(c)) {
         var n = parse_number(data, pos);
-        return arena.alloc(Node{ kind = Kind.num, value = n });
+        return arena.alloc(Node{kind = Kind.num, value = n});
     }
 
     return error.UnexpectedToken;

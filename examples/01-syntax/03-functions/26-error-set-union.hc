@@ -5,8 +5,8 @@ import H.std.{io};
 //   - 错误集联合：error{A} || error{B}（Zig 式）
 //   - 组合错误集作为函数返回契约
 
-const FileError = error{ NotFound, PermissionDenied };
-const ParseError = error{ InvalidFormat };
+const FileError = error{NotFound, PermissionDenied};
+const ParseError = error{InvalidFormat};
 const CombinedError = FileError || ParseError;   // 错误集联合
 
 fn load_config(io: *T, path: &[u8]) CombinedError!Config where T: Io {

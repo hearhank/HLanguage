@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 字段缺失 → 默认值（orelse 链）
 //   - 格式错误 → error（显式错误集）
 
-const ConfigError = error{ InvalidConfig };
+const ConfigError = error{InvalidConfig};
 
 class Config {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     host: String,

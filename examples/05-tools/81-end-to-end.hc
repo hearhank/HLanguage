@@ -5,8 +5,7 @@ import H.std.{io};
 // Q25 定案（2026-08-13）：TCP 服务形态
 //   接收数据（传输）→ 反序列化（定义）→ 校验/变换（修改）→ 序列化回写（传输）→ 落盘（保存）
 
-[continuous]
-class Order {   // 连续内存（内建 to_bytes；脚本生成作定制通道演示）
+[continuous] class Order {   // 连续内存（内建 to_bytes；脚本生成作定制通道演示）
     id: i32,
     amount: f64,
     status: OrderStatus,

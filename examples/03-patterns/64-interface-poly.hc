@@ -10,17 +10,19 @@ interface IShape {
     fn area(self: *Self) f32;
 }
 
-[continuous]
-class Rect: IShape {
+[continuous] class Rect: IShape {
     w: f32,
     h: f32,
-    fn area(self: *Self) f32 { return self.w * self.h; }
+    fn area(self: *Self) f32 {
+        return self.w * self.h;
+    }
 }
 
-[continuous]
-class Circle: IShape {
+[continuous] class Circle: IShape {
     r: f32,
-    fn area(self: *Self) f32 { return pi * self.r * self.r; }
+    fn area(self: *Self) f32 {
+        return pi * self.r * self.r;
+    }
 }
 
 // 静态路径（主）：接口约束参数（Q22b：where 子句 + 虚拟类型，单态化无虚表）
@@ -38,8 +40,8 @@ fn total_area(shapes: &Vec(*IShape)) f32 {
 }
 
 fn main(args: o Vec(String)) !void {
-    var rect = Rect{ w = 3.0, h = 4.0 };
-    var circ = Circle{ r = 2.0 };
+    var rect = Rect{w = 3.0, h = 4.0};
+    var circ = Circle{r = 2.0};
 
     // 静态路径（单态化，无虚表）
     io.print("rect = {}\n", describe(&rect));
@@ -53,15 +55,15 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn static_path_monomorphization() !void {
-    var rect = Rect{ w = 3.0, h = 4.0 };
-    var circ = Circle{ r = 2.0 };
+    var rect = Rect{w = 3.0, h = 4.0};
+    var circ = Circle{r = 2.0};
     try expect(describe(&rect) > 11.99 and describe(&rect) < 12.01);
     try expect(describe(&circ) > 12.56 and describe(&circ) < 12.57);
 }
 
 [test] fn heterogeneous_boxing() !void {
-    var rect = Rect{ w = 3.0, h = 4.0 };
-    var circ = Circle{ r = 2.0 };
+    var rect = Rect{w = 3.0, h = 4.0};
+    var circ = Circle{r = 2.0};
     var shapes: o Vec(*IShape) = Vec(*IShape).init(alloc);
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));

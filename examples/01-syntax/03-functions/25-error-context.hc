@@ -5,7 +5,7 @@ import H.std.{io};
 //   - try 传播时记录调用链（Debug）；错误带各层调用位置
 //   - 自定义错误集 + 错误值映射
 
-const ConfigError = error{ NotFound, InvalidFormat };
+const ConfigError = error{NotFound, InvalidFormat};
 
 fn load_config(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     var data = io.fs.read_file(path) catch return error.NotFound;

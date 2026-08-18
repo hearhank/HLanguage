@@ -5,7 +5,12 @@ import H.std.{io};
 // Q27 定案（2026-08-13）：switch 是表达式（穷举保证确定值）
 //   - 与 if 表达式、强制 else 同一哲学（显式初始化延伸）
 
-enum Direction { north, east, south, west }
+enum Direction {
+    north,
+    east,
+    south,
+    west
+}
 
 enum Value {
     int: i32,

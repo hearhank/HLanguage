@@ -6,8 +6,7 @@ import H.std.{io};
 //   - 数组/集合/复杂类型：引用类型——赋值 = 编译错误（Q1'），复制需显式 copy(&x)
 //   - String = u8[] 别名（Q3）：复制需显式 copy(&x)（默认深复制，浅复制需显式标注）
 
-[continuous]
-class Point {   // 连续内存值类型（H1 特性标注）
+[continuous] class Point {   // 连续内存值类型（H1 特性标注）
     mut x: f32,
     y: f32,
 }
@@ -20,7 +19,7 @@ fn main(args: o Vec(String)) !void {
     io.print("a = {} (不变)\n", a);
 
     // 纯值 struct：赋值即复制
-    var p1 = Point{ x = 1.0, y = 2.0 };
+    var p1 = Point{x = 1.0, y = 2.0};
     var mut p2 = p1;
     p2.x = 99.0;
     io.print("p1.x = {} (不受影响)\n", p1.x);
@@ -45,7 +44,7 @@ fn main(args: o Vec(String)) !void {
     b = 10;
     try expect_eq(a, 5);   // 原值不变
 
-    var p1 = Point{ x = 1.0, y = 2.0 };
+    var p1 = Point{x = 1.0, y = 2.0};
     var mut p2 = p1;
     p2.x = 99.0;
     try expect_eq(p1.x, 1.0);   // 复制互不影响

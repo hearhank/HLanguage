@@ -7,8 +7,7 @@ import H.std.{io};
 //   - ⚠️ 注意：含切片/指针字段的类型不可标 [continuous]（会序列化指针值）——
 //     需递归序列化（脚本定制，Q37 精神）或定长缓冲
 
-[continuous]
-class Message {   // 连续内存：可 to_bytes 直映射（8 字节）
+[continuous] class Message {   // 连续内存：可 to_bytes 直映射（8 字节）
     id: i32,
     kind: u8,
 }
@@ -23,11 +22,11 @@ fn encode(m: *Message) o Vec(u8) {
 
 fn decode(data: &[u8]) !Message {
     var len = read_u64_le(data[0..8]);
-    return Message.from_bytes(data[8 .. 8 + len]);
+    return Message.from_bytes(data[8..8 + len]);
 }
 
 fn main(args: o Vec(String)) !void {
-    var msg = Message{ id = 7, kind = 1 };
+    var msg = Message{id = 7, kind = 1};
     var frame = encode(&msg);
     io.print("frame len = {}\n", frame.len);   // 8 + 8 = 16
 
@@ -36,7 +35,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn encode_decode_roundtrip() !void {
-    var msg = Message{ id = 7, kind = 1 };
+    var msg = Message{id = 7, kind = 1};
     var frame = encode(&msg);
     try expect_eq(frame.len, 16);   // 8（u64 前缀）+ 8（POD 字节）
     var decoded = try decode(&frame);

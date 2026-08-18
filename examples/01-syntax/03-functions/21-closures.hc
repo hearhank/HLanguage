@@ -17,7 +17,10 @@ fn main(args: o Vec(String)) !void {
     var double = |v| v * 2;              // 无环境捕获
     var add_a = |v| v + a;               // 只读捕获 a（默认）
     var mut total = 0;
-    var accum = mut |v| { total += v; return v; };   // 可写捕获（mut |x|）
+    var accum = mut |v| { // 可写捕获（mut |x|）
+        total += v;
+        return v;
+    };
 
     io.print("{}\n", apply(double, 5));
     io.print("{}\n", apply(add_a, 5));
@@ -36,7 +39,10 @@ fn main(args: o Vec(String)) !void {
     try expect_eq(apply(add_a, 5), 15);
 
     var mut total = 0;
-    var accum = mut |v| { total += v; return v; };   // 可写捕获
+    var accum = mut |v| { // 可写捕获
+        total += v;
+        return v;
+    };
     try expect_eq(apply(accum, 3), 3);
     try expect_eq(total, 3);
 }

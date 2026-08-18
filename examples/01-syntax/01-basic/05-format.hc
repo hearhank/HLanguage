@@ -17,8 +17,7 @@ fn main(args: o Vec(String)) !void {
     // io.print("{x}\n", "str");    // 错误：说明符与类型不匹配（Q2 comptime 校验）
 }
 
-[test("格式化输入运行")]
-fn format_entry_runs() !void {
+[test("格式化输入运行")] fn format_entry_runs() !void {
     var a: o Vec(String) = [];
     try main(a);   // S2：格式串全部合法，运行不抛错
 }

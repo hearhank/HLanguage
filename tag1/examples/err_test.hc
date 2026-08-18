@@ -1,6 +1,6 @@
 import H.std.{io};
 
-const FileError = error{ NotFound, PermissionDenied, Io };
+const FileError = error{NotFound, PermissionDenied, Io};
 fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     var f = io.fs.open(path) catch |err| switch (err) {
         error.NotFound => return error.NotFound,

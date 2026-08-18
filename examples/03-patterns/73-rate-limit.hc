@@ -11,7 +11,7 @@ class TokenBucket {
     mut last_refill: i64,
 
     fn new(capacity: i32, now: i64) o TokenBucket {
-        return TokenBucket{ capacity = capacity, tokens = capacity, last_refill = now };
+        return TokenBucket{capacity = capacity, tokens = capacity, last_refill = now};
     }
 
     fn allow(self: *mut Self, io: *T) bool where T: Io {

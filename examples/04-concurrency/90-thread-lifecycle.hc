@@ -13,9 +13,15 @@ import H.std.{io};
 // 原生后端为子集边界：spawn 需函数引用（FnRef），原生 ABI 未支持（Phase 8），
 // 编译模式响亮拒绝（error.NotCallable），不静默误编译。
 
-fn add(a: i32, b: i32) i32 { return a + b; }
-fn bump(v: i32) i32 { return v + 1; }
-fn triple(a: i32, b: i32, c: i32) i32 { return a + b + c; }
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+fn bump(v: i32) i32 {
+    return v + 1;
+}
+fn triple(a: i32, b: i32, c: i32) i32 {
+    return a + b + c;
+}
 
 // Q8：每线程独立 alloc——worker 的 alloc.alloc bump 到自身 arena，
 // 不进全局泄漏跟踪（根 alloc.leaks() 不变）
@@ -25,7 +31,9 @@ fn worker() usize {
 }
 
 global g: i32 = 0;
-fn bump_g() void { g = g + 1; }
+fn bump_g() void {
+    g = g + 1;
+}
 
 fn main(args: o Vec(String)) !void {
     // spawn 立即返回句柄；join 运行到完成并返回值

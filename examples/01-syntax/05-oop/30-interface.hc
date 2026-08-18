@@ -11,8 +11,7 @@ interface IShape {
     fn area(self: *Self) f32;
 }
 
-[continuous]
-class Rect: IShape {
+[continuous] class Rect: IShape {
     w: f32,
     h: f32,
 
@@ -21,8 +20,7 @@ class Rect: IShape {
     }
 }
 
-[continuous]
-class Circle: IShape {
+[continuous] class Circle: IShape {
     r: f32,
 
     fn area(self: *Self) f32 {
@@ -31,8 +29,8 @@ class Circle: IShape {
 }
 
 fn main(args: o Vec(String)) !void {
-    var rect = Rect{ w = 3.0, h = 4.0 };
-    var circ = Circle{ r = 2.0 };
+    var rect = Rect{w = 3.0, h = 4.0};
+    var circ = Circle{r = 2.0};
 
     // 方法调用双语：rect.area() ≡ Rect.area(&rect)
     io.print("rect area = {}\n", rect.area());
@@ -40,8 +38,8 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn interface_implementation() !void {
-    var rect = Rect{ w = 3.0, h = 4.0 };
-    var circ = Circle{ r = 2.0 };
+    var rect = Rect{w = 3.0, h = 4.0};
+    var circ = Circle{r = 2.0};
     try expect(rect.area() > 11.99 and rect.area() < 12.01);   // 12
     try expect(circ.area() > 12.56 and circ.area() < 12.57);   // 4π ≈ 12.566
 }

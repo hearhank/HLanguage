@@ -16,15 +16,22 @@ import H.std.{io};
 
 [module] namespace Orders {
     // —— owns 数据（模块内私有类型：无 pub = 模块私有，扁平/跨包不可见）——
-    class LineItem { sku: String, qty: i32, price_cents: i32 }
+    class LineItem {
+        sku: String,
+        qty: i32,
+        price_cents: i32
+    }
 
     // —— 上下文：依赖注入载体（init 参数列表构造）——
-    class OrderCtx { tax_pct: i32, min_qty: i32 }
+    class OrderCtx {
+        tax_pct: i32,
+        min_qty: i32
+    }
 
     // 上下文工厂：显式接收依赖（税率、最小起订量），返回模块上下文；
     // 调用方持有 ctx 并传入各 API（数据/依赖经上下文进入模块）
     pub fn init(tax_pct: i32, min_qty: i32) Orders.OrderCtx {
-        return Orders.OrderCtx { tax_pct = tax_pct, min_qty = min_qty };
+        return Orders.OrderCtx{tax_pct = tax_pct, min_qty = min_qty};
     }
 
     // —— 对外 pub API（边界）——
@@ -43,8 +50,8 @@ import H.std.{io};
 [test] fn orders_domain_boundary_and_total() !void {
     var ctx = Orders.init(10, 2);   // 税率 10%、最小起订 2 件
     var lines = [
-        Orders.LineItem { sku = "A", qty = 2, price_cents = 300 },   // 600 分
-        Orders.LineItem { sku = "B", qty = 1, price_cents = 400 },   // 不足 min_qty，剔除
+        Orders.LineItem{sku = "A", qty = 2, price_cents = 300},   // 600 分
+        Orders.LineItem{sku = "B", qty = 1, price_cents = 400},   // 不足 min_qty，剔除
     ];
     // (2×300) + 10% = 660 分
     try expect_eq(Orders.total(ctx, lines), 660);
@@ -55,8 +62,8 @@ import H.std.{io};
     var low_tax = Orders.init(0, 1);     // 无税、最小 1 件：两行全部计入
     var high_tax = Orders.init(20, 2);   // 20% 税、最小 2 件：仅 A 行计入
     var lines = [
-        Orders.LineItem { sku = "A", qty = 2, price_cents = 300 },   // 600 分
-        Orders.LineItem { sku = "B", qty = 1, price_cents = 400 },   // 400 分
+        Orders.LineItem{sku = "A", qty = 2, price_cents = 300},   // 600 分
+        Orders.LineItem{sku = "B", qty = 1, price_cents = 400},   // 400 分
     ];
     try expect_eq(Orders.total(low_tax, lines), 1000);   // 600 + 400
     try expect_eq(Orders.total(high_tax, lines), 720);   // 600 + 20% = 720（B 剔除）

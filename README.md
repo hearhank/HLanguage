@@ -17,10 +17,10 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | **第一部分「最小功能集」（M0–M7）** | ✅ **已完成**（`tag1/` 垂直切片，2026-08-17），**不自举** |
 | 语言系统（M0–M4） | ✅ 已完成：前端 / 语义 / 双后端 / 运行时与内建 |
 | 最小外围（M5–M7） | ✅ 已完成：最小标准库 / 测试基建 / 工具链最小 |
-| 测试 | `cargo test --workspace` **792 项全绿**（2026-08-18） |
+| 测试 | `cargo test --workspace` **796 项全绿**（2026-08-18） |
 | 示例回归 | 解释模式 **147/148 通过 + 1 跳过**（0 失败；组 F 四模式容器 37/76/77/78 已转绿） |
 | 原生交叉验证 | 编译模式 **57 项 mismatch**（未实现原生内建/方法，运行时以 `error.*` 响亮中止；边界值） |
-| 第三块（E1–E7） | 🟡 推进中 —— **E1 元编程 / E2 线程·异步·四模式·原子 / E3 标准库扩展 / E4 系统编程（K1/K2/K4/K5）已落地**；E5–E7 计划（见下） |
+| 第三块（E1–E7） | 🟡 推进中 —— **E1 元编程 / E2 线程·异步·四模式·原子 / E3 标准库扩展 / E4 系统编程（K1/K2/K4/K5）已落地**；E5 部分（I1 `hc fmt` 已落地）/ E6–E7 计划（见下） |
 | CI | 每次 push/PR 运行完整示例套件回归门（`tag1/scripts/check-examples.sh`） |
 | 原生编译依赖 | 外部 `zig cc`（`hc build` / `hc test --mode=compile` 需要，缺失时回退字节码产物） |
 
@@ -83,7 +83,7 @@ H2/
 | E2 并发与异步 | 线程 / 异步 / 四模式 / @atomic / Send·Sync 静态标记 | 🟡 部分落地（组 G/E/F：spawn/join/cancel/is_done/detach + async fn/await + Io.threaded/evented + 四模式容器 OneToOne/OneToMany/ManyToOne/ManyToMany + @atomicLoad/Store/Rmw 已落地——组 F 为 ADR-0011 逆转；Send·Sync 静态标记 = E6.1，1.x） |
 | E3 标准库扩展 | 四大支柱完整（含 UDP / HTTP / IPC / FFI 等） | 🟡 部分落地（组 G：net UDP/HTTP/TCP + ipc 管道/共享内存 + storage/archive + text/time/rng 已落地；FFI = G6，跳过/1.x） |
 | E4 系统编程 | 系统编程特性（K1–K11） | 🟡 部分落地（组 H，ADR-0014：K1 无标签 union / K2 volatile / K4 @ptrFromInt·@intFromPtr / K5 export fn 已落地；K3 asm / K6 freestanding / K7–K11 = 1.x） |
-| E5 工具链扩展 | LSP / 格式化 / lint / 包注册中心 / fingerprint | ⏳ 计划 |
+| E5 工具链扩展 | LSP / 格式化 / lint / 包注册中心 / fingerprint | 🟡 部分落地（I1 `hc fmt`：token 级重排 + AST 保真 + `--check` 幂等门已落地；I2 lint / I3 lsp / I4 注册中心留后续） |
 | E6 语言扩展 | 惰性迭代、switch 守卫、开放问题裁决、吃狗粮反馈 | ⏳ 计划 |
 | E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 计划 |
 
@@ -96,7 +96,7 @@ H2/
 | T3（M4 后） | 语言系统完整 | ✅ 已达成 |
 | **T4（M5–M7 后）** | **第一部分完成：最小功能集可用（不自举）** | ✅ **已达成（tag1，2026-08-17）** |
 | T5（E1–E2 后） | 元编程 + 并发完整 | 🟡 部分达成（2026-08-18：元编程 E1 完整；线程/异步/四模式/@atomic 已落地——组 F 逆转；Send·Sync 静态标记 1.x） |
-| T6（E3–E5 后） | 标准库 + 工具链完整 | ⏳ 推进中（E3 大部分落地，FFI 1.x；E5 未启动） |
+| T6（E3–E5 后） | 标准库 + 工具链完整 | ⏳ 推进中（E3 大部分落地，FFI 1.x；E5 部分启动——I1 `hc fmt` 已落地） |
 | T7（E7 后） | 自举闭环（用 H 编译 H） | ⏳ 计划 |
 | T8（E6 + 冻结） | 1.0 冻结 | ⏳ 计划 |
 

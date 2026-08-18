@@ -49,8 +49,8 @@ fn main(args: o Vec(String)) !void {
     arr.append(JsonValue{string = String.from("y", alloc)});
 
     var pairs = Vec(JsonPair).init(alloc);
-    pairs.append(JsonPair{ key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)} });
-    pairs.append(JsonPair{ key = String.from("list", alloc), value = JsonValue{array = arr} });
+    pairs.append(JsonPair{key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)}});
+    pairs.append(JsonPair{key = String.from("list", alloc), value = JsonValue{array = arr}});
 
     var doc = JsonValue{object = pairs};
     io.print("strings = {}\n", count_strings(&doc));   // 2
@@ -62,8 +62,8 @@ fn main(args: o Vec(String)) !void {
     arr.append(JsonValue{string = String.from("y", alloc)});
 
     var pairs = Vec(JsonPair).init(alloc);
-    pairs.append(JsonPair{ key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)} });
-    pairs.append(JsonPair{ key = String.from("list", alloc), value = JsonValue{array = arr} });
+    pairs.append(JsonPair{key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)}});
+    pairs.append(JsonPair{key = String.from("list", alloc), value = JsonValue{array = arr}});
 
     var doc = JsonValue{object = pairs};
     try expect_eq(count_strings(&doc), 2);   // "x" + "y"

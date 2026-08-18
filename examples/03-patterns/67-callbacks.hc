@@ -39,7 +39,9 @@ fn main(args: o Vec(String)) !void {
 [test] fn event_callback() !void {
     var bus: o EventBus = alloc.init(EventBus);
     var mut count = 0;
-    bus.on(mut |event| { count += 1; });   // 可写捕获（Q26：双向登记）
+    bus.on(mut |event| { // 可写捕获（Q26：双向登记）
+        count += 1;
+    });
     bus.emit("click");
     bus.emit("key");
     try expect_eq(count, 2);

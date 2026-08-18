@@ -30,7 +30,7 @@ fn main(args: o Vec(String)) !void {
     var e = Entity.new(
         alloc,
         Kind.enemy,
-        Position{ x = 1.0, y = 2.0 },
+        Position{x = 1.0, y = 2.0},
         Vec(&[u8]).init(alloc),
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     );
@@ -53,7 +53,7 @@ fn main(args: o Vec(String)) !void {
     var e = Entity.new(
         alloc,
         Kind.enemy,
-        Position{ x = 1.0, y = 2.0 },
+        Position{x = 1.0, y = 2.0},
         Vec(&[u8]).init(alloc),
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     );

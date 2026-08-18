@@ -6,8 +6,7 @@ import H.std.{io};
 //   - 堆上 class ↔ JSON：内建 to_json()/from_json() + 脚本生成可定制（Q37）
 //   - Vec/Map/切片 → byte 数组（二进制序列化）
 
-[continuous]
-class Point {   // 连续内存值类型（H1 特性标注）
+[continuous] class Point {   // 连续内存值类型（H1 特性标注）
     x: f32,
     y: f32,
 }
@@ -19,7 +18,7 @@ class Order {
 
 fn main(args: o Vec(String)) !void {
     // 连续类型 → bytes：内建方法（零拷贝视图）
-    var p = Point{ x = 1.0, y = 2.0 };
+    var p = Point{x = 1.0, y = 2.0};
     var bytes: &[u8] = p.to_bytes();
     io.print("size = {}\n", bytes.len);   // 8 字节（两个 f32）
 
@@ -39,7 +38,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn continuous_to_bytes() !void {
-    var p = Point{ x = 1.0, y = 2.0 };
+    var p = Point{x = 1.0, y = 2.0};
     var bytes: &[u8] = p.to_bytes();
     try expect_eq(bytes.len, 8);   // 两个 f32（直映射）
     var p2 = try Point.from_bytes(bytes);

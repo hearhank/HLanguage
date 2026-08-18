@@ -43,7 +43,7 @@ fn main(args: o Vec(String)) !void {
     io.print("{} {} {}\n", arr[0], arr[1], arr[2]);   // 10 20 30
 
     // 用户类型迭代（实现 IIterable(i32)）
-    var fib = Fib{ a = 0, b = 1, remaining = 6 };
+    var fib = Fib{a = 0, b = 1, remaining = 6};
     for (fib) |f| {
         io.print("{} ", f);        // 0 1 1 2 3 5
     }
@@ -73,7 +73,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn user_type_iteration() !void {
-    var fib = Fib{ a = 0, b = 1, remaining = 6 };
+    var fib = Fib{a = 0, b = 1, remaining = 6};
     var got = Vec(i32).init(alloc);
     for (fib) |f| {
         got.append(f);

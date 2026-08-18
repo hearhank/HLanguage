@@ -5,7 +5,7 @@ import H.std.{io};
 //   - split / trim 组合；行 → class（定义数据）
 //   - 格式错误 → error union（显式错误集）
 
-const CsvError = error{ BadRow };
+const CsvError = error{BadRow};
 
 class Row {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     name: String,

@@ -10,15 +10,13 @@ interface IParse {
     fn parse(self: *Self, data: &[u8]) anyerror!Value;
 }
 
-[continuous]
-class JsonParser: IParse {   // 无字段（连续）；实现 IParse
+[continuous] class JsonParser: IParse {   // 无字段（连续）；实现 IParse
     fn parse(self: *Self, data: &[u8]) anyerror!Value {
         return json.parse(data) catch return error.InvalidJson;
     }
 }
 
-[continuous]
-class CsvParser: IParse {   // 无字段（连续）；实现 IParse
+[continuous] class CsvParser: IParse {   // 无字段（连续）；实现 IParse
     fn parse(self: *Self, data: &[u8]) anyerror!Value {
         return csv.parse(data) catch return error.BadRow;
     }

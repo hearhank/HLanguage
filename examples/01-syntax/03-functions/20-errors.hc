@@ -8,7 +8,7 @@ import H.std.{io};
 //   - try 传播；无异常；无 ? 运算符别名
 //   - const 为常量/类型别名声明（Q12 定案，2026-08-13）：const 不可变，var mut 可变
 
-const FileError = error{ NotFound, PermissionDenied, Io };
+const FileError = error{NotFound, PermissionDenied, Io};
 
 fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     var f = io.fs.open(path) catch |err| switch (err) {

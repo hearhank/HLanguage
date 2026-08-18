@@ -17,7 +17,7 @@ class Rng {
     }
 
     fn between(self: *mut Self, lo: i32, hi: i32) i32 {
-        return lo + (self.next() % (hi - lo));
+        return lo + (self.next() %(hi - lo));
     }
 }
 

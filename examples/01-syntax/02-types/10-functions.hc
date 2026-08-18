@@ -5,8 +5,12 @@ import H.std.{io};
 //   - 函数自动满足调用接口（Fn1(i32) i32）：直接作值传递，无需 &
 //   - 函数与闭包统一走调用接口（Q13/Q43）——「函数 = 唯一处理逻辑」
 
-fn square(x: i32) i32 { return x * x; }
-fn cube(x: i32) i32 { return x * x * x; }
+fn square(x: i32) i32 {
+    return x * x;
+}
+fn cube(x: i32) i32 {
+    return x * x * x;
+}
 
 fn apply(f: Fn1(i32) i32, x: i32) i32 {
     return f(x);
