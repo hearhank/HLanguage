@@ -456,6 +456,10 @@
           "named": true
         },
         {
+          "type": "import_declaration",
+          "named": true
+        },
+        {
           "type": "interface_declaration",
           "named": true
         },
@@ -969,6 +973,58 @@
     }
   },
   {
+    "type": "import_declaration",
+    "named": true,
+    "fields": {
+      "module": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "module_path",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "import_item",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "import_item",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "index_expression",
     "named": true,
     "fields": {
@@ -1121,6 +1177,21 @@
     }
   },
   {
+    "type": "module_path",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "namespace_body",
     "named": true,
     "fields": {},
@@ -1197,6 +1268,22 @@
         "types": [
           {
             "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "owned_type",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type",
             "named": true
           }
         ]
@@ -1597,6 +1684,10 @@
           "named": true
         },
         {
+          "type": "owned_type",
+          "named": true
+        },
+        {
           "type": "pointer_type",
           "named": true
         },
@@ -1899,6 +1990,10 @@
     "named": false
   },
   {
+    "type": "as",
+    "named": false
+  },
+  {
     "type": "await",
     "named": false
   },
@@ -2023,6 +2118,10 @@
     "named": false
   },
   {
+    "type": "import",
+    "named": false
+  },
+  {
     "type": "integer_literal",
     "named": true
   },
@@ -2045,6 +2144,10 @@
   {
     "type": "null_literal",
     "named": true
+  },
+  {
+    "type": "o",
+    "named": false
   },
   {
     "type": "pub",

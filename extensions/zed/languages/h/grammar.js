@@ -26,6 +26,13 @@ module.exports = grammar({
     // A single parenthesized expression `(x)` is both a call argument list
     // and (potentially) a tuple. Prefer the argument-list reading.
     [$.argument_list, $.tuple_expression],
+    // `import A.B.{x}`: the dotted module path is ambiguous with a bare
+    // identifier followed by a field access. Prefer the module-path reading.
+    // The self-conflict lets GLR explore both greedy and non-greedy module
+    // path readings; the non-greedy one fails (no `{` follows the early `.`)
+    // and gets pruned.
+    [$.module_path, $.field_expression],
+    [$.module_path],
   ],
 
   // Rules
@@ -41,6 +48,7 @@ module.exports = grammar({
 
     // Declarations
     declaration: $ => choice(
+      $.import_declaration,
       $.function_declaration,
       $.variable_declaration,
       $.constant_declaration,
@@ -50,6 +58,32 @@ module.exports = grammar({
       $.interface_declaration,
       $.namespace_declaration,
       $.test_declaration,
+    ),
+
+    // Import declaration
+    //   import H.std.{io};
+    //   import H.std.{io as my};
+    //   import H.std.net.{http, tcp};
+    import_declaration: $ => seq(
+      'import',
+      field('module', $.module_path),
+      '.',
+      '{',
+      commaSep($.import_item),
+      '}',
+      ';',
+    ),
+
+    // Module path: a sequence of identifiers separated by dots (e.g. H.std.net)
+    module_path: $ => seq(
+      $.identifier,
+      repeat(seq('.', $.identifier)),
+    ),
+
+    // A single imported item, optionally renamed with `as` (e.g. io as my)
+    import_item: $ => seq(
+      field('name', $.identifier),
+      optional(seq('as', field('alias', $.identifier))),
     ),
 
     // Function declaration
@@ -210,6 +244,7 @@ module.exports = grammar({
       $.user_type,
       $.pointer_type,
       $.optional_type,
+      $.owned_type,
       $.error_union_type,
       $.array_type,
       $.slice_type,
@@ -242,6 +277,14 @@ module.exports = grammar({
 
     optional_type: $ => seq(
       '?',
+      field('type', $.type),
+    ),
+
+    // Owned type: `o T` (H ownership syntax; e.g. o Vec(String)).
+    // Unlike `*T` (shared/read-only) and `*mut T` (mutable), `o T`
+    // means the value is owned.
+    owned_type: $ => seq(
+      'o',
       field('type', $.type),
     ),
 

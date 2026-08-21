@@ -25,6 +25,9 @@
   "false"
   "pub"
   "mut"
+  "import"
+  "as"
+  "o"
 ] @keyword
 
 ; Types
