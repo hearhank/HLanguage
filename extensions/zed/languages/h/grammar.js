@@ -17,6 +17,15 @@ module.exports = grammar({
   // Conflict resolution
   conflicts: $ => [
     [$.expression, $.statement],
+    // `Foo(...)` is ambiguous: a call expression (expression position)
+    // vs a user type with type arguments (type position). Prefer the
+    // expression (call) interpretation in expression contexts.
+    [$.expression, $.user_type],
+    // `error.X` is both an error literal and a field access on `error`.
+    [$.error_literal, $.field_expression],
+    // A single parenthesized expression `(x)` is both a call argument list
+    // and (potentially) a tuple. Prefer the argument-list reading.
+    [$.argument_list, $.tuple_expression],
   ],
 
   // Rules
@@ -236,11 +245,11 @@ module.exports = grammar({
       field('type', $.type),
     ),
 
-    error_union_type: $ => seq(
+    error_union_type: $ => prec.right(1, seq(
       optional(field('error_set', $.type)),
       '!',
       field('type', $.type),
-    ),
+    )),
 
     array_type: $ => seq(
       '[',
@@ -274,14 +283,11 @@ module.exports = grammar({
       $.expression_statement,
       $.variable_declaration,
       $.constant_declaration,
-      $.if_statement,
       $.while_statement,
       $.for_statement,
-      $.switch_statement,
       $.return_statement,
       $.break_statement,
       $.continue_statement,
-      $.try_statement,
       $.catch_statement,
       $.defer_statement,
       $.errdefer_statement,
@@ -291,13 +297,6 @@ module.exports = grammar({
     expression_statement: $ => seq(
       $.expression,
       ';',
-    ),
-
-    if_statement: $ => seq(
-      'if',
-      field('condition', $.expression),
-      field('consequence', $.block),
-      optional(seq('else', field('alternative', choice($.block, $.if_statement)))),
     ),
 
     while_statement: $ => seq(
@@ -313,14 +312,6 @@ module.exports = grammar({
       field('variable', $.identifier),
       '|',
       field('body', $.block),
-    ),
-
-    switch_statement: $ => seq(
-      'switch',
-      field('value', $.expression),
-      '{',
-      repeat($.switch_case),
-      '}',
     ),
 
     switch_case: $ => seq(
@@ -352,12 +343,6 @@ module.exports = grammar({
     continue_statement: $ => seq(
       'continue',
       optional(seq(':', field('label', $.identifier))),
-      ';',
-    ),
-
-    try_statement: $ => seq(
-      'try',
-      field('expression', $.expression),
       ';',
     ),
 
@@ -394,13 +379,10 @@ module.exports = grammar({
       $.index_expression,
       $.array_expression,
       $.tuple_expression,
-      $.struct_expression,
-      $.enum_expression,
       $.if_expression,
       $.switch_expression,
       $.block_expression,
       $.closure_expression,
-      $.pointer_expression,
       $.await_expression,
       $.try_expression,
       $.catch_expression,
@@ -416,17 +398,17 @@ module.exports = grammar({
       prec.left(5, seq(field('left', $.expression), choice('*', '/', '%'), field('right', $.expression))),
     ),
 
-    unary_expression: $ => choice(
+    unary_expression: $ => prec.right(7, choice(
       seq('!', field('operand', $.expression)),
       seq('-', field('operand', $.expression)),
       seq('*', field('operand', $.expression)),
       seq('&', field('operand', $.expression)),
-    ),
+    )),
 
-    call_expression: $ => seq(
+    call_expression: $ => prec(9, seq(
       field('function', $.expression),
       field('arguments', $.argument_list),
-    ),
+    )),
 
     argument_list: $ => seq(
       '(',
@@ -434,18 +416,18 @@ module.exports = grammar({
       ')',
     ),
 
-    field_expression: $ => seq(
+    field_expression: $ => prec(9, seq(
       field('object', $.expression),
       '.',
       field('field', $.identifier),
-    ),
+    )),
 
-    index_expression: $ => seq(
+    index_expression: $ => prec(9, seq(
       field('object', $.expression),
       '[',
       field('index', $.expression),
       ']',
-    ),
+    )),
 
     array_expression: $ => seq(
       '[',
@@ -459,32 +441,18 @@ module.exports = grammar({
       ')',
     ),
 
-    struct_expression: $ => seq(
-      field('type', $.type),
-      '{',
-      commaSep($.field_initializer),
-      '}',
-    ),
-
     field_initializer: $ => seq(
       field('name', $.identifier),
       '=',
       field('value', $.expression),
     ),
 
-    enum_expression: $ => seq(
-      field('type', $.type),
-      '.',
-      field('variant', $.identifier),
-      optional(seq('(', field('payload', $.expression), ')')),
-    ),
-
-    if_expression: $ => seq(
+    if_expression: $ => prec.right(seq(
       'if',
       field('condition', $.expression),
       field('consequence', choice($.expression, $.block)),
       optional(seq('else', field('alternative', choice($.expression, $.block)))),
-    ),
+    )),
 
     switch_expression: $ => seq(
       'switch',
@@ -508,39 +476,34 @@ module.exports = grammar({
       field('body', $.block),
     ),
 
-    pointer_expression: $ => seq(
-      '&',
-      field('operand', $.expression),
-    ),
-
-    await_expression: $ => seq(
+    await_expression: $ => prec(9, seq(
       field('expression', $.expression),
       '.',
       'await',
-    ),
+    )),
 
     try_expression: $ => seq(
       'try',
       field('expression', $.expression),
     ),
 
-    catch_expression: $ => seq(
+    catch_expression: $ => prec.left(8, seq(
       field('expression', $.expression),
       'catch',
       field('default', $.expression),
-    ),
+    )),
 
-    orelse_expression: $ => seq(
+    orelse_expression: $ => prec.left(8, seq(
       field('expression', $.expression),
       '??',
       field('default', $.expression),
-    ),
+    )),
 
-    unwrap_expression: $ => seq(
+    unwrap_expression: $ => prec(9, seq(
       field('expression', $.expression),
       '.',
       '?',
-    ),
+    )),
 
     // Literals
     literal: $ => choice(

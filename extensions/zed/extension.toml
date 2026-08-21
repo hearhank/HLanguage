@@ -1,130 +1,33 @@
 id = "h-language"
 name = "H Language"
-description = "H language support for Zed"
 version = "0.1.0"
 schema_version = 1
-authors = ["Hank <baibib@163.com>"]
+description = "H language support for Zed"
 repository = "https://github.com/h-language/h"
+authors = ["Hank <baibib@163.com>"]
+themes = []
+icon_themes = []
+languages = ["languages/h"]
+capabilities = []
+
+[lib]
+kind = "Rust"
+version = "0.7.0"
 
 [grammars.h]
-repository = "https://github.com/h-language/tree-sitter-h"
+# Local grammar: point Zed at the grammar directory in this repository.
+# For a published extension, replace with the tree-sitter-h repository + rev.
+repository = "file://C:/Users/Hank/Documents/works/AI/H2/extensions/zed/languages/h"
 rev = "main"
 
-[languages.h]
-name = "H"
-grammar = "h"
-language_servers = ["hc-lsp"]
-formatter = {external = {command = "hc", arguments = ["fmt"]}}
-
 [language_servers.hc-lsp]
-name = "H Language Server"
-language = "h"
+language = "H"
+languages = []
 
-[language_servers.hc-lsp.binary]
-path = "hc-lsp"
-arguments = []
+[language_servers.hc-lsp.language_ids]
 
-# File types
-[[languages.h.file_types]]
-suffix = "h"
+[context_servers]
 
-# Language configuration
-[languages.h.configuration]
-tab_size = 4
-hard_tabs = false
-soft_wrap = "prefer_line"
-preferred_line_length = 100
-show_inline_completions = true
-show_whitespace = true
-remove_trailing_whitespace_on_save = true
-ensure_final_newline_on_save = true
+[agent_servers]
 
-# Bracket pairs
-[[languages.h.bracket_pairs]]
-start = "("
-end = ")"
-close = true
-newline = true
-
-[[languages.h.bracket_pairs]]
-start = "["
-end = "]"
-close = true
-newline = true
-
-[[languages.h.bracket_pairs]]
-start = "{"
-end = "}"
-close = true
-newline = true
-
-# Autoclose pairs
-[[languages.h.autoclose_before]]
-; = "};:"
-
-# Word characters
-[languages.h.word_characters]
-; = "_"
-
-# Comments
-[languages.h.comments]
-line_comment = "//"
-block_comment = ["/*", "*/"]
-doc_comment = "///"
-
-# Indentation
-[languages.h.indentation]
-indent = "    "
-outdent = "    "
-
-# Syntax highlighting overrides
-[languages.h.syntax]
-# Keywords
-"keyword" = {fg = "keyword", modifiers = ["bold"]}
-"keyword.control" = {fg = "keyword.control"}
-"keyword.operator" = {fg = "keyword.operator"}
-
-# Types
-"type" = {fg = "type"}
-"type.builtin" = {fg = "type.builtin", modifiers = ["bold"]}
-
-# Functions
-"function" = {fg = "function"}
-"function.method" = {fg = "function.method"}
-
-# Variables
-"variable" = {fg = "variable"}
-"variable.parameter" = {fg = "variable.parameter"}
-"variable.global" = {fg = "variable.global", modifiers = ["bold"]}
-
-# Constants
-"constant" = {fg = "constant"}
-"constant.builtin" = {fg = "constant.builtin", modifiers = ["bold"]}
-
-# Strings
-"string" = {fg = "string"}
-"string.escape" = {fg = "string.escape"}
-
-# Numbers
-"number" = {fg = "number"}
-
-# Comments
-"comment" = {fg = "comment", modifiers = ["italic"]}
-"comment.doc" = {fg = "comment.doc", modifiers = ["italic"]}
-
-# Operators
-"operator" = {fg = "operator"}
-
-# Punctuation
-"punctuation" = {fg = "punctuation"}
-"punctuation.bracket" = {fg = "punctuation.bracket"}
-"punctuation.delimiter" = {fg = "punctuation.delimiter"}
-
-# Properties
-"property" = {fg = "property"}
-
-# Attributes
-"attribute" = {fg = "attribute", modifiers = ["italic"]}
-
-# Namespace
-"namespace" = {fg = "namespace"}
+[slash_commands]

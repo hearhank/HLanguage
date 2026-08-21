@@ -11,51 +11,48 @@ This extension provides H language support for the Zed editor, including:
 
 ## Installation
 
-### Prerequisites
+### One-Command Deploy (Windows)
 
-1. **Install H language compiler** (`hc`):
-   ```bash
-   # Clone the H language repository
-   git clone https://github.com/h-language/h
-   cd h
-   
-   # Build and install
-   cargo build --release
-   cargo install --path tag1/hc
-   ```
+From a `cmd` prompt, run the deployment script. It builds the LSP server,
+generates the Tree-sitter parser, builds the Rust extension, and stages
+everything:
 
-2. **Install Tree-sitter CLI** (for syntax highlighting):
-   ```bash
-   npm install -g tree-sitter-cli
-   ```
+```bat
+cd tag1\hc-lsp
+deploy-lsp.bat
+```
 
-### Install the Extension
+The script:
+- Builds `hc-lsp` and copies it (plus `hc`) to `bin\`
+- Generates the Tree-sitter parser into `extensions\zed\languages\h\src`
+- Builds the Rust extension (`extension.wasm`)
+- Copies the extension to `%USERPROFILE%\.zed\extensions\h-language`
+- Writes a Zed settings snippet to `zed-lsp-snippet.json`
 
-1. **Clone the extension**:
-   ```bash
-   git clone https://github.com/h-language/h
-   cd h/extensions/zed
-   ```
+### Install in Zed
 
-2. **Generate Tree-sitter parser**:
-   ```bash
-   cd languages/h
-   tree-sitter generate
-   ```
-
-3. **Install in Zed**:
-   - Open Zed
-   - Press `Cmd+,` (macOS) or `Ctrl+,` (Linux/Windows) to open settings
-   - Add the extension path to `extensions`:
-     ```json
-     {
-       "extensions": {
-         "h-language": "/path/to/h/extensions/zed"
+1. **Add `bin` to PATH** so Zed can find `hc-lsp`: run `setup-lsp.bat` (or
+   manually add `%PROJECT_ROOT%\bin` to your user PATH).
+2. **Install the dev extension**:
+   - Open Zed, run `zed: install dev extension` from the command palette
+   - Select the `extensions\zed` directory
+   - Zed compiles the Rust extension automatically (it downloads
+     `wasm32-wasip2` + wasi-sdk on first use).
+3. If the LSP does not start (e.g. wasm compile failed), merge the generated
+   `zed-lsp-snippet.json` into `%APPDATA%\Zed\settings.json`:
+   ```json
+   {
+     "lsp": {
+       "hc-lsp": {
+         "binary": { "path": "C:\\path\\to\\bin\\hc-lsp.exe" }
        }
+     },
+     "languages": {
+       "H": { "language_servers": ["hc-lsp", "!language-server"] }
      }
-     ```
-
-4. **Restart Zed**
+   }
+   ```
+4. **Restart Zed** and open a `.h` file.
 
 ## Configuration
 

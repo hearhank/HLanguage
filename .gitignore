@@ -23,6 +23,11 @@ target/
 *_tmp.*
 *.log
 
+# Zed 扩展部署产物（由 deploy-lsp.bat 重新生成）
+extensions/zed/extension.wasm
+setup-lsp.bat
+/zed-lsp-snippet.json
+
 # 编辑器/系统
 .DS_Store
 Thumbs.db

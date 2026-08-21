@@ -1,0 +1,14 @@
+{
+  "lsp": {
+    "hc-lsp": {
+      "binary": {
+        "path": "C:\\Users\\Hank\\Documents\\works\\AI\\H2\\bin\\hc-lsp.exe"
+      }
+    }
+  },
+  "languages": {
+    "H": {
+      "language_servers": ["hc-lsp", "!language-server"]
+    }
+  }
+}

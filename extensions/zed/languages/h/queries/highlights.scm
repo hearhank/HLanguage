@@ -14,7 +14,6 @@
   "for"
   "switch"
   "case"
-  "default"
   "return"
   "break"
   "continue"
@@ -24,15 +23,8 @@
   "errdefer"
   "true"
   "false"
-  "null"
-  "self"
   "pub"
-  "using"
-  "script"
-  "comptime"
-  "test"
-  "extern"
-  "export"
+  "mut"
 ] @keyword
 
 ; Types
@@ -51,10 +43,12 @@
 (function_declaration
   name: (identifier) @function)
 (call_expression
-  function: (identifier) @function)
+  function: (expression
+    (identifier) @function))
 (call_expression
-  function: (field_expression
-    field: (identifier) @function.method))
+  function: (expression
+    (field_expression
+      field: (identifier) @function.method)))
 
 ; Parameters
 (parameter
@@ -73,8 +67,6 @@
   name: (identifier) @property)
 (field_expression
   field: (identifier) @property)
-(field_initializer
-  name: (identifier) @property)
 
 ; Literals
 (integer_literal) @number
@@ -93,9 +85,9 @@
   "+" "-" "*" "/" "%"
   "==" "!=" "<" ">" "<=" ">="
   "&&" "||" "!"
-  "&" "|" "^" "<<" ">>"
-  "=" "+=" "-=" "*=" "/=" "%="
-  "." "->" "=>" "::" ":" ";" "," "(" ")" "[" "]" "{" "}"
+  "&" "|"
+  "="
+  "." "=>" ":" ";" "," "(" ")" "[" "]" "{" "}"
 ] @operator
 
 ; Punctuation
@@ -121,8 +113,6 @@
 ; Enum variants
 (enum_variant
   name: (identifier) @constant)
-(enum_expression
-  variant: (identifier) @constant)
 
 ; Namespace
 (namespace_declaration
