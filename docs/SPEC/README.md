@@ -52,5 +52,6 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | `08-mem-allocator-design.md` | **mem 标准库内存分配器设计**：Allocator 抽象 + 全局回退分配器 + Arena（方法集、内存归属规则、装箱/集合交互、tag1 差距清单） |
 | `09-part2-execution.md` | **第二部分执行细表**（A–H 全完成，2026-08-18）：缺口清单、≤2h 任务分解、验收与门禁、完成注记 |
 | `10-part3-execution.md` | **第三块执行细表**（计划，2026-08-18）：前置裁决、描述充分性审查、E1–E7 ≤2h 任务分解（A–K）、自举验收 |
+| `11-lsp-implementation.md` | **LSP工具实施计划**（设计完成，2026-08-22）：设计决策、技术架构、任务拆分（≤1小时）、验收标准、风险与缓解 |
 
 相关文档：决策记录 `docs/adr/0001`–`0008`；术语表 `CONTEXT.md`；参考语言事实档案与功能比对 `RESEARCH/`（含 `h-vs-rust-comparison.md`）；review 裁定全录 `docs/review/2026-08-13-spec-examples-review.md`。

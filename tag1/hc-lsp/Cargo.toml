@@ -1,0 +1,23 @@
+[package]
+name = "hc-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# LSP library
+tower-lsp = "0.20"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Compiler frontend (for diagnostics, type checking, etc.)
+hc = { path = "../hc" }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -14,7 +14,7 @@ fn main(args: o Vec(String)) !void {
     io.print("{:.2}\n", 3.14159);   // 精度：3.14
     io.print("{:8}\n", 42);         // 宽度（右对齐）
     io.print("{:<6}\n", "hi");      // 左对齐
-    // io.print("{x}\n", "str");    // 错误：说明符与类型不匹配（Q2 comptime 校验）
+    //io.print("{x}\n", "str");    // 错误：说明符与类型不匹配（Q2 comptime 校验）
 }
 
 [test("格式化输入运行")] fn format_entry_runs() !void {

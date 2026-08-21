@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["hc", "hc-rt", "hc-tools"]
+members = ["hc", "hc-rt", "hc-tools", "hc-lsp"]
 
 [workspace.package]
 version = "0.1.1"

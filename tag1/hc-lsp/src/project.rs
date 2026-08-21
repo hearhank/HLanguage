@@ -1,0 +1,117 @@
+use std::path::PathBuf;
+use tower_lsp::lsp_types::Url;
+
+/// Represents the project context
+#[derive(Debug, Clone)]
+pub struct ProjectContext {
+    /// The root URI of the project
+    pub root_uri: Option<Url>,
+    /// The root path of the project (if available)
+    pub root_path: Option<PathBuf>,
+    /// The project name (from build.zon)
+    pub name: Option<String>,
+    /// The project version (from build.zon)
+    pub version: Option<String>,
+}
+
+impl ProjectContext {
+    /// Create a new project context
+    pub fn new() -> Self {
+        Self {
+            root_uri: None,
+            root_path: None,
+            name: None,
+            version: None,
+        }
+    }
+
+    /// Set the root URI
+    pub fn set_root_uri(&mut self, uri: Url) {
+        self.root_uri = Some(uri.clone());
+        // Try to convert URI to path
+        if let Ok(path) = uri.to_file_path() {
+            self.root_path = Some(path);
+        }
+    }
+
+    /// Set the root path
+    pub fn set_root_path(&mut self, path: PathBuf) {
+        self.root_path = Some(path.clone());
+        // Try to convert path to URI
+        if let Ok(uri) = Url::from_file_path(&path) {
+            self.root_uri = Some(uri);
+        }
+    }
+
+    /// Get the root URI
+    pub fn root_uri(&self) -> Option<&Url> {
+        self.root_uri.as_ref()
+    }
+
+    /// Get the root path
+    pub fn root_path(&self) -> Option<&PathBuf> {
+        self.root_path.as_ref()
+    }
+
+    /// Check if the project has a root
+    pub fn has_root(&self) -> bool {
+        self.root_uri.is_some() || self.root_path.is_some()
+    }
+
+    /// Find the build.zon file in the project root
+    pub fn find_build_zon(&self) -> Option<PathBuf> {
+        self.root_path.as_ref().map(|root| root.join("build.zon"))
+    }
+
+    /// Parse build.zon and update project info
+    /// Note: This is a placeholder. The actual implementation will reuse hc-tools/src/buildzon.rs
+    pub fn parse_build_zon(&mut self) -> Result<(), String> {
+        // TODO: Implement build.zon parsing
+        // For now, we just set placeholder values
+        self.name = Some("unknown".to_string());
+        self.version = Some("0.1.0".to_string());
+        Ok(())
+    }
+}
+
+impl Default for ProjectContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_project_context() {
+        let ctx = ProjectContext::new();
+        assert!(ctx.root_uri.is_none());
+        assert!(ctx.root_path.is_none());
+        assert!(!ctx.has_root());
+    }
+
+    #[test]
+    fn test_set_root_uri() {
+        let mut ctx = ProjectContext::new();
+        let uri = Url::parse("file:///test/project").unwrap();
+
+        ctx.set_root_uri(uri.clone());
+
+        assert!(ctx.has_root());
+        assert_eq!(ctx.root_uri(), Some(&uri));
+    }
+
+    #[test]
+    fn test_find_build_zon() {
+        let mut ctx = ProjectContext::new();
+        let path = PathBuf::from("/test/project");
+
+        ctx.set_root_path(path);
+
+        let build_zon = ctx.find_build_zon();
+        assert!(build_zon.is_some());
+        assert_eq!(build_zon.unwrap(), PathBuf::from("/test/project/build.zon"));
+    }
+}

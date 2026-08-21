@@ -305,3 +305,37 @@ _Avoid_: 库内写 main 入口
 **包与依赖 (Package & deps)**:
 包管理器内置编译器；**包形态 = 应用（`Kind::exe`，含 main）/ 库（`Kind::lib`，无 main，1+ 模块，产出 lib/dll）**；依赖清单 = **H 数据字面量**（`const build = Build{ ... }`，build.zon 式，2026-08-13 Q26 定案）；官方注册中心；`hc build` / `hc cc`（M8 工具链，系统库自带、静态链接默认）。
 _Avoid_: 隐藏系统依赖
+
+## 11. 工具链（M8）
+
+**LSP服务器 (Language Server Protocol Server)**:
+提供语言智能服务的服务器，遵循LSP协议。H语言的LSP服务器提供诊断、定义跳转、悬停提示、自动补全等功能。独立二进制 `hc-lsp` 或子命令 `hc lsp` 启动。支持Zed、VSCode、Neovim等编辑器。
+_Avoid_: 将LSP服务器与编译器混淆
+
+**诊断 (Diagnostic)**:
+编译器或LSP服务器提供的错误和警告信息。包括语法错误、类型错误、语义错误等。LSP诊断包含位置（行列）、级别（错误/警告）、消息。实时诊断当前文件，保存时诊断整个项目。
+_Avoid_: 将诊断与运行时错误混淆
+
+**定义跳转 (Go to Definition)**:
+LSP功能，跳转到符号的定义位置。支持函数、类、枚举、接口、变量等符号。支持跨文件跳转（依赖包中的符号）。
+_Avoid_: 将定义跳转与引用查找混淆
+
+**悬停提示 (Hover)**:
+LSP功能，鼠标悬停时显示符号的类型信息和文档注释。类型信息由编译器类型推断提供，文档注释为 `///` 格式的Markdown文本。
+_Avoid_: 悬停提示显示过多信息
+
+**自动补全 (Auto Completion)**:
+LSP功能，提供代码补全建议。包括关键字、标识符（变量、函数、类型）、字段和方法（基于类型推断）、导入建议。根据上下文过滤补全项。
+_Avoid_: 补全项过多，影响选择
+
+**Tree-sitter语法 (Tree-sitter Grammar)**:
+用于编辑器语法高亮、缩进、大纲等的语法定义。H语言的Tree-sitter语法从现有lexer/parser转换，逐步迁移。核心语法包括表达式、函数、类、枚举、接口、命名空间、控制流。
+_Avoid_: 将Tree-sitter语法与编译器语法混淆
+
+**Zed扩展 (Zed Extension)**:
+为Zed编辑器提供的语言扩展。包含Tree-sitter语法、LSP服务器配置、语言元数据（config.toml）。集成到H2仓库的 `extensions/zed/` 目录。
+_Avoid_: 将Zed扩展与LSP服务器混淆
+
+**文档注释 (Doc Comment)**:
+`///` 格式的注释，用于文档生成和LSP悬停提示。支持Markdown格式。类似Rust的文档注释格式。
+_Avoid_: 使用其他格式的文档注释
