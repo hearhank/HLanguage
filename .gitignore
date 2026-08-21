@@ -27,6 +27,8 @@ target/
 extensions/zed/extension.wasm
 setup-lsp.bat
 /zed-lsp-snippet.json
+# Zed 语法 grammar 运行时克隆/编译目录（grammars/h.wasm 与 grammars/h/）
+extensions/zed/grammars/
 
 # 编辑器/系统
 .DS_Store
