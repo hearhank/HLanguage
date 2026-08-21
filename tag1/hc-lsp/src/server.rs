@@ -1,4 +1,5 @@
 use crate::compiler::{compile_document, to_lsp_diagnostic};
+use crate::completion::CompletionEngine;
 use crate::document::DocumentManager;
 use crate::project::ProjectContext;
 use crate::symbol::SymbolTable;
@@ -16,6 +17,8 @@ pub struct HcLspServer {
     project: Arc<Mutex<ProjectContext>>,
     /// Symbol tables for each document (URI -> SymbolTable)
     symbols: Arc<Mutex<HashMap<Url, SymbolTable>>>,
+    /// Completion engine
+    completion_engine: CompletionEngine,
 }
 
 impl HcLspServer {
@@ -25,6 +28,7 @@ impl HcLspServer {
             documents: Arc::new(Mutex::new(DocumentManager::new())),
             project: Arc::new(Mutex::new(ProjectContext::new())),
             symbols: Arc::new(Mutex::new(HashMap::new())),
+            completion_engine: CompletionEngine::new(),
         }
     }
 }
@@ -349,7 +353,45 @@ impl LanguageServer for HcLspServer {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        // TODO: Implement completion
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        // Get document content
+        let docs = self.documents.lock().await;
+        let content = match docs.get(&uri) {
+            Some(doc) => doc.content.clone(),
+            None => return Ok(None),
+        };
+        drop(docs);
+
+        // Get symbol table for this document
+        let symbols = self.symbols.lock().await;
+        let symbol_table = symbols.get(&uri);
+
+        // Find prefix at cursor position
+        // Simple approach: extract identifier prefix from the line
+        let line = content.lines().nth(position.line as usize);
+        if let Some(line) = line {
+            let col = position.character as usize;
+            let chars: Vec<char> = line.chars().collect();
+
+            // Find start of identifier (move left until non-identifier char)
+            let mut start = col;
+            while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+                start -= 1;
+            }
+
+            // Extract prefix
+            let prefix: String = chars[start..col].iter().collect();
+
+            // Get completions
+            let completions = self
+                .completion_engine
+                .get_completions(symbol_table, &prefix);
+
+            return Ok(Some(CompletionResponse::Array(completions)));
+        }
+
         Ok(None)
     }
 }
