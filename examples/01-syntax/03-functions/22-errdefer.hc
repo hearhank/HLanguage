@@ -6,7 +6,7 @@ import H.std.{io};
 //   - errdefer：仅错误返回路径执行（Zig 式）
 //   - 场景：写入中途出错 → 回滚/清理
 
-fn write_config(io: *T, path: &[u8], data: &[u8]) !void where T: Io {
+fn write_config<T>(io: *T, path: &[u8], data: &[u8]) !void where T: Io {
     var f = try io.fs.open(path);
     defer f.close();                    // 正常/错误都关闭
 
@@ -18,7 +18,7 @@ fn write_config(io: *T, path: &[u8], data: &[u8]) !void where T: Io {
     try io.fs.rename("tmp.tmp", path);  // 成功：原子替换
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     try write_config(&io, "config.json", "{}");
     io.print("written\n");
 }

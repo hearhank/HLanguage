@@ -10,8 +10,8 @@ class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上
     age: i32,
 }
 
-fn main(args: o Vec(String)) !void {
-    var people = Vec(Person).init(alloc);
+fn main(args: o Vec<String>) !void {
+    var people = Vec<Person>.init(alloc);
     people.append(alloc.init(Person{name = String.from("alice", alloc), age = 30}));   // 带参构造（C1'）
     people.append(alloc.init(Person{name = String.from("bob", alloc), age = 25}));
     people.append(alloc.init(Person{name = String.from("carol", alloc), age = 35}));
@@ -28,7 +28,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn custom_comparator_sort() !void {
-    var people = Vec(Person).init(alloc);
+    var people = Vec<Person>.init(alloc);
     people.append(alloc.init(Person{name = String.from("alice", alloc), age = 30}));
     people.append(alloc.init(Person{name = String.from("bob", alloc), age = 25}));
     people.append(alloc.init(Person{name = String.from("carol", alloc), age = 35}));

@@ -8,13 +8,13 @@ import H.std.{io};
 //   - 作用域绑定（join 后回到当前作用域）→ 引用捕获允许（Q18）
 //   - 仅四模式类型可模拟（用户类型不可——需唯一写者）
 
-fn producer(ch: *OneToOne(i32), n: i32) void {
+fn producer(ch: *OneToOne<i32>, n: i32) void {
     for (0..n) |i| {
         ch.write(i * i);
     }
 }
 
-fn consumer(ch: *OneToOne(i32), count: i32) i32 {
+fn consumer(ch: *OneToOne<i32>, count: i32) i32 {
     var sum = 0;
     for (0..count) |_| {
         sum += ch.read();
@@ -22,12 +22,12 @@ fn consumer(ch: *OneToOne(i32), count: i32) i32 {
     return sum;
 }
 
-fn main(args: o Vec(String)) !void {
-    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
+fn main(args: o Vec<String>) !void {
+    var ch: o OneToOne<i32> = OneToOne<i32>.init(alloc);
 
     // 两个线程共享同一容器：各持 &ch（内建共享特例，Q32）
-    var p_thread: o Thread(void) = spawn(producer, &ch, 10);
-    var c_thread: o Thread(i32) = spawn(consumer, &ch, 10);
+    var p_thread: o Thread<void> = spawn(producer, &ch, 10);
+    var c_thread: o Thread<i32> = spawn(consumer, &ch, 10);
 
     try p_thread.join();
     var sum = try c_thread.join();
@@ -35,9 +35,9 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn producer_consumer() !void {
-    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
-    var p_thread: o Thread(void) = spawn(producer, &ch, 10);
-    var c_thread: o Thread(i32) = spawn(consumer, &ch, 10);
+    var ch: o OneToOne<i32> = OneToOne<i32>.init(alloc);
+    var p_thread: o Thread<void> = spawn(producer, &ch, 10);
+    var c_thread: o Thread<i32> = spawn(consumer, &ch, 10);
     try p_thread.join();
     var sum = try c_thread.join();
     try expect_eq(sum, 285);   // 0²+1²+…+9²

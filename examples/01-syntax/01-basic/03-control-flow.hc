@@ -8,7 +8,7 @@ import H.std.{io};
 //
 // 可写捕获：|mut item|（Rust 标杆，与 var mut 一致）
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // if 是表达式：作表达式时 else 强制
     var mut x: i32 = 7;
     var label: &[u8] = if (x > 5) "big" else "small";

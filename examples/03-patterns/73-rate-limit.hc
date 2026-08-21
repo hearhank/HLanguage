@@ -14,7 +14,7 @@ class TokenBucket {
         return TokenBucket{capacity = capacity, tokens = capacity, last_refill = now};
     }
 
-    fn allow(self: *mut Self, io: *T) bool where T: Io {
+fn allow<T>(self: *mut Self, io: *T) bool where T: Io {
         // 补充令牌（按流逝时间）
         var elapsed = io.time.now() - self.last_refill;
         self.tokens = min(self.capacity, self.tokens + elapsed);
@@ -28,7 +28,7 @@ class TokenBucket {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var bucket: o TokenBucket = TokenBucket.new(3, io.time.now());
     for (0..5) |_| {
         io.print("allowed = {}\n", bucket.allow(&io));

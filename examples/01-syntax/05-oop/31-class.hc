@@ -7,7 +7,7 @@ import H.std.{io};
 //   - 无构造块、字段规则统一（默认只读 / mut 修饰）
 //   - tree = 递归/层级组合（父 o 拥有子，Q16 默认所有权）
 // Q-S11 定案（2026-08-13，取代 Q1 谓词）：move 唯一约束 = 拥有所有权（非 Arena）——
-//   Counter 与 Node（children: Vec(Node) 为自有子对象）均可 move；
+//   Counter 与 Node（children: Vec<Node> 为自有子对象）均可 move；
 //   含引用值字段的 class 同样可 move（指针问题用户负责）。
 
 class Counter {
@@ -24,7 +24,7 @@ class Counter {
 
 tree Node {                              // 递归组合
     value: i32,
-    children: Vec(Node),                 // 组合：子节点
+    children: Vec<Node>,                 // 组合：子节点
 
     fn total(self: *Self) i32 {
         var sum = self.value;
@@ -35,7 +35,7 @@ tree Node {                              // 递归组合
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // class：堆上、默认拥有（非 arena 分配器，Q16）；构造 = alloc.init（C1'）
     var c: o Counter = alloc.init(Counter);
     c.inc();

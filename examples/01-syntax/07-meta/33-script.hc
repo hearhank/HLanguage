@@ -25,7 +25,7 @@ script {
     out.concat("fn person_field_count() i32 { return ").concat(String.from(count)).concat("; }");
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var p = alloc.init(Person{name = String.from("alice", alloc), age = 30});   // 带参构造（C1'）
     io.print("person_field_count = {}\n", person_field_count());
 }

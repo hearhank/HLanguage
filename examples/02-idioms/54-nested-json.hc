@@ -20,7 +20,7 @@ class Person {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var mut p: o Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
     p.name = String.from("alice", alloc);
     p.addr.city = String.from("beijing", alloc);

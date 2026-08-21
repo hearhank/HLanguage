@@ -127,7 +127,7 @@ fn kw_of(name: &[u8]) ?&[u8] {
 }
 
 // 解码 content[i] 处的完整码点（i 必须在字符起始；content 恒为合法 UTF-8）
-fn cp_at(content: Vec(u8), i: i32) i32 {
+fn cp_at(content: Vec<u8>, i: i32) i32 {
     var b0: i32 = @intCast(i32, content[i]);
     if (b0 < 0x80) return b0;
     var b1: i32 = @intCast(i32, content[i + 1]);
@@ -167,7 +167,7 @@ fn is_printable(cp: i32) bool {
 }
 
 // 追加 `\u{hex}`（hex 小写无前导零，对齐 Rust escape_unicode）
-fn append_unicode_escape(out: Vec(u8), cp: i32) void {
+fn append_unicode_escape(out: Vec<u8>, cp: i32) void {
     out.append('\\'); out.append('u'); out.append('{');
     var digits = "0123456789abcdef";
     var sh: i32 = 0;
@@ -183,8 +183,8 @@ fn append_unicode_escape(out: Vec(u8), cp: i32) void {
 }
 
 // Rust Debug 输出：字符串内容转义（`\n`/`\r`/`\t`/`\"`/`\\`/`\0`/不可打印 → `\u{..}`）
-fn dbg_escape(content: Vec(u8)) Vec(u8) {
-    var out = Vec(u8).init(alloc);
+fn dbg_escape(content: Vec<u8>) Vec<u8> {
+    var out = Vec<u8>.init(alloc);
     var n: i32 = @intCast(i32, content.len);
     var i: i32 = 0;
     while (i < n) {
@@ -224,7 +224,7 @@ class Lexer {
     }
 
     // 追加一个完整字符（含多字节 UTF-8）到内容缓冲并前进
-    fn append_char(self: *mut Self, content: Vec(u8)) void {
+    fn append_char(self: *mut Self, content: Vec<u8>) void {
         var w = utf8_width(self.src[self.pos]);
         var k: i32 = 0;
         while (k < w) {
@@ -248,7 +248,7 @@ class Lexer {
         io.print("{}\")\n", msg);
     }
 
-    fn emit_content(self: *mut Self, start: i32, kind: &[u8], content: Vec(u8)) void {
+    fn emit_content(self: *mut Self, start: i32, kind: &[u8], content: Vec<u8>) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         var esc = dbg_escape(content);
         var s = String.from_slice(esc, alloc);
@@ -327,7 +327,7 @@ class Lexer {
     }
 
     fn lex_number(self: *mut Self, start: i32) void {
-        var buf = Vec(u8).init(alloc);
+        var buf = Vec<u8>.init(alloc);
         var is_float = false;
         // 前缀 0x/0b/0o
         if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
@@ -427,7 +427,7 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec(u8)) void {
+    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec<u8>) void {
         // 惰性宽度后缀
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
@@ -452,7 +452,7 @@ class Lexer {
         if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
             self.bump();
             self.bump();
-            var content = Vec(u8).init(alloc);
+            var content = Vec<u8>.init(alloc);
             while (true) {
                 if (self.pos >= self.n) {
                     self.emit_error(start, "unterminated raw string");
@@ -470,7 +470,7 @@ class Lexer {
             return;
         }
         // 普通字符串
-        var content = Vec(u8).init(alloc);
+        var content = Vec<u8>.init(alloc);
         while (true) {
             if (self.pos >= self.n) {
                 self.emit_error(start, "unterminated string literal");
@@ -709,7 +709,7 @@ class Lexer {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var src = try io.fs.read_file(path, alloc);

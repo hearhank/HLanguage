@@ -20,12 +20,12 @@ fn Pair(T: type) type {
     };
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     io.print("{}\n", max_value(3, 5));       // anytype：整数
     io.print("{}\n", max_value(3.5, 2.0));   // anytype：浮点
 
     // comptime 类型应用（Q15 同款）
-    var p: Pair(i32) = Pair(i32){first = 1, second = 2};
+    var p: Pair<i32> = Pair<i32>{first = 1, second = 2};
     io.print("{}\n", p.first + p.second);
 }
 
@@ -36,6 +36,6 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn comptime_type_application() !void {
-    var p: Pair(i32) = Pair(i32){first = 1, second = 2};
+    var p: Pair<i32> = Pair<i32>{first = 1, second = 2};
     try expect_eq(p.first + p.second, 3);
 }

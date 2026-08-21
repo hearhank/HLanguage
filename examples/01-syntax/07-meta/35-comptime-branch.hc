@@ -14,9 +14,9 @@ fn max_value(a: anytype, b: anytype) anytype {
     return if (a > b) a else b;
 }
 
-fn main(args: o Vec(String)) !void {
-    // comptime 类型应用：ArrayLen(i32, 3) = [3]i32
-    var arr: ArrayLen(i32, 3) = [1, 2, 3];
+fn main(args: o Vec<String>) !void {
+    // comptime 类型应用：ArrayLen<i32, 3> = [3]i32
+    var arr: ArrayLen<i32, 3> = [1, 2, 3];
     io.print("len = {}\n", arr.len);
 
     io.print("max = {}\n", max_value(3, 7));
@@ -24,7 +24,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn comptime_type_function() !void {
-    var arr: ArrayLen(i32, 3) = [1, 2, 3];
+    var arr: ArrayLen<i32, 3> = [1, 2, 3];
     try expect_eq(arr.len, 3);
 }
 

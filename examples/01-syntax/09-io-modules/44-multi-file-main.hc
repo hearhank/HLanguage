@@ -8,8 +8,8 @@ import H.std.{io};
 using Orders;
 using Pricing;
 
-fn main(args: o Vec(String)) !void {
-    var lines = Vec(Orders.Line).init(alloc);
+fn main(args: o Vec<String>) !void {
+    var lines = Vec<Orders.Line>.init(alloc);
     lines.append(Orders.Line{item = String.from("apple", alloc), price = 3.0});
     lines.append(Orders.Line{item = String.from("banana", alloc), price = 2.0});
 
@@ -18,7 +18,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn multi_file_project() !void {
-    var lines = Vec(Orders.Line).init(alloc);
+    var lines = Vec<Orders.Line>.init(alloc);
     lines.append(Orders.Line{item = String.from("apple", alloc), price = 3.0});
     lines.append(Orders.Line{item = String.from("banana", alloc), price = 2.0});
     var total = Orders.total(&lines);

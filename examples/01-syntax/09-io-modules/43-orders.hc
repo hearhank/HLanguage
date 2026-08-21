@@ -10,7 +10,7 @@ namespace Orders {
         price: f64,
     }
 
-    pub fn total(lines: &Vec(Line)) f64 {
+    pub fn total(lines: &Vec<Line>) f64 {
         var sum = 0.0;
         for (lines) |line| {
             sum += with_tax(line.price, 0.1);   // using 后直接使用（Q21）
@@ -20,7 +20,7 @@ namespace Orders {
 }
 
 [test] fn orders_total() !void {
-    var lines = Vec(Orders.Line).init(alloc);
+    var lines = Vec<Orders.Line>.init(alloc);
     lines.append(Orders.Line{item = String.from("apple", alloc), price = 3.0});
     lines.append(Orders.Line{item = String.from("banana", alloc), price = 2.0});
     var total = Orders.total(&lines);

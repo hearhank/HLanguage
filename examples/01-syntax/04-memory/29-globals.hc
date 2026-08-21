@@ -9,7 +9,7 @@ import H.std.{io};
 global APP_NAME: &[u8] = "h";       // 只读常量
 global MAX_RETRIES: i32 = 3;
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     io.print("{} retries = {}\n", APP_NAME, MAX_RETRIES);
 }
 

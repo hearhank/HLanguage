@@ -12,8 +12,8 @@ class Row {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     age: i32,
 }
 
-fn parse_csv(data: &[u8]) CsvError!Vec(Row) {
-    var rows = Vec(Row).init(alloc);
+fn parse_csv(data: &[u8]) CsvError!Vec<Row> {
+    var rows = Vec<Row>.init(alloc);
     var text = String.from(data, alloc);
     var lines = text.split('\n');
 
@@ -28,7 +28,7 @@ fn parse_csv(data: &[u8]) CsvError!Vec(Row) {
     return rows;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var csv = "alice,30\nbob,25";
     var rows = try parse_csv(csv);
     for (rows) |row| {

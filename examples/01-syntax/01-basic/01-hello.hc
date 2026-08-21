@@ -2,7 +2,7 @@ import H.std.{io};
 
 // 01-hello.hc — 程序入口与 Hello World
 //
-// 入口：fn main(args: o Vec(String)) !void（2026-08-17 定案，ADR-0010）
+// 入口：fn main(args: o Vec<String>) !void（2026-08-17 定案，ADR-0010）
 //   - 命令行参数经入口注入（0 号 = 程序名）；io 经 `import H.std.{io}` 引入
 //   - !void：入口错误由运行时统一报告（带位置）
 //
@@ -11,12 +11,12 @@ import H.std.{io};
 //
 // 运行：脚本模式 hc run 01-hello.hc / 编译模式 hc build 后执行二进制
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     io.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
 }
 
 [test] fn hello_entry_runs() !void {
-    var a: o Vec(String) = [];
+    var a: o Vec<String> = [];
     try main(a);   // S2：smoke test（入口 !void 错误自动捕获）
 }

@@ -7,12 +7,12 @@ import H.std.{io};
 //   - 同一套 await 代码在 Threaded（默认）/ Evented 下运行
 //   - await = 阻塞等待（Threaded） vs 协作挂起（Evented），语义一致（双模式承诺）
 
-async fn fetch(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
+async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     var body = try io.net.get(url);
     return String.from(body, alloc);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // 显式选择 Evented 运行时（协作调度，脚本模式库选项）
     var ev_io = Io.evented(alloc);
 

@@ -21,17 +21,17 @@ enum Kind {
 class Entity {   // 含 Vec/数组字段 → 未标 continuous（堆上）
     kind: Kind,
     pos: Position,          // 连续类型内嵌（值）
-    tags: Vec(&[u8]),       // 复杂类型字段（堆，默认拥有 Q16）
+    tags: Vec<&[u8]>,       // 复杂类型字段（堆，默认拥有 Q16）
     history: [8]f32,        // 数组字段（引用类型，B3）
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // 嵌套构造：连续类型用字面量，Entity 用 new 样板（Q22）
     var e = Entity.new(
         alloc,
         Kind.enemy,
         Position{x = 1.0, y = 2.0},
-        Vec(&[u8]).init(alloc),
+        Vec<&[u8]>.init(alloc),
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     );
     e.tags.append("boss");
@@ -54,7 +54,7 @@ fn main(args: o Vec(String)) !void {
         alloc,
         Kind.enemy,
         Position{x = 1.0, y = 2.0},
-        Vec(&[u8]).init(alloc),
+        Vec<&[u8]>.init(alloc),
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     );
     e.tags.append("boss");

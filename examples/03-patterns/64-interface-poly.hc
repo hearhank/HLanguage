@@ -26,12 +26,12 @@ interface IShape {
 }
 
 // 静态路径（主）：接口约束参数（Q22b：where 子句 + 虚拟类型，单态化无虚表）
-fn describe(shape: *T) f32 where T: IShape {
+fn describe<T>(shape: *T) f32 where T: IShape {
     return shape.area();
 }
 
 // 异构集合：接口对象（显式装箱；*Rect → *IShape 收窄待细化）
-fn total_area(shapes: &Vec(*IShape)) f32 {
+fn total_area(shapes: &Vec<*IShape>) f32 {
     var total = 0.0;
     for (shapes) |s| {
         total += s.area();
@@ -39,7 +39,7 @@ fn total_area(shapes: &Vec(*IShape)) f32 {
     return total;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
 
@@ -48,7 +48,7 @@ fn main(args: o Vec(String)) !void {
     io.print("circle = {}\n", describe(&circ));
 
     // 异构集合：显式装箱
-    var shapes: o Vec(*IShape) = Vec(*IShape).init(alloc);
+    var shapes: o Vec<*IShape> = Vec<*IShape>.init(alloc);
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     io.print("total = {}\n", total_area(&shapes));
@@ -64,7 +64,7 @@ fn main(args: o Vec(String)) !void {
 [test] fn heterogeneous_boxing() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
-    var shapes: o Vec(*IShape) = Vec(*IShape).init(alloc);
+    var shapes: o Vec<*IShape> = Vec<*IShape>.init(alloc);
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);

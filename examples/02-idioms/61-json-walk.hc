@@ -10,8 +10,8 @@ enum JsonValue {
     boolean: bool,
     number: f64,
     string: String,
-    array: Vec(JsonValue),       // 递归
-    object: Vec(JsonPair),       // 简化：键值对列表
+    array: Vec<JsonValue>,       // 递归
+    object: Vec<JsonPair>,       // 简化：键值对列表
 }
 
 class JsonPair {
@@ -42,13 +42,13 @@ fn count_strings(v: *JsonValue) i32 {
     };
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // 构造一个简单 JSON：{"a": "x", "list": [1, "y"]}
-    var arr = Vec(JsonValue).init(alloc);
+    var arr = Vec<JsonValue>.init(alloc);
     arr.append(JsonValue{number = 1.0});
     arr.append(JsonValue{string = String.from("y", alloc)});
 
-    var pairs = Vec(JsonPair).init(alloc);
+    var pairs = Vec<JsonPair>.init(alloc);
     pairs.append(JsonPair{key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)}});
     pairs.append(JsonPair{key = String.from("list", alloc), value = JsonValue{array = arr}});
 
@@ -57,11 +57,11 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn json_walk_count() !void {
-    var arr = Vec(JsonValue).init(alloc);
+    var arr = Vec<JsonValue>.init(alloc);
     arr.append(JsonValue{number = 1.0});
     arr.append(JsonValue{string = String.from("y", alloc)});
 
-    var pairs = Vec(JsonPair).init(alloc);
+    var pairs = Vec<JsonPair>.init(alloc);
     pairs.append(JsonPair{key = String.from("a", alloc), value = JsonValue{string = String.from("x", alloc)}});
     pairs.append(JsonPair{key = String.from("list", alloc), value = JsonValue{array = arr}});
 

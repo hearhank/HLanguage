@@ -24,14 +24,14 @@ fn level_rank(level: Level) i32 {
 class Logger {
     mut min_level: Level,
 
-    fn log(self: *Self, io: *T, level: Level, msg: &[u8]) void where T: Io {
+fn log<T>(self: *Self, io: *T, level: Level, msg: &[u8]) void where T: Io {
         if (level_rank(level) >= level_rank(self.min_level)) {
             io.print("[{}] {}\n", level, msg);
         }
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var logger: o Logger = alloc.init(Logger);   // 无参构造（C1'）
     logger.min_level = Level.info;
 

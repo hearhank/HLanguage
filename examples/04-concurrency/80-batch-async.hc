@@ -5,16 +5,16 @@ import H.std.{io};
 //   - 并行发起：Future 列表（Q19 await 任何函数可用）
 //   - 全部等待并汇总（Go 协程方向，B2）
 
-async fn fetch(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
+async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     var body = try io.net.get(url);
     return String.from(body, alloc);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var urls = ["https://a.example.com", "https://b.example.com", "https://c.example.com"];
 
     // 批量发起（并行）
-    var futures = Vec(Future(!String)).init(alloc);
+    var futures = Vec<Future<!String>>.init(alloc);
     for (urls) |u| {
         futures.append(fetch(&io, u, alloc));
     }

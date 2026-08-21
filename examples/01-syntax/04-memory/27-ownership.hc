@@ -8,7 +8,7 @@ import H.std.{io};
 // Q-S11 定案（2026-08-13，取代 Q1 谓词）：move 唯一约束 = 拥有所有权（非 Arena）；
 //   指针问题（悬垂/别名）由用户负责，不阻塞 move。String 为自有子对象，随实例转移。
 
-fn take(io: *T, y: o String) void where T: Io {
+fn take<T>(io: *T, y: o String) void where T: Io {
     io.print("took: {}\n", y);   // y 函数内隐含拥有（12.5），退出自动销毁
 }
 
@@ -17,11 +17,11 @@ fn make() o String {
     return move s;                        // 新建值必须 move 返回（12.5）
 }
 
-fn borrow(io: *T, v: *String) void where T: Io {
+fn borrow<T>(io: *T, v: *String) void where T: Io {
     io.print("borrowed: {}\n", v);        // 借用：调用方保留所有权
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // move 进函数（调用点显式；销毁责任转移，原绑定仍可访问——悬垂由用户负责）
     var s1 = String.from("hello", alloc);
     take(&io, move s1);

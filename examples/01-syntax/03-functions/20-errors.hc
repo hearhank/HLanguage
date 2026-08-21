@@ -10,7 +10,7 @@ import H.std.{io};
 
 const FileError = error{NotFound, PermissionDenied, Io};
 
-fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
+fn read_config<T>(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     var f = io.fs.open(path) catch |err| switch (err) {
         error.NotFound => return error.NotFound,
         error.PermissionDenied => return error.PermissionDenied,
@@ -20,7 +20,7 @@ fn read_config(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     return io.fs.read_all(f, alloc);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var data = read_config(&io, "config.txt") catch |err| {
         io.print("config error: {}\n", err);
         return;

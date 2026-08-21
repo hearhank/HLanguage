@@ -91,10 +91,20 @@ module.exports = grammar({
       optional('pub'),
       'fn',
       field('name', $.identifier),
+      optional(field('type_parameters', $.type_parameter_list)),
       field('parameters', $.parameter_list),
       optional(field('return_type', $.type)),
       field('body', $.block),
     ),
+
+    // Generic function type parameters: `fn swap<T>(a: *mut T, b: *mut T) void`
+    type_parameter_list: $ => seq(
+      '<',
+      commaSep1($.type_parameter),
+      '>',
+    ),
+
+    type_parameter: $ => field('name', $.identifier),
 
     parameter_list: $ => seq(
       '(',
@@ -265,9 +275,9 @@ module.exports = grammar({
     ),
 
     type_arguments: $ => seq(
-      '(',
+      '<',
       commaSep1($.type),
-      ')',
+      '>',
     ),
 
     pointer_type: $ => seq(

@@ -4,7 +4,7 @@
 import H.std.{io as my};
 import H.std.net.{http, tcp};
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     my.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
 }

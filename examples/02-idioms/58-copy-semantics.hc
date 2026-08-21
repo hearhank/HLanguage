@@ -11,7 +11,7 @@ import H.std.{io};
     y: f32,
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // 标量：赋值即复制
     var a: i32 = 5;
     var b = a;
@@ -25,7 +25,7 @@ fn main(args: o Vec(String)) !void {
     io.print("p1.x = {} (不受影响)\n", p1.x);
 
     // 集合：引用类型——显式 copy（B3）
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);              // 显式深拷贝
     v2.append(2);
@@ -51,7 +51,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn collection_explicit_copy() !void {
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);   // 显式深拷贝（B3）
     v2.append(2);

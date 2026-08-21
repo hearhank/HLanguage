@@ -14,7 +14,7 @@ enum Value {
     none,
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var v: Value = Value{int = 42};
 
     switch (v) {

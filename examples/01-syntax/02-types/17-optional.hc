@@ -22,7 +22,7 @@ fn parse_int(s: &[u8]) ?i32 {
     return null;   // 草图：解析失败返回 null（optional 显式解包）
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // optional：orelse 默认值
     var n = parse_int("42") orelse 0;
     io.print("{}\n", n);

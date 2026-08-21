@@ -5,7 +5,7 @@ import H.std.{io};
 //   - io.time：时间戳/计时/延时（io 显式传递，Q35 同款）
 //   - 场景：计时、延时
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     // 计时
     var start = io.time.now();
     // ... 工作

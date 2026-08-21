@@ -4,14 +4,14 @@ import H.std.{io};
 //
 // Q13 定案（2026-08-13）：函数是唯一处理逻辑
 //   - 接口描述功能；复杂类型 = 函数的组合；数据为中心的唯一处理机制就是函数
-//   - 闭包参数类型 = 内置调用接口类型 Fn1(参数) 返回（捕获不参与签名）
+//   - 闭包参数类型 = 内置调用接口类型 Fn1<参数> 返回（捕获不参与签名）
 //   - 闭包捕获：默认只读 |x|；可写 mut |x|；转移 move |x|
 
-fn apply(f: Fn1(i32) i32, x: i32) i32 {
+fn apply(f: Fn1<i32> i32, x: i32) i32 {
     return f(x);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var a = 10;
 
     var double = |v| v * 2;              // 无环境捕获

@@ -22,14 +22,14 @@ enum OrderStatus {
 script {
     var fields = types.fields("Order");
     // 遍历 fields 拼接生成（示意）：
-    //   fn order_to_bytes(o: *Order) o Vec(u8) { ... }
+    //   fn order_to_bytes(o: *Order) o Vec<u8> { ... }
     //   fn order_from_bytes(data: &[u8]) !Order { ... }
     //   fn order_validate(o: *Order) !void { ... }
     // E1（ADR-0013）：产物必须为字符串；定制通道生成物在组 C（E1.3）展开，此处以注释占位
     "// script-generated: order_to_bytes/from_bytes/validate（组 C 展开）";
 }
 
-fn handle_order(io: *T, conn: *TcpConn) !void where T: Io {
+fn handle_order<T>(io: *T, conn: *TcpConn) !void where T: Io {
     // 传输：接收长度前缀帧
     var data = try io.net.read_frame(&conn, alloc);
 
@@ -52,7 +52,7 @@ fn handle_order(io: *T, conn: *TcpConn) !void where T: Io {
     try f.append(resp);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var server = try io.net.listen(8080);
     defer server.close();
     io.print("listening on 8080\n");

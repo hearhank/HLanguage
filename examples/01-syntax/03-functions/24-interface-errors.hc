@@ -22,7 +22,7 @@ interface IParse {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var json_p = JsonParser{};   // 连续类型（空字段）：字面量构造
     var csv_p = CsvParser{};
 
