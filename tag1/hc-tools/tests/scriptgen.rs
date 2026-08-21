@@ -61,7 +61,7 @@ fn minimal_script_string_product_replaces_block() {
         "minimal.hc",
         "import H.std.{io};\n\
          script { \"fn generated() i32 { return 42; }\"; }\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
          \x20   io.print(\"generated = {}\\n\", generated());\n\
          }\n",
     );
@@ -95,7 +95,7 @@ fn types_fields_drive_generation() {
          \x20   out.concat(\"fn person_field_count() i32 { return \")\n\
          \x20       .concat(String.from(count)).concat(\"; }\");\n\
          }\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
          \x20   io.print(\"count = {}\\n\", person_field_count());\n\
          }\n",
     );
@@ -122,7 +122,7 @@ fn types_all_and_type_metadata() {
          \x20   }\n\
          \x20   \"// types: \".concat(names).concat(\"| type=\").concat(types.type);\n\
          }\n\
-         fn main(args: o Vec(String)) !void { io.print(\"ok\\n\"); }\n",
+         fn main(args: o Vec<String>) !void { io.print(\"ok\\n\"); }\n",
     );
     let out = run_hc(&[Path::new("run"), &file]);
     let s = stdout(&out);
@@ -143,7 +143,7 @@ fn multi_round_expansion_later_script_sees_earlier_output() {
          \x20   script { \"fn inner() i32 { return 7; }\"; }\n\
          }\n\
          script { \"fn total() i32 { return Gen.inner(); }\"; }\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
          \x20   io.print(\"total = {}\\n\", total());\n\
          }\n",
     );
@@ -162,7 +162,7 @@ fn check_mode_expands_scripts() {
         &dir,
         "check.hc",
         "script { \"fn generated() i32 { return 1; }\"; }\n\
-         fn main(args: o Vec(String)) !void { _ = generated(); }\n",
+         fn main(args: o Vec<String>) !void { _ = generated(); }\n",
     );
     let out = run_hc(&[Path::new("check"), &file]);
     let s = stdout(&out);
@@ -187,7 +187,7 @@ fn ir_mode_consistent_loading() {
          \x20   }\n\
          \x20   out.concat(\"fn fields_str() String { return \\\"\\\"; }\");\n\
          }\n\
-         fn main(args: o Vec(String)) !void { io.print(\"ir ok\\n\"); }\n",
+         fn main(args: o Vec<String>) !void { io.print(\"ir ok\\n\"); }\n",
     );
     let out = run_hc(&[Path::new("run"), &Path::new("--ir"), &file]);
     let s = stdout(&out);
@@ -225,7 +225,7 @@ fn script_io_forbidden() {
          \x20   io.print(\"nope\\n\");\n\
          \x20   \"fn x() i32 { return 1; }\";\n\
          }\n\
-         fn main(args: o Vec(String)) !void {}\n",
+         fn main(args: o Vec<String>) !void {}\n",
     );
     let out = run_hc(&[Path::new("run"), &file]);
     let s = stderr(&out);
@@ -246,7 +246,7 @@ fn script_alloc_forbidden() {
          \x20   var arena = alloc;\n\
          \x20   \"fn x() i32 { return 1; }\";\n\
          }\n\
-         fn main(args: o Vec(String)) !void {}\n",
+         fn main(args: o Vec<String>) !void {}\n",
     );
     let out = run_hc(&[Path::new("run"), &file]);
     let s = stderr(&out);
@@ -339,7 +339,7 @@ script {
     out;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     var good = alloc.init(User{name = "alice", age = 30, email = "a@x.com"});
     try user_validate(&good);
     io.print("json = {}\n", user_to_json(&good, alloc));
@@ -376,7 +376,7 @@ fn non_string_product_rejected() {
         &dir,
         "neg_int.hc",
         "script { 42; }\n\
-         fn main(args: o Vec(String)) !void {}\n",
+         fn main(args: o Vec<String>) !void {}\n",
     );
     let out = run_hc(&[Path::new("run"), &file]);
     let s = stderr(&out);

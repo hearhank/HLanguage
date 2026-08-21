@@ -78,6 +78,37 @@ impl Parser {
             ))
         }
     }
+
+    /// 泛型上下文关闭 `>`：处理嵌套泛型的 `>>`（词法为单个 Shr）分裂为两个 `>`。
+    /// 当前消耗第一个 `>`，第二个以 Gt token 插入当前位置供外层泛型关闭。
+    fn expect_gt_generic(&mut self) -> Result<(), Diagnostic> {
+        match self.peek() {
+            TokenKind::Gt => {
+                self.advance();
+                Ok(())
+            }
+            TokenKind::Shr => {
+                let sp = self.tokens[self.pos].span.clone();
+                self.tokens[self.pos].kind = TokenKind::Gt;
+                self.advance();
+                self.tokens.insert(
+                    self.pos,
+                    Token {
+                        kind: TokenKind::Gt,
+                        span: sp,
+                    },
+                );
+                Ok(())
+            }
+            other => Err(Diagnostic::error(
+                self.span(),
+                format!(
+                    "expected `>` to close generic args, found {}",
+                    other.describe()
+                ),
+            )),
+        }
+    }
     fn error_at(&self, msg: impl Into<String>) -> Diagnostic {
         Diagnostic::error(self.span(), msg)
     }
@@ -131,18 +162,18 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::KwGlobal => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 self.parse_global(start, is_pub)
             }
             TokenKind::KwConst => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 self.parse_const(start, is_pub)
@@ -159,45 +190,45 @@ impl Parser {
             }
             TokenKind::KwClass | TokenKind::KwTree => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 self.parse_class(start, traits, is_pub)
             }
             TokenKind::KwEnum => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 self.parse_enum(start, is_pub)
             }
             TokenKind::KwUnion => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 self.parse_union(start, is_pub)
             }
             TokenKind::KwInterface => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 self.parse_interface(start, is_pub)
             }
             TokenKind::KwNamespace => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 let name = self.expect_ident()?;
@@ -225,9 +256,9 @@ impl Parser {
             }
             TokenKind::KwUsing => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 let path = self.parse_path()?;
@@ -247,9 +278,9 @@ impl Parser {
             }
             TokenKind::KwImport => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 self.advance();
                 // 路径：`pkg.mod` / `H.std`（可含多段）；符号选择 `.{` 前止步
@@ -297,9 +328,9 @@ impl Parser {
             }
             TokenKind::KwScript => {
                 if is_export {
-                    return Err(self.error_at(
-                        "`export` only applies to `fn`/`async fn` declarations (K5)",
-                    ));
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
                 }
                 // E1（ADR-0013）：script 块——解析为声明级占位，装载期求值替换。
                 // `close_end` = 块闭合 `}` 之后字节偏移：`parse_block` 消费 `}` 后 pos 指向
@@ -487,7 +518,8 @@ impl Parser {
         is_async: bool,
         is_export: bool,
     ) -> Result<Decl, Diagnostic> {
-        let (name, params, ret, where_clause, body, span) = self.parse_fn_rest(start)?;
+        let (name, type_params, params, ret, where_clause, body, span) =
+            self.parse_fn_rest(start)?;
         let (is_test, test_name) = traits
             .iter()
             .find_map(|t| match t {
@@ -497,6 +529,7 @@ impl Parser {
             .unwrap_or((false, None));
         Ok(Decl::Fn {
             name,
+            type_params,
             params,
             ret,
             where_clause,
@@ -516,6 +549,7 @@ impl Parser {
     ) -> Result<
         (
             String,
+            Vec<String>,
             Vec<Param>,
             Option<Type>,
             Vec<(String, Type)>,
@@ -525,6 +559,22 @@ impl Parser {
         Diagnostic,
     > {
         let name = self.expect_name_or_keyword()?;
+        // 泛型参数表：`fn swap<T>(...)` / `fn swap<T, U>(...)`。声明类型参数名；
+        // 约束仍走 where 子句（M2.2）。`<T: type>` 型约束（comptime）暂不在此表。
+        let mut type_params: Vec<String> = Vec::new();
+        if self.at(&TokenKind::Lt) {
+            self.advance();
+            loop {
+                let tn = self.expect_ident()?;
+                type_params.push(tn);
+                if self.at(&TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_gt_generic()?;
+        }
         self.expect(&TokenKind::LParen, "`(` after function name")?;
         let params = self.parse_params()?;
         self.expect(&TokenKind::RParen, "`)` after parameters")?;
@@ -564,7 +614,15 @@ impl Parser {
         let body = self.parse_block()?;
         self.in_type_fn = was_type_fn;
         let end = self.span();
-        Ok((name, params, ret, where_clause, body, start.merge(&end)))
+        Ok((
+            name,
+            type_params,
+            params,
+            ret,
+            where_clause,
+            body,
+            start.merge(&end),
+        ))
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, Diagnostic> {
@@ -634,9 +692,11 @@ impl Parser {
             if self.at(&TokenKind::KwFn) {
                 self.advance();
                 let mstart = self.span();
-                let (mname, mparams, mret, mwhere, mbody, mspan) = self.parse_fn_rest(mstart)?;
+                let (mname, mtype_params, mparams, mret, mwhere, mbody, mspan) =
+                    self.parse_fn_rest(mstart)?;
                 methods.push(Method {
                     name: mname,
+                    type_params: mtype_params,
                     params: mparams,
                     ret: mret,
                     where_clause: mwhere,
@@ -777,6 +837,21 @@ impl Parser {
         self.advance(); // fn
         let mstart = self.span();
         let name = self.expect_ident()?;
+        // 泛型参数表：`fn save<T>(...)`（接口方法）
+        let mut type_params: Vec<String> = Vec::new();
+        if self.at(&TokenKind::Lt) {
+            self.advance();
+            loop {
+                let tn = self.expect_ident()?;
+                type_params.push(tn);
+                if self.at(&TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_gt_generic()?;
+        }
         self.expect(&TokenKind::LParen, "`(` after method name")?;
         let params = self.parse_params()?;
         self.expect(&TokenKind::RParen, "`)` after parameters")?;
@@ -807,6 +882,7 @@ impl Parser {
         let mspan = mstart.merge(&self.span());
         Ok(Method {
             name,
+            type_params,
             params,
             ret,
             where_clause,
@@ -1018,20 +1094,22 @@ impl Parser {
             let part = self.expect_name_or_keyword()?;
             name = format!("{name}.{part}");
         }
-        // 泛型实例化 Vec(i32) / IIterable(i32) / Fn1(i32) i32
-        let args = if self.at(&TokenKind::LParen) {
+        // 泛型实例化 Vec<i32> / IIterable<i32> / Fn1<i32> i32
+        let args = if self.at(&TokenKind::Lt) {
             self.advance();
             let mut a = Vec::new();
-            if !self.at(&TokenKind::RParen) {
+            if !self.at(&TokenKind::Gt) {
                 loop {
-                    // 组 D：comptime_int 字面量实参（`ArrayLen(i32, 3)` 的 `3`）——编译期
+                    // 组 D：comptime_int 字面量实参（`ArrayLen<i32, 3>` 的 `3`）——编译期
                     // 整数值，非类型名。实例化时按 `n: comptime_int` 参数绑定。
                     if let TokenKind::Int(text) = self.peek() {
                         let n = text
                             .trim_end_matches(|c: char| c.is_alphabetic())
                             .replace('_', "")
                             .parse::<usize>()
-                            .map_err(|_| self.error_at(format!("invalid comptime_int arg `{text}`")))?;
+                            .map_err(|_| {
+                                self.error_at(format!("invalid comptime_int arg `{text}`"))
+                            })?;
                         self.advance();
                         a.push(Type::ComptimeInt(n));
                     } else {
@@ -1044,8 +1122,8 @@ impl Parser {
                     }
                 }
             }
-            self.expect(&TokenKind::RParen, "`)` to close generic args")?;
-            // FnN(参数) 返回类型：Fn1(i32) i32——把返回类型并入参数列表
+            self.expect_gt_generic()?;
+            // FnN(参数) 返回类型：Fn1<i32> i32——把返回类型并入参数列表
             if name.starts_with("Fn")
                 && name.len() > 2
                 && name[2..].chars().all(|c| c.is_ascii_digit())
@@ -1888,10 +1966,8 @@ impl Parser {
                                 if matches!(callee.as_ref(), Expr::Ident(_, _)) =>
                             {
                                 if let Expr::Ident(tyname, _) = callee.as_ref() {
-                                    let ty_args: Vec<Type> = args
-                                        .iter()
-                                        .filter_map(|a| self.expr_to_type(a))
-                                        .collect();
+                                    let ty_args: Vec<Type> =
+                                        args.iter().filter_map(|a| self.expr_to_type(a)).collect();
                                     let fields = self.parse_named_lit_fields()?;
                                     e = Expr::NamedLit {
                                         ty: tyname.clone(),
@@ -2290,15 +2366,30 @@ impl Parser {
                     let ename = self.expect_ident()?;
                     return Ok(Expr::ErrorLit(ename, start));
                 }
-                // 集合类型实例化 Vec(i32)/Map(&[u8], i32)/Table(i32)：泛型参数为类型（跳过），
+                // 集合类型实例化 Vec<i32>/Map<&[u8], i32>/Table<i32>：泛型参数为类型（跳过），
                 // 返回 Ident 以便 postfix `.init` 继续（tag1：类型实例化 = 空容器）
-                if matches!(name.as_str(), "Vec" | "Map" | "Deque" | "Table")
-                    && self.at(&TokenKind::LParen)
+                if matches!(
+                    name.as_str(),
+                    "Vec"
+                        | "Map"
+                        | "Deque"
+                        | "Table"
+                        | "List"
+                        | "OneToOne"
+                        | "OneToMany"
+                        | "ManyToOne"
+                        | "ManyToMany"
+                        | "Pair"
+                        | "PairPair"
+                        | "LinkedList"
+                        | "Opt"
+                ) && self.at(&TokenKind::Lt)
                 {
                     self.advance();
-                    if !self.at(&TokenKind::RParen) {
+                    let mut ty_args: Vec<Type> = Vec::new();
+                    if !self.at(&TokenKind::Gt) {
                         loop {
-                            let _ = self.parse_type()?;
+                            ty_args.push(self.parse_type()?);
                             if self.at(&TokenKind::Comma) {
                                 self.advance();
                             } else {
@@ -2306,7 +2397,18 @@ impl Parser {
                             }
                         }
                     }
-                    self.expect(&TokenKind::RParen, "`)` to close collection type")?;
+                    self.expect_gt_generic()?;
+                    // 泛型类型字面量：Pair<i32>{ first = 1, ... } → NamedLit（ty_args 收集）
+                    if self.at(&TokenKind::LBrace) {
+                        let fields = self.parse_named_lit_fields()?;
+                        let end = self.span();
+                        return Ok(Expr::NamedLit {
+                            ty: name,
+                            ty_args,
+                            fields,
+                            span: start.merge(&end),
+                        });
+                    }
                     return Ok(Expr::Ident(name, start));
                 }
                 // Type.name（枚举常量）——解释器统一处理

@@ -23,10 +23,10 @@ use hc_rt::Interp;
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 mod buildzon;
-mod docgen;
-mod scriptgen;
 mod comptimegen;
+mod docgen;
 mod fmtgen;
+mod scriptgen;
 
 /// ANSI 颜色开关：仅当目标流为终端且未设置 NO_COLOR 时启用。
 /// 重定向/管道（CI、check-examples.sh 捕获）下自动关闭，保证 grep 解析不受污染。
@@ -667,7 +667,11 @@ fn link_exe(ll_path: &Path, exe_path: &Path, extra: &[PathBuf]) -> Result<(), St
 /// 或 `zig cc -shared` → `{name}.dll`（dll，exe 运行时加载）。另写 `{name}.sym`
 /// （限定名 → 导出符号，exe 链接引用）。**库无 main 校验**（C4：Kind::lib 含 main → 诊断）。
 /// 返回（库文件路径，符号表）。
-fn build_lib(dir: &Path, name: &str, dll: bool) -> Result<(PathBuf, Vec<(String, String)>), ExitCode> {
+fn build_lib(
+    dir: &Path,
+    name: &str,
+    dll: bool,
+) -> Result<(PathBuf, Vec<(String, String)>), ExitCode> {
     let entry_path = match package_entry(dir) {
         Ok(e) => e,
         Err(msg) => {
@@ -1022,7 +1026,8 @@ fn build_file(path: &Path, dll: bool) -> ExitCode {
 fn init_project(name: &str) -> ExitCode {
     // 名称校验：合法目录名（字母/数字/`-`/`_`；非空、非 `.`/`..`）
     if name.is_empty()
-        || name == "." || name == ".."
+        || name == "."
+        || name == ".."
         || !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -1069,7 +1074,7 @@ fn init_project(name: &str) -> ExitCode {
          //   - 测试约定：`[test]` 标注函数与源码同文件（Q-T1）\n\
          //   - 运行：`hc run {name}`   测试：`hc test {name}`\n\
          \n\
-         fn main(args: o Vec(String)) !void {{\n\
+         fn main(args: o Vec<String>) !void {{\n\
          \x20   io.print(\"hello, {name}!\\n\");\n\
          }}\n\
          \n\
@@ -1166,10 +1171,7 @@ fn locate_build_deps(
                 let mut pkgs = Vec::new();
                 for item in items {
                     if let Expr::NamedLit {
-                        ty,
-                        fields,
-                        span,
-                        ..
+                        ty, fields, span, ..
                     } = item
                     {
                         if ty == "Pkg" {
@@ -1202,7 +1204,8 @@ fn locate_build_deps(
 /// → 替换其 Pkg 项（更新 path/version）。deps 数组按「既有 Pkg 原文 + 新项」重建。
 fn pkg_add(name: &str, path: &Option<String>, version: &Option<String>) -> ExitCode {
     if name.is_empty()
-        || name == "." || name == ".."
+        || name == "."
+        || name == ".."
         || !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -1322,11 +1325,7 @@ fn doc_command(args: &[String]) -> ExitCode {
         if target_path.is_dir() {
             match docgen::generate_project(&target_path, &out_dir) {
                 Ok(paths) => {
-                    println!(
-                        "生成 {} 个文件到 {}",
-                        paths.len(),
-                        out_dir.display()
-                    );
+                    println!("生成 {} 个文件到 {}", paths.len(), out_dir.display());
                     for p in &paths {
                         println!("  {}", p.display());
                     }
@@ -2038,11 +2037,7 @@ fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
                     Ok((expanded, p)) => parsed.push((f.clone(), expanded, p)),
                     Err(msg) => {
                         bad.push((f.clone(), "parse/script error".into()));
-                        eprintln!(
-                            "{} {name}: {}",
-                            paint(err_color(), "31", "[FAIL]"),
-                            msg
-                        );
+                        eprintln!("{} {name}: {}", paint(err_color(), "31", "[FAIL]"), msg);
                     }
                 },
                 Err(e) => bad.push((f.clone(), format!("io: {e}"))),
@@ -2226,12 +2221,12 @@ fn main() i32 {
     #[test]
     fn ir_io_exit_maps_code() {
         // F2：io.exit 在 IR 侧映射退出码（Exited(code)，对齐 oracle Interp.exit_code）
-        let src = "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.exit(ExitType.Error, 3); }\n";
+        let src = "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.exit(ExitType.Error, 3); }\n";
         match run_ir_source(src) {
             Ok(IrRunOutcome::Exited(3)) => {}
             other => panic!("预期 Exited(3)，实际：{other:?}"),
         }
-        let ok = "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.exit(ExitType.Exit, 0); }\n";
+        let ok = "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.exit(ExitType.Exit, 0); }\n";
         match run_ir_source(ok) {
             Ok(IrRunOutcome::Exited(0)) => {}
             other => panic!("预期 Exited(0)，实际：{other:?}"),

@@ -85,7 +85,7 @@ fn move_closure_returns_by_value() {
     // 按值返回规则：move 闭包捕获 base，脱离 make 作用域后仍可用（副本随返回值转移）
     run_ok(
         r#"
-fn make() Fn1(i32) i32 {
+fn make() Fn1<i32> i32 {
     var base = 10;
     return move |v| v + base;
 }

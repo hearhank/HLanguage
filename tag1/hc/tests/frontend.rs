@@ -158,7 +158,7 @@ fn parse_error_reports_position() {
 #[test]
 fn parse_closures() {
     let src = r#"
-fn apply(f: Fn1(i32) i32, x: i32) i32 { return f(x); }
+fn apply(f: Fn1<i32> i32, x: i32) i32 { return f(x); }
 fn main(io: Io) !void {
     var a = 10;
     var add_a = |v| v + a;
@@ -448,7 +448,7 @@ fn k1_union_scalar_only_rejected() {
         "必须为标量类型",
     );
     check_has_error(
-        "union Bad { v: Vec(i32) }\n[test] fn t() !void {}\n",
+        "union Bad { v: Vec<i32> }\n[test] fn t() !void {}\n",
         "必须为标量类型",
     );
 }
@@ -554,9 +554,7 @@ fn k5_export_start_marks_entry() {
 #[test]
 fn k5_export_pub_composable() {
     // `pub export fn` 组合修饰（语言可见性 + 符号导出）——干净解析
-    check_clean(
-        "pub export fn f() i32 {\n    return 1;\n}\nfn main() i32 {\n    return f();\n}\n",
-    );
+    check_clean("pub export fn f() i32 {\n    return 1;\n}\nfn main() i32 {\n    return f();\n}\n");
 }
 
 #[test]
@@ -565,8 +563,9 @@ fn k5_export_non_fn_rejected() {
     let err = parse_source("export const X: i32 = 5;\nfn main() i32 {\n    return X;\n}\n")
         .expect_err("export const should be a parse error");
     assert!(
-        err.iter()
-            .any(|d| d.message.contains("`export` only applies to `fn`/`async fn` declarations")),
+        err.iter().any(|d| d
+            .message
+            .contains("`export` only applies to `fn`/`async fn` declarations")),
         "{err:?}"
     );
 }
@@ -721,7 +720,7 @@ fn a1_parse_study_example() {
 import H.std.{io as my};
 import H.std.net.{http,tcp};
 
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     my.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
     http.print();

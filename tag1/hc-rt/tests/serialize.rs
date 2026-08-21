@@ -107,7 +107,7 @@ class Tag {
 class Doc {
     mut id: i32,
     mut tag: Tag,
-    mut nums: Vec(i32),
+    mut nums: Vec<i32>,
 }
 [test] fn t() !void {
     var mut tag: o Tag = alloc.init(Tag);

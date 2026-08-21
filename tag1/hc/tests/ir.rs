@@ -96,7 +96,10 @@ fn pick(x: ?i32) i32 {
     }
 }
 "#;
-    assert_eq!(run(src, "pick", &[IrValue::Opt(None)]).unwrap(), IrValue::Int(0));
+    assert_eq!(
+        run(src, "pick", &[IrValue::Opt(None)]).unwrap(),
+        IrValue::Int(0)
+    );
     assert_eq!(
         run(src, "pick", &[IrValue::Int(7)]).unwrap(),
         IrValue::Int(7)
@@ -168,7 +171,13 @@ fn try_propagates_error_value() {
 fn fail() !i32 { return error.NotFound; }
 fn g() !i32 { return try fail(); }
 "#;
-    assert_eq!(run(src, "g", &[]).unwrap(), IrValue::Err { name: "NotFound".into(), code: 0 });
+    assert_eq!(
+        run(src, "g", &[]).unwrap(),
+        IrValue::Err {
+            name: "NotFound".into(),
+            code: 0
+        }
+    );
 }
 
 #[test]
@@ -199,7 +208,10 @@ fn catch_passes_non_error() {
 #[test]
 fn orelse_null_default() {
     let src = "fn d(x: ?i32) i32 { return x orelse 5; }";
-    assert_eq!(run(src, "d", &[IrValue::Opt(None)]).unwrap(), IrValue::Int(5));
+    assert_eq!(
+        run(src, "d", &[IrValue::Opt(None)]).unwrap(),
+        IrValue::Int(5)
+    );
     assert_eq!(run(src, "d", &[IrValue::Int(7)]).unwrap(), IrValue::Int(7));
 }
 
@@ -320,11 +332,17 @@ fn second() !i32 { return error.Second; }
 "#;
     assert_eq!(
         run(src, "first", &[]).unwrap(),
-        IrValue::Err { name: "First".into(), code: 0 }
+        IrValue::Err {
+            name: "First".into(),
+            code: 0
+        }
     );
     assert_eq!(
         run(src, "second", &[]).unwrap(),
-        IrValue::Err { name: "Second".into(), code: 1 }
+        IrValue::Err {
+            name: "Second".into(),
+            code: 1
+        }
     );
 }
 
@@ -431,8 +449,8 @@ fn out_of_slice_constructs_are_hard_errors() {
     // Phase 3-6 for/switch/闭包/global/const/defer/errdefer/标签均已纳入 IR 支持面（见正例测试）；
     // 此处仅保留仍未实现者（未知标识符 / 循环外 break / defer 体控制流）。
     for src in [
-        "fn f() i32 { return nosuch; }", // 未知标识符
-        "fn f() i32 { break; }", // break 在循环外
+        "fn f() i32 { return nosuch; }",    // 未知标识符
+        "fn f() i32 { break; }",            // break 在循环外
         "fn f() void { defer try foo(); }", // defer 体含控制流（try → 跳转指令）
     ] {
         let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
@@ -775,11 +793,53 @@ fn pick(s: String) i32 {
     }
 }
 "#;
-    assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "red".into(), payload: None }]).unwrap(), IrValue::Int(1));
-    assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "green".into(), payload: None }]).unwrap(), IrValue::Int(2));
-    assert_eq!(run(src, "name", &[IrValue::Enum { name: "Color".into(), variant: "blue".into(), payload: None }]).unwrap(), IrValue::Int(3));
-    assert_eq!(run(src, "pick", &[IrValue::Str("a".into())]).unwrap(), IrValue::Int(1));
-    assert_eq!(run(src, "pick", &[IrValue::Str("z".into())]).unwrap(), IrValue::Int(0));
+    assert_eq!(
+        run(
+            src,
+            "name",
+            &[IrValue::Enum {
+                name: "Color".into(),
+                variant: "red".into(),
+                payload: None
+            }]
+        )
+        .unwrap(),
+        IrValue::Int(1)
+    );
+    assert_eq!(
+        run(
+            src,
+            "name",
+            &[IrValue::Enum {
+                name: "Color".into(),
+                variant: "green".into(),
+                payload: None
+            }]
+        )
+        .unwrap(),
+        IrValue::Int(2)
+    );
+    assert_eq!(
+        run(
+            src,
+            "name",
+            &[IrValue::Enum {
+                name: "Color".into(),
+                variant: "blue".into(),
+                payload: None
+            }]
+        )
+        .unwrap(),
+        IrValue::Int(3)
+    );
+    assert_eq!(
+        run(src, "pick", &[IrValue::Str("a".into())]).unwrap(),
+        IrValue::Int(1)
+    );
+    assert_eq!(
+        run(src, "pick", &[IrValue::Str("z".into())]).unwrap(),
+        IrValue::Int(0)
+    );
 }
 
 // ---------- Phase 5：global / const + @__init__ + IrRuntime ----------
@@ -1356,7 +1416,7 @@ interface IShape { fn area(self: *Self) f32; }
     r: f32,
     fn area(self: *Self) f32 { return pi * self.r * self.r; }
 }
-fn total_area(shapes: &Vec(*IShape)) f32 {
+fn total_area(shapes: &Vec<*IShape>) f32 {
     var total = 0.0;
     for (shapes) |s| {
         total += s.area();
@@ -1366,7 +1426,7 @@ fn total_area(shapes: &Vec(*IShape)) f32 {
 fn t() i32 {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
-    var shapes: o Vec(*IShape) = Vec(*IShape).init(alloc);
+    var shapes: o Vec<*IShape> = Vec<*IShape>.init(alloc);
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);
@@ -1381,10 +1441,10 @@ fn t() i32 {
 
 #[test]
 fn vec_init_captures_global_alloc_ir() {
-    // `Vec(T).init(alloc)`：携带全局分配器——`v.alloc()` 返回它，可继续分配 8 字节
+    // `Vec<T>.init(alloc)`：携带全局分配器——`v.alloc()` 返回它，可继续分配 8 字节
     let src = r#"
 fn t() i32 {
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     var buf = v.alloc().alloc(8);
     if (buf != "\x00\x00\x00\x00\x00\x00\x00\x00") { return 1; }
     return 0;
@@ -1395,11 +1455,11 @@ fn t() i32 {
 
 #[test]
 fn vec_init_captures_arena_ir() {
-    // `Vec(T).init(arena)`：携带 arena——类型可见（Arena），未分配过字节则为 0
+    // `Vec<T>.init(arena)`：携带 arena——类型可见（Arena），未分配过字节则为 0
     let src = r#"
 fn t() i32 {
     var arena = Arena.init(alloc);
-    var v = Vec(i32).init(arena);
+    var v = Vec<i32>.init(arena);
     if (@typeOf(v.alloc()) != "Arena") { return 1; }
     if (v.alloc().bytes() != 0) { return 2; }
     return 0;
@@ -1410,10 +1470,10 @@ fn t() i32 {
 
 #[test]
 fn vec_default_carries_global_alloc_ir() {
-    // 裸类型表达式 `Vec(i32)`（无显式 init）→ 回退全局 alloc（§3 隐式环境）
+    // 裸类型表达式 `Vec<i32>`（无显式 init）→ 回退全局 alloc（§3 隐式环境）
     let src = r#"
 fn t() i32 {
-    var v = Vec(i32);
+    var v = Vec<i32>;
     var buf = v.alloc().alloc(4);
     if (buf != "\x00\x00\x00\x00") { return 1; }
     return 0;
@@ -1427,7 +1487,7 @@ fn vec_stores_and_grows_with_stored_alloc_ir() {
     // 携带的分配器随集合存在：扩容（append）后 `.alloc()` 仍可观测、可分配
     let src = r#"
 fn t() i32 {
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     if (v.len() != 2) { return 1; }
@@ -1443,10 +1503,10 @@ fn t() i32 {
 
 #[test]
 fn map_init_captures_alloc_ir() {
-    // `Map(K,V).init(alloc)`：携带分配器 + put/get(.?)/len 正常
+    // `Map<K,V>.init(alloc)`：携带分配器 + put/get(.?)/len 正常
     let src = r#"
 fn t() i32 {
-    var m = Map(i32, i32).init(alloc);
+    var m = Map<i32, i32>.init(alloc);
     m.put(1, 2);
     m.put(3, 4);
     if (m.len() != 2) { return 1; }
@@ -1462,11 +1522,11 @@ fn t() i32 {
 
 #[test]
 fn map_init_captures_arena_ir() {
-    // `Map(K,V).init(arena)`：携带 arena——类型可见
+    // `Map<K,V>.init(arena)`：携带 arena——类型可见
     let src = r#"
 fn t() i32 {
     var arena = Arena.init(alloc);
-    var m = Map(i32, i32).init(arena);
+    var m = Map<i32, i32>.init(arena);
     m.put(1, 2);
     if (@typeOf(m.alloc()) != "Arena") { return 1; }
     if (m.get(1).? != 2) { return 2; }
@@ -1481,7 +1541,7 @@ fn map_iterates_kv_pairs_ir() {
     // Map 句柄可遍历：`for (m) |kv|` → kv.key / kv.value（对齐 Class("Map") 遍历）
     let src = r#"
 fn t() i32 {
-    var m = Map(i32, i32).init(alloc);
+    var m = Map<i32, i32>.init(alloc);
     m.put(10, 1);
     m.put(20, 2);
     var sum = 0;
@@ -1497,10 +1557,10 @@ fn t() i32 {
 
 #[test]
 fn table_init_captures_alloc_ir() {
-    // `Table(T).init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
+    // `Table<T>.init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
     let src = r#"
 fn t() i32 {
-    var t = Table(i32).init(alloc, 2, 3, 7);
+    var t = Table<i32>.init(alloc, 2, 3, 7);
     if (t.len() != 2) { return 1; }
     if (t[0].len() != 3) { return 2; }
     if (t[0][1] != 7) { return 3; }

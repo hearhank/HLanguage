@@ -97,7 +97,7 @@ fn run_directory_prefers_main_hc_else_first_hc() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("a.hc"),
-        "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.print(\"first-hc\\n\"); }\n",
+        "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.print(\"first-hc\\n\"); }\n",
     )
     .unwrap();
     let out = Command::new(hc_bin())
@@ -259,7 +259,7 @@ fn build_lib_with_main_is_diagnosed() {
         "const build = Build{ name = \"badlib\", version = \"0.1.0\", kind = Kind.lib, files = [\"lib.hc\"], deps = [] };\n",
     )
     .unwrap();
-    std::fs::write(dir.join("lib.hc"), "fn main(args: o Vec(String)) !void { }\n").unwrap();
+    std::fs::write(dir.join("lib.hc"), "fn main(args: o Vec<String>) !void { }\n").unwrap();
     let out = Command::new(hc_bin())
         .arg("build")
         .arg(&dir)
@@ -280,7 +280,7 @@ fn run_exit_success_is_silent_and_aborts() {
     let path = temp_hc_file(
         "ok",
         "import H.std.{io};\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
              io.print(\"before\\n\");\n\
              io.exit(ExitType.Exit, 0);\n\
              io.print(\"after\\n\");\n\
@@ -306,7 +306,7 @@ fn run_exit_nonzero_code_is_silent() {
     let path = temp_hc_file(
         "code5",
         "import H.std.{io};\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
              io.exit(ExitType.Exit, 5);\n\
          }\n",
     );
@@ -327,7 +327,7 @@ fn run_exit_error_prints_and_codes() {
     let path = temp_hc_file(
         "err",
         "import H.std.{io};\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
              io.exit(ExitType.Error, 3);\n\
          }\n",
     );
@@ -351,7 +351,7 @@ fn run_ir_exit_propagates_code() {
     let path = temp_hc_file(
         "ir_err",
         "import H.std.{io};\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
              io.exit(ExitType.Error, 3);\n\
          }\n",
     );
@@ -376,7 +376,7 @@ fn run_io_stdin_reads_line() {
     let path = temp_hc_file(
         "stdin",
         "import H.std.{io};\n\
-         fn main(args: o Vec(String)) !void {\n\
+         fn main(args: o Vec<String>) !void {\n\
              var line = io.stdin();\n\
              io.print(\"got:\");\n\
              io.print(line);\n\
@@ -432,7 +432,7 @@ fn init_creates_runnable_scaffold() {
     let zon = std::fs::read_to_string(proj.join("build.zon")).expect("读 build.zon");
     assert!(zon.contains("name = \"demo\""), "清单应含项目名: {zon}");
     let main = std::fs::read_to_string(proj.join("main.hc")).expect("读 main.hc");
-    assert!(main.contains("fn main(args: o Vec(String)) !void"), "应含标准入口: {main}");
+    assert!(main.contains("fn main(args: o Vec<String>) !void"), "应含标准入口: {main}");
 
     // 脚手架运行绿（目录 = 包，入口 main.hc）
     let run = Command::new(hc_bin())
@@ -553,7 +553,7 @@ fn pkg_add_writes_local_dep_and_run_green() {
     // 4) 入口用依赖 + hc run 绿（依赖 pub 函数经包名前缀调用）
     std::fs::write(
         app.join("main.hc"),
-        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec(String)) !void { io.print(\"pkg = {}\\n\", parse(\"{}\")); }\n",
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec<String>) !void { io.print(\"pkg = {}\\n\", parse(\"{}\")); }\n",
     )
     .unwrap();
     let run = Command::new(hc_bin())
@@ -586,7 +586,7 @@ fn missing_local_dep_is_diagnosed() {
     .unwrap();
     std::fs::write(
         app.join("main.hc"),
-        "import H.std.{io};\nfn main(args: o Vec(String)) !void { io.print(\"hi\\n\"); }\n",
+        "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.print(\"hi\\n\"); }\n",
     )
     .unwrap();
     let out = Command::new(hc_bin())
@@ -826,7 +826,7 @@ fn dep_version_mismatch_warns() {
         .expect("hc pkg add");
     std::fs::write(
         app.join("main.hc"),
-        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec(String)) !void { io.print(\"n = {}\\n\", parse(\"{}\")); }\n",
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec<String>) !void { io.print(\"n = {}\\n\", parse(\"{}\")); }\n",
     )
     .unwrap();
     let run = Command::new(hc_bin())

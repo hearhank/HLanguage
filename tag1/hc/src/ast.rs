@@ -29,6 +29,8 @@ pub enum Decl {
     },
     Fn {
         name: String,
+        /// 泛型参数表（`fn swap<T>(...)`）：显式声明的类型参数名（<T> 尖括号表）
+        type_params: Vec<String>,
         params: Vec<Param>,
         ret: Option<Type>,
         /// where 子句（M2.2：泛型约束）：(泛型参数名, 约束接口)
@@ -114,10 +116,7 @@ pub enum Decl {
     },
     /// E1.2（组 D D2）：`comptime { ... }` 块——编译期求值（装载期受限 Interp，
     /// 结果丢弃、失败 = 编译错误）。仅编译期存在，不产生运行时代码、不替换源码。
-    Comptime {
-        body: Block,
-        span: Span,
-    },
+    Comptime { body: Block, span: Span },
 }
 
 impl Decl {
@@ -132,7 +131,10 @@ impl Decl {
             | Decl::Union { pub_, .. }
             | Decl::Interface { pub_, .. }
             | Decl::Namespace { pub_, .. } => *pub_,
-            Decl::Using { .. } | Decl::Import { .. } | Decl::Script { .. } | Decl::Comptime { .. } => false,
+            Decl::Using { .. }
+            | Decl::Import { .. }
+            | Decl::Script { .. }
+            | Decl::Comptime { .. } => false,
         }
     }
 }
@@ -196,6 +198,8 @@ pub struct FieldDecl {
 #[derive(Debug, Clone)]
 pub struct Method {
     pub name: String,
+    /// 泛型参数表（`fn save<T>(...)`）：显式声明的类型参数名
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     /// where 子句（M2.2：泛型约束）：(泛型参数名, 约束接口)
@@ -698,9 +702,10 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
             visit_expr(a, scopes, fv);
             visit_expr(b, scopes, fv);
         }
-        Expr::Unwrap(inner, _) | Expr::Try(inner, _) | Expr::Move(inner, _) | Expr::Await(inner, _) => {
-            visit_expr(inner, scopes, fv)
-        }
+        Expr::Unwrap(inner, _)
+        | Expr::Try(inner, _)
+        | Expr::Move(inner, _)
+        | Expr::Await(inner, _) => visit_expr(inner, scopes, fv),
         Expr::Catch(e, kind, _) => {
             visit_expr(e, scopes, fv);
             match kind.as_ref() {

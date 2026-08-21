@@ -24,9 +24,7 @@ fn run_ok(src: &str) {
 #[test]
 fn box_single_arg_falls_back_global_alloc() {
     // box(v) 单参 → 回退全局 alloc（设计文档 §6：`box` 的 alloc 参数显式传入；未传时回退 `alloc`）
-    run_ok(
-        "[test] fn t() !void {\n    var p = box(42);\n    try expect_eq(p.*, 42);\n}\n",
-    );
+    run_ok("[test] fn t() !void {\n    var p = box(42);\n    try expect_eq(p.*, 42);\n}\n");
 }
 
 #[test]
@@ -57,9 +55,7 @@ fn box_deref_read_write() {
 #[test]
 fn box_compare_with_plain_value() {
     // Boxed 与普通值比较：解引用后比较（对齐 Ptr 语义）
-    run_ok(
-        "[test] fn t() !void {\n    var p = box(42);\n    try expect_eq(p, 42);\n}\n",
-    );
+    run_ok("[test] fn t() !void {\n    var p = box(42);\n    try expect_eq(p, 42);\n}\n");
 }
 
 #[test]
@@ -76,7 +72,7 @@ fn box_interface_dispatch() {
              r: f32,\n\
              fn area(self: *Self) f32 { return pi * self.r * self.r; }\n\
          }\n\
-         fn total_area(shapes: &Vec(*IShape)) f32 {\n\
+         fn total_area(shapes: &Vec<*IShape>) f32 {\n\
              var total = 0.0;\n\
              for (shapes) |s| {\n\
                  total += s.area();\n\
@@ -86,7 +82,7 @@ fn box_interface_dispatch() {
          [test] fn t() !void {\n\
              var rect = Rect{ w = 3.0, h = 4.0 };\n\
              var circ = Circle{ r = 2.0 };\n\
-             var shapes: o Vec(*IShape) = Vec(*IShape).init(alloc);\n\
+             var shapes: o Vec<*IShape> = Vec<*IShape>.init(alloc);\n\
              shapes.append(box(rect, alloc));\n\
              shapes.append(box(circ, alloc));\n\
              var total = total_area(&shapes);\n\

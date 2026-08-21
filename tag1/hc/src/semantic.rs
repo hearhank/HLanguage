@@ -89,7 +89,7 @@ impl SType {
                     n.clone()
                 } else {
                     let a = args.iter().map(|t| t.name()).collect::<Vec<_>>().join(", ");
-                    format!("{n}({a})")
+                    format!("{n}<{a}>")
                 }
             }
             SType::Tuple(ts) => {
@@ -348,8 +348,18 @@ fn is_builtin_type(name: &str) -> bool {
         name,
         // 组 F（Q32 内建共享特例）：四模式共享容器类型——OneToOne/OneToMany/ManyToOne/
         // ManyToMany 为内建泛型共享特例（方法取 *Self；不占用唯一写者槽）
-        "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany"
-            | "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "ExitType"
+        "OneToOne"
+            | "OneToMany"
+            | "ManyToOne"
+            | "ManyToMany"
+            | "String"
+            | "Vec"
+            | "Map"
+            | "Deque"
+            | "Table"
+            | "Allocator"
+            | "Arena"
+            | "ExitType"
     )
 }
 
@@ -510,10 +520,7 @@ impl Checker {
                 }
             }
             Decl::Union {
-                name,
-                fields,
-                span,
-                ..
+                name, fields, span, ..
             } => {
                 // 命名规范（Q22）：类型名 PascalCase（首字母大写）
                 if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
@@ -599,6 +606,7 @@ impl Checker {
             }
             Decl::Fn {
                 name,
+                type_params,
                 params,
                 ret,
                 where_clause,
@@ -606,8 +614,13 @@ impl Checker {
                 is_async,
                 ..
             } => {
-                let sig =
-                    self.make_sig(params.clone(), ret.clone(), where_clause.clone(), *is_async);
+                let sig = self.make_sig(
+                    type_params.clone(),
+                    params.clone(),
+                    ret.clone(),
+                    where_clause.clone(),
+                    *is_async,
+                );
                 // [test] fn 不进重载池（运行时按 test 名收集）
                 if !is_test {
                     // 兄弟文件（skip_entry）：跳过 main 与顶层函数（文件私有——对齐运行时
@@ -948,13 +961,15 @@ impl Checker {
 
     fn make_sig(
         &self,
+        type_params: Vec<String>,
         params: Vec<Param>,
         ret: Option<Type>,
         where_clause: Vec<(String, Type)>,
         is_async: bool,
     ) -> FnSig {
-        // 泛型参数名 = where 键 + 参数/返回类型中出现的泛型标识符
+        // 泛型参数名 = 显式 <T> 表 + where 键 + 参数/返回类型中出现的泛型标识符
         let mut generics: Vec<String> = where_clause.iter().map(|(t, _)| t.clone()).collect();
+        generics.extend(type_params);
         for p in &params {
             collect_generic_names(&p.ty, &mut generics);
         }
@@ -973,7 +988,13 @@ impl Checker {
     }
 
     fn register_sig(&mut self, qname: &str, m: &Method) {
-        let sig = self.make_sig(m.params.clone(), m.ret.clone(), m.where_clause.clone(), false);
+        let sig = self.make_sig(
+            m.type_params.clone(),
+            m.params.clone(),
+            m.ret.clone(),
+            m.where_clause.clone(),
+            false,
+        );
         self.funcs.entry(qname.to_string()).or_default().push(sig);
     }
 
@@ -1243,7 +1264,7 @@ impl Checker {
                         .map(|x| self.ty_display(x))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    format!("{n}({a})")
+                    format!("{n}<{a}>")
                 }
             }
             Type::Ptr(inner, true) => format!("*mut {}", self.ty_display(inner)),
@@ -1523,7 +1544,10 @@ impl Checker {
                     "Allocator" | "ExitType" => return SType::Named(n.clone(), vec![]),
                     // 组 E E1：Future(R)——async fn 调用返回类型；await 解包取 R
                     "Future" => {
-                        return SType::Named(n.clone(), args.iter().map(|a| self.ty_of(a)).collect())
+                        return SType::Named(
+                            n.clone(),
+                            args.iter().map(|a| self.ty_of(a)).collect(),
+                        )
                     }
                     _ => {}
                 }
@@ -1592,8 +1616,7 @@ impl Checker {
                         return Some(self.ty_of(&fd.ty));
                     }
                 }
-                if let Some(TypeKind::Union { fields, .. }) = self.types.get(cn).map(|i| &i.kind)
-                {
+                if let Some(TypeKind::Union { fields, .. }) = self.types.get(cn).map(|i| &i.kind) {
                     if let Some(fd) = fields.iter().find(|f| f.name == *field) {
                         return Some(self.ty_of(&fd.ty));
                     }
@@ -1645,8 +1668,7 @@ impl Checker {
                 // （Q18/Q19 静态检查）；普通初始化走 expr_ty。
                 let mut spawn_thread: Option<ThreadState> = None;
                 let init_ty = match init {
-                    Some(Expr::Call { callee, args, .. })
-                        if matches!(callee.as_ref(), Expr::Ident(f, _) if f == "spawn") =>
+                    Some(Expr::Call { callee, args, .. }) if matches!(callee.as_ref(), Expr::Ident(f, _) if f == "spawn") =>
                     {
                         let (t, ts) = self.spawn_capture_info(args, span, scopes);
                         spawn_thread = Some(ts);
@@ -1787,10 +1809,9 @@ impl Checker {
                     // 错误捕获：else |err|——err 绑定为错误联合值（错误值，无负载）
                     if let Some((_, en)) = &ifs.err_capture {
                         let err_ty = match &ct {
-                            Some(SType::ErrorUnion(e, _)) => Some(SType::ErrorUnion(
-                                e.clone(),
-                                Box::new(SType::Unknown),
-                            )),
+                            Some(SType::ErrorUnion(e, _)) => {
+                                Some(SType::ErrorUnion(e.clone(), Box::new(SType::Unknown)))
+                            }
                             _ => Some(SType::ErrorUnion(None, Box::new(SType::Unknown))),
                         };
                         scopes.push(HashMap::new());
@@ -2085,7 +2106,9 @@ impl Checker {
                     .collect();
                 SType::Tuple(ts)
             }
-            Expr::NamedLit { ty, fields, span, .. } => {
+            Expr::NamedLit {
+                ty, fields, span, ..
+            } => {
                 self.check_named_lit(ty, fields, span, scopes);
                 match self.types.get(ty) {
                     Some(_) => SType::Named(ty.clone(), vec![]),
@@ -3339,10 +3362,7 @@ impl Checker {
         for scope in scopes {
             for info in scope.values() {
                 if let Some(ts) = &info.thread {
-                    if !ts.bound
-                        && !ts.detached
-                        && ts.local_refs.iter().any(|(n, _)| *n == x)
-                    {
+                    if !ts.bound && !ts.detached && ts.local_refs.iter().any(|(n, _)| *n == x) {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!(
@@ -3477,9 +3497,9 @@ impl Checker {
                     return Some(SType::Unknown);
                 }
                 match self.expr_ty(&args[0], scopes, None) {
-                    Some(SType::Ptr(..)) | Some(SType::Unknown) | None => {
-                        Some(SType::Int { width: IntWidth::USize })
-                    }
+                    Some(SType::Ptr(..)) | Some(SType::Unknown) | None => Some(SType::Int {
+                        width: IntWidth::USize,
+                    }),
                     Some(t) => {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
@@ -3535,10 +3555,7 @@ impl Checker {
                     Some(t) => {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
-                            format!(
-                                "@atomicRmw expects a pointer argument (got `{}`)",
-                                t.name()
-                            ),
+                            format!("@atomicRmw expects a pointer argument (got `{}`)", t.name()),
                         ));
                         Some(SType::Unknown)
                     }
@@ -3695,10 +3712,7 @@ impl Checker {
         // 无 anytype 参数或返回类型非 `anytype` → 原路径（泛型替换 / 声明类型直用）。
         let any_bindings = self.anytype_bindings(sig, &arg_tys, skip_self);
         let ret_st = if !any_bindings.is_empty()
-            && matches!(
-                sig.ret.as_ref().map(|r| r.strip()),
-                Some(Type::Infer)
-            )
+            && matches!(sig.ret.as_ref().map(|r| r.strip()), Some(Type::Infer))
         {
             Some(
                 self.anytype_concrete_ret(qname, &any_bindings, &arg_tys)
@@ -3779,11 +3793,7 @@ impl Checker {
     /// 在 anytype 具体绑定下重求值函数体 return 表达式 → 具体返回类型。
     /// 多路径 return 取「首个 definite 类型」为代表，其余须 mutual-compatible
     /// （不符 → None，回落 `Infer`）。重求值产生的诊断截断（解析调用点类型不报错）。
-    fn retype_return(
-        &mut self,
-        body: &Block,
-        bindings: &HashMap<String, SType>,
-    ) -> Option<SType> {
+    fn retype_return(&mut self, body: &Block, bindings: &HashMap<String, SType>) -> Option<SType> {
         let mut scopes: Vec<HashMap<String, VarInfo>> = vec![bindings
             .iter()
             .map(|(n, t)| {
@@ -3839,9 +3849,7 @@ impl Checker {
                         self.collect_stmt_returns(es, scopes, out);
                     }
                 }
-                Stmt::While(WhileStmt { body, .. }) => {
-                    self.collect_return_types(body, scopes, out)
-                }
+                Stmt::While(WhileStmt { body, .. }) => self.collect_return_types(body, scopes, out),
                 Stmt::For(ForStmt { body, .. }) => self.collect_return_types(body, scopes, out),
                 Stmt::Switch(SwitchStmt { arms, .. }) => {
                     for arm in arms {
@@ -3907,13 +3915,19 @@ impl Checker {
                 } else {
                     format!(
                         "{n}({})",
-                        args.iter().map(|a| self.stype_key(a)).collect::<Vec<_>>().join(",")
+                        args.iter()
+                            .map(|a| self.stype_key(a))
+                            .collect::<Vec<_>>()
+                            .join(",")
                     )
                 }
             }
             SType::Tuple(ts) => format!(
                 "({})",
-                ts.iter().map(|a| self.stype_key(a)).collect::<Vec<_>>().join(", ")
+                ts.iter()
+                    .map(|a| self.stype_key(a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             SType::Optional(inner) => format!("?{}", self.stype_key(inner)),
             SType::ErrorUnion(e, inner) => format!(

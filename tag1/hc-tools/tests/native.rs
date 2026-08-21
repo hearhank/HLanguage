@@ -929,7 +929,7 @@ fn tree_vec_field_append_recursion_native() {
     let st = compile_tests_and_run(
         "tree Node {\n\
              value: i32,\n\
-             children: Vec(Node),\n\
+             children: Vec<Node>,
              fn total(self: *Self) i32 {\n\
                  var sum = self.value;\n\
                  for (self.children) |child| {\n\
@@ -985,7 +985,10 @@ fn g4b_thread_spawn_aborts_notcallable() {
              var r = th.join();\n\
          }\n",
     );
-    assert!(!st.success(), "原生线程程序应中止（error.NotCallable），实际退出 {st}");
+    assert!(
+        !st.success(),
+        "原生线程程序应中止（error.NotCallable），实际退出 {st}"
+    );
     assert!(
         stdout.contains("error.NotCallable"),
         "应打印 error.NotCallable 边界消息，实际 stdout: {stdout:?}"

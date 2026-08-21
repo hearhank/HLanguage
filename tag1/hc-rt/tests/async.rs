@@ -1,10 +1,10 @@
-//! 组 E E2：`await` ≡ `join()`——async fn 调用点返回 `Future(R)`（延迟执行），
+//! 组 E E2：`await` ≡ `join()`——async fn 调用点返回 `Future<R>`（延迟执行），
 //! await 运行体到完成（协作式，复用 G 组 Thread 机制）；协作式取消。
 //! 组 E E3：`Io.threaded()`/`Io.evented()` 单线程事件循环——`runtime` 字段标识
 //! 运行时形态；`io.poll()` 排空根回收队列（evented）驱动待处理任务，threaded 恒 0。
 //!
 //! tree-walking interp 侧验证：async fn 调用不立即运行体（延迟）、await 运行到完成并
-//! 返回结果、错误 union 传播（`Future(!R)`）、cancel 协作标志（await 前取消 →
+//! 错误 union 传播（`Future<!R>`）、cancel 协作标志（await 前取消 →
 //! `error.Cancelled`）、is_done 状态转移、内联 `await async_fn()`、await 幂等缓存。
 //! E3：Io 构造器返回运行时字段正确、poll 排空事件队列（未 join 线程 → 运行到完成）。
 //! 一致性（interp == IR）见 hc-rt/tests/consistency.rs `e2_async_await_consistent`。
@@ -25,12 +25,12 @@ fn run_ok(src: &str) {
 
 #[test]
 fn await_returns_value() {
-    // 基本 await：async fn 调用返回 Future(i32)，await 运行体到完成返回 42
+    // 基本 await：async fn 调用返回 Future<i32>，await 运行体到完成返回 42
     run_ok(
         r#"
 async fn fetch() i32 { return 42; }
 [test] fn t() !void {
-    var fut: Future(i32) = fetch();
+    var fut: Future<i32> = fetch();
     try expect_eq(fut.is_done(), false);
     var r = await fut;
     try expect_eq(r, 42);
@@ -74,7 +74,7 @@ async fn bump() i32 { g = g + 1; return g; }
 
 #[test]
 fn await_propagates_error_union() {
-    // 错误 union：async fn 返回 `!i32`（Future(!i32)），await 透传 error 值（可 try/catch）
+    // 错误 union：async fn 返回 `!i32`（Future<!i32>），await 透传 error 值（可 try/catch）
     run_ok(
         r#"
 async fn may_fail(ok: bool) !i32 {
@@ -82,7 +82,7 @@ async fn may_fail(ok: bool) !i32 {
     return 5;
 }
 [test] fn t() !void {
-    var fut: Future(!i32) = may_fail(false);
+    var fut: Future<!i32> = may_fail(false);
     try expect_error(error.Boom, await fut);
     try expect_eq(try await may_fail(true), 5);
 }
@@ -97,7 +97,7 @@ fn cancel_before_await_returns_cancelled() {
         r#"
 async fn work() !i32 { return 42; }
 [test] fn t() !void {
-    var fut: Future(!i32) = work();
+    var fut: Future<!i32> = work();
     try expect_eq(fut.is_done(), false);
     fut.cancel();
     try expect_error(error.Cancelled, await fut);

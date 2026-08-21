@@ -9,7 +9,7 @@ class ABC {
         io.print("引用在此打印");
     }
 }
-fn main(args: o Vec(String)) !void {
+fn main(args: o Vec<String>) !void {
     io.print("hello, world\n");
     io.print("H 语言：定义数据 / 修改数据 / 传输数据 / 保存数据\n");
     io.print("x = {}, y = {}\n", 42, 3.14);

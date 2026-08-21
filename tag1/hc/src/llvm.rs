@@ -4724,7 +4724,9 @@ impl BodyEmitter {
             self.emit(format!("{p} = load %Value, %Value* %sp.{}", args[0]));
             let v = self.r();
             self.emit(format!("{v} = load %Value, %Value* %sp.{}", args[1]));
-            self.emit(format!("call void @hc_volatile_store(%Value {p}, %Value {v})"));
+            self.emit(format!(
+                "call void @hc_volatile_store(%Value {p}, %Value {v})"
+            ));
             return;
         }
         // K4：@ptrFromInt(addr)——整数载荷 → T_PTR 标记（虚拟指针）；@intFromPtr(p)——指针
@@ -5860,8 +5862,14 @@ mod tests {
             "export fn add(a: i32, b: i32) i32 { return a + b; } fn main() i32 { return add(1, 2); }",
         );
         assert!(ll.contains("; exports: add"), "{ll}");
-        assert!(ll.contains("define %Value @\"add\"(%Value %p0, %Value %p1)"), "{ll}");
-        assert!(ll.contains("call %Value @\"hc_fn0\"(%Value %p0, %Value %p1)"), "{ll}");
+        assert!(
+            ll.contains("define %Value @\"add\"(%Value %p0, %Value %p1)"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains("call %Value @\"hc_fn0\"(%Value %p0, %Value %p1)"),
+            "{ll}"
+        );
         assert!(ll.contains("ret %Value %r"), "{ll}");
         // 非导出函数不产生 thunk
         assert!(!ll.contains("define %Value @\"main\"("), "{ll}");
@@ -5957,7 +5965,7 @@ mod tests {
         // helper 随 preamble 发射（供 57-protocol 等）。对齐 run_ir `call_builtin_method`
         // Arr 臂的原地扩容语义（同一 `%ArrObj` 指针写回，别名可见）。
         let ll = gen(
-            r#"class Node { value: i32, children: Vec(Node), } fn f() i32 {
+            r#"class Node { value: i32, children: Vec<Node>, } fn f() i32 {
     var r = Node.new(1, alloc);
     r.children.append(Node.new(2, alloc));
     r.children.append(Node.new(3, alloc));
@@ -6280,15 +6288,13 @@ fn f() i32 {
         // G4b 定案 A：原生保持响亮拒绝线程。spawn 的 callee 以 FnRef 传递 → 原生 ABI
         // 无函数值表示（Phase 8），codegen 发射 @hc_abort_notcallable 运行时中止
         // （error.NotCallable）——不静默误编译，属原生子集边界。
-        let ll = gen(
-            r#"
+        let ll = gen(r#"
 fn add(a: i32, b: i32) i32 { return a + b; }
 fn main() {
     var th = spawn(add, 6, 7);
     var r = th.join();
 }
-"#,
-        );
+"#);
         assert!(ll.contains("define void @hc_abort_notcallable"), "{ll}");
         assert!(ll.contains("call void @hc_abort_notcallable"), "{ll}");
         // 禁止静默：spawn 内建也不得落入 NotBuiltin 之前被跳过——FnRef 中止先于

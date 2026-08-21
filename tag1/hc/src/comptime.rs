@@ -32,7 +32,9 @@ pub fn is_type_fn(params: &[ast::Param], ret: &Option<ast::Type>) -> bool {
 /// （ADR-0012 #5）。与 `is_type_fn` 正交——anytype 函数返回运行时值（非类型函数），
 /// 但返回类型 `anytype` 在调用点解析为具体类型（类型层具体化，见 semantic `match_overloads`）。
 pub fn has_anytype(params: &[ast::Param]) -> bool {
-    params.iter().any(|p| matches!(p.ty.strip(), ast::Type::Infer))
+    params
+        .iter()
+        .any(|p| matches!(p.ty.strip(), ast::Type::Infer))
 }
 
 /// 类型参数判定：`T: type`（`Type::Named("type")`）——实参是编译期类型对象。
@@ -89,8 +91,8 @@ pub fn type_key(t: &ast::Type) -> String {
                 n.clone()
             } else {
                 format!(
-                    "{n}({})",
-                    inner.iter().map(type_key).collect::<Vec<_>>().join(",")
+                    "{n}<{a}>",
+                    a = inner.iter().map(type_key).collect::<Vec<_>>().join(",")
                 )
             }
         }
@@ -105,7 +107,10 @@ pub fn type_key(t: &ast::Type) -> String {
         ast::Type::Optional(inner) => format!("?{}", type_key(inner)),
         ast::Type::ErrorUnion(_, inner) => format!("{}!", type_key(inner)),
         ast::Type::Tuple(ts) => {
-            format!("({})", ts.iter().map(type_key).collect::<Vec<_>>().join(", "))
+            format!(
+                "({})",
+                ts.iter().map(type_key).collect::<Vec<_>>().join(", ")
+            )
         }
         ast::Type::Array(n, inner) => format!("[{n}]{}", type_key(inner)),
         ast::Type::ComptimeInt(v) => format!("{v}"),
@@ -123,24 +128,17 @@ pub fn subst(ty: &ast::Type, bindings: &HashMap<String, ast::Type>) -> ast::Type
             }
             ast::Type::Named(n.clone(), vec![])
         }
-        ast::Type::Named(n, args) => ast::Type::Named(
-            n.clone(),
-            args.iter().map(|a| subst(a, bindings)).collect(),
-        ),
-        ast::Type::Ptr(inner, mut_) => {
-            ast::Type::Ptr(Box::new(subst(inner, bindings)), *mut_)
+        ast::Type::Named(n, args) => {
+            ast::Type::Named(n.clone(), args.iter().map(|a| subst(a, bindings)).collect())
         }
-        ast::Type::Slice(inner, mut_) => {
-            ast::Type::Slice(Box::new(subst(inner, bindings)), *mut_)
-        }
+        ast::Type::Ptr(inner, mut_) => ast::Type::Ptr(Box::new(subst(inner, bindings)), *mut_),
+        ast::Type::Slice(inner, mut_) => ast::Type::Slice(Box::new(subst(inner, bindings)), *mut_),
         ast::Type::Optional(inner) => ast::Type::Optional(Box::new(subst(inner, bindings))),
         ast::Type::ErrorUnion(e, inner) => ast::Type::ErrorUnion(
             e.as_ref().map(|x| Box::new(subst(x, bindings))),
             Box::new(subst(inner, bindings)),
         ),
-        ast::Type::Tuple(ts) => {
-            ast::Type::Tuple(ts.iter().map(|t| subst(t, bindings)).collect())
-        }
+        ast::Type::Tuple(ts) => ast::Type::Tuple(ts.iter().map(|t| subst(t, bindings)).collect()),
         ast::Type::Array(n, inner) => ast::Type::Array(*n, Box::new(subst(inner, bindings))),
         ast::Type::ComptimeInt(v) => ast::Type::ComptimeInt(*v),
         ast::Type::Infer => ast::Type::Infer,
@@ -165,15 +163,17 @@ pub fn map_type_apps(
                 Ok(ast::Type::Named(resolve(n, args)?, vec![]))
             }
         }
-        ast::Type::Ptr(inner, mut_) => {
-            Ok(ast::Type::Ptr(Box::new(map_type_apps(inner, resolve)?), *mut_))
-        }
-        ast::Type::Slice(inner, mut_) => {
-            Ok(ast::Type::Slice(Box::new(map_type_apps(inner, resolve)?), *mut_))
-        }
-        ast::Type::Optional(inner) => {
-            Ok(ast::Type::Optional(Box::new(map_type_apps(inner, resolve)?)))
-        }
+        ast::Type::Ptr(inner, mut_) => Ok(ast::Type::Ptr(
+            Box::new(map_type_apps(inner, resolve)?),
+            *mut_,
+        )),
+        ast::Type::Slice(inner, mut_) => Ok(ast::Type::Slice(
+            Box::new(map_type_apps(inner, resolve)?),
+            *mut_,
+        )),
+        ast::Type::Optional(inner) => Ok(ast::Type::Optional(Box::new(map_type_apps(
+            inner, resolve,
+        )?))),
         ast::Type::ErrorUnion(e, inner) => Ok(ast::Type::ErrorUnion(
             match e {
                 Some(x) => Some(Box::new(map_type_apps(x, resolve)?)),
@@ -188,9 +188,10 @@ pub fn map_type_apps(
             }
             Ok(ast::Type::Tuple(out))
         }
-        ast::Type::Array(n, inner) => {
-            Ok(ast::Type::Array(*n, Box::new(map_type_apps(inner, resolve)?)))
-        }
+        ast::Type::Array(n, inner) => Ok(ast::Type::Array(
+            *n,
+            Box::new(map_type_apps(inner, resolve)?),
+        )),
         ast::Type::ComptimeInt(v) => Ok(ast::Type::ComptimeInt(*v)),
         ast::Type::Infer => Ok(ast::Type::Infer),
         ast::Type::Owned(inner) => Ok(ast::Type::Owned(Box::new(map_type_apps(inner, resolve)?))),
@@ -218,10 +219,10 @@ pub fn instantiate(
 ) -> Result<Instantiated, String> {
     // 参数分类：`T: type` = 类型参数；`n: comptime_int` = 编译期整数值参数
     // （ADR-0012：惰性宽度字面量，实例化时按上下文收窄）。实参按全部参数对齐。
-    let is_type_param = |p: &ast::Param| matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "type");
-    let is_value_param = |p: &ast::Param| {
-        matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "comptime_int")
-    };
+    let is_type_param =
+        |p: &ast::Param| matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "type");
+    let is_value_param =
+        |p: &ast::Param| matches!(p.ty.strip(), ast::Type::Named(n, _) if n == "comptime_int");
     let type_params: Vec<&ast::Param> = params.iter().filter(|p| is_type_param(p)).collect();
     let value_params: Vec<&ast::Param> = params.iter().filter(|p| is_value_param(p)).collect();
     let total = type_params.len() + value_params.len();
@@ -338,10 +339,7 @@ fn eval_type_expr(
 }
 
 /// 数组类型长度求值：`3` 字面量（收窄为 usize）/ `n` comptime_int 参数引用。
-fn eval_array_len(
-    e: &ast::Expr,
-    value_bindings: &HashMap<String, usize>,
-) -> Result<usize, String> {
+fn eval_array_len(e: &ast::Expr, value_bindings: &HashMap<String, usize>) -> Result<usize, String> {
     match e {
         ast::Expr::IntLit { text, .. } => text
             .trim_end_matches(|c: char| c.is_alphabetic())

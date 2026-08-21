@@ -1961,14 +1961,14 @@ async fn outer(n: i32) i32 { return await inner(n) + 1; }
 #[test]
 fn e4_async_pointer_capture_consistent() {
     // 组 E E4：async fn 指针参数 + await（示例 37/76 `async_scope_binding` 模式）——
-    // interp（lazy，&base 捕获 + Future(i32)）== IR（eager 同步执行 + await 透传）在纯
+    // interp（lazy，&base 捕获 + Future<i32>）== IR（eager 同步执行 + await 透传）在纯
     // 函数下结果一致；IR 侧经 37/76 示例 compile 模式实证可运行。
     assert_all_pass(
         r#"
 async fn async_add(b: *i32, n: i32) i32 { return b.* + n; }
 [test] fn async_scope_binding() void {
     var base = 10;
-    var fut: Future(i32) = async_add(&base, 5);
+    var fut: Future<i32> = async_add(&base, 5);
     expect_eq(await fut, 15);
 }
 "#,
@@ -1978,7 +1978,7 @@ async fn async_add(b: *i32, n: i32) i32 { return b.* + n; }
 #[test]
 fn d35_comptime_array_type_fn_consistent() {
     // 组 D（示例 35）：comptime_int 值参数 + 数组类型函数
-    // `fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`——`ArrayLen(i32, 3)`
+    // `fn ArrayLen(T: type, n: comptime_int) type { return [n]T; }`——`ArrayLen<i32, 3>`
     // 即 `[3]i32`。interp == IR 双模式一致：类型应用初始化、`.len`、anytype 运行时函数。
     assert_all_pass(
         r#"
@@ -1990,12 +1990,12 @@ fn max_value(a: anytype, b: anytype) anytype {
     return b;
 }
 [test] fn array_type_fn() void {
-    var arr: ArrayLen(i32, 3) = [1, 2, 3];
+    var arr: ArrayLen<i32, 3> = [1, 2, 3];
     expect_eq(arr.len, 3);
     expect_eq(arr[1], 2);
 }
 [test] fn comptime_int_scaled() void {
-    var arr: ArrayLen(f64, 2) = [0.5, 1.5];
+    var arr: ArrayLen<f64, 2> = [0.5, 1.5];
     expect(arr.len == 2);
 }
 [test] fn anytype_runtime_fn() void {
@@ -2020,14 +2020,14 @@ fn max_value(a: anytype, b: anytype) anytype {
     return b;
 }
 [test] fn type_application() void {
-    var p: Pair(i32) = Pair(i32){ first = 1, second = 2 };
+    var p: Pair<i32> = Pair<i32>{ first = 1, second = 2 };
     expect_eq(p.first, 1);
     expect_eq(p.second, 2);
     p.second = 5;
     expect_eq(p.second, 5);
 }
 [test] fn passthrough_alias() void {
-    var x: Identity(i32) = 42;
+    var x: Identity<i32> = 42;
     expect_eq(x, 42);
 }
 [test] fn anytype_runtime_fn() void {
@@ -2077,11 +2077,11 @@ fn d3_nested_instantiation_consistent() {
     assert_all_pass(
         r#"
 fn Pair(T: type) type { return struct { first: T, second: T }; }
-fn PairPair(T: type) type { return struct { a: Pair(T), b: Pair(T) }; }
+fn PairPair(T: type) type { return struct { a: Pair<T>, b: Pair<T> }; }
 [test] fn nested_literal() void {
-    var pp: PairPair(i32) = PairPair(i32){
-        a = Pair(i32){ first = 1, second = 2 },
-        b = Pair(i32){ first = 3, second = 4 },
+    var pp: PairPair<i32> = PairPair<i32>{
+        a = Pair<i32>{ first = 1, second = 2 },
+        b = Pair<i32>{ first = 3, second = 4 },
     };
     expect_eq(pp.a.first, 1);
     expect_eq(pp.a.second, 2);
@@ -2092,7 +2092,7 @@ fn PairPair(T: type) type { return struct { a: Pair(T), b: Pair(T) }; }
     expect_eq(pp.a.first + pp.b.second, 11);
 }
 [test] fn nested_no_init() void {
-    var x: PairPair(i32);
+    var x: PairPair<i32>;
     expect_eq(x.a.first, 0);
     expect_eq(x.b.second, 0);
 }
@@ -2107,14 +2107,14 @@ fn d3_recursive_instantiation_consistent() {
     // Optional 字段默认 `None` 终止（`next = null` / 无初值构造不递归）。
     assert_all_pass(
         r#"
-fn LinkedList(T: type) type { return struct { value: T, next: ?LinkedList(T) }; }
+fn LinkedList(T: type) type { return struct { value: T, next: ?LinkedList<T> }; }
 [test] fn recursive_literal() void {
-    var l: LinkedList(i32) = LinkedList(i32){ value = 1, next = null };
+    var l: LinkedList<i32> = LinkedList<i32>{ value = 1, next = null };
     expect_eq(l.value, 1);
     expect_eq(l.next, null);
 }
 [test] fn recursive_no_init() void {
-    var l: LinkedList(i32);
+    var l: LinkedList<i32>;
     expect_eq(l.value, 0);
     expect_eq(l.next, null);
 }
@@ -2404,14 +2404,14 @@ fn f_four_mode_and_atomic_consistent() {
     assert_all_pass(
         r#"
 [test] fn four_mode_fifo() !void {
-    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
+    var ch: o OneToOne<i32> = OneToOne<i32>.init(alloc);
     ch.write(1);
     ch.write(2);
     try expect_eq(ch.read(), 1);
     try expect_eq(ch.read(), 2);
 }
 [test] fn four_mode_try_read_null() !void {
-    var ch: o ManyToOne(i32) = ManyToOne(i32).init(alloc);
+    var ch: o ManyToOne<i32> = ManyToOne(i32).init(alloc);
     var v = ch.try_read();
     try expect(v == null);
     ch.write(9);
@@ -2420,14 +2420,14 @@ fn f_four_mode_and_atomic_consistent() {
     try expect_eq(v2.?, 9);
 }
 [test] fn four_mode_close() !void {
-    var ch: o OneToMany(i32) = OneToMany(i32).init(alloc);
+    var ch: o OneToMany<i32> = OneToMany(i32).init(alloc);
     ch.close();
     ch.write(3); // 返回 error.Closed → 丢弃（M3.4：非尾语句错误值不达根）
     ch.write(4);
     var dummy: i32 = 0; // 尾语句须非错误值表达式（块值规则）
 }
 [test] fn four_mode_channel_cap() !void {
-    var ch: o ManyToMany(i32) = ManyToMany(i32).init(alloc, 2);
+    var ch: o ManyToMany<i32> = ManyToMany<i32>.init(alloc, 2);
     ch.send(5);
     ch.send(6);
     try expect_eq(ch.recv(), 5);

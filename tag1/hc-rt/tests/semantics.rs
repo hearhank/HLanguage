@@ -66,8 +66,8 @@ fn reference_assignment_rejected() {
     run_compile_error(
         "class Foo { a: i32 }
 fn main(io: Io) !void {
-    var v: Vec(i32) = Vec(i32).init(alloc);
-    var w: Vec(i32) = v;
+    var v: Vec<i32> = Vec<i32>.init(alloc);
+    var w: Vec<i32> = v;
 }\n",
         "cannot assign",
     );
@@ -90,12 +90,12 @@ class Point { x: f32, y: f32 }
 
 #[test]
 fn table_construct_and_index() {
-    // M8：Table(T).init(alloc, rows, cols, init) + t[i, j] 多参索引
+    // M8：Table<T>.init(alloc, rows, cols, init) + t[i, j] 多参索引
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table(i32).init(alloc, 3, 4, 0);
+    var tbl = Table<i32>.init(alloc, 3, 4, 0);
     try expect_eq(tbl[1, 2], 0);
-    var t2 = Table(i32).init(alloc, 2, 2, 7);
+    var t2 = Table<i32>.init(alloc, 2, 2, 7);
     try expect_eq(t2[0, 0], 7);
     try expect_eq(t2[1, 1], 7);
 }\n",
@@ -120,7 +120,7 @@ fn copy_shallow_mode() {
     // L1：copy(&x, .shallow) ≡ copy(&x, CopyMode.shallow)
     run_ok(
         "[test] fn t() !void {
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1, .shallow);
     try expect_eq(v2.len, 1);
@@ -132,7 +132,7 @@ fn copy_shallow_mode() {
 fn copy_deep_mode_default() {
     run_ok(
         "[test] fn t() !void {
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);
     v2.append(2);
@@ -271,7 +271,7 @@ fn m22_field_access_len() {
     // 内建字段：容器 .len
     run_ok(
         "[test] fn t() !void {
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     try expect_eq(v.len, 2);
@@ -283,7 +283,7 @@ fn m22_field_access_len() {
 fn m22_table_double_index_ok() {
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table(i32).init(alloc, 2, 2, 0);
+    var tbl = Table<i32>.init(alloc, 2, 2, 0);
     try expect_eq(tbl[1, 0], 0);
 }\n",
     );
@@ -480,7 +480,7 @@ fn m22_slice_range_index() {
 
 // ---------- M2.5 Debug 悬垂标记验收 ----------
 
-const DANGLING_SRC: &str = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
+const DANGLING_SRC: &str = "fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
 
 #[test]
 fn m25_dangling_access_rejected_debug() {
@@ -502,7 +502,7 @@ fn m25_dangling_access_rejected_debug() {
 #[test]
 fn m25_dangling_hold_not_accessed_ok() {
     // 取出/持有悬垂引用不抛错；只有解引用访问才触发（Q18：取指针不抛错）
-    let src = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
+    let src = "fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
     run_ok(src);
 }
 
