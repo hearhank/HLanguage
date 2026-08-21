@@ -1,6 +1,6 @@
 name = "H"
 grammar = "h"
-path_suffixes = ["h"]
+path_suffixes = ["hc"]
 line_comments = ["// "]
 block_comment = ["/*", "*/"]
 tab_size = 4

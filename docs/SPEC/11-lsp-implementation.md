@@ -41,6 +41,18 @@
 
 **扩展位置**：`extensions/zed/`
 
+**Zed 扩展清单（`extension.toml`）关键点**（2026-08-22 修正）：
+- `[lib] kind = "Rust" version = "0.7.0"`：Rust 扩展，编译为 `extension.wasm`（`zed_extension_api 0.7.0`，`language_server_command` 返回 `hc-lsp` 命令）。
+- `[grammars.h]`：Zed 在安装 dev extension 时会**浅克隆清单里的仓库**并编译 `src/parser.c` 为 wasm。因此必须满足：
+  - `repository` 指向**真实的 git 仓库**（本扩展指向本仓库：`file:///C:/Users/Hank/Documents/works/AI/H2`，注意是 `file:///` 三个斜杠，`file://C:` 会把 `C:` 当主机名而失败）；
+  - `rev` 必须是仓库中存在的分支名或 commit SHA（本仓库分支为 `feature/improv_code_v0.1.5`，不是 `main`）；
+  - `path` 指向仓库内语法子目录（`extensions/zed/languages/h`）；
+  - `src/parser.c` 必须**已提交**（浅克隆只含已提交内容）。
+- `[language_servers.hc-lsp]`：`language = "H"` 需与 `config.toml` 的 `name = "H"` 一致。
+- 文件后缀：**`.hc`**（非 `.h`，`.h` 是 C/C++ 头文件）。`languages/h/config.toml` 用 `path_suffixes = ["hc"]`。
+
+**安装方式**：Zed 内 `zed: install dev extension` → 选择 `extensions/zed` 目录；Zed 自动编译 Rust 扩展并下载 wasi-sdk 编译语法。复制到 `%USERPROFILE%\.zed\extensions` 不是有效的加载方式。
+
 ### 1.4 实现策略
 
 **诊断触发**：混合模式
@@ -611,3 +623,4 @@
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
 | 2026-08-22 | 1.0 | 初始版本，完成grilling会话，确定设计决策和实施计划 |
+| 2026-08-22 | 1.1 | 修复 Zed 扩展无法加载：`[grammars.h]` 改为指向本仓库（`file:///...` + `rev=feature/improv_code_v0.1.5` + `path=extensions/zed/languages/h`），`path_suffixes` 改为 `hc`，部署脚本改为 dev extension 安装流程 |

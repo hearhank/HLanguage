@@ -170,13 +170,9 @@ if exist "%PROJECT_ROOT%\tag1\target\release\hc.exe" (
 
 echo.
 echo ========================================
-echo [5/6] Configuring Zed extension...
+echo [5/6] Preparing Zed dev extension...
 echo ========================================
 echo.
-
-REM Get Zed extensions directory
-set ZED_EXTENSIONS_DIR=%USERPROFILE%\.zed\extensions
-if not exist "%ZED_EXTENSIONS_DIR%" mkdir "%ZED_EXTENSIONS_DIR%"
 
 REM Build the Rust extension (wasm) so the LSP command is available. Zed can
 REM also compile this itself on dev-extension install, but pre-building gives a
@@ -192,18 +188,40 @@ if %errorlevel% equ 0 (
     echo [WARN] Could not build Rust extension wasm. Zed will try to compile it on install.
 )
 
-REM Create extension directory
+REM Remove any stale grammar build dir (Zed regenerates it from the manifest).
+if exist "%PROJECT_ROOT%\extensions\zed\grammars\h" rmdir /S /Q "%PROJECT_ROOT%\extensions\zed\grammars\h"
+
+REM The extension manifest points its grammar at this repository (file:///...)
+REM with rev=feature/improv_code_v0.1.5 and path=extensions/zed/languages/h,
+REM so the generated src/parser.c must be committed for the shallow clone that
+REM Zed makes to contain it.
+echo.
+echo [NOTE] The grammar manifest builds from a git clone of this repository.
+echo        Commit src/parser.c (and any grammar.js / query changes) before
+echo        installing the dev extension, or Zed's grammar build will fail.
+echo.
+echo [NOTE] Install the extension in Zed with:
+echo       1. Command palette -^> "zed: install dev extension"
+echo       2. Select the directory: %PROJECT_ROOT%\extensions\zed
+echo       3. Zed compiles the Rust extension and grammar automatically.
+echo.
+
+REM Optional: stage a copy for reference (not the dev-extension install path).
+set ZED_EXTENSIONS_DIR=%USERPROFILE%\.zed\extensions
+if not exist "%ZED_EXTENSIONS_DIR%" mkdir "%ZED_EXTENSIONS_DIR%"
 set H_EXTENSION_DIR=%ZED_EXTENSIONS_DIR%\h-language
 if not exist "%H_EXTENSION_DIR%" mkdir "%H_EXTENSION_DIR%"
 
-REM Copy extension files (includes grammar, queries, Rust source, config.toml)
-echo Copying Zed extension files...
-xcopy /E /I /Y "%PROJECT_ROOT%\extensions\zed\*" "%H_EXTENSION_DIR%\" >nul
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to copy extension files
-    exit /b 1
+REM Copy extension source excluding heavy build artifacts (target\, .git).
+set H_EXT_STAGED=%H_EXTENSION_DIR%
+echo Copying extension files (excluding target, git, stale grammar build dir)...
+robocopy "%PROJECT_ROOT%\extensions\zed" "%H_EXT_STAGED%" /E /XD target .git grammars\h /XF *.tmp /NFL /NDL /NJH /NJS /NC /NS >nul
+if %errorlevel% geq 8 (
+    echo [WARN] robocopy failed to copy extension files
+) else (
+    echo [OK] Extension files staged to %H_EXT_STAGED%
+    echo     (This is a reference copy. To load in Zed, use "zed: install dev extension".)
 )
-echo [OK] Extension files copied to %H_EXTENSION_DIR%
 
 REM Copy the pre-generated Zed LSP settings snippet (a committed file) so the
 REM LSP is wired up even before the Rust extension is compiled. Merge its
@@ -245,7 +263,8 @@ echo set ZED_EXTENSIONS_DIR=%ZED_EXTENSIONS_DIR%
 echo.
 echo echo H Language LSP environment configured!
 echo echo.
-echo.echo Available commands:
+echo echo.
+echo echo Available commands:
 echo echo   hc-lsp    - Start LSP server
 echo echo   hc        - H language compiler ^(if installed^)
 echo echo.
@@ -254,7 +273,7 @@ echo echo   %H_EXTENSION_DIR%
 echo echo.
 echo echo To use in Zed:
 echo echo   1. Restart Zed
-echo echo   2. Open a .h file
+echo echo   2. Open a .hc file
 echo echo   3. LSP features should be active
 echo echo.
 echo echo If LSP does not start, merge this into Zed settings ^(%APPDATA%\Zed\settings.json^):
@@ -278,9 +297,11 @@ echo   - Setup script created: %SETUP_SCRIPT%
 echo.
 echo Next steps:
 echo   1. Run setup-lsp.bat to configure environment (adds bin to PATH)
-echo   2. Restart Zed editor
-echo   3. Open a .h file to test LSP features
-echo   4. If LSP does not start, merge %LSP_SNIPPET% into %ZED_SETTINGS%
+echo   2. Install the dev extension in Zed: "zed: install dev extension" -^> select
+echo      the extensions\zed directory
+echo   3. Restart Zed editor
+echo   4. Open a .hc file to test LSP features
+echo   5. If LSP does not start, merge %LSP_SNIPPET% into %ZED_SETTINGS%
 echo.
 echo To manually add to PATH:
 echo   set PATH=%BIN_DIR%;%%PATH%%

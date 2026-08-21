@@ -15,10 +15,12 @@ kind = "Rust"
 version = "0.7.0"
 
 [grammars.h]
-# Local grammar: point Zed at the grammar directory in this repository.
-# For a published extension, replace with the tree-sitter-h repository + rev.
-repository = "file://C:/Users/Hank/Documents/works/AI/H2/extensions/zed/languages/h"
-rev = "main"
+# Local grammar. Zed clones the repository below and builds the parser from
+# `src/parser.c` (already generated and committed). The `path` points Zed at
+# the grammar subdirectory inside the repository.
+repository = "file:///C:/Users/Hank/Documents/works/AI/H2"
+rev = "feature/improv_code_v0.1.5"
+path = "extensions/zed/languages/h"
 
 [language_servers.hc-lsp]
 language = "H"

@@ -26,18 +26,17 @@ The script:
 - Builds `hc-lsp` and copies it (plus `hc`) to `bin\`
 - Generates the Tree-sitter parser into `extensions\zed\languages\h\src`
 - Builds the Rust extension (`extension.wasm`)
-- Copies the extension to `%USERPROFILE%\.zed\extensions\h-language`
-- Writes a Zed settings snippet to `zed-lsp-snippet.json`
+- Stages the extension and writes a Zed settings snippet to `zed-lsp-snippet.json`
 
 ### Install in Zed
 
 1. **Add `bin` to PATH** so Zed can find `hc-lsp`: run `setup-lsp.bat` (or
    manually add `%PROJECT_ROOT%\bin` to your user PATH).
-2. **Install the dev extension**:
+2. **Install the dev extension** (this is how Zed actually loads the extension):
    - Open Zed, run `zed: install dev extension` from the command palette
    - Select the `extensions\zed` directory
-   - Zed compiles the Rust extension automatically (it downloads
-     `wasm32-wasip2` + wasi-sdk on first use).
+   - Zed compiles the Rust extension and the Tree-sitter grammar automatically
+     (it downloads `wasm32-wasip2` + wasi-sdk on first use).
 3. If the LSP does not start (e.g. wasm compile failed), merge the generated
    `zed-lsp-snippet.json` into `%APPDATA%\Zed\settings.json`:
    ```json
@@ -52,7 +51,14 @@ The script:
      }
    }
    ```
-4. **Restart Zed** and open a `.h` file.
+4. **Restart Zed** and open a `.hc` file.
+
+> The grammar manifest points at this repository itself
+> (`repository = "file:///C:/Users/Hank/Documents/works/AI/H2"`, `rev` =
+> `feature/improv_code_v0.1.5`, `path = "extensions/zed/languages/h"`). Zed
+> clones the repo shallowly and compiles `src/parser.c`. Because it is a
+> shallow clone of this repo, **commit** `src/parser.c` and any grammar/query
+> changes before re-installing the dev extension.
 
 ## Configuration
 
@@ -161,7 +167,7 @@ If syntax highlighting doesn't work:
 If diagnostics don't show:
 1. Check if `hc-lsp` is running: `ps aux | grep hc-lsp`
 2. Check Zed logs: `View -> Toggle Log Viewer`
-3. Make sure the file has a `.h` extension
+3. Make sure the file has a `.hc` extension
 
 ## Contributing
 
