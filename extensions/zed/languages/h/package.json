@@ -30,7 +30,7 @@
         "h"
       ],
       "highlights": [
-        "queries/highlights.scm"
+        "highlights.scm"
       ],
       "locals": [
         "queries/locals.scm"
