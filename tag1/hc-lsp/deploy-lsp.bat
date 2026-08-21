@@ -37,9 +37,16 @@ REM Check Tree-sitter CLI
 where tree-sitter >nul 2>&1
 if %errorlevel% neq 0 (
     echo [WARN] Tree-sitter CLI is not installed. Installing...
-    npm install -g tree-sitter-cli
+    echo Installing Tree-sitter CLI with allow-scripts...
+    npm install -g --allow-scripts=tree-sitter-cli tree-sitter-cli
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to install Tree-sitter CLI
+        echo.
+        echo Please try one of the following:
+        echo   1. Run: npm install -g --allow-scripts=tree-sitter-cli tree-sitter-cli
+        echo   2. Or: npm config set allow-scripts=tree-sitter-cli --location=user
+        echo      Then: npm install -g tree-sitter-cli
+        echo   3. Or install manually from: https://github.com/tree-sitter/tree-sitter/releases
         exit /b 1
     )
     echo [OK] Tree-sitter CLI installed
