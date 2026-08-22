@@ -387,14 +387,65 @@ impl BodyEmitter {
                 T_FLOAT,
                 format!("{}", f64::NEG_INFINITY.to_bits() as u128),
             ),
-            "sqrt" => self.emit_unop_helper("hc_sqrt", args, temp),
-            "abs" => self.emit_unop_helper("hc_abs", args, temp),
-            "floor" => self.emit_unop_helper("hc_floor", args, temp),
-            "ceil" => self.emit_unop_helper("hc_ceil", args, temp),
-            "round" => self.emit_unop_helper("hc_round", args, temp),
-            "pow" => self.emit_unop_helper("hc_pow", args, temp),
+            "sqrt" => {
+                self.emit_math_unop_inline("call double @llvm.sqrt.f64(double %f)", args, temp)
+            }
+            "abs" => {
+                self.emit_math_unop_inline("call double @llvm.fabs.f64(double %f)", args, temp)
+            }
+            "floor" => {
+                self.emit_math_unop_inline("call double @llvm.floor.f64(double %f)", args, temp)
+            }
+            "ceil" => {
+                self.emit_math_unop_inline("call double @llvm.ceil.f64(double %f)", args, temp)
+            }
+            "round" => {
+                self.emit_math_unop_inline("call double @llvm.round.f64(double %f)", args, temp)
+            }
+            "pow" => {
+                self.emit_math_unop_inline("call double @pow(double %f, double %f)", args, temp)
+            }
             _ => self.abort_feature("builtin"),
         }
+    }
+
+    /// 内联数值一元运算：提取 `%Value` 中的 f64 值（支持 Int→f64 强制转换），
+    /// 应用 `call_expr`（LLVM 原生内建或 libm 调用，`%f` 为双精度值），
+    /// 结果装箱为 `T_FLOAT` 的 `%Value` 存入目标槽。
+    /// 替代 `math_unop_helper` 运行时 helper，直接发射原生 LLVM 指令。
+    pub(crate) fn emit_math_unop_inline(&mut self, call_expr: &str, args: &[usize], temp: usize) {
+        let Some(&vslot) = args.first() else {
+            self.abort_feature("builtin");
+            return;
+        };
+        let v = self.r();
+        self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+        let tag = self.r();
+        self.emit(format!("{tag} = extractvalue %Value {v}, 0"));
+        let data = self.r();
+        self.emit(format!("{data} = extractvalue %Value {v}, 1"));
+        let is_int = self.r();
+        self.emit(format!("{is_int} = icmp eq i32 {tag}, {T_INT}"));
+        let dt = self.r();
+        self.emit(format!("{dt} = trunc i128 {data} to i64"));
+        let asf = self.r();
+        self.emit(format!("{asf} = sitofp i64 {dt} to double"));
+        let raw = self.r();
+        self.emit(format!("{raw} = bitcast i64 {dt} to double"));
+        let f = self.r();
+        self.emit(format!(
+            "{f} = select i1 {is_int}, double {asf}, double {raw}"
+        ));
+        // 代入 call_expr：将 `%f` 替换为实际寄存器名
+        // 对 pow 需要两个 %f 参数，全部替换
+        let call_str = call_expr.replace("%f", &f);
+        let r = self.r();
+        self.emit(format!("{r} = {call_str}"));
+        let bits = self.r();
+        self.emit(format!("{bits} = bitcast double {r} to i64"));
+        let z = self.r();
+        self.emit(format!("{z} = zext i64 {bits} to i128"));
+        self.build_store(temp, T_FLOAT, z);
     }
 
     pub(crate) fn call_builtin(
@@ -504,9 +555,14 @@ impl BodyEmitter {
             };
             let v = self.r();
             self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
-            let res = self.r();
-            self.emit(format!("{res} = call %Value @hc_volatile_load(%Value {v})"));
-            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            // 内联：extractvalue data → inttoptr → load volatile
+            let d = self.r();
+            self.emit(format!("{d} = extractvalue %Value {v}, 1"));
+            let pp = self.r();
+            self.emit(format!("{pp} = inttoptr i128 {d} to %Value*"));
+            let pv = self.r();
+            self.emit(format!("{pv} = load volatile %Value, %Value* {pp}"));
+            self.emit(format!("store %Value {pv}, %Value* %sp.{temp}"));
             return;
         }
         if name == "@volatileStore" {
@@ -518,9 +574,12 @@ impl BodyEmitter {
             self.emit(format!("{p} = load %Value, %Value* %sp.{}", args[0]));
             let v = self.r();
             self.emit(format!("{v} = load %Value, %Value* %sp.{}", args[1]));
-            self.emit(format!(
-                "call void @hc_volatile_store(%Value {p}, %Value {v})"
-            ));
+            // 内联：extractvalue data → inttoptr → store volatile
+            let pd = self.r();
+            self.emit(format!("{pd} = extractvalue %Value {p}, 1"));
+            let pp = self.r();
+            self.emit(format!("{pp} = inttoptr i128 {pd} to %Value*"));
+            self.emit(format!("store volatile %Value {v}, %Value* {pp}"));
             return;
         }
         // K4：@ptrFromInt(addr)——整数载荷 → T_PTR 标记（虚拟指针）；@intFromPtr(p)——指针
@@ -1074,15 +1133,19 @@ impl BodyEmitter {
             IrInst::JumpIfNull { temp, label } => {
                 let v = self.r();
                 self.emit(format!("{v} = load %Value, %Value* %sp.{temp}"));
+                let tag = self.r();
+                self.emit(format!("{tag} = extractvalue %Value {v}, 0"));
                 let c = self.r();
-                self.emit(format!("{c} = call i1 @hc_is_null(%Value {v})"));
+                self.emit(format!("{c} = icmp eq i32 {tag}, {T_NULL}"));
                 self.cond_br(&c, *label);
             }
             IrInst::JumpIfErr { temp, label } => {
                 let v = self.r();
                 self.emit(format!("{v} = load %Value, %Value* %sp.{temp}"));
+                let tag = self.r();
+                self.emit(format!("{tag} = extractvalue %Value {v}, 0"));
                 let c = self.r();
-                self.emit(format!("{c} = call i1 @hc_is_err(%Value {v})"));
+                self.emit(format!("{c} = icmp eq i32 {tag}, {T_ERR}"));
                 self.cond_br(&c, *label);
             }
             IrInst::Label { id } => self.label(*id),

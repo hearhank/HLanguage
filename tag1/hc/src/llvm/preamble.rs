@@ -43,9 +43,7 @@ pub(crate) fn emit_preamble(
     out.push_str("declare double @fmod(double, double)\n");
     out.push_str("declare double @fabs(double)\n");
     out.push_str("declare double @sqrt(double)\n");
-    out.push_str("declare double @floor(double)\n");
-    out.push_str("declare double @ceil(double)\n");
-    out.push_str("declare double @round(double)\n\n");
+    out.push_str("declare double @pow(double, double)\n\n");
 
     // 断言失败标志（全局；单线程顺序执行）
     out.push_str("@hc_fail_msg = global i8* null\n");

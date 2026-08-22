@@ -47,7 +47,6 @@ other:
 }
 "#;
 
-
 pub(crate) const TPL_DIVMOD: &str = r#"define %Value @FNAME@(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0
@@ -93,7 +92,6 @@ other:
   ret %Value { i32 2, i128 0 }
 }
 "#;
-
 
 pub(crate) const TPL_EUCMOD: &str = r#"define %Value @hc_eucmod(%Value %a, %Value %b) {
 entry:
@@ -147,7 +145,6 @@ other:
 }
 "#;
 
-
 pub(crate) const TPL_BITOP: &str = r#"define %Value @FNAME@(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0
@@ -167,7 +164,6 @@ other:
   ret %Value { i32 2, i128 0 }
 }
 "#;
-
 
 pub(crate) const TPL_SHIFT: &str = r#"define %Value @FNAME@(%Value %a, %Value %b) {
 entry:
@@ -189,7 +185,6 @@ other:
   ret %Value { i32 2, i128 0 }
 }
 "#;
-
 
 pub(crate) const HC_EQ_PLAIN: &str = r#"define i1 @hc_eq_plain(%Value %a, %Value %b) {
 entry:
@@ -265,7 +260,6 @@ entry:
 }
 "#;
 
-
 pub(crate) const HC_LT: &str = r#"define i1 @hc_lt(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0
@@ -325,7 +319,6 @@ entry:
 }
 "#;
 
-
 pub(crate) const HC_TRUTHY: &str = r#"define i1 @hc_truthy(%Value %v) {
 entry:
   %t = extractvalue %Value %v, 0
@@ -367,23 +360,6 @@ other:
 }
 "#;
 
-
-pub(crate) const HC_IS_ERR: &str = r#"define i1 @hc_is_err(%Value %v) {
-  %t = extractvalue %Value %v, 0
-  %r = icmp eq i32 %t, 6
-  ret i1 %r
-}
-"#;
-
-
-pub(crate) const HC_IS_NULL: &str = r#"define i1 @hc_is_null(%Value %v) {
-  %t = extractvalue %Value %v, 0
-  %r = icmp eq i32 %t, 1
-  ret i1 %r
-}
-"#;
-
-
 pub(crate) const HC_BOOL: &str = r#"define %Value @hc_bool(i1 zeroext %b) {
   %d = zext i1 %b to i128
   %v0 = insertvalue %Value { i32 0, i128 0 }, i32 4, 0
@@ -416,7 +392,6 @@ mixed:
 }
 "#;
 
-
 pub(crate) const HC_NEG: &str = r#"define %Value @hc_neg(%Value %v) {
 entry:
   %t = extractvalue %Value %v, 0
@@ -446,7 +421,6 @@ err:
 }
 "#;
 
-
 pub(crate) const HC_BITNOT: &str = r#"define %Value @hc_bitnot(%Value %v) {
 entry:
   %t = extractvalue %Value %v, 0
@@ -464,7 +438,6 @@ err:
 }
 "#;
 
-
 pub(crate) const HC_NOT: &str = r#"define %Value @hc_not(%Value %v) {
   %b = call i1 @hc_truthy(%Value %v)
   %n = xor i1 %b, true
@@ -474,7 +447,6 @@ pub(crate) const HC_NOT: &str = r#"define %Value @hc_not(%Value %v) {
   ret %Value %v1
 }
 "#;
-
 
 pub(crate) const HC_DEREF: &str = r#"define %Value @hc_deref(%Value %v) {
 entry:
@@ -513,39 +485,6 @@ err:
 /// K2（ADR-0014）：@volatileLoad——LLVM `load volatile`（防优化掉副作用/重排，
 /// MMIO 场景）。非指针恒等（对齐 `hc_deref` 的 identity 分支）。
 
-pub(crate) const HC_VOLATILE_LOAD: &str = r#"define %Value @hc_volatile_load(%Value %v) {
-entry:
-  %t = extractvalue %Value %v, 0
-  %is_ptr = icmp eq i32 %t, 7
-  br i1 %is_ptr, label %deref, label %identity
-deref:
-  %d = extractvalue %Value %v, 1
-  %pp = inttoptr i128 %d to %Value*
-  %pv = load volatile %Value, %Value* %pp
-  ret %Value %pv
-identity:
-  ret %Value %v
-}
-"#;
-
-/// K2（ADR-0014）：@volatileStore——LLVM `store volatile`；非指针 → BadAssign（对齐 `hc_store_ptr`）。
-
-pub(crate) const HC_VOLATILE_STORE: &str = r#"define void @hc_volatile_store(%Value %p, %Value %v) {
-entry:
-  %t = extractvalue %Value %p, 0
-  %is_ptr = icmp eq i32 %t, 7
-  br i1 %is_ptr, label %sp, label %err
-sp:
-  %d = extractvalue %Value %p, 1
-  %pp = inttoptr i128 %d to %Value*
-  store volatile %Value %v, %Value* %pp
-  ret void
-err:
-  call void @hc_abort_badassign()
-  unreachable
-}
-"#;
-
 /// 比较前归一化：指针解引用、普通值恒等。与 [`HC_EQ_DISPATCH`] 配合，
 /// 让 `hc_eq` 在指针与非指针混合时对齐 `IrValue::value_eq`。
 
@@ -563,7 +502,6 @@ okb:
   ret i8* %p
 }
 "#;
-
 
 pub(crate) const HC_MAKE_ARR: &str = r#"define %Value @hc_make_arr(i64 %n) {
 entry:
@@ -583,7 +521,6 @@ entry:
   ret %Value %v1
 }
 "#;
-
 
 pub(crate) const HC_ARR_SET: &str = r#"define void @hc_arr_set(%Value %arr, i64 %i, %Value %v) {
 entry:
@@ -743,7 +680,6 @@ edone:
 }
 "#;
 
-
 pub(crate) const HC_MAKE_CLASS: &str = r#"define %Value @hc_make_class(i8* %ty, i64 %n) {
 entry:
   %os = ptrtoint %ClassObj* getelementptr (%ClassObj, %ClassObj* null, i32 1) to i64
@@ -764,7 +700,6 @@ entry:
 }
 "#;
 
-
 pub(crate) const HC_CLASS_SET: &str = r#"define void @hc_class_set(%Value %obj, i64 %i, i8* %fname, %Value %v) {
 entry:
   %d = extractvalue %Value %obj, 1
@@ -778,7 +713,6 @@ entry:
   ret void
 }
 "#;
-
 
 pub(crate) const HC_MAKE_ENUM: &str = r#"define %Value @hc_make_enum(i8* %name, i8* %variant, %Value* %payload) {
 entry:
@@ -795,7 +729,6 @@ entry:
   ret %Value %v1
 }
 "#;
-
 
 pub(crate) const HC_UNWRAP: &str = r#"define %Value @hc_unwrap(%Value %v) {
 entry:
@@ -817,7 +750,6 @@ some:
   ret %Value %pv
 }
 "#;
-
 
 pub(crate) const HC_INDEX: &str = r#"define %Value @hc_index(%Value %base, %Value %idx) {
 entry:
@@ -891,7 +823,6 @@ notidx:
 }
 "#;
 
-
 pub(crate) const HC_STORE_INDEX: &str = r#"define void @hc_store_index(%Value %base, %Value %idx, %Value %v) {
 entry:
   %b = call %Value @hc_deref(%Value %base)
@@ -930,7 +861,6 @@ oob_err:
   unreachable
 }
 "#;
-
 
 pub(crate) const HC_SLICE: &str = r#"define %Value @hc_slice(%Value %base, %Value %lo, %Value %hi) {
 entry:
@@ -1052,7 +982,6 @@ notidx:
 }
 "#;
 
-
 pub(crate) const HC_STORE_SLICE: &str = r#"define void @hc_store_slice(%Value %base, %Value %lo, %Value %hi, %Value %v) {
 entry:
   %b = call %Value @hc_deref(%Value %base)
@@ -1141,7 +1070,6 @@ next:
 }
 "#;
 
-
 pub(crate) const HC_CLASS_FIND: &str = r#"define %FindRes @hc_class_find(%Value %base, i8* %field) {
 entry:
   %t = extractvalue %Value %base, 0
@@ -1177,7 +1105,6 @@ nf:
   ret %FindRes { i1 false, %Value undef }
 }
 "#;
-
 
 pub(crate) const HC_FIELD: &str = r#"define %Value @hc_field(%Value %base, i8* %field) {
 entry:
@@ -1248,7 +1175,6 @@ slc_len:
 }
 "#;
 
-
 pub(crate) const HC_STORE_FIELD: &str = r#"define void @hc_store_field(%Value %base, i8* %field, %Value %v) {
 entry:
   %b = call %Value @hc_deref(%Value %base)
@@ -1302,7 +1228,6 @@ append:
 }
 "#;
 
-
 pub(crate) const HC_SEQ_INFO: &str = r#"define %SeqInfo @hc_seq_info(%Value %v) {
 entry:
   %t = extractvalue %Value %v, 0
@@ -1330,7 +1255,6 @@ slc:
   ret %SeqInfo %q2
 }
 "#;
-
 
 pub(crate) const HC_EQ_AGG: &str = r#"define i1 @hc_eq_agg(%Value %a, %Value %b) {
 entry:
@@ -1651,7 +1575,6 @@ done:
 }
 "#;
 
-
 pub(crate) const HC_ENUM_PAYLOAD: &str = r#"define %Value @hc_enum_payload(%Value %v) {
 entry:
   %b = call %Value @hc_deref(%Value %v)
@@ -1717,7 +1640,6 @@ fin:
 }
 "#;
 
-
 pub(crate) const HC_ITER_ALLOC: &str = r#"define %IterObj* @hc_iter_alloc(i64 %n) {
 entry:
   %osz = ptrtoint %IterObj* getelementptr (%IterObj, %IterObj* null, i32 1) to i64
@@ -1735,7 +1657,6 @@ entry:
   ret %IterObj* %op
 }
 "#;
-
 
 pub(crate) const HC_ITER_SET: &str = r#"define void @hc_iter_set(%IterObj* %iter, i64 %i, %Value* %src, i1 %is_ref) {
 entry:
@@ -1776,7 +1697,6 @@ ret_false:
   ret %Value { i32 4, i128 0 }
 }
 "#;
-
 
 pub(crate) const HC_ITER_WRITE_BACK: &str = r#"define void @hc_iter_write_back(%IterObj* %iter, %Value* %slot) {
 entry:
@@ -1951,7 +1871,6 @@ notiter:
 }
 "#;
 
-
 pub(crate) const HC_WRITE_BYTES: &str = r#"define void @hc_write_bytes(i8* %p, i64 %n) {
 entry:
   %n32 = trunc i64 %n to i32
@@ -1961,7 +1880,6 @@ entry:
 }
 "#;
 
-
 pub(crate) const HC_WRITE_STRZ: &str = r#"define void @hc_write_strz(i8* %p) {
 entry:
   %f = getelementptr inbounds [3 x i8], ptr @.fmt_s, i64 0, i64 0
@@ -1969,7 +1887,6 @@ entry:
   ret void
 }
 "#;
-
 
 pub(crate) const HC_WRITE_U128_BASE: &str = r#"define void @hc_write_u128_base(i128 %v, i32 %base, i32 %upper) {
 entry:
@@ -2002,7 +1919,6 @@ write:
 }
 "#;
 
-
 pub(crate) const HC_WRITE_I128_DEC: &str = r#"define void @hc_write_i128_dec(i128 %n) {
 entry:
   %is_neg = icmp slt i128 %n, 0
@@ -2018,7 +1934,6 @@ mag:
   ret void
 }
 "#;
-
 
 pub(crate) const HC_WRITE_INT: &str = r#"define void @hc_write_int(%Value %v, i32 %mode) {
 entry:
@@ -2042,7 +1957,6 @@ basefmt:
   ret void
 }
 "#;
-
 
 pub(crate) const HC_WRITE_TYPENAME: &str = r#"define void @hc_write_typename(%Value %v) {
 entry:
@@ -2148,7 +2062,6 @@ n_void:
   ret void
 }
 "#;
-
 
 pub(crate) const HC_WRITE_VALUE: &str = r#"define void @hc_write_value(%Value %v, i32 %mode) {
 entry:
@@ -2355,7 +2268,6 @@ en_end:
 }
 "#;
 
-
 pub(crate) const HC_MIN: &str = r#"define %Value @hc_min(%Value %a, %Value %b) {
 entry:
   %lt = call i1 @hc_lt(%Value %a, %Value %b)
@@ -2364,7 +2276,6 @@ entry:
 }
 "#;
 
-
 pub(crate) const HC_MAX: &str = r#"define %Value @hc_max(%Value %a, %Value %b) {
 entry:
   %lt = call i1 @hc_lt(%Value %a, %Value %b)
@@ -2372,7 +2283,6 @@ entry:
   ret %Value %r
 }
 "#;
-
 
 pub(crate) const HC_SQRT: &str = r#"define %Value @hc_sqrt(%Value %v) {
 entry:
@@ -2409,7 +2319,6 @@ entry:
 }
 "#;
 
-
 pub(crate) const HC_COPY: &str = r#"define %Value @hc_copy(%Value %v, %Value %mode) {
 entry:
   %t = extractvalue %Value %mode, 0
@@ -2442,7 +2351,6 @@ abort:
 }
 "#;
 
-
 pub(crate) const HC_INTCAST: &str = r#"define %Value @hc_intcast(%Value %v, i128 %min, i128 %max) {
 entry:
   %t = extractvalue %Value %v, 0
@@ -2461,7 +2369,6 @@ abort:
   unreachable
 }
 "#;
-
 
 pub(crate) const HC_TYPEOF: &str = r#"define %Value @hc_typeof(%Value %v) {
 entry:
@@ -2560,7 +2467,6 @@ ret_str:
   ret %Value %v1
 }
 "#;
-
 
 pub(crate) const HC_READ_U64_LE: &str = r#"define %Value @hc_read_u64_le(%Value %v) {
 entry:
@@ -2706,7 +2612,6 @@ mk:
 }
 "#;
 
-
 pub(crate) const HC_ADD_OVERFLOW: &str = r#"define %Value @hc_add_overflow(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0
@@ -2732,7 +2637,6 @@ abort:
   unreachable
 }
 "#;
-
 
 pub(crate) const HC_SUB_OVERFLOW: &str = r#"define %Value @hc_sub_overflow(%Value %a, %Value %b) {
 entry:
@@ -2760,7 +2664,6 @@ abort:
 }
 "#;
 
-
 pub(crate) const HC_MUL_OVERFLOW: &str = r#"define %Value @hc_mul_overflow(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0
@@ -2787,7 +2690,6 @@ abort:
 }
 "#;
 
-
 pub(crate) const HC_MAKE_IO: &str = r#"define %Value @hc_make_io() {
 entry:
   %fs = call %Value @hc_make_class(i8* @.t_fs, i64 0)
@@ -2803,5 +2705,3 @@ entry:
   ret %Value %io
 }
 "#;
-
-

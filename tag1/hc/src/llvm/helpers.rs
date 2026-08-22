@@ -55,10 +55,6 @@ pub(crate) fn emit_cmp_helpers(out: &mut String) {
     out.push('\n');
     out.push_str(HC_TRUTHY);
     out.push('\n');
-    out.push_str(HC_IS_ERR);
-    out.push('\n');
-    out.push_str(HC_IS_NULL);
-    out.push('\n');
     out.push_str(HC_BOOL);
     out.push('\n');
 }
@@ -77,13 +73,13 @@ pub(crate) fn emit_pointer_helpers(out: &mut String) {
     out.push('\n');
     out.push_str(HC_STORE_PTR);
     out.push('\n');
-    out.push_str(HC_VOLATILE_LOAD);
-    out.push('\n');
-    out.push_str(HC_VOLATILE_STORE);
-    out.push('\n');
 }
 
-pub(crate) fn emit_deep_copy_gate(out: &mut String, strings: &[String], continuous: &HashSet<String>) {
+pub(crate) fn emit_deep_copy_gate(
+    out: &mut String,
+    strings: &[String],
+    continuous: &HashSet<String>,
+) {
     let mut names: Vec<&String> = continuous.iter().collect();
     names.sort();
     // 无连续类：恒等门（`needs_deep_copy` 未发射指令，保守兜底），不引入递归 helper
@@ -201,28 +197,6 @@ pub(crate) fn emit_print_helpers(out: &mut String) {
     }
 }
 
-pub(crate) fn math_unop_helper(fname: &str, op: &str) -> String {
-    format!(
-        r#"define %Value @{fname}(%Value %v) {{
-entry:
-  %t = extractvalue %Value %v, 0
-  %d = extractvalue %Value %v, 1
-  %is_int = icmp eq i32 %t, 2
-  %dt = trunc i128 %d to i64
-  %asf = sitofp i64 %dt to double
-  %raw = bitcast i64 %dt to double
-  %f = select i1 %is_int, double %asf, double %raw
-  {op}
-  %bits = bitcast double %r to i64
-  %z = zext i64 %bits to i128
-  %v0 = insertvalue %Value {{ i32 0, i128 0 }}, i32 3, 0
-  %v1 = insertvalue %Value %v0, i128 %z, 1
-  ret %Value %v1
-}}
-"#
-    )
-}
-
 pub(crate) fn emit_scalar_builtin_helpers(out: &mut String) {
     for h in [
         HC_MIN,
@@ -242,24 +216,6 @@ pub(crate) fn emit_scalar_builtin_helpers(out: &mut String) {
         out.push_str(h);
         out.push('\n');
     }
-    // math.* 数值 helper（对齐 oracle call_math）
-    out.push_str(&math_unop_helper(
-        "hc_abs",
-        "%r = call double @fabs(double %f)",
-    ));
-    out.push_str(&math_unop_helper(
-        "hc_floor",
-        "%r = call double @floor(double %f)",
-    ));
-    out.push_str(&math_unop_helper(
-        "hc_ceil",
-        "%r = call double @ceil(double %f)",
-    ));
-    out.push_str(&math_unop_helper(
-        "hc_round",
-        "%r = call double @round(double %f)",
-    ));
-    out.push_str(&math_unop_helper("hc_pow", "%r = fmul double %f, %f"));
 }
 
 pub(crate) fn emit_io_helper(out: &mut String) {
@@ -289,7 +245,7 @@ pub(crate) fn emit_assert_helpers(out: &mut String) {
         (
             "hc_expect_error",
             "%Value %x, %Value %y",
-            "%ea = call i1 @hc_is_err(%Value %x)\n  %eb = call i1 @hc_is_err(%Value %y)\n  %eq = call i1 @hc_eq(%Value %x, %Value %y)\n  %e1 = and i1 %ea, %eb\n  %b = and i1 %e1, %eq",
+            "%ta = extractvalue %Value %x, 0\n  %ea = icmp eq i32 %ta, 6\n  %tb = extractvalue %Value %y, 0\n  %eb = icmp eq i32 %tb, 6\n  %eq = call i1 @hc_eq(%Value %x, %Value %y)\n  %e1 = and i1 %ea, %eb\n  %b = and i1 %e1, %eq",
         ),
         (
             "hc_expect_eq_slices",
@@ -316,4 +272,3 @@ pub(crate) fn emit_assert_helpers(out: &mut String) {
         let _ = writeln!(out, "}}\n");
     }
 }
-

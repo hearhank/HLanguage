@@ -62,21 +62,23 @@ mod tests {
 
     #[test]
     fn try_catch_uses_err_channel() {
+        // P3-1: JumpIfErr 内联为 extractvalue + icmp eq i32 %tag, 6（T_ERR），不再调用 @hc_is_err
         let ll = gen("fn f() !i32 { return error.NotFound; } fn g() i32 { return f() catch 7; }");
-        assert!(ll.contains("call i1 @hc_is_err"), "{ll}");
+        assert!(ll.contains("icmp eq i32"), "{ll}");
+        assert!(!ll.contains("@hc_is_err"), "{ll}");
     }
 
     #[test]
     fn volatile_load_store_emit_volatile_ops() {
-        // K2：@volatileLoad/@volatileStore → hc_volatile_load/hc_volatile_store——
-        // 内嵌 LLVM `load volatile`/`store volatile`（防优化掉副作用，MMIO 场景）
+        // P3-7: @volatileLoad/@volatileStore 内联为直接 LLVM `load volatile`/`store volatile`，
+        // 不再调用 @hc_volatile_load/@hc_volatile_store helper
         let ll = gen(
             "fn f() i32 { var mut x: i32 = 5; var p = &mut x; @volatileStore(p, 7); return @volatileLoad(p); }",
         );
-        assert!(ll.contains("define %Value @hc_volatile_load"), "{ll}");
-        assert!(ll.contains("define void @hc_volatile_store"), "{ll}");
         assert!(ll.contains("load volatile %Value"), "{ll}");
         assert!(ll.contains("store volatile %Value"), "{ll}");
+        assert!(!ll.contains("@hc_volatile_load"), "{ll}");
+        assert!(!ll.contains("@hc_volatile_store"), "{ll}");
     }
 
     #[test]
@@ -382,9 +384,10 @@ mod tests {
     }
 
     #[test]
-    fn phase7_math_builtins_emit_nan_and_helpers() {
-        // math.nan(f64) 类型名参数 → 忽略，直接发 NaN 位模式 Float；
-        // math.sqrt/abs/pow → 一元 helper 调用；helper 定义进 preamble。
+    fn phase7_math_builtins_emit_nan_and_inline() {
+        // P3-2: math.nan/inf/inf_neg → 直接常量位模式；
+        // math.sqrt/abs/floor/ceil/round → 内联 LLVM 内建指令（@llvm.sqrt.f64 等）；
+        // math.pow → 内联 @pow 调用。不再调用 hc_sqrt/hc_abs 等 helper。
         let ll = gen(r#"fn main(io: Io) !void {
     var nan = math.nan(f64);
     var s = math.sqrt(4.0);
@@ -394,13 +397,15 @@ mod tests {
         // f64::NAN.to_bits() = 0x7FF8000000000000
         assert!(ll.contains("i32 3, 0"), "{ll}");
         assert!(ll.contains("i128 9221120237041090560"), "{ll}");
-        assert!(ll.contains("call %Value @hc_sqrt(%Value"), "{ll}");
-        assert!(ll.contains("call %Value @hc_pow(%Value"), "{ll}");
-        assert!(ll.contains("define %Value @hc_abs(%Value"), "{ll}");
-        assert!(ll.contains("define %Value @hc_floor(%Value"), "{ll}");
-        assert!(ll.contains("define %Value @hc_ceil(%Value"), "{ll}");
-        assert!(ll.contains("define %Value @hc_round(%Value"), "{ll}");
-        assert!(ll.contains("define %Value @hc_pow(%Value"), "{ll}");
+        // sqrt 内联为 @llvm.sqrt.f64
+        assert!(ll.contains("@llvm.sqrt.f64"), "{ll}");
+        // pow 内联为 @pow
+        assert!(ll.contains("@pow"), "{ll}");
+        // 不再有 math.* 的 helper 定义
+        assert!(!ll.contains("define %Value @hc_abs"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_floor"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_ceil"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_round"), "{ll}");
     }
 
     #[test]
@@ -561,5 +566,69 @@ fn main() {
             ll.contains("define %Value @\"hc_fn1\""),
             "normal fn -> define: {ll}"
         );
+    }
+
+    // ---- P3-3: @sizeOf/@alignOf 扩展覆盖 ----
+
+    #[test]
+    fn size_of_various_types() {
+        // P3-3: @sizeOf 为标量类型返回编译期常量（不产生 helper 调用）
+        let ll = gen(r#"fn main() !void {
+    try expect_eq(@sizeOf(i32), 4);
+    try expect_eq(@sizeOf(f64), 8);
+    try expect_eq(@sizeOf(i8), 1);
+    try expect_eq(@sizeOf(u64), 8);
+    try expect_eq(@sizeOf(bool), 1);
+}"#);
+        // 所有 @sizeOf 编译期折叠为 i128 常量，无 helper 调用
+        assert!(ll.contains("i128 4"), "{ll}");
+        assert!(ll.contains("i128 8"), "{ll}");
+        assert!(ll.contains("i128 1"), "{ll}");
+    }
+
+    #[test]
+    fn align_of_various_types() {
+        // P3-3: @alignOf 返回编译期对齐常量
+        let ll = gen(r#"fn main() !void {
+    try expect_eq(@alignOf(i32), 4);
+    try expect_eq(@alignOf(f64), 8);
+    try expect_eq(@alignOf(i8), 1);
+}"#);
+        assert!(ll.contains("i128 4"), "{ll}");
+        assert!(ll.contains("i128 8"), "{ll}");
+        assert!(ll.contains("i128 1"), "{ll}");
+    }
+
+    // ---- P3-1: JumpIfNull 内联 ----
+
+    #[test]
+    fn jump_if_null_inline_no_helper_call() {
+        // P3-1: JumpIfNull 直接 extractvalue + icmp eq，不再调用 @hc_is_null
+        let ll = gen("fn f(x: ?i32) i32 { if (x) |v| { return v; } else { return 0; } }");
+        assert!(ll.contains("icmp eq i32"), "{ll}");
+        assert!(!ll.contains("@hc_is_null"), "{ll}");
+    }
+
+    // ---- P3-2: math.* 内联扩展（abs/floor/ceil/round） ----
+
+    #[test]
+    fn math_abs_floor_ceil_round_inline() {
+        // P3-2: math.abs/floor/ceil/round 内联为 LLVM 内建调用，不再有 helper 定义
+        let ll = gen(r#"fn main(io: Io) !void {
+    var a = math.abs(-3.5);
+    var f = math.floor(3.7);
+    var c = math.ceil(3.2);
+    var r = math.round(3.5);
+    io.print("{} {} {} {}\n", a, f, c, r);
+}"#);
+        assert!(ll.contains("@llvm.fabs.f64"), "{ll}");
+        assert!(ll.contains("@llvm.floor.f64"), "{ll}");
+        assert!(ll.contains("@llvm.ceil.f64"), "{ll}");
+        assert!(ll.contains("@llvm.round.f64"), "{ll}");
+        // 不再有 helper 定义
+        assert!(!ll.contains("define %Value @hc_abs"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_floor"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_ceil"), "{ll}");
+        assert!(!ll.contains("define %Value @hc_round"), "{ll}");
     }
 }
