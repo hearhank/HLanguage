@@ -219,6 +219,8 @@
 | J4 | Table 多索引（M8 记录项） | Table 测试绿 | — | 1.5h |
 | J5 | 吃狗粮反馈：编译器编写（E7）暴露的语言缺口反馈回设计 + 修订 | 06 修订记录 | E7 首段 | 1h |
 
+> ✅ **J1（开放问题裁决，2026-08-22）**：#1/#3/#5/#6 设计定案（ADR-0016，grill-with-docs 访谈 4 子项全推荐），05 状态表四行已关闭。**裁决产出为设计，实施另计**（`--dangle` CLI 标志 + tag1 `debug_dangling` 对齐 + `mem.with_arena` stdlib 包装归 C2 条目实施；Send/Sync 详细诊断归 J2/C3）。
+
 ### K. E7 自举（Phase 3：用 H 编译 H）
 
 > 07 §五 E7 渐进路线：H lexer → parser/AST → 语义（类型/所有权/错误集）→ 后端（IR/VM/LLVM）。**双实现对照**：与 Rust 版 token/AST/执行结果对比，差异即 bug。**Rust 参考实现长期保留**（自举失败风险对策，05 风险登记）。
