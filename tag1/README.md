@@ -179,6 +179,6 @@ CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspa
 | [`docs/SPEC/phase1/07-bootstrap-plan.md`](../docs/SPEC/phase1/07-bootstrap-plan.md) | 三块实现计划 + 实现状态表 |
 | [`docs/SPEC/phase2/09-part2-execution.md`](../docs/SPEC/phase2/09-part2-execution.md) | 第二部分执行细表（A–H 全完成） |
 | [`docs/SPEC/phase3/10-part3-execution.md`](../docs/SPEC/phase3/10-part3-execution.md) | 第三块执行细表（计划） |
-| [`docs/SPEC/06-language-spec.md`](../docs/SPEC/06-language-spec.md) | 语言规范总纲 |
+| [`docs/SPEC/phase1/06-language-spec.md`](../docs/SPEC/phase1/06-language-spec.md) | 语言规范总纲 |
 | [`CONTEXT.md`](../CONTEXT.md) | 术语表与项目背景 |
 | [`examples/README.md`](../examples/README.md) | 示例套件说明 |

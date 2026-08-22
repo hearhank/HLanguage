@@ -64,7 +64,7 @@ pub enum TokenKind {
     KwImport,
     KwPub,
     KwExport,
-    KwO,
+    KwOwned,
     KwMove,
     KwMut,
     KwAnd,

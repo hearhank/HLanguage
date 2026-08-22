@@ -101,7 +101,7 @@ pub(crate) fn is_free_builtin(name: &str) -> bool {
             | "skip_space" | "peek" | "advance" | "is_digit" | "parse_number"
             // 文本解析
             | "parse_int" | "parse_float"
-            // 组 G 线程（E2.2）：spawn(f, args...) o Thread(T)——协作式延迟执行
+            // 组 G 线程（E2.2）：spawn(f, args...) owned Thread(T)——协作式延迟执行
             | "spawn"
             // 组 F：四模式类型实例化 OneToOne<i32> → 空容器标记（init 构造真实容器）
             | "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany"

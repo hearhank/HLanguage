@@ -46,7 +46,7 @@ fn main() !void {
     io.print("{} {}\n", q, r);                              // 3 2
 
     // 标量装箱：接口 = 类型标注（*INumber 只读引用 / *mut INumber 可写引用）
-    var hp: o *INumber = box(a, alloc);
+    var hp: owned *INumber = box(a, alloc);
     io.print("{}\n", hp.add(b));                            // 12（动态分发）
 }
 

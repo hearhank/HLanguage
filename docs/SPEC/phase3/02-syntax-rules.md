@@ -62,7 +62,7 @@
 
 ```hc
 var x: i32 = 5;          // 声明；T 可推断时省略
-var mut x: o *mut T = t; // 全写：可写、拥有、类型 T
+var mut x: owned *mut T = t; // 全写：可写、拥有、类型 T
 const Name = 值;          // 常量/类型别名（const 不可变，var mut 可变）
 ```
 
@@ -108,7 +108,7 @@ tree Node { ... }                            // 递归/层级
 
 - **`class`** 统一（struct 删除）；存储形态由特性标注决定：`[continuous]` → 连续内存值类型（无分配器/可内嵌/赋值即复制/`to_bytes` 直映射/`[pad]`/`[align(T)]`/字面量 `X{...}`）；未标注 → 堆上。
 - **特性标注**：类型声明上方中括号 `[name]` / `[name(参数)]`；多特性叠放 `[continuous] [pad]`。
-- **成员可见性**：方法默认公开；属性默认私有（`private` 显式可选）——`pub mut A: o T`。
+- **成员可见性**：方法默认公开；属性默认私有（`private` 显式可选）——`pub mut A: owned T`。
 - 无继承；无 `==` 重载（运算符只绑定接口族）。
 - 内建泛型：`Vec<T>`、`Map<K,V>`、`Deque<T>`、`Table<T>`、`String`（newtype = `Vec<u8>`）。
 

@@ -45,7 +45,7 @@ pub enum Value {
     /// 装箱/接口胖指针（G3：data + vtbl + alloc 三字宽，设计文档 §6 定案落地）。
     /// tag1：data = 被装箱值的共享槽（拥有）；vtbl = 具体类型名（真实接口虚表归编译期，
     /// tag1 方法分派鸭子类型——deref 即达 pointee）；alloc = 装箱时显式传入的分配器
-    /// 引用（`box(v)` 未传回退全局 `alloc`）——销毁 `o *I` 时用携带的 alloc 释放 data。
+    /// 引用（`box(v)` 未传回退全局 `alloc`）——销毁  `owned *I` 时用携带的 alloc 释放 data。
     Boxed(Rc<RefCell<BoxedData>>),
     /// 集合句柄（G4：Vec/Deque 持有分配器引用，设计文档 §7 定案落地）。
     /// tag1：items = Arr 同款共享槽存储（外部形态即数组），alloc = 构造 `init(alloc)`
@@ -116,7 +116,7 @@ pub struct BoxedData {
     pub data: Rc<RefCell<Value>>,
     /// vtbl 字：具体类型名（tag1 编译期静态标注；真实接口虚表归编译期）
     pub vtbl: String,
-    /// alloc 字：创建时携带的分配器引用（销毁 `o *I` 时用它释放 data）
+    /// alloc 字：创建时携带的分配器引用（销毁  `owned *I` 时用它释放 data）
     pub alloc: Value,
 }
 
@@ -181,13 +181,15 @@ impl ArenaState {
             return Err(ArenaAllocErr::Deinit);
         }
         let aligned = align_up(self.cursor, ALLOC_ALIGN);
-        let need_new = self.blocks.is_empty()
-            || aligned + n > self.blocks.last().unwrap().borrow().len();
+        let need_new =
+            self.blocks.is_empty() || aligned + n > self.blocks.last().unwrap().borrow().len();
         if need_new {
             let size = n.max(ARENA_BLOCK_SIZE);
             let mut block = Vec::new();
             // 优雅失败（`vec![0u8; size]` 对超大 size 会中止进程）
-            block.try_reserve_exact(size).map_err(|_| ArenaAllocErr::Oom)?;
+            block
+                .try_reserve_exact(size)
+                .map_err(|_| ArenaAllocErr::Oom)?;
             block.resize(size, 0u8);
             self.blocks.push(Rc::new(RefCell::new(block)));
             self.cursor = 0;

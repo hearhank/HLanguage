@@ -37,7 +37,7 @@
 ```
 <name>/
 ├── build.zon     # 清单：name/version/kind=Kind.exe/files=["main.hc"]/deps=[]
-└── main.hc       # 入口 fn main(args: o Vec(String)) !void + [test] 冒烟测试
+└── main.hc       # 入口 fn main(args: owned Vec(String)) !void + [test] 冒烟测试
 ```
 
 - **名称校验**：`[A-Za-z0-9_-]`（目录名合法；非空、非 `.`/`..`）

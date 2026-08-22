@@ -22,7 +22,7 @@ enum OrderStatus {
 script {
     var fields = types.fields("Order");
     // 遍历 fields 拼接生成（示意）：
-    //   fn order_to_bytes(o: *Order) o Vec<u8> { ... }
+    //   fn order_to_bytes(o: *Order) owned Vec<u8> { ... }
     //   fn order_from_bytes(data: &[u8]) !Order { ... }
     //   fn order_validate(o: *Order) !void { ... }
     // E1（ADR-0013）：产物必须为字符串；定制通道生成物在组 C（E1.3）展开，此处以注释占位

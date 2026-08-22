@@ -315,7 +315,7 @@ impl<'a> Fmt<'a> {
             | TokenKind::KwUsing
             | TokenKind::KwPub
             | TokenKind::KwExport
-            | TokenKind::KwO
+            | TokenKind::KwOwned
             | TokenKind::KwMove
             | TokenKind::KwMut
             | TokenKind::KwAnd

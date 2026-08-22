@@ -19,7 +19,7 @@
 | 2 | **io = 标准库模块**：函数直接调用（`my.print(...)`）；模块内环境状态（env/exit/fs/net/time，**args 经入口 `main(args)` 注入，`io.args()` 取消**）；非对象注入 | Q13/F1 |
 | 3 | **库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）；**值类型栈上分配，经 `alloc` 堆上分配** | Q9 |
 | 4 | **扩展类型暂留语言内建**（String/集合族/Table），后期再评估分离标准库 | Q10 |
-| 5 | **线程进第二部分**：仅 E2.2 线程生命周期（`spawn(f, args...) o Thread(T)` / `join() !T` / `cancel()` / `is_done()` / `detach()` + 02 E2.2 捕获规则 + 每线程 alloc）；四模式/async/@atomic/mutex 留第三块 | Q10/Q15 |
+| 5 | **线程进第二部分**：仅 E2.2 线程生命周期（`spawn(f, args...) owned Thread(T)` / `join() !T` / `cancel()` / `is_done()` / `detach()` + 02 E2.2 捕获规则 + 每线程 alloc）；四模式/async/@atomic/mutex 留第三块 | Q10/Q15 |
 | 6 | **代码管理组**（第二块扩展，排最后）：① 项目代码结构 ② 代码引用库 ③ 模块(domain) ④ 文档自动生成 | Q11/Q12 |
 | 7 | **模块(domain)** = `[module]` 特性标注的命名空间（F2 定案）——内容与其它命名空间**隔离**；需要其它库的数据经**上下文（init 参数列表）**初始化注入；第二部分以工程约定落地，模块实例化语法归第三块 E6 候选 | Q11/Q16/F2 |
 | 8 | **文档自动生成** = `hc doc` 输出 **Markdown**（标准库 + 用户项目，`///` 注释 + 声明签名）；HTML 归第三块 E5.1 | Q17 |
@@ -162,7 +162,7 @@
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| ✅ G1 | `spawn(f, args...) o Thread(T)` 内建（interp）：每线程 alloc 实例（Q8）；线程栈与作用域根提升 | 线程测试绿（基本 spawn/join） | A3 | 2h |
+| ✅ G1 | `spawn(f, args...) owned Thread(T)` 内建（interp）：每线程 alloc 实例（Q8）；线程栈与作用域根提升 | 线程测试绿（基本 spawn/join） | A3 | 2h |
 | ✅ G2 | `join() !T`（返回值传递）/ `cancel()`（协作式）/ `is_done()` / `detach()` | 线程生命周期测试绿 | G1 | 2h |
 | ✅ G3 | 捕获规则与所有权：值复制/move/global + Q18 绑定例外 + Q19 冻结窗口（02 E2.2） | 捕获规则测试绿 | G1 | 2h |
 | ✅ G4a | 三后端对齐 I：IR 线程指令 + 字节码 opcode 扩展 | ir/bytecode 测试绿 | G1/G2/G3 | 1.5h |
@@ -197,7 +197,7 @@
 >
 > ✅ **H3 已完成（2026-08-17）**：模块(domain)约定（语法已含于 A2b）——`06-08-modules.md` 新增「模块(domain)约定」专节：边界（owns 数据 = 模块内 class，对外仅 pub API）、上下文（`init(...)` 参数列表 = 依赖注入，与 `import` 符号引用正交 Q24）、隔离（成员仅限定名 `Orders.xxx`，模块内互引亦限定名）、跨包形态（`pub [module]` + `import pkg.Mod` 整模块 / `import pkg.Mod.{f}` 符号选择）。示例 `examples/05-tools/91-orders-domain.hc`（orders 域：边界 + 上下文 DI + 隔离，2 测试；采用固定数组使 **interpret + compile 双全绿**，compile 门禁基线 55 mismatch 不变；经实测确认非 `pub` 的 `[module]` 跨包不可见）。
 >
-> ✅ **H4 已完成（2026-08-17）**：`hc doc [target] [--out <dir>]` Markdown 生成——新模块 `hc-tools/src/docgen.rs`：`collect_doc_runs` 从原始源码扫描 `///` 行（lexer 跳过注释，故不用 token 流）分组带 end 偏移；`doc_before` 消费式关联声明（**关键适配**：parser 的 `span.start` 落在 fn/class 关键字、`pub`/`[test]` 等标注在 span 外，故间隙判定放宽为「空白 + `pub` + `[...]` 标注」`gap_is_doc_prefix`，直接贴在声明上的 doc 归属该声明，文件级 doc 仅取 import 之上的首块）；`render_type`/`render_decl` 自写签名渲染（`o T`/`?T`/`!void`/`[N]T`/`T(args)`；namespace 递归嵌套成员、class/interface 方法、trait 用 `{:?}`）。页形态：文件页 = `# \`stem\`` + 文件级 doc + `## 导入` + `## 声明`；包页 = `index.md`（包名/版本/类型/文件清单）+ 每文件一页；标准库页 = `std.md`（H.std 为 Rust 内建无 .hc 源，用内置目录化摘要：io/alloc·mem/collections/serialize/scalar 接口族/@ 内建/线程）。输出目录约定：默认 `<target 所在目录>/docs/api/`（`--out` 覆盖）。验收：doc 生成测试绿——hc-tools src 单元 4（doc 提取/页面含签名与文档/std 页/类型渲染）+ cli.rs 集成 3（目录页 + 标准库页 + 单文件页），总数 615→622。
+> ✅ **H4 已完成（2026-08-17）**：`hc doc [target] [--out <dir>]` Markdown 生成——新模块 `hc-tools/src/docgen.rs`：`collect_doc_runs` 从原始源码扫描 `///` 行（lexer 跳过注释，故不用 token 流）分组带 end 偏移；`doc_before` 消费式关联声明（**关键适配**：parser 的 `span.start` 落在 fn/class 关键字、`pub`/`[test]` 等标注在 span 外，故间隙判定放宽为「空白 + `pub` + `[...]` 标注」`gap_is_doc_prefix`，直接贴在声明上的 doc 归属该声明，文件级 doc 仅取 import 之上的首块）；`render_type`/`render_decl` 自写签名渲染（ `owned T`/`?T`/`!void`/`[N]T`/`T(args)`；namespace 递归嵌套成员、class/interface 方法、trait 用 `{:?}`）。页形态：文件页 = `# \`stem\`` + 文件级 doc + `## 导入` + `## 声明`；包页 = `index.md`（包名/版本/类型/文件清单）+ 每文件一页；标准库页 = `std.md`（H.std 为 Rust 内建无 .hc 源，用内置目录化摘要：io/alloc·mem/collections/serialize/scalar 接口族/@ 内建/线程）。输出目录约定：默认 `<target 所在目录>/docs/api/`（`--out` 覆盖）。验收：doc 生成测试绿——hc-tools src 单元 4（doc 提取/页面含签名与文档/std 页/类型渲染）+ cli.rs 集成 3（目录页 + 标准库页 + 单文件页），总数 615→622。
 >
 > ✅ **H5 已完成（2026-08-18）**：`hc doc` 细化——索引/链接/格式回归。索引行增强：`- [file.hc](file.md) — 文件文档首行 · N 声明`（N = 页内 `###` 顶层声明数，`####` 嵌套成员不计数）；文件页标题下插「返回索引」导航回链（`generate_project` 在标题行后插入 `[← 返回索引](index.md)\n`，保留原空行间隔）。格式回归测试 `doc_format_regression_examples_wellformed`：`hc doc` 跑真实示例套件 `tag1/../examples/01-syntax/01-basic`（5 文件，注意 `examples_dir()` 指向的 `tag1/examples` 为早期遗留，故显式 `../../examples`），断言索引链接全部文件且声明数与页内 `###` 一致、每个文件页含标题/导航回链/`## 声明`。cli.rs 19→20、总数 622→623。
 

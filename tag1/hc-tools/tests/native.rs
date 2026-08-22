@@ -939,7 +939,7 @@ fn tree_vec_field_append_recursion_native() {
              }\n\
          }\n\
          [test] fn tree_recursive_composition() !void {\n\
-             var root: o Node = Node.new(1, alloc);\n\
+             var root: owned Node = Node.new(1, alloc);\n\
              root.children.append(Node.new(2, alloc));\n\
              root.children.append(Node.new(3, alloc));\n\
              try expect_eq(root.total(), 6);\n\

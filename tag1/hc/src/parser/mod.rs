@@ -56,8 +56,8 @@ impl Parser {
     // ---------- 类型 ----------
 
     pub fn parse_type(&mut self) -> Result<Type, Diagnostic> {
-        // o T（所有权形态）
-        if self.at(&TokenKind::KwO) {
+        // owned T（所有权形态）
+        if self.at(&TokenKind::KwOwned) {
             self.advance();
             let inner = self.parse_type()?;
             return Ok(Type::Owned(Box::new(inner)));

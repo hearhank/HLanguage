@@ -672,7 +672,7 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // E2.2 线程生命周期（组 G，协作式延迟执行）：spawn(f, args...) o Thread(T)
+            // E2.2 线程生命周期（组 G，协作式延迟执行）：spawn(f, args...) owned Thread(T)
             // 立即返回句柄但不并发运行——join/detach/程序结束时才执行到完成（真并行留第三块 E2）。
             "spawn" => {
                 if args.is_empty() {

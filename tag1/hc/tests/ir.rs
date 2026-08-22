@@ -1426,7 +1426,7 @@ fn total_area(shapes: &Vec<*IShape>) f32 {
 fn t() i32 {
     var rect = Rect{ w = 3.0, h = 4.0 };
     var circ = Circle{ r = 2.0 };
-    var shapes: o Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);

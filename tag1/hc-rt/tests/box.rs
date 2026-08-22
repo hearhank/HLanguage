@@ -38,7 +38,7 @@ fn box_carries_explicit_alloc() {
 #[test]
 fn box_carries_arena() {
     // box(v, arena)：携带 arena——类型可见（Arena），且 box 不占用 arena 字节
-    // （tag1 data 走 Rc，alloc 为元数据引用；真实后端按 §6 销毁 o *I 时用它释放 data）
+    // （tag1 data 走 Rc，alloc 为元数据引用；真实后端按 §6 销毁 owned *I 时用它释放 data）
     run_ok(
         "[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var p = box(42, arena);\n    try expect_eq(@typeOf(p.alloc()), \"Arena\");\n    try expect_eq(p.alloc().bytes(), 0);\n}\n",
     );
@@ -82,7 +82,7 @@ fn box_interface_dispatch() {
          [test] fn t() !void {\n\
              var rect = Rect{ w = 3.0, h = 4.0 };\n\
              var circ = Circle{ r = 2.0 };\n\
-             var shapes: o Vec<*IShape> = Vec<*IShape>.init(alloc);\n\
+             var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);\n\
              shapes.append(box(rect, alloc));\n\
              shapes.append(box(circ, alloc));\n\
              var total = total_area(&shapes);\n\

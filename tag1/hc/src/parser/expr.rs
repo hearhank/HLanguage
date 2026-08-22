@@ -203,7 +203,7 @@ impl Parser {
                 Ok(Expr::Await(Box::new(e), start))
             }
             TokenKind::KwSpawn => {
-                // E2.2：`spawn(f, args...) o Thread(T)`——以普通调用形态解析
+                // E2.2：`spawn(f, args...) owned Thread(T)`——以普通调用形态解析
                 // （callee = Ident("spawn")），语义层按内建处理（is_builtin_fn "spawn"）。
                 // 第三块 E2 的 async/await/spawn 并发语法不在此列，保持 out-of-scope。
                 self.advance();

@@ -1,6 +1,6 @@
 /**
  * Tree-sitter grammar for H language
- * 
+ *
  * This grammar defines the syntax rules for H language,
  * used for syntax highlighting and code folding in Zed editor.
  */
@@ -290,8 +290,8 @@ module.exports = grammar({
       field('type', $.type),
     ),
 
-    // Owned type: `o T` (H ownership syntax; e.g. o Vec(String)).
-    // Unlike `*T` (shared/read-only) and `*mut T` (mutable), `o T`
+    // Owned type:  `owned T` (H ownership syntax; e.g. owned Vec(String)).
+    // Unlike `*T` (shared/read-only) and `*mut T` (mutable),  `owned T`
     // means the value is owned.
     owned_type: $ => seq(
       'o',

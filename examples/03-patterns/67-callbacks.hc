@@ -20,7 +20,7 @@ class EventBus {
 }
 
 fn main() !void {
-    var bus: o EventBus = alloc.init(EventBus);   // 无参构造（C1'）
+    var bus: owned EventBus = alloc.init(EventBus);   // 无参构造（C1'）
     var mut count = 0;
 
     // 只读捕获（默认）
@@ -37,7 +37,7 @@ fn main() !void {
 }
 
 [test] fn event_callback() !void {
-    var bus: o EventBus = alloc.init(EventBus);
+    var bus: owned EventBus = alloc.init(EventBus);
     var mut count = 0;
     bus.on(mut |event| { // 可写捕获（Q26：双向登记）
         count += 1;

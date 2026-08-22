@@ -12,7 +12,7 @@ import H.std.{io};
     kind: u8,
 }
 
-fn encode(m: *Message) o Vec<u8> {
+fn encode(m: *Message) owned Vec<u8> {
     var payload = m.to_bytes();
     var frame = Vec<u8>.init(alloc);
     frame.append_u64(payload.len);     // 长度前缀（u64 LE，Q38）

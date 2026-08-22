@@ -1,12 +1,12 @@
 # 自举计划（K1–K6：用 H 编译 H）
 
-> 来源：`docs/phase3/10-part3-execution.md` 组 K + `docs/phase1/07-bootstrap-plan.md` §五 E7。
+> 来源：`docs/SPEC/phase3/10-part3-execution.md` 组 K + `docs/SPEC/phase1/07-bootstrap-plan.md` §五 E7。
 >
-> 当前阶段：**第四阶段**（从 `docs/phase3/` 迁移至此，2026-08-22）。
+> 当前阶段：**第四阶段**（从 `docs/SPEC/phase3/` 迁移至此，2026-08-22）。
 
 ## 渐进路线
 
-E7 渐进路线：H lexer → parser/AST → 语义（类型/所有权/错误集）→ 后端（IR/VM/LLVM）。**双实现对照**：与 Rust 版 token/AST/执行结果对比，差异即 bug。**Rust 参考实现长期保留**（自举失败风险对策，见 `docs/phase3/05-open-questions-and-risks.md` 风险登记）。
+E7 渐进路线：H lexer → parser/AST → 语义（类型/所有权/错误集）→ 后端（IR/VM/LLVM）。**双实现对照**：与 Rust 版 token/AST/执行结果对比，差异即 bug。**Rust 参考实现长期保留**（自举失败风险对策，见 `docs/SPEC/phase3/05-open-questions-and-risks.md` 风险登记）。
 
 ## 任务分解
 

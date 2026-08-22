@@ -27,7 +27,7 @@ fn main() !void {
     io.print("{} {}\n", p2.x, p2.y);
 
     // class → JSON：内建默认（零配置可用）
-    var mut order: o Order = alloc.init(Order);   // 无参构造（C1'）+ 字段赋值
+    var mut order: owned Order = alloc.init(Order);   // 无参构造（C1'）+ 字段赋值
     order.id = 42;
     var json = order.to_json();
     io.print("{}\n", json);
@@ -47,7 +47,7 @@ fn main() !void {
 }
 
 [test] fn class_to_json() !void {
-    var mut order: o Order = alloc.init(Order);   // 无参构造（C1'）
+    var mut order: owned Order = alloc.init(Order);   // 无参构造（C1'）
     order.id = 42;
     var json = order.to_json();
     var order2 = try Order.from_json(json);

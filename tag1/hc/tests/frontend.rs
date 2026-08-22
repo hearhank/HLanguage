@@ -381,7 +381,7 @@ fn check_clean(src: &str) {
 fn m24_move_arena_rejected() {
     // move Arena 分配对象 → 编译错误（所有权归 Arena）
     check_has_error(
-        "fn take(y: o String) void {}\n[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
+        "fn take(y: owned String) void {}\n[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
         "allocated by Arena",
     );
 }
@@ -390,7 +390,7 @@ fn m24_move_arena_rejected() {
 fn m24_move_global_rejected() {
     // move global → 编译错误（所有权归根作用域）
     check_has_error(
-        "global g: String = String.from(\"x\", alloc);\n[test] fn t() !void {\n    take(move g);\n}\nfn take(y: o String) void {}\n",
+        "global g: String = String.from(\"x\", alloc);\n[test] fn t() !void {\n    take(move g);\n}\nfn take(y: owned String) void {}\n",
         "cannot move global",
     );
 }
@@ -408,7 +408,7 @@ fn m24_move_value_type_rejected() {
 fn m24_move_owned_ok() {
     // move 有所有权对象（非 Arena 分配）→ 合法
     check_clean(
-        "fn make() o String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
+        "fn make() owned String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
     );
 }
 
@@ -425,11 +425,13 @@ fn m24_return_local_ref_rejected() {
 fn m24_return_owned_param_must_move() {
     // 带所有权参数：返回引用 → 错误；必须 `return move param`
     check_has_error(
-        "fn f(y: o String) *String {\n    return &y;\n}\n",
+        "fn f(y: owned String) *String {\n    return &y;\n}\n",
         "escapes function scope",
     );
     // move 返回所有权 → 合法
-    check_clean("fn f(y: o String) o String {\n    return move y;\n}\n[test] fn t() !void {}\n");
+    check_clean(
+        "fn f(y: owned String) owned String {\n    return move y;\n}\n[test] fn t() !void {}\n",
+    );
 }
 
 #[test]

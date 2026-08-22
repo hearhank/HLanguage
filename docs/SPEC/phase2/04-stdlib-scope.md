@@ -101,7 +101,7 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 
 ### 并发（12.21/12.24/Q14/Q20）
 
-- `spawn(f, args...) o Thread(T)` — `join() !T` / `cancel() !void` / `is_done() bool` / `detach()`
+- `spawn(f, args...) owned Thread(T)` — `join() !T` / `cancel() !void` / `is_done() bool` / `detach()`
 - `async fn` → `Future(R)`（R 含 !）；`await f`
 - 四模式类型：`init(alloc)` / `write(v)` / `read() T` / `try_read() ?T` / `close()` / **`send(v)` / `recv() T`（通道，Q-R12）**
 - 原子原语（Q-S3）：`@atomicLoad` / `@atomicStore` / `@atomicRmw` + 内存序五值

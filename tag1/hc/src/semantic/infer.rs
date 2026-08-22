@@ -1201,7 +1201,7 @@ impl Checker {
     /// 内建函数返回类型（子集：供 orelse/return 期望传播）
     pub(crate) fn builtin_fn_ret(&self, name: &str) -> SType {
         match name {
-            // G3（设计文档 §6）：`box(v, alloc)` 返回拥有/可变指针 `o *mut T`
+            // G3（设计文档 §6）：`box(v, alloc)` 返回拥有/可变指针  `owned *mut T`
             "box" => SType::Ptr(Box::new(SType::Unknown), true),
             "copy" => SType::Unknown,
             "parse_int" | "parse_char" => SType::Optional(Box::new(SType::Int {
@@ -1223,7 +1223,7 @@ impl Checker {
                 width: IntWidth::USize,
             })),
             "min" | "max" | "sort" | "fmt_int" | "fmt_float" => SType::Unknown,
-            // G1：`spawn(f, args...) o Thread(T)` 返回线程句柄（协作式延迟执行）。
+            // G1：`spawn(f, args...) owned Thread(T)` 返回线程句柄（协作式延迟执行）。
             // G3 精化：check_call 拦截 spawn 走 spawn_capture_info 提取 T；此处兜底。
             "spawn" => SType::Named("Thread".to_string(), vec![]),
             _ => SType::Void,

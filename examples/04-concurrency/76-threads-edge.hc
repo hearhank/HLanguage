@@ -16,13 +16,13 @@ async fn async_add(b: *i32, n: i32) i32 {
 
 fn main() !void {
     // Thread 接口：is_done / join（消耗所有权，返回 !T）
-    var t: o Thread<i32> = spawn(worker, 9);
+    var t: owned Thread<i32> = spawn(worker, 9);
     io.print("is_done = {}\n", t.is_done());
     var r = try t.join();
     io.print("result = {}\n", r);
 
     // detach：显式放弃结果（线程继续，根作用域回收）
-    var t2: o Thread<i32> = spawn(worker, 3);
+    var t2: owned Thread<i32> = spawn(worker, 3);
     t2.detach();
 
     // 四模式类型（写者数量由类型名保证：单写者无锁、多写者互斥）
@@ -41,7 +41,7 @@ fn main() !void {
 }
 
 [test] fn thread_interface() !void {
-    var t: o Thread<i32> = spawn(worker, 9);
+    var t: owned Thread<i32> = spawn(worker, 9);
     var r = try t.join();
     try expect_eq(r, 81);
 }

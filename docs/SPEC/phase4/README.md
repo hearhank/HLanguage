@@ -20,9 +20,9 @@
 
 ## 关联文档
 
-- 第三阶段工作集：[`docs/phase3/README.md`](../phase3/README.md)
-- 原始自举计划：[`docs/phase1/07-bootstrap-plan.md`](../phase1/07-bootstrap-plan.md) §五 E7
-- 第三块执行细表（自举原始 K 组）：[`docs/phase3/10-part3-execution.md`](../phase3/10-part3-execution.md)
+- 第三阶段工作集：[`docs/SPEC/phase3/README.md`](../phase3/README.md)
+- 原始自举计划：[`docs/SPEC/phase1/07-bootstrap-plan.md`](../phase1/07-bootstrap-plan.md) §五 E7
+- 第三块执行细表（自举原始 K 组）：[`docs/SPEC/phase3/10-part3-execution.md`](../phase3/10-part3-execution.md)
 
 ## 当前状态（2026-08-22）
 

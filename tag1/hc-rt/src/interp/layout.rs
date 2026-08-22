@@ -1,7 +1,6 @@
 use super::*;
 
 impl Interp {
-
     // ---------- 序列化内建辅助（M4.4；连续类型 byte 化、class json 化） ----------
 
     /// 标量声明宽度字节数（自然对齐 = 宽度）
@@ -17,7 +16,10 @@ impl Interp {
     /// M4.3：连续 class 布局——字段 (名, 偏移, 大小) 列表 + 总大小
     /// （与 to_bytes 直映射一致：自然对齐 + 字段间填充 + 尾部圆整；
     ///   [pad] = 紧凑对齐 1；[align(T)] = 尾部圆整到 T 的对齐值）
-    pub(crate) fn continuous_layout(&self, ty: &str) -> Option<(Vec<(String, usize, usize)>, usize)> {
+    pub(crate) fn continuous_layout(
+        &self,
+        ty: &str,
+    ) -> Option<(Vec<(String, usize, usize)>, usize)> {
         let (fdecls, traits) = match self.types.get(ty) {
             Some(TypeDef::Class { fields, traits, .. }) => (fields, traits),
             _ => return None,
@@ -219,7 +221,11 @@ impl Interp {
     }
 
     /// class 实例 → 字节（M4.4 直映射；连续类型尊重 pad/align/嵌套/元组，堆上走自然对齐标量近似）
-    pub(crate) fn class_to_bytes(&self, ty: &str, fields: &HashMap<String, Value>) -> Result<Vec<u8>> {
+    pub(crate) fn class_to_bytes(
+        &self,
+        ty: &str,
+        fields: &HashMap<String, Value>,
+    ) -> Result<Vec<u8>> {
         let Some(TypeDef::Class { fields: fdecls, .. }) = self.types.get(ty) else {
             return Err(RtError::msg("UnknownType", format!("unknown type `{ty}`")));
         };
@@ -366,7 +372,13 @@ impl Interp {
     }
 
     /// 字节 → 连续字段值（标量 / 嵌套连续 / 元组递归）
-    pub(crate) fn read_field_bytes(&self, bytes: &[u8], off: usize, size: usize, ty: &Type) -> Result<Value> {
+    pub(crate) fn read_field_bytes(
+        &self,
+        bytes: &[u8],
+        off: usize,
+        size: usize,
+        ty: &Type,
+    ) -> Result<Value> {
         match ty.strip() {
             Type::Named(n, _) if Self::is_scalar_name(n) => {
                 self.read_scalar(bytes.get(off..off + size).unwrap_or(&[]), n)
@@ -399,8 +411,8 @@ impl Interp {
     pub(crate) fn union_default_value(ty: &Type) -> Value {
         match ty.strip() {
             Type::Named(n, _) => match n.as_str() {
-                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
-                | "u64" | "u128" | "usize" => Value::Int(0),
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "u128" | "usize" => Value::Int(0),
                 "f16" | "f32" | "f64" | "f128" => Value::Float(0.0),
                 "bool" => Value::Bool(false),
                 _ => Value::Void,
@@ -425,22 +437,14 @@ impl Interp {
     pub(crate) fn union_write_scalar(out: &mut [u8], n: &str, v: &Value) {
         match (n, v) {
             ("i8" | "u8", Value::Int(i)) => out[0] = *i as u8,
-            ("i16" | "u16", Value::Int(i)) => {
-                out[..2].copy_from_slice(&(*i as i16).to_le_bytes())
-            }
-            ("i32" | "u32", Value::Int(i)) => {
-                out[..4].copy_from_slice(&(*i as i32).to_le_bytes())
-            }
+            ("i16" | "u16", Value::Int(i)) => out[..2].copy_from_slice(&(*i as i16).to_le_bytes()),
+            ("i32" | "u32", Value::Int(i)) => out[..4].copy_from_slice(&(*i as i32).to_le_bytes()),
             ("i64" | "u64" | "isize" | "usize", Value::Int(i)) => {
                 out[..8].copy_from_slice(&(*i as i64).to_le_bytes())
             }
-            ("i128" | "u128", Value::Int(i)) => {
-                out[..16].copy_from_slice(&i.to_le_bytes())
-            }
+            ("i128" | "u128", Value::Int(i)) => out[..16].copy_from_slice(&i.to_le_bytes()),
             ("f32", Value::Float(f)) => out[..4].copy_from_slice(&(*f as f32).to_le_bytes()),
-            ("f64" | "f16" | "f128", Value::Float(f)) => {
-                out[..8].copy_from_slice(&f.to_le_bytes())
-            }
+            ("f64" | "f16" | "f128", Value::Float(f)) => out[..8].copy_from_slice(&f.to_le_bytes()),
             ("bool", Value::Bool(b)) => out[0] = if *b { 1 } else { 0 },
             _ => {}
         }
@@ -478,7 +482,9 @@ impl Interp {
                 let b = bytes
                     .get(..4)
                     .ok_or_else(|| RtError::msg("InvalidBytes", "truncated union bytes"))?;
-                Ok(Value::Float(f32::from_le_bytes(b.try_into().unwrap()) as f64))
+                Ok(Value::Float(
+                    f32::from_le_bytes(b.try_into().unwrap()) as f64
+                ))
             }
             "f64" | "f16" | "f128" => {
                 let b = bytes
@@ -493,7 +499,12 @@ impl Interp {
 
     /// K1 union 写字段同步：写 `written` 字段后，把该字段字节重解释为其余每个字段的类型。
     /// 维持「读任意字段 = 写后字节重解释」的 C 风格 union 语义（字段全标量，ADR-0014）。
-    pub(crate) fn union_sync_fields(&self, c: &mut ClassData, written: &str, v: &Value) -> Result<()> {
+    pub(crate) fn union_sync_fields(
+        &self,
+        c: &mut ClassData,
+        written: &str,
+        v: &Value,
+    ) -> Result<()> {
         let Some(TypeDef::Union { fields }) = self.types.get(&c.name) else {
             return Err(RtError::msg(
                 "TypeError",
@@ -533,7 +544,12 @@ impl Interp {
     }
 
     /// 字段写入统一入口（K1：union 标记 → 写 + 同步重解释；class → 普通覆盖写）
-    pub(crate) fn assign_class_field(&mut self, c: Rc<RefCell<ClassData>>, field: &str, v: Value) -> Result<()> {
+    pub(crate) fn assign_class_field(
+        &mut self,
+        c: Rc<RefCell<ClassData>>,
+        field: &str,
+        v: Value,
+    ) -> Result<()> {
         if c.borrow().fields.contains_key("@union") {
             let mut cd = c.borrow_mut();
             cd.fields.insert(field.to_string(), v.clone());
@@ -846,7 +862,11 @@ impl Interp {
     }
 
     /// JSON 对象 → class 实例（匹配字段名；嵌套对象按字段声明类型还原）
-    pub(crate) fn class_from_json(&mut self, ty: &str, obj: &HashMap<String, Value>) -> Result<Value> {
+    pub(crate) fn class_from_json(
+        &mut self,
+        ty: &str,
+        obj: &HashMap<String, Value>,
+    ) -> Result<Value> {
         let Some(TypeDef::Class { fields: fdecls, .. }) = self.types.get(ty) else {
             return Err(RtError::msg("UnknownType", format!("unknown type `{ty}`")));
         };
@@ -1030,7 +1050,7 @@ impl Interp {
             self.in_main = false;
             return Err(RtError::msg("NoMain", "no `main` entry point"));
         }
-        // main(args: o Vec(String))——单参数 = 命令行参数（0 号 = 程序名）；或零参版本。
+        // main(args: owned Vec(String))——单参数 = 命令行参数（0 号 = 程序名）；或零参版本。
         // 2026-08-17 定案（ADR-0010）：main 不再注入 io（io 经 `import H.std.{io}` 引入）。
         let args_val = Value::vec(
             self.args.iter().map(|a| Value::str(a)).collect(),

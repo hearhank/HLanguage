@@ -44,7 +44,7 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 |---|---|
 | `phase1/01-language-design.md` | 语言设计共识（实现依据）；§12 为 26 项语言特性清单（待逐项定义） |
 | `phase1/02-milestones.md` | 阶段里程碑：任务与验收标准；含「语言特性 ↔ 阶段」映射表 |
-| `phase1/03-timeline.md` | 依赖关系与时间线 |
+| `phase1/03-timeline.md` | 依赖关系与时间线（尚未创建） |
 | `phase2/04-stdlib-scope.md` | 标准库四大支柱范围 |
 | `phase3/05-open-questions-and-risks.md` | 开放问题与风险登记 |
 | `phase1/06-language-spec.md` | **语言规范总纲**（定位/双模式/入口/语法速查/文件索引）；规范正文按主题拆分：`phase1/06-01-syntax`（词法/声明/运算符/控制流/测试）、`phase1/06-02-types`（基础类型）、`phase1/06-03-extended-types`（扩展类型）、`phase1/06-04-functions`（函数/内建）、`phase1/06-05-interfaces`（接口/标量接口族/迭代/序列化内建）、`phase1/06-06-ownership`（所有权）、`phase1/06-07-errors`（错误）、`phase2/06-08-modules`（模块）、`phase3/06-09-meta`（元编程）、`phase3/06-10-concurrency`（并发）、`phase1/06-13-project-structure`（项目结构/代码管理约定） |

@@ -1649,7 +1649,7 @@ impl IrRuntime {
     /// 调用模块函数（自动先初始化全局）。
     pub fn call(&mut self, module: &IrModule, entry: &str, args: &[IrValue]) -> R<IrValue> {
         self.init(module)?;
-        // main(args: o Vec(String))——单参数 = 命令行参数（0 号 = 程序名）；或零参版本。
+        // main(args: owned Vec(String))——单参数 = 命令行参数（0 号 = 程序名）；或零参版本。
         // 2026-08-17 定案（ADR-0010）：main 不再注入 io（io 经 `import H.std.{io}` 引入）。
         let mut args = args.to_vec();
         if entry == "main" && args.is_empty() {

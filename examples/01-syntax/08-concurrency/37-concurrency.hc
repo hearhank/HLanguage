@@ -3,7 +3,7 @@ import H.std.{io};
 // 37-concurrency.hc — 并发：线程、四模式类型、async
 //
 // Q18 定案（2026-08-13）：
-//   - spawn(f, args...)：函数 + 显式参数；返回 o Thread<T>
+//   - spawn(f, args...)：函数 + 显式参数；返回 owned Thread<T>
 //   - 作用域绑定：async 任务 await 后回到当前作用域 → 可捕获引用
 //   - 逃逸线程：引用捕获禁用（编译期检查）
 //   - 四模式类型：OneToOne / OneToMany / ManyToOne / ManyToMany
@@ -18,7 +18,7 @@ async fn async_add(b: *i32, n: i32) i32 {
 
 fn main() !void {
     // 线程 = 数据对象（12.24）：spawn 归当前作用域，join 消耗所有权
-    var t: o Thread<i32> = spawn(compute, 6, 7);
+    var t: owned Thread<i32> = spawn(compute, 6, 7);
     var result = try t.join();
     io.print("result = {}\n", result);
 
@@ -35,7 +35,7 @@ fn main() !void {
 }
 
 [test] fn thread_join() !void {
-    var t: o Thread<i32> = spawn(compute, 6, 7);
+    var t: owned Thread<i32> = spawn(compute, 6, 7);
     var result = try t.join();
     try expect_eq(result, 42);
 }

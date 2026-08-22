@@ -2,7 +2,7 @@ import H.std.{io};
 
 // 90-thread-lifecycle.hc — 线程生命周期（组 G，协作式延迟执行，2026-08-17 落地）
 //
-// E2.2 提前落地：spawn(f, args...) o Thread<T> / join() !T / cancel() !void /
+// E2.2 提前落地：spawn(f, args...) owned Thread<T> / join() !T / cancel() !void /
 // is_done() bool / detach() !void。并发模型 = 协作式延迟执行：spawn 立即返回句柄
 // 但不并发运行，join / detach / 程序结束时才执行到完成（确定性、单线程）。
 // 每线程独立 alloc 实例（Q8）。四模式类型 / async / await / @atomic / mutex

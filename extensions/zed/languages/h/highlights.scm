@@ -27,7 +27,7 @@
   "mut"
   "import"
   "as"
-  "o"
+  "owned"
 ] @keyword
 
 ; Types

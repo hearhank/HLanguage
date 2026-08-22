@@ -557,15 +557,15 @@ class Fib: IIterable<i32> { ... }       // 泛型接口在 implements 中实例�
 ### 10.2 接口指针（胖指针）
 
 - `*IShape` = **胖指针**（**三字宽 = data + 虚表 + alloc 引用**）
-- 装箱时携带分配器，销毁 `o *I` 时用携带的 alloc 释放 data
-- `box(rect, alloc)`（`o *mut Rect`）赋给接口指针时**编译期自动收窄**（接口实现检查通过即合法）
+- 装箱时携带分配器，销毁  `owned *I` 时用携带的 alloc 释放 data
+- `box(rect, alloc)`（ `owned *mut Rect`）赋给接口指针时**编译期自动收窄**（接口实现检查通过即合法）
 - data 部分参与 Debug 悬垂标记，虚表指针不参与（编译期静态）
 - **接口 = 类型标注**：`*INumber` = 只读引用、`*mut INumber` = 可写引用（标量可 `box` 装箱）
 
 ### 10.3 接口参数
 
 - 接口类型传参 = **带约束的虚拟类型 T**，约束放签名末尾 **where 子句**：`fn add(a: *T) void where T: INumber`
-- 形态映射：`&T`→`*T`（只读）/ `&mut T`→`*mut T`（可写）/ `move T`→`o T`（拥有）
+- 形态映射：`&T`→`*T`（只读）/ `&mut T`→`*mut T`（可写）/ `move T`→ `owned T`（拥有）
 - 调用点显式：`add(&a)` / `add(&mut a)` / `add(move a)`
 - **静态分发**（单态化、无虚表）为主路径；动态分发（`*IShape` 胖指针装箱）保留给异构集合
 
@@ -839,8 +839,8 @@ fn List(T: type) type     // comptime 式泛型：编译期函数、类型即值
 ### 15.1 基础语法
 
 ```hc
-var shared: o ManyToMany<i32> = ...;        // 四模式共享容器
-var t: o Thread<i32> = spawn(af, ...);       // spawn = 函数 + 显式参数
+var shared: owned ManyToMany<i32> = ...;        // 四模式共享容器
+var t: owned Thread<i32> = spawn(af, ...);       // spawn = 函数 + 显式参数
 var r = try t.join();                        // 消耗所有权（await 同源）
 t.cancel() / t.is_done() / t.detach()
 var f: Future<R> = af(...); var v = await f;  // await 任何函数可用

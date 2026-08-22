@@ -1923,7 +1923,7 @@ pub(crate) fn call_builtin(
             Ok(if shallow { v } else { deep_copy(ctx, v) })
         }
         // ---------- 组 G 线程（E2.2，协作式延迟执行） ----------
-        // spawn(f, args...) o Thread(T)：立即返回句柄但不并发运行——join/detach 时才
+        // spawn(f, args...) owned Thread(T)：立即返回句柄但不并发运行——join/detach 时才
         // 执行到完成（真并行留第三块 E2）。构造 `Class("Thread")`，字段经 cell 承载。
         "spawn" => {
             if args.is_empty() {

@@ -5,11 +5,10 @@
 
 ### `fn main`
 ```hc
-fn main(args: o Vec(String)) !void
+fn main(args: owned Vec(String)) !void
 ```
 
 ### `[test] fn scaffold_smoke`
 ```hc
 [test] fn scaffold_smoke() !void
 ```
-

@@ -1,6 +1,6 @@
 # 未实现功能清单（第三阶段实施 Backlog）
 
-> **阶段定义（2026-08-22）**：第三阶段 = 标准库扩展 + 前两阶段未实现功能；自举 = 第四阶段（见 [`docs/phase4/`](../phase4/)）；1.x 延迟项迁移至 `docs/phase4/02-1x-delayed-items.md`。
+> **阶段定义（2026-08-22）**：第三阶段 = 标准库扩展 + 前两阶段未实现功能；自举 = 第四阶段（见 [`docs/SPEC/phase4/`](../phase4/)）；1.x 延迟项迁移至 `docs/SPEC/phase4/02-1x-delayed-items.md`。
 >
 > 每条目格式：**编号｜功能｜状态**（🔴 待实现 / 🟡 部分实现 / ⏳ 1.x / 🟣 第四阶段）｜**出处**｜**落点**（实现模块）｜**备注**。
 >
@@ -42,7 +42,7 @@
 ### A8｜端到端示例程序（四大支柱同时使用）｜🟣（**已迁移至第四阶段**）
 - **出处**：`02-milestones.md` M7 验收（「端到端示例程序（同时用到四大支柱）作为验收基准」）
 - **落点**：`examples/` 新示例 + 测试
-- **备注**：设计已定案（2026-08-22 grilling 会话），**已移至第四阶段**。TCP 聊天服务器（`server.hc` + `client.hc`），行文本协议，广播 + 昵称 + 私信，异步事件循环架构，双模式集成测试，代码注释标注四支柱映射。见 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
+- **备注**：设计已定案（2026-08-22 grilling 会话），**已移至第四阶段**。TCP 聊天服务器（`server.hc` + `client.hc`），行文本协议，广播 + 昵称 + 私信，异步事件循环架构，双模式集成测试，代码注释标注四支柱映射。见 [`docs/SPEC/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
 
 ---
 
@@ -134,10 +134,10 @@
 - **落点**：LLVM 后端（`llvm.rs`）
 - **备注**：**设计定案就绪（2026-08-22，ADR-0019，grill-with-docs 访谈 3 子项全确认）**——① 函数值 = 胖闭包对象 `{ fn_ptr, env_ptr }`（堆上分配，`%Value` 载荷存指针，新增闭包 tag）；`FnRef` = LLVM 函数符号地址；② 调用复用 `%Value` 参数/返回值通道，闭包隐藏 env 首参，零动态分发；③ spawn 原生子集边界解除（G4b 定案 A「响亮拒绝」被真实支持替换），`NotCallable` mismatch（10-functions / 21-closures / 48-iterator-chain）归零，K4 H 后端编写时联动。实施 = LLVM 后端 Phase 8 大改造，实现另计
 
-### C8｜LLVM 原生内建子集扩展（mismatch 归零）｜🟣（**已迁移至第四阶段**）
+#### C8｜LLVM 原生内建子集扩展（mismatch 归零）｜🟣（**已迁移至第四阶段**）
 - **出处**：`07-bootstrap-plan.md` §八 P11d 收束注记（2026-08-17 用户裁定到此收束）
 - **落点**：`llvm.rs` 原生内建 / 方法 / 序列化 / 标量接口族
-- **备注**：compile mismatch **52–57** 构成——21 Unsupported（12 defer-try-f 设计内硬错误 + 6 `Orders.Line` 跨包字面量 + 3 匿名 struct）+ 31 运行时（20 NotBuiltin + 6 NoMethod + 3 NotCallable + 2 AssertFailed）。**已移至第四阶段**，若重开需授权。见 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
+- **备注**：compile mismatch **52–57** 构成——21 Unsupported（12 defer-try-f 设计内硬错误 + 6 `Orders.Line` 跨包字面量 + 3 匿名 struct）+ 31 运行时（20 NotBuiltin + 6 NoMethod + 3 NotCallable + 2 AssertFailed）。**已移至第四阶段**，若重开需授权。见 [`docs/SPEC/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
 
 ---
 
@@ -185,7 +185,7 @@
 
 ## 第四阶段（自举 + 1.x）
 
-自举（K2–K6 H 版编译器）和 1.x 延迟项已迁移至独立文件夹 [`docs/phase4/`](../phase4/)：
+自举（K2–K6 H 版编译器）和 1.x 延迟项已迁移至独立文件夹 [`docs/SPEC/phase4/`](../phase4/)：
 
-- [`docs/phase4/01-bootstrap-plan.md`](../phase4/01-bootstrap-plan.md)（自举计划）
-- [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)（1.x 延迟项）
+- [`docs/SPEC/phase4/01-bootstrap-plan.md`](../phase4/01-bootstrap-plan.md)（自举计划）
+- [`docs/SPEC/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)（1.x 延迟项）

@@ -9,7 +9,7 @@
 ### 1.1 词法分析（Lexer）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / interface / where / namespace / using / import / pub / export / orelse / try / catch / move / mut / and / or / script / comptime / anytype / async / await / spawn / extern / void / null / true / false` | ✅ |
+| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using / import / pub / export / owned / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
 | 字面量 | 整数（进制前缀+后缀）、浮点、字符串（含转义）、原生字符串 `"""..."""`、字符 | ✅ |
 | 运算符/标点 | 完整运算符集（算术/比较/逻辑/位/赋值/范围/`||` 错误集联合） | ✅ |
 | 注释 | 行注释 `//` + 块注释 `/* */` | ✅ |
@@ -214,7 +214,7 @@
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | `.name` 枚举字面量推断 | `copy(&x, .shallow)` ≡ `copy(&x, CopyMode.shallow)` | ✅ |
-| `o` 所有权前缀 | `o T` 标注所有权形态，仅记录不改变语义 | ✅ |
+| `owned` 所有权前缀 |  `owned T` 标注所有权形态，仅记录不改变语义 | ✅ |
 | `FnN<i32> i32` 函数类型 | `Fn1<i32> i32` 等函数类型语法，参数+返回类型 | ✅ |
 | definite assignment (C7) | `alloc.init(T)` 无参构造跟踪字段初始化，return 前未全赋值 → 编译错误 | ✅ |
 
@@ -231,6 +231,7 @@
 | 受限环境 | io/alloc/argv/网络不可用，`types` 元数据可见 | ✅ |
 | 最大轮数守卫 | 防自引用无限循环 | ✅ |
 | 三后端零改动 | IR/字节码/native 对展开后 AST 无感知 | ✅ |
+| 序列化定制 | `types.fields` 驱动校验与 to_json 样板生成 | ✅ |
 
 ### 5.2 Comptime（ADR-0012）
 | 功能 | 描述 | 状态 |
@@ -252,6 +253,8 @@
 | 泛型容器 | `List<i32>` / `Pair(i32, f64)` 等 | ✅ |
 | 嵌套实例化 | `List(Pair<i32>)` 内层先登记 | ✅ |
 | where 子句 | 泛型约束验证 | ✅ |
+| 内建泛型嵌套具体化 | `Vec<List<i32>>` 具体化后类型正确 | ✅ |
+| 无限大小类型拒绝 | 值内嵌自引用/互递归无间接层 → 编译错误 | ✅ |
 
 ---
 
@@ -331,7 +334,8 @@
 ### 7.3 io 输入输出
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| `print` | 标准输出（格式说明符 `{d}/{x}/{X}/{b}/{e}/{s}` + 宽度/对齐/精度） | ✅ |
+| print | 标准输出（格式说明符 `{d}/{x}/{X}/{b}/{e}/{s}` + 宽度/对齐/精度） | ✅ |
+| 格式串 comptime 校验 | 说明符与参数类型不匹配编译报错 | ✅ |
 | 文件系统 | 文件读写（seek/pos/read_at/write_at、read_int/write_int、open_dir/Dir、list_dir → `Vec<DirEntry>`） | ✅ |
 | `io.stdout`/`io.stderr` | 独立字节流句柄 | ✅ |
 | net TCP | TCP 网络 | ✅ |

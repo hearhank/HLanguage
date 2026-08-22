@@ -1399,7 +1399,7 @@
       "members": [
         {
           "type": "STRING",
-          "value": "o"
+          "value": "owned"
         },
         {
           "type": "FIELD",

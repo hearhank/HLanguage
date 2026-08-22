@@ -87,7 +87,7 @@ fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "import") return "KwImport";
     if (name == "pub") return "KwPub";
     if (name == "export") return "KwExport";
-    if (name == "o") return "KwO";
+    if (name == "owned") return "KwOwned";
     if (name == "move") return "KwMove";
     if (name == "mut") return "KwMut";
     if (name == "and") return "KwAnd";
@@ -763,7 +763,7 @@ class Parser {
         if (kind_eq(k, "KwImport")) { self.advance(); return vec_from_slice("import"); }
         if (kind_eq(k, "KwPub")) { self.advance(); return vec_from_slice("pub"); }
         if (kind_eq(k, "KwExport")) { self.advance(); return vec_from_slice("export"); }
-        if (kind_eq(k, "KwO")) { self.advance(); return vec_from_slice("o"); }
+        if (kind_eq(k, "KwOwned")) { self.advance(); return vec_from_slice("owned"); }
         if (kind_eq(k, "KwMove")) { self.advance(); return vec_from_slice("move"); }
         if (kind_eq(k, "KwMut")) { self.advance(); return vec_from_slice("mut"); }
         if (kind_eq(k, "KwAnd")) { self.advance(); return vec_from_slice("and"); }
@@ -1335,8 +1335,8 @@ class Parser {
     // ============================================================
 
     fn parse_type(self: *mut Self) void {
-        // o T
-        if (self.at("KwO")) {
+        // owned T
+        if (self.at("KwOwned")) {
             self.advance();
             self.parse_type();
             return;
@@ -2351,19 +2351,19 @@ fn dump_ast(node: AstNode, depth: i32) void {
 // 鍏ュ彛
 // ============================================================
 
-fn main() !void {
+fn main(args: Vec<String>) !void {
     var path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var src = try io.fs.read_file(path, alloc);
     // 璇嶆硶鍒嗘瀽
-    var lx: o Lexer = alloc.init(Lexer{
+    var lx: owned Lexer = alloc.init(Lexer{
         src = src, n = @intCast(i32, src.len),
         pos = 0, line = 1, col = 1,
         tokens = Vec<Token>.init(alloc)
     });
     lx.run();
     // 璇硶鍒嗘瀽
-    var parser: o Parser = alloc.init(Parser{
+    var parser: owned Parser = alloc.init(Parser{
         tokens = lx.tokens, pos = 0,
         n = @intCast(i32, lx.tokens.len)
     });

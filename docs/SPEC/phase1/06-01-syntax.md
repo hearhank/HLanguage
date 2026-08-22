@@ -31,9 +31,9 @@
 
 ```hc
 var x: i32 = 5;          // 声明；T 可推断时省略
-var mut x: o *mut T = t; // 全写：可写、拥有、类型 T
-var mut x: o *mut = t;   // 类型推断
-var mut x: o = t;        // 类型与 *mut 推断，o 显式
+var mut x: owned *mut T = t; // 全写：可写、拥有、类型 T
+var mut x: owned *mut = t;   // 类型推断
+var mut x: owned = t;        // 类型与 *mut 推断，o 显式
 var x1: *T = &x;         // 只读指针、类型推断
 var a = arena.alloc(T);  // 无 o：所有权在 arena（禁止 move）
 const Name = 值;          // 常量/类型别名（Q12 定案：const 不可变，var mut 可变）

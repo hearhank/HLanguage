@@ -104,7 +104,7 @@ fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "import") return "KwImport";
     if (name == "pub") return "KwPub";
     if (name == "export") return "KwExport";
-    if (name == "o") return "KwO";
+    if (name == "owned") return "KwOwned";
     if (name == "move") return "KwMove";
     if (name == "mut") return "KwMut";
     if (name == "and") return "KwAnd";
@@ -709,10 +709,10 @@ class Lexer {
     }
 }
 
-fn main() !void {
+fn main(args:Vec<String>) !void {
     var path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var src = try io.fs.read_file(path, alloc);
-    var lx: o Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
+    var lx: owned Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
     lx.run();
 }

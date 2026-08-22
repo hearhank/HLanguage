@@ -1,4 +1,4 @@
-//! 组 G1：`spawn(f, args...) o Thread(T)` 协作式延迟执行 + Q8 每线程 alloc。
+//! 组 G1：`spawn(f, args...) owned Thread(T)` 协作式延迟执行 + Q8 每线程 alloc。
 //!
 //! tree-walking interp 侧验证：spawn 立即返回句柄（不并发运行）、join 运行到完成并返回
 //! 结果、is_done 状态转移（false → true）、每线程独立 alloc 实例（bump 到自身 arena，
