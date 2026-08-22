@@ -22,7 +22,7 @@ const build = Build{
     let d = &m.deps[0];
     assert_eq!(d.name, "json");
     assert_eq!(d.version, "0.2.0");
-    assert_eq!(d.fingerprint, Some(0xa1b2));
+    assert_eq!(d.fingerprint, Some("a1b2".into()));
     assert_eq!(d.path.as_deref(), Some(Path::new("../json")));
 }
 

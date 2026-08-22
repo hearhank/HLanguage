@@ -29,7 +29,7 @@ pub enum Kind {
 pub struct Dep {
     pub name: String,
     pub version: String,
-    pub fingerprint: Option<u64>,
+    pub fingerprint: Option<String>,
     pub path: Option<PathBuf>,
 }
 
@@ -153,14 +153,22 @@ fn parse_dep(e: &Expr) -> Result<Dep, String> {
     })
 }
 
-fn parse_fingerprint(e: &Expr) -> Result<u64, String> {
+fn parse_fingerprint(e: &Expr) -> Result<String, String> {
     match e {
+        // 新旧兼容：整数字面量（旧格式 `0xa1b2`）→ 十六进制小写
         Expr::IntLit { text, .. } => {
             let (n, _) = hc_rt::parse_int_text(text)
                 .map_err(|err| format!("build.zon: 指纹 `{text}` 非法: {}", err.message))?;
-            Ok(n as u64)
+            Ok(format!("{:x}", n))
         }
-        _ => Err("build.zon: 字段 `fingerprint` 应为整数字面量".into()),
+        // 新格式：SHA-256 十六进制字符串
+        Expr::StrLit { value, .. } => {
+            if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err("build.zon: 指纹应为 64 字符十六进制字符串（SHA-256）".into());
+            }
+            Ok(value.to_ascii_lowercase())
+        }
+        _ => Err("build.zon: 字段 `fingerprint` 应为 SHA-256 十六进制字符串或整数字面量".into()),
     }
 }
 

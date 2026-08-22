@@ -12,6 +12,7 @@ use crate::buildzon;
 use crate::cli::{err_color, paint};
 use crate::fsio::{read_bytecode, read_program};
 use crate::package::sibling_files;
+use crate::project::resolve_registry_dep;
 use crate::scriptgen;
 
 /// A3（ADR-0010）：程序参数 = [程序名] + 文件后参数（0 号 = 程序名）
@@ -246,8 +247,8 @@ pub(crate) fn load_manifest_deps_into(interp: &mut Interp, path: &Path) -> Resul
     load_deps_into(interp, dir, &manifest, &mut visited)
 }
 
-/// M7.2：递归装载本地依赖包（build.zon `deps` 中带 `path` 的项）；
-/// 无 path 的注册中心依赖跳过；依赖文件缺省回退「目录全部 .hc」。
+/// M7.2：递归装载依赖包（build.zon `deps` 中带 `path` 的本地依赖 + 注册中心依赖）；
+/// 依赖文件缺省回退「目录全部 .hc」。
 pub(crate) fn load_deps_into(
     interp: &mut Interp,
     dir: &Path,
@@ -255,14 +256,18 @@ pub(crate) fn load_deps_into(
     visited: &mut HashSet<PathBuf>,
 ) -> Result<(), ExitCode> {
     for dep in &manifest.deps {
-        let Some(rel) = &dep.path else {
-            eprintln!(
-                "[warn] 依赖 {} 无本地 path（注册中心归第三块），跳过",
-                dep.name
-            );
-            continue;
+        let dep_dir = if let Some(rel) = &dep.path {
+            dir.join(rel)
+        } else {
+            // B3：注册中心依赖——从 ~/.hc/registry/<name>/<version>/ 解析
+            match resolve_registry_dep(&dep.name, &dep.version, dep.fingerprint.as_deref()) {
+                Ok((reg_dir, _)) => reg_dir,
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    return Err(ExitCode::FAILURE);
+                }
+            }
         };
-        let dep_dir = dir.join(rel);
         // H2：缺失依赖诊断——本地依赖 path 必须指向存在的完整包（build.zon + .hc）；
         // 缺失/无清单 → 硬错误（不静默跳过），提示修正声明或 `hc pkg add` 重写
         if !dep_dir.is_dir() {

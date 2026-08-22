@@ -12,7 +12,7 @@ use crate::fmtgen;
 use crate::fsio::{collect_hc_files, is_hbc2, zig_cc_available};
 use crate::lintgen;
 use crate::package::package_entry;
-use crate::project::{init_project, pkg_add};
+use crate::project::{init_project, pkg_add, pkg_publish};
 use crate::run::{
     load_manifest_deps_into, load_siblings_into, program_args, run_file, run_file_bytecode,
     run_file_ir,
@@ -84,6 +84,7 @@ USAGE:
     hc init <name>             创建新项目骨架（build.zon + main.hc，组 H1）
     hc pkg add <name> [--path <dir>] [--version <ver>]
                               写本地依赖声明到 build.zon deps（组 H2）
+    hc pkg publish          从当前目录发布包到本地注册中心（~/.hc/registry/，B3）
     hc doc [target] [--out <dir>]
                               生成 Markdown 文档（/// 注释 + 声明签名；target 默认当前目录包，
                               `std` = 标准库内置目录页；输出默认 <target 目录>/docs/api/，组 H4）
@@ -253,38 +254,40 @@ pub(crate) fn run_cli() -> ExitCode {
             };
             init_project(name)
         }
-        "pkg" => {
-            // H2：`hc pkg add <name> [--path <dir>] [--version <ver>]`——写本地依赖
-            if args.get(2).map(|s| s.as_str()) != Some("add") {
-                eprintln!("error: `hc pkg` 子命令暂仅支持 `add`\n\n{USAGE}");
-                return ExitCode::from(2);
-            }
-            let Some(name) = args.get(3) else {
-                eprintln!("error: `hc pkg add` requires a package name\n\n{USAGE}");
-                return ExitCode::from(2);
-            };
-            let mut path: Option<String> = None;
-            let mut version: Option<String> = None;
-            let mut i = 4;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--path" => {
-                        i += 1;
-                        path = args.get(i).cloned();
+        "pkg" => match args.get(2).map(|s| s.as_str()) {
+            Some("add") => {
+                let Some(name) = args.get(3) else {
+                    eprintln!("error: `hc pkg add` requires a package name\n\n{USAGE}");
+                    return ExitCode::from(2);
+                };
+                let mut path: Option<String> = None;
+                let mut version: Option<String> = None;
+                let mut i = 4;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--path" => {
+                            i += 1;
+                            path = args.get(i).cloned();
+                        }
+                        "--version" => {
+                            i += 1;
+                            version = args.get(i).cloned();
+                        }
+                        other => {
+                            eprintln!("error: `hc pkg add` 未知选项 `{other}`");
+                            return ExitCode::from(2);
+                        }
                     }
-                    "--version" => {
-                        i += 1;
-                        version = args.get(i).cloned();
-                    }
-                    other => {
-                        eprintln!("error: `hc pkg add` 未知选项 `{other}`");
-                        return ExitCode::from(2);
-                    }
+                    i += 1;
                 }
-                i += 1;
+                pkg_add(name, &path, &version)
             }
-            pkg_add(name, &path, &version)
-        }
+            Some("publish") => pkg_publish(),
+            _ => {
+                eprintln!("error: `hc pkg` 子命令支持 `add` / `publish`\n\n{USAGE}");
+                ExitCode::from(2)
+            }
+        },
         "doc" => {
             // H4：`hc doc [target] [--out <dir>]`——target 默认 `.`，`std` 特殊值
             doc_command(&args[2..])

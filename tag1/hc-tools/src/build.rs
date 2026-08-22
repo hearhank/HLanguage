@@ -10,6 +10,7 @@ use crate::package::{
     check_and_merge, check_and_merge_deps, dir_hc_files, package_entry, package_programs,
     strip_test_funcs_in_place,
 };
+use crate::project::resolve_registry_dep;
 
 /// C3/C4：`Kind::lib` 构建——codegen_lib（包前缀，剔除 test 函数；静态归档转 runtime
 /// helper 为 declare，dll 保持自包含）→ `zig cc -c` + `zig ar rcs lib{name}.a`（静态）
@@ -229,10 +230,19 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
         let mut dep_progs: Vec<(String, hc::Program)> = Vec::new();
         if let Some(m) = &manifest {
             for dep in &m.deps {
-                let Some(rel) = &dep.path else {
-                    continue; // 注册中心依赖归第三块
+                let dep_dir = if let Some(rel) = &dep.path {
+                    dir.join(rel)
+                } else {
+                    // B3：注册中心依赖——从 ~/.hc/registry/<name>/<version>/ 解析
+                    match resolve_registry_dep(&dep.name, &dep.version, dep.fingerprint.as_deref())
+                    {
+                        Ok((reg_dir, _)) => reg_dir,
+                        Err(msg) => {
+                            eprintln!("error: {msg}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
                 };
-                let dep_dir = dir.join(rel);
                 // H2：缺失依赖诊断——本地依赖 path 须指向存在的完整包
                 if !dep_dir.is_dir() {
                     eprintln!(

@@ -1,9 +1,11 @@
-//! `hc init` / `hc pkg add`：项目骨架生成与 build.zon 依赖写入。
+//! `hc init` / `hc pkg add` / `hc pkg publish`：项目骨架生成、build.zon 依赖写入、注册中心发布。
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use hc::ast::{Decl, Expr};
+use sha2::{Digest, Sha256};
 
 /// H1：`hc init <name>`——在当前目录生成最小项目骨架（`build.zon` + `main.hc`）。
 ///
@@ -259,4 +261,234 @@ pub(crate) fn pkg_add(name: &str, path: &Option<String>, version: &Option<String
             ExitCode::FAILURE
         }
     }
+}
+
+/// `~/.hc` 注册中心根目录（跨平台：Unix `$HOME` / Windows `%USERPROFILE%`）。
+pub(crate) fn registry_root() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join(".hc").join("registry")
+}
+
+/// 注册中心依赖路径：`~/.hc/registry/<name>/<version>/`
+pub(crate) fn registry_dep_path(name: &str, version: &str) -> PathBuf {
+    registry_root().join(name).join(version)
+}
+
+/// 计算一组文件的 SHA-256 指纹（按相对路径排序后依次哈希 `{path}\n{content}`，
+/// 替换换行符确保跨平台一致）。
+fn compute_fingerprint(files: &BTreeMap<String, Vec<u8>>) -> String {
+    let mut hasher = Sha256::new();
+    for (path, content) in files {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\n");
+        hasher.update(content);
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// B3：`hc pkg publish`——从当前目录发布包到本地注册中心。
+///
+/// 1. 读取并解析 build.zon（缺失/无效报错）
+/// 2. 收集包文件（`files` 字段或全部 `.hc` 文件）
+/// 3. 计算 SHA-256 指纹
+/// 4. 创建 `~/.hc/registry/<name>/<version>/` 目录
+/// 5. 写入 `manifest.zon`（含指纹）+ 复制包文件
+/// 6. 输出确认信息
+pub(crate) fn pkg_publish() -> ExitCode {
+    let zon_path = Path::new("build.zon");
+    let src = match std::fs::read_to_string(zon_path) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("error: 当前目录无 build.zon（先 `hc init <name>` 创建项目）");
+            return ExitCode::FAILURE;
+        }
+    };
+    let manifest = match crate::buildzon::parse(&src) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: build.zon 解析失败: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if manifest.name.is_empty() {
+        eprintln!("error: build.zon 缺少 `name` 字段");
+        return ExitCode::FAILURE;
+    }
+    if manifest.version.is_empty() {
+        eprintln!("error: build.zon 缺少 `version` 字段");
+        return ExitCode::FAILURE;
+    }
+
+    // 收集文件：`files` 字段优先，否则全部 `.hc` 文件
+    let files: Vec<PathBuf> = if manifest.files.is_empty() {
+        let mut v = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(".") {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().map_or(false, |e| e == "hc") {
+                    v.push(p);
+                }
+            }
+        }
+        v.sort();
+        v
+    } else {
+        manifest
+            .files
+            .iter()
+            .map(|f| Path::new(f).to_path_buf())
+            .collect()
+    };
+
+    if files.is_empty() {
+        eprintln!("error: 无包文件可发布（build.zon `files` 为空且目录无 `.hc` 文件）");
+        return ExitCode::FAILURE;
+    }
+
+    // 读取文件内容并计算指纹
+    let mut file_map: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for f in &files {
+        let content = match std::fs::read(f) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("error: 读取 {} 失败: {e}", f.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let rel = f
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        file_map.insert(rel, content);
+    }
+    let fingerprint = compute_fingerprint(&file_map);
+
+    // 创建注册中心目录
+    let reg_dir = registry_dep_path(&manifest.name, &manifest.version);
+    if let Err(e) = std::fs::create_dir_all(&reg_dir) {
+        eprintln!("error: 创建注册中心目录 {} 失败: {e}", reg_dir.display());
+        return ExitCode::FAILURE;
+    }
+
+    // 写入 manifest.zon（含指纹）
+    let manifest_zon = format!(
+        "const build = Build{{\n    name = \"{}\",\n    version = \"{}\",\n    kind = {},\n    files = [\n        {},\n    ],\n    deps = [],\n}};\n// 注册中心指纹——SHA-256\nconst fingerprint = \"{}\";\n",
+        manifest.name,
+        manifest.version,
+        match manifest.kind {
+            crate::buildzon::Kind::Exe => "Kind.exe",
+            crate::buildzon::Kind::Lib => "Kind.lib",
+            crate::buildzon::Kind::Script => "Kind.script",
+        },
+        files
+            .iter()
+            .map(|f| {
+                f.file_name()
+                    .map(|n| format!("\"{}\"", n.to_string_lossy()))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(",\n        "),
+        fingerprint
+    );
+    if let Err(e) = std::fs::write(reg_dir.join("manifest.zon"), &manifest_zon) {
+        eprintln!("error: 写入 manifest.zon 失败: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    // 复制包文件
+    for (rel, content) in &file_map {
+        let dest = reg_dir.join(rel);
+        if let Err(e) = std::fs::write(&dest, content) {
+            eprintln!("error: 写入 {} 失败: {e}", dest.display());
+            return ExitCode::FAILURE;
+        }
+    }
+
+    println!(
+        "已发布 `{}@{}` 到本地注册中心：",
+        manifest.name, manifest.version
+    );
+    println!("  目录: {}", reg_dir.display());
+    println!("  文件: {} 个", file_map.len());
+    println!("  指纹: {}", fingerprint);
+    ExitCode::SUCCESS
+}
+
+/// 解析注册中心 `manifest.zon` 中的指纹。
+fn parse_registry_fingerprint(src: &str) -> Result<String, String> {
+    let program = hc::parse_source(src).map_err(|diags| {
+        diags
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    for decl in &program.decls {
+        if let Decl::Const { name, init, .. } = decl {
+            if name == "fingerprint" {
+                if let Expr::StrLit { value, .. } = init {
+                    return Ok(value.clone());
+                }
+            }
+        }
+    }
+    Err("manifest.zon: 缺少 `const fingerprint = \"...\"`".into())
+}
+
+/// B3：从注册中心解析依赖——返回（依赖目录，指纹）。
+/// 目录不存在/指纹不匹配返回 Err 文本。
+pub(crate) fn resolve_registry_dep(
+    name: &str,
+    version: &str,
+    expected_fingerprint: Option<&str>,
+) -> Result<(PathBuf, String), String> {
+    let reg_dir = registry_dep_path(name, version);
+    if !reg_dir.is_dir() {
+        return Err(format!(
+            "依赖 `{name}@{version}` 未在注册中心找到（{}）——先 `hc pkg publish`",
+            reg_dir.display()
+        ));
+    }
+
+    // 读取并解析 manifest.zon
+    let manifest_src = std::fs::read_to_string(reg_dir.join("manifest.zon"))
+        .map_err(|_| format!("注册中心 {} 缺少 manifest.zon", reg_dir.display()))?;
+    let fingerprint = parse_registry_fingerprint(&manifest_src)?;
+
+    // 校验指纹
+    let mut file_map: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(&reg_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().map_or(false, |e| e == "hc") {
+                if let Ok(content) = std::fs::read(&p) {
+                    if let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) {
+                        file_map.insert(name, content);
+                    }
+                }
+            }
+        }
+    }
+    let actual = compute_fingerprint(&file_map);
+    if actual != fingerprint {
+        return Err(format!(
+            "依赖 `{name}@{version}` 指纹不匹配！\n  期望: {}\n  实际: {}\n  文件可能已被篡改或损坏",
+            fingerprint, actual
+        ));
+    }
+
+    // 如有期望指纹，额外校验
+    if let Some(expected) = expected_fingerprint {
+        if actual != expected {
+            return Err(format!(
+                "依赖 `{name}@{version}` 指纹校验失败！\n  build.zon 声明: {}\n  注册中心实际: {}\n  供应链校验不通过",
+                expected, actual
+            ));
+        }
+    }
+
+    Ok((reg_dir, actual))
 }

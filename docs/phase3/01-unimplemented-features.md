@@ -59,10 +59,17 @@
 - **落点**：`tag1/hc-lsp/`（独立 crate：诊断 / 补全 / 跳转 / hover）+ `hc-tools/src/cli.rs`（`hc lsp` 子命令）+ Zed 扩展
 - **备注**：LSP 已独立实现（诊断 / 补全 / 跳转 / hover 全功能）；`hc lsp` 子命令已整合（`hc-lsp` 作为 `hc-tools` 依赖，通过 `hc_lsp::run_server()` 启动）；Zed 扩展配置指向 `hc lsp`。脚本实时预览通道（M3 实时预览）未接通，留 1.x
 
-### B3｜注册中心 MVP（`hc pkg` 完整：指纹 / 审计 / 供应链校验）｜🟡（**设计已完成**）
+### B3｜注册中心 MVP（`hc pkg` 完整：指纹 / 审计 / 供应链校验）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 I4；`07-bootstrap-plan.md` E5.2
 - **落点**：`hc-tools`（build.zon 指纹 + 依赖来源审计）+ 自托管 MVP
-- **备注**：`hc pkg add`（本地依赖）已落地；build.zon 指纹 / 供应链校验未实现。**设计定案（2026-08-22 grilling 会话）**：文件系统直连注册中心（`~/.hc/registry/<name>/<version>/`），全局唯一平名 + semver，`hc pkg publish` 从当前目录发布，`hc build` 自动 fetch 缺失依赖，SHA-256 指纹发布时生成 + fetch 时对比校验。注册中心治理（冲突 / 审计 / 失联）已定案 1.0（ADR-0016 #5）——MVP 只做唯一包名 + 指纹发布，治理不阻塞
+- **实施详情**：
+  - `fingerprint` 类型：`Option<u64>` → `Option<String>`（SHA-256 十六进制），兼容旧 `0x...` 格式
+  - `hc pkg publish`：读 build.zon → 收集文件 → 计算 SHA-256 指纹 → 写入 `~/.hc/registry/<name>/<version>/`
+  - `hc build` 注册中心 fetch：无 `path` 的依赖自动从 `~/.hc/registry/` 解析
+  - `hc run` 注册中心 fetch：`load_deps_into` 同样支持注册中心依赖
+  - 指纹校验：发布时生成，fetch 时对比，不匹配报硬错误
+  - 依赖：`sha2` + `hex` crate
+- **文件更改**：`buildzon.rs`（指纹类型 + 解析兼容）、`project.rs`（`pkg_publish` + `resolve_registry_dep`）、`cli.rs`（`pkg publish` 子命令）、`build.rs`（注册中心 fetch）、`run.rs`（注册中心 fetch）
 
 ### B4｜包管理器正式版 + 官方注册中心（1.0 项）｜⏳ 1.x
 - **出处**：`02-milestones.md` M8 / M10
@@ -168,9 +175,9 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 4 🟡 / 1 ⏳ / 2 🟢）+ C 8（0 🔴 / 4 🟡 / 3 ⏳ / 1 🟣）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
+- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 3 🟡 / 1 ⏳ / 3 🟢）+ C 8（0 🔴 / 4 🟡 / 3 ⏳ / 1 🟣）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
   - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)；🟣 标记项（A8 端到端示例、C8 LLVM 原生内建）已移至第四阶段
-- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**B3 注册中心 MVP**（指纹 / 供应链校验）、**C2 开放问题裁决**（`--dangle` 等）、**C3 惰性迭代/switch 守卫/Send-Sync**、**C5 泛型嵌套**、**D1 并发测试 runner**、**B6 启动时间指标**
+- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**C2 开放问题裁决**（`--dangle` 等）、**C3 惰性迭代/switch 守卫/Send-Sync**、**C5 泛型嵌套**、**D1 并发测试 runner**、**B6 启动时间指标**
 - **建议首项**：**C3（惰性迭代/switch 守卫/Send/Sync）**——设计已定案（ADR-0017），语义层改动，影响面可控
 
 ## 第四阶段（自举 + 1.x）
