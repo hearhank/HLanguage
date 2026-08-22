@@ -1,7 +1,6 @@
 pub mod compiler;
 pub mod completion;
 pub mod document;
-pub mod handlers;
 pub mod project;
 pub mod server;
 pub mod symbol;

@@ -17,10 +17,10 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | **第一部分「最小功能集」（M0–M7）** | ✅ **已完成**（`tag1/` 垂直切片，2026-08-17），**不自举** |
 | 语言系统（M0–M4） | ✅ 已完成：前端 / 语义 / 双后端 / 运行时与内建 |
 | 最小外围（M5–M7） | ✅ 已完成：最小标准库 / 测试基建 / 工具链最小 |
-| 测试 | `cargo test --workspace` **796 项全绿**（2026-08-18） |
-| 示例回归 | 解释模式 **132 passed / 10 failed / 1 skipped**（组 F 四模式容器/线程/异步全部转绿，剩余 10 项为 E1 元编程特性） |
-| 原生交叉验证 | 编译模式 **55 项 mismatch**（21 Unsupported + 31 运行时 + 3 其他；未实现原生内建以 `error.*` 响亮中止） |
-| 第三块（E1–E7） | 🟡 推进中 —— **E1 元编程 / E2 线程·异步·四模式·原子 / E3 标准库扩展 / E4 系统编程已全部落地**；E5 大部分落地（hc fmt/lint/doc/lsp/init/pkg 均已实现）；E6–E7 计划中（见下） |
+| 测试 | `cargo test --workspace` **796 项全绿**（2026-08-23） |
+| 示例回归 | 解释模式 **147 passed / 0 failed / 1 skipped**（全部转绿） |
+| 原生交叉验证 | 编译模式 **57 项 mismatch**（21 Unsupported + 31 运行时 + 3 其他；未实现原生内建以 `error.*` 响亮中止） |
+| 第三块（E1–E7） | 🟡 推进中 —— **E1 元编程 / E2 线程·异步·四模式·原子·Send·Sync / E3 标准库扩展 / E4 系统编程已全部落地**；E5 大部分落地（hc fmt/lint/doc/lsp/init/pkg 均已实现）；**B7 质量工具完整（LSP/格式化/lint 集）推进中**；E6 部分落地（switch 守卫）；E7 计划中（见下） |
 | CI | 每次 push/PR 运行完整示例套件回归门（`tag1/scripts/check-examples.sh`） |
 | 原生编译依赖 | 外部 `zig cc`（`hc build` / `hc test --mode=compile` 需要，缺失时回退字节码产物） |
 
@@ -42,7 +42,7 @@ H2/
 
 ## H 语言路线图
 
-实现计划分**三块**（`docs/SPEC/phase1/07-bootstrap-plan.md`），前两块构成**第一部分「最小功能集」**（`tag1` 已实现），第三块为**扩展与自举**（E1–E4 已落地，2026-08-18，见下）。
+实现计划分**三块**（`docs/SPEC/phase1/07-bootstrap-plan.md`），前两块构成**第一部分「最小功能集」**（`tag1` 已实现），第三块为**扩展与自举**（E1–E4 已落地，见下）。
 
 ### ✅ 已完成 —— 第一部分「最小功能集」（M0–M7）
 
@@ -75,16 +75,16 @@ H2/
 
 ### 🟡 推进中 —— 第三块 · 扩展与自举（E1–E7）
 
-> **2026-08-22**：E1 元编程、E2 线程/异步/四模式/原子、E3 标准库扩展、E4 系统编程已全部落地；E5 工具链扩展（hc fmt / lint / doc / lsp / init / pkg add/publish）大部分已落地。剩 E6–E7 计划；E2 Send·Sync 静态标记（E6.1）、E4 K3/K6–K11 与 E6/E7 明确延迟 1.x。
+> **2026-08-23**：E1 元编程、E2 线程/异步/四模式/原子/Send·Sync、E3 标准库扩展、E4 系统编程已全部落地；E5 工具链扩展大部分落地，B7 质量工具完整（LSP/格式化/lint 集）推进中；E6 部分落地（switch 守卫）；E7 计划中。
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | E1 元编程 | 脚本生成（`script` 块）、comptime 完整（类型即值）、泛型完整 | ✅ 已落地（script 块装载期展开 + 序列化定制 + comptime 类型函数/值函数/anytype + 泛型实例化） |
-| E2 并发与异步 | 线程 / 异步 / 四模式 / @atomic / Send·Sync 静态标记 | 🟡 已落地：spawn/join/cancel/is_done/detach + async fn/await + Io.threaded/evented + 四模式容器 + @atomicLoad/Store/Rmw（Send·Sync 静态标记 1.x） |
+| E2 并发与异步 | 线程 / 异步 / 四模式 / @atomic / Send·Sync 静态标记 | 🟡 已落地：spawn/join/cancel/is_done/detach + async fn/await + Io.threaded/evented + 四模式容器 + @atomicLoad/Store/Rmw + Send·Sync 编译期诊断（type_is_send/type_is_sync 递归检查 + spawn 边界诊断） |
 | E3 标准库扩展 | 四大支柱完整（含 UDP / HTTP / IPC / FFI / 序列化库等） | 🟡 已落地：net UDP/HTTP、ipc 管道/共享内存、storage/archive、text/time/rng、serialize 库（fmt_int/fmt_float/parse 辅助组）、Table 类型、`hc cc` C 互操作编译（FFI ADR-0020 已定案，待实施） |
 | E4 系统编程 | 系统编程特性（K1–K11） | 🟡 已落地：K1 无标签 union / K2 volatile / K4 @ptrFromInt·@intFromPtr / K5 export fn，K3 asm / K6 freestanding / K7–K11 1.x |
-| E5 工具链扩展 | LSP / 格式化 / lint / 文档生成 / 项目脚手架 / 包注册中心 | 🟡 大部分落地：hc fmt（token 级重排 + AST 保真 + --check）/ hc lint（9 规则 + --json）/ hc doc（Markdown 生成 + 索引页）/ hc lsp（诊断推送 + 自动补全 + 跳转定义骨架）/ hc init 脚手架 / hc pkg add/publish；包注册中心正式版 1.x |
-| E6 语言扩展 | 惰性迭代、switch 守卫、开放问题裁决、吃狗粮反馈 | ⏳ 计划 |
+| E5 工具链扩展 | LSP / 格式化 / lint / 文档生成 / 项目脚手架 / 包注册中心 | 🟡 大部分落地：hc fmt（token 级重排 + AST 保真 + --check）/ hc lint（9 规则 + --json）/ hc doc（Markdown 生成 + 索引页）/ hc lsp（诊断推送 + 自动补全 + 跳转定义骨架）/ hc init 脚手架 / hc pkg add/publish；B7 质量工具完整（LSP 跳转定义/hover 增强中）；包注册中心正式版 1.x |
+| E6 语言扩展 | 惰性迭代、switch 守卫、开放问题裁决、吃狗粮反馈 | 🟡 部分落地：switch 守卫已实施（模式+if 守卫+穷举检查）；惰性迭代真实现 1.x；开放问题裁决已定案 |
 | E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 计划 |
 
 ### 里程碑节点
@@ -95,8 +95,8 @@ H2/
 | T2（M3 后） | 双后端可运行、双模式一致 | ✅ 已达成 |
 | T3（M4 后） | 语言系统完整 | ✅ 已达成 |
 | **T4（M5–M7 后）** | **第一部分完成：最小功能集可用（不自举）** | ✅ **已达成（tag1，2026-08-17）** |
-| T5（E1–E2 后） | 元编程 + 并发完整 | 🟡 部分达成（2026-08-18：元编程 E1 完整；线程/异步/四模式/@atomic 已落地——组 F 逆转；Send·Sync 静态标记 1.x） |
-| T6（E3–E5 后） | 标准库 + 工具链完整 | 🟡 部分达成（E3 标准库扩展 + E4 系统编程 + E5 工具链扩展已大部分落地；FFI 待实施，mismatch 归零 1.x） |
+| T5（E1–E2 后） | 元编程 + 并发完整 | 🟡 部分达成（2026-08-23：元编程 E1 完整；线程/异步/四模式/@atomic/Send·Sync 已落地；OS 级并行/mutex 1.x） |
+| T6（E3–E5 后） | 标准库 + 工具链完整 | 🟡 部分达成（E3 标准库扩展 + E4 系统编程 + E5 工具链扩展已大部分落地；B7 质量工具完整推进中；FFI 待实施，mismatch 归零 1.x） |
 | T7（E7 后） | 自举闭环（用 H 编译 H） | ⏳ 计划 |
 | T8（E6 + 冻结） | 1.0 冻结 | ⏳ 计划 |
 

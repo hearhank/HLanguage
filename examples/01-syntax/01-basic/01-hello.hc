@@ -17,6 +17,5 @@ fn main() !void {
 }
 
 [test] fn hello_entry_runs() !void {
-    var a: o Vec<String> = [];
-    try main(a);   // S2：smoke test（入口 !void 错误自动捕获）
+    try main();   // S2：smoke test（入口 !void 错误自动捕获）
 }
