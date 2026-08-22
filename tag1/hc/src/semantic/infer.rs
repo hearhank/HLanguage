@@ -1262,9 +1262,23 @@ impl Checker {
             }
             let _ = self.expr_ty(callee, scopes, None);
         }
-        // 捕获分类（跳过 callee）
+        // 捕获分类 + Send 检查（跳过 callee）
         for a in args.iter().skip(1) {
             self.classify_spawn_capture(a, scopes, &mut local_refs);
+            // C3：spawn 边界——捕获值必须满足 Send（跨线程安全传递）
+            let capture_ty = self.expr_ty(a, scopes, None);
+            if let Some(st) = &capture_ty {
+                if !self.type_is_send(st) {
+                    self.diags.push(Diagnostic::error(
+                        a.span(),
+                        format!(
+                            "captured value of type `{}` does not satisfy `Send`: \
+                             cannot send non-Send value across threads",
+                            st.name()
+                        ),
+                    ));
+                }
+            }
         }
         let thread_ty = SType::Named("Thread".to_string(), vec![t]);
         let ts = ThreadState {
@@ -2317,6 +2331,70 @@ impl Checker {
     }
 
     // ---------- 既有检查（宽度 / 引用赋值 / definite assignment） ----------
+
+    /// C3：类型是否满足 `Send` 标记接口（可跨线程安全传递）
+    pub(crate) fn type_is_send(&self, t: &SType) -> bool {
+        match t {
+            SType::Int { .. } | SType::Float | SType::Bool | SType::Void | SType::Str => true,
+            SType::Slice(inner) => self.type_is_send(inner),
+            SType::Named(n, args) => {
+                if is_collection(n) {
+                    args.iter().all(|a| self.type_is_send(a))
+                } else {
+                    self.type_has_interface(n, "Send")
+                }
+            }
+            SType::Tuple(items) => items.iter().all(|i| self.type_is_send(i)),
+            SType::Optional(inner) => self.type_is_send(inner),
+            SType::ErrorUnion(err, inner) => {
+                err.as_ref().map_or(true, |e| self.type_is_send(e)) && self.type_is_send(inner)
+            }
+            SType::Ptr(inner, _) => self.type_is_send(inner),
+            SType::Array(_, inner) => self.type_is_send(inner),
+            SType::Infer | SType::Generic(_) | SType::Unknown => true,
+        }
+    }
+
+    /// C3：类型是否满足 `Sync` 标记接口（可跨线程安全共享引用）
+    pub(crate) fn type_is_sync(&self, t: &SType) -> bool {
+        match t {
+            SType::Int { .. } | SType::Float | SType::Bool | SType::Void | SType::Str => true,
+            SType::Slice(inner) => self.type_is_sync(inner),
+            SType::Named(n, args) => {
+                if is_collection(n) {
+                    args.iter().all(|a| self.type_is_sync(a))
+                } else {
+                    self.type_has_interface(n, "Sync")
+                }
+            }
+            SType::Tuple(items) => items.iter().all(|i| self.type_is_sync(i)),
+            SType::Optional(inner) => self.type_is_sync(inner),
+            SType::ErrorUnion(err, inner) => {
+                err.as_ref().map_or(true, |e| self.type_is_sync(e)) && self.type_is_sync(inner)
+            }
+            SType::Ptr(inner, false) => self.type_is_sync(inner),
+            SType::Ptr(_, true) => false, // *mut T 可变共享 → 非 Sync
+            SType::Array(_, inner) => self.type_is_sync(inner),
+            SType::Infer | SType::Generic(_) | SType::Unknown => true,
+        }
+    }
+
+    /// C3：命名类型是否实现指定接口（如 `Send`、`Sync`、`IIterable`）
+    fn type_has_interface(&self, name: &str, iface: &str) -> bool {
+        match self.types.get(name) {
+            Some(TypeInfo {
+                kind: TypeKind::Class { ifaces, .. },
+                ..
+            }) => ifaces.iter().any(|t| {
+                if let Type::Named(n, _) = t.strip() {
+                    n == iface
+                } else {
+                    false
+                }
+            }),
+            _ => false,
+        }
+    }
 
     /// 类型是否为引用类型（不可值赋值；连续类型/标量除外）
     pub(crate) fn type_is_ref_st(&self, t: &SType) -> bool {

@@ -63,7 +63,54 @@ impl Checker {
                 self.check_block(body, &mut scopes, constraint, ret_ty);
                 self.collect_infer_ret = false;
             }
-            Decl::Class { name, methods, .. } => {
+            Decl::Class {
+                name,
+                ifaces,
+                fields,
+                methods,
+                ..
+            } => {
+                // C3：Send/Sync 标记接口验证——声明类字段必须满足对应标记
+                for iface in ifaces {
+                    let iface_name = match iface.strip() {
+                        Type::Named(n, _) => n.as_str(),
+                        _ => continue,
+                    };
+                    match iface_name {
+                        "Send" => {
+                            for f in fields {
+                                let ft = self.ty_of(&f.ty);
+                                if !self.type_is_send(&ft) {
+                                    self.diags.push(Diagnostic::error(
+                                        f.span.clone(),
+                                        format!(
+                                            "field `{}` of type `{}` does not satisfy `Send`: \
+                                             `{}` is not Send",
+                                            f.name,
+                                            name,
+                                            ft.name()
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                        "Sync" => {
+                            for f in fields {
+                                let ft = self.ty_of(&f.ty);
+                                if !self.type_is_sync(&ft) {
+                                    self.diags.push(Diagnostic::error(
+                                        f.span.clone(),
+                                        format!(
+                                            "field `{}` of type `{}` does not satisfy `Sync`",
+                                            f.name, name
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 for m in methods {
                     let ret_ty = self.ret_stype(&m.ret);
                     let constraint = self.fn_error_constraint(&m.ret);
