@@ -209,7 +209,7 @@
 
 > ✅ **组 I I1（`hc fmt`）已完成（2026-08-18）**：token 级重排——缩进/换行/空格规范化，**AST 保真**（格式化前后 token 序列签名一致自检，不一致即报错拒绝写回；`hc-tools/src/fmtgen.rs`，复用 hc lexer token 流 + span 切片重建）。**排版规则**：4 空格缩进、`{` 行尾、`}` 独占行；二元运算符两侧空格、`,` 后空格、`:` 类型标注后空格；`0..10`/`p.x`/`f(x)`/`[5]i32`/`!void` 不空格；struct 字面量 `Point{x = 1.0}`、`import H.std.{io}` 紧贴；`switch` 臂尾逗号换行。**注释三类保留**（独立/行内/行尾）：行尾注释前源码对齐空白（全空格/tab）原样保留（注释表逐列对齐一致），`//` 不在同一行则挂下一 token 前。**垂直布局保留**：多行数组字面量 / 垂直实参式多行调用（紧随 `(` 的首 token 在下一行）/ 多行 struct 字面量 / 方法链跨行延续缩进；闭包块实参 `f(|x| {` 不算垂直实参（避免过度缩进且非幂等）。**空块 `{}` 行内**，**仅含注释的块不折叠**（`{` 换行 → 注释独占行 → `}` 独立行，幂等修复——原 `fn f() void {// 注释` pass1 塌行、pass2 补空格）。**`--check` 幂等门**：将改动则 exit 1（CI 用），默认原地写回。**应用**：全部 examples/（repo 根）与 tag1/examples/ 已规范格式化，一次 `hc fmt .` 后 `hc fmt --check .` exit 0 收敛。**测试**：`hc-tools/tests/fmt.rs` 4 项（代表性排版形态幂等 + 空块/注释块回归 + 示例语料一次格式化收敛）；`cargo test --workspace` 796 全绿；门禁基线不变（interpret 147/0/1、compile 57 mismatch）。
 
-### J. E6 语言扩展 + 吃狗粮（贯穿；E7 自举前的语言成熟）
+### J. E6 语言扩展 + 吃狗粮（贯穿；第四阶段自举前的语言成熟）
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
@@ -217,33 +217,24 @@
 | J2 | 惰性迭代、switch 守卫、Send/Sync 静态标记（编译期诊断） | 语义测试绿 | — | 2h |
 | J3 | 并发测试（`[test]` 并发形态：异步/线程测试 runner） | 测试基建绿 | E/F | 1.5h |
 | J4 | Table 多索引（M8 记录项） | Table 测试绿 | — | 1.5h |
-| J5 | 吃狗粮反馈：编译器编写（E7）暴露的语言缺口反馈回设计 + 修订 | 06 修订记录 | E7 首段 | 1h |
+| J5 | 吃狗粮反馈：编译器编写（第四阶段自举）暴露的语言缺口反馈回设计 + 修订 | 06 修订记录 | 第四阶段自举首段 | 1h |
 
 > ✅ **J1（开放问题裁决，2026-08-22）**：#1/#3/#5/#6 设计定案（ADR-0016，grill-with-docs 访谈 4 子项全推荐），05 状态表四行已关闭。**裁决产出为设计，实施另计**（`--dangle` CLI 标志 + tag1 `debug_dangling` 对齐 + `mem.with_arena` stdlib 包装归 C2 条目实施；Send/Sync 详细诊断归 J2/C3）。
 > ✅ **J2 设计已定案（2026-08-22，ADR-0017，grill-with-docs 访谈 3 子项全推荐）**：① 惰性迭代 = 只补迭代契约（选项 C，`iter()` 迭代器方法签名 + `filter`/`map` 组合子，真惰性求值留 1.x/A7）；② switch 守卫（`模式 if 守卫 => 表达式`）；③ Send/Sync 编译期诊断（内建标记接口 + 组合性验证 + spawn/await 边界非 Send → 编译错误带位置，形态承 ADR-0016 #6）。**设计产出已落档，实施另计**（语义层 switch 守卫 + Send/Sync 推导/边界诊断 + 迭代器对象方法签名归 C3 条目实施）。
 
-### K. E7 自举（Phase 3：用 H 编译 H）
+### K. E7 自举（已迁移至第四阶段）
 
-> 07 §五 E7 渐进路线：H lexer → parser/AST → 语义（类型/所有权/错误集）→ 后端（IR/VM/LLVM）。**双实现对照**：与 Rust 版 token/AST/执行结果对比，差异即 bug。**Rust 参考实现长期保留**（自举失败风险对策，05 风险登记）。
+> 自举（K1–K6：用 H 编译 H）已从第三阶段移至**第四阶段**，详见 [`docs/phase4/01-bootstrap-plan.md`](../phase4/01-bootstrap-plan.md)。
+>
+> **K1（H 版 lexer）已完成**（2026-08-18）——`stage1/lexer.hc` 自身源码 6621 token 零 diff + 对照语料全绿。K2–K6 未动工。
 
-| # | 任务（行为面） | 验收 | 依赖 | 预估 |
-|---|---|---|---|---|
-| K1 | ✅ H 版 lexer（.hc 源码 → token 流）+ 对照测试（Rust lexer 输出 diff） | H lexer 可跑 + 对照绿 | D（comptime 支撑编译期工具） | 2h |
-| K2 | H 版 parser/AST（token → 声明树）+ 对照测试 | H parser 可跑 + 对照绿 | K1 | 2h |
-| K3 | H 版语义（名称解析/类型检查/所有权/错误集）+ 对照测试 | H 语义可跑 + 对照绿 | K2 | 2h |
-| K4 | H 版后端：IR 参考解释器（跑 H 自身测试）+ 对照 | H 后端可跑 + 执行结果对照绿 | K3 | 2h |
-| K5 | 自举闭环 stage2：H 编译器（H 程序）用 stage1 编译自身；产物再编译产物（二次自举验证） | **用 H 编译 H 达成** | K4 | 2h |
-| K6 | 可复现构建 + 规范一致性（Rust/H 双实现交叉验证全语法/语义/内存/并发） | 一致性套件扩展绿 | K5 | 2h |
-
-> ✅ **K1（H 版 lexer）已完成（2026-08-18）**：`stage1/lexer.hc` 用 H 语言重写词法分析，与 Rust 参考（`tag1/hc/src/lexer.rs`，`hc lex` 转储）逐 token 对照，格式 `{start} {end} {line} {col} {kind:?}`。**对照绿**：自身源码 6621 token 零 diff、对照语料 `stage1/corpus/*.hc` 9 文件全绿（关键字/数字前缀归一化/惰性宽度后缀/转义全套/错误路径/未知字符双 Error/未闭合注释/UTF-8 计列）、92 示例全绿、全部 61 个 Rust 源文件全绿。**对照测试**：`hc-tools/tests/k1_lexer.rs`（语料 + 自身源码两个用例）。**复刻的隐藏保真细节**：span=END 位置；consume-then-check（闭引号/转义/`\u{` 先消费再判定）；数字前缀字母与浮点指数归一化小写但数字位大小写保留（0XFF→"0xff"、1.5E2→"1.5e2"）；后缀含 CJK 时 Rust `suffix.len()`（字节）× bump（每字符）导致的过度消费（42i32中文 吞后续）；Debug 转义 `\0` + is_printable 近似表（探针实证 U+115F/3164/FFA0/FFFC/FFFD 可打印）；ident 延续 `is_alphanumeric`（CJK 表意文字 E4–E9 收、全角标点不收）。**已知近似**：Unicode 空白仅 ASCII 六种、is_printable 与 CJK 扩展区为近似表。**门禁**：`cargo test --workspace` 全绿 + `check-examples.sh` 基线不漂移。
-
-**当前执行范围合计 ≈ 73.5h，45 个任务**（A 4 / B 10 / C 3 / D 9.5 / E 7 / **F 6——✅ 已完成（2026-08-18，ADR-0011 逆转）** / G 11 / H 6.5 / I 7.5 / J 7 / K1–4 8）。**延迟/留后续**：F 组 1.x 余项 = 真 OS 并行 + `mutex` + 单写者无锁路径（F1/F5）；H5（K6 freestanding）2h → 1.x（ADR-0014）；K5/K6（自举闭环 + 可复现）4h 2 任务 → 后续。
+**当前执行范围合计 ≈ 73.5h，45 个任务**（A 4 / B 10 / C 3 / D 9.5 / E 7 / **F 6——✅ 已完成（2026-08-18，ADR-0011 逆转）** / G 11 / H 6.5 / I 7.5 / J 7 / K1–4 8）。**延迟/留后续**：F 组 1.x 余项 = 真 OS 并行 + `mutex` + 单写者无锁路径（F1/F5）；H5（K6 freestanding）2h → 1.x（ADR-0014）；K5/K6（自举闭环 + 可复现）4h 2 任务 → 第四阶段（见 [`docs/phase4/`](../phase4/)）。
 
 ## 4. 验收与门禁
 
 - **功能点级**：`cargo test` 相关套件绿 + 文档同步（本文件 §5 清单对应项）
 - **组级**：示例回归基线——现 interpret **147/0/1** + compile **57 mismatch**；**E 组已落地**：37/38/39/76/80 的 `[test]` 异步断言双后端全绿；**F 组已落地（2026-08-18 ADR-0011 逆转）**：四模式容器 37/76/77/78 由失败转全绿（0 失败）；compile mismatch 60→**57**（随原生 ABI 扩展下降，Phase 8 原生函数值/闭包，K4 H 后端编写时联动；57 中 5 例文件级 MISMATCH 来自 `main` 特性——四模式容器 37/76 原生 LLVM `error.Unsupported` 响亮拒绝（原生子集边界）、**38/80（G1 net 已落地仍红：38 主函数旧 URL 形式 `connect(url)`/`read_all(&conn)` + `JsonValue` 类型未实现、80 主函数 `https://` 网络不可达，仅 `http://` 支持）**、Io.evented 39（interp-only E3）；78/79 捕获语法解析副作用已随 F 组落地消化，见 `tag1/scripts/check-examples.sh` 注释）
-- **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**留后续执行**（当前范围至 K4，K5/K6 不排程）
+- **第三块总验收**（07 §五）：**`用 H 编译 H` 达成（stage2）**；可复现构建（同源码同结果）；规范一致性（Rust/H 双实现交叉验证）——**已迁移至第四阶段**，见 [`docs/phase4/01-bootstrap-plan.md`](../phase4/01-bootstrap-plan.md)
 
 ## 5. 文档同步清单
 
@@ -256,7 +247,7 @@
 | ✅ `06-08-modules.md` | 供应链指纹 / 依赖来源审计 | **A3/B4 已完成（2026-08-18）**；I4 注册中心 MVP 待 |
 | ✅ `06-10-concurrency.md` | 异步/四模式/原子（协作式衔接） | **E/F 组已完成（2026-08-18）**：async 协作式 + 四模式/@atomic 已落地标注；真 OS 并行与 `mutex` 仍 1.x |
 | ⚠️ `04-stdlib-scope.md` | 标准库扩展明细（net/ipc/storage/text/ffi）+ 系统编程扩展 | G 组标准库已同步（2026-08-18）；H 组系统编程扩展待 |
-| ⚠️ `02-milestones.md` | M9/M10 状态勾选 | M3/M5 已按 tag1 实现勾选（2026-08-18）；M9/M10 待自举（K 组） |
+| ⚠️ `02-milestones.md` | M9/M10 状态勾选 | M3/M5 已按 tag1 实现勾选（2026-08-18）；M9/M10 待自举（第四阶段，见 [`docs/phase4/`](../phase4/)） |
 | `05-open-questions-and-risks.md` | 开放问题逐项关闭 | A/J 组（J 待） |
 | ✅ `07-bootstrap-plan.md` | 实现状态表与测试基线更新 | **T1–T5 状态已标注（2026-08-18）** |
 | ✅ `CONTEXT.md` | 术语（comptime/script/异步/原子/裸机） | **各组完成时已同步** |

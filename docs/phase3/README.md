@@ -9,8 +9,8 @@
 ## 范围
 
 - **第三阶段**：标准库扩展（net / ipc / storage / text / ffi 剩余项）+ 前两阶段未实现功能（工具链：lint / lsp 完整 / 注册中心；语言扩展：惰性迭代 / switch 守卫 / Send/Sync / Table 多索引 / 绑定级只读等；测试：并发测试 runner；系统编程：K3 asm 等）
-- **第四阶段（不属本阶段）**：自举闭环（`stage1/` H 版 lexer 已就绪，parser / 语义 / 后端 / stage2 / 可复现构建）
-- **1.x 延迟项**：真 OS 并行 / mutex / freestanding / 位域 / 指针算术等（见 `01-unimplemented-features.md` 附录）
+- **第四阶段（不属本阶段）**：自举闭环 + 1.x 延迟项（见 [`docs/phase4/`](../phase4/)）
+- **1.x 延迟项**：真 OS 并行 / mutex / freestanding / 位域 / 指针算术等（已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)）
 
 ## 工作文档（本文件夹核心）
 
@@ -27,12 +27,16 @@
 | `05-open-questions-and-risks.md` | 开放问题 / 系统编程缺口（J1 裁决依据） |
 | `06-09-meta.md` | 元编程规范（script / comptime，已实现部分） |
 | `06-10-concurrency.md` | 并发规范（异步 / 四模式 / 原子，已实现部分） |
-| `10-part3-execution.md` | 第三块执行细表（组 A–G 已完成记录 + I/J/K 待办 + 完成注记） |
+| `10-part3-execution.md` | 第三块执行细表（组 A–G 已完成记录 + I/J 待办 + 完成注记）——K 组（自举）已迁移至 `docs/phase4/` |
 
 ## 关联决策记录（ADR）
 
 - 0011 并发模型衔接（协作式，四模式逆转落地）/ 0012 comptime 类型即值 / 0013 script 块语义 / 0014 系统编程范围（K1–K5 纳入、K6 延迟）
 - 0015 Table 密封表 + 绑定级只读未实现（[ADR-0015](../adr/0015-table-sealed-init_with.md)，2026-08-22 设计会话产出，见 `01-unimplemented-features.md` C1 / C4 条目）
+
+## 关联文档
+
+- 第四阶段（自举 + 1.x）：[`docs/phase4/`](../phase4/)
 
 ## 当前状态基线（2026-08-22）
 
