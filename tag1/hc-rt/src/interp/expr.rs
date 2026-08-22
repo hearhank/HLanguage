@@ -1612,6 +1612,16 @@ impl Interp {
         arg_vals: &[Value],
         span: &Span,
     ) -> Result<Value> {
+        // A1（ADR-0020）：`extern fn`——纯声明，解释器拒绝调用
+        if fdef.is_extern {
+            return Err(RtError::msg(
+                "NotCallable",
+                format!(
+                    "`extern fn {}` is a C declaration and cannot be called in interpreter mode",
+                    fdef.name
+                ),
+            ));
+        }
         if fdef.params.len() < arg_vals.len() {
             return Err(RtError::new("ArityMismatch", Some(span.clone())));
         }

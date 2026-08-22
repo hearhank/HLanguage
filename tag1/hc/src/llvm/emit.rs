@@ -162,6 +162,11 @@ pub(crate) fn emit_func(
         .map(|i| format!("%Value %p{i}"))
         .collect::<Vec<_>>()
         .join(", ");
+    // A1（ADR-0020）：`extern fn`——纯声明→ emit `declare` 而非 `define`
+    if f.is_extern {
+        let _ = writeln!(out, "declare %Value @\"{prefix}hc_fn{idx}\"({params})");
+        return;
+    }
     let _ = writeln!(out, "define %Value @\"{prefix}hc_fn{idx}\"({params}) {{");
     // 序言（槽数组 + 参数存槽）并入 entry 块（BodyEmitter 首个块即 entry）
     let mut be = BodyEmitter::new(prefix, links);

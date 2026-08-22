@@ -268,7 +268,8 @@ impl<'a> Fmt<'a> {
             | TokenKind::RawStr(_)
             | TokenKind::Char(_)
             | TokenKind::AtBuiltin(_)
-            | TokenKind::Underscore => self.emit_word(text),
+            | TokenKind::Underscore
+            | TokenKind::KwExtern => self.emit_word(text),
 
             TokenKind::KwFn => {
                 self.emit_word(text);

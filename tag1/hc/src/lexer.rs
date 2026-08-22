@@ -163,6 +163,7 @@ impl<'a> Lexer<'a> {
             "async" => TokenKind::KwAsync,
             "await" => TokenKind::KwAwait,
             "spawn" => TokenKind::KwSpawn,
+            "extern" => TokenKind::KwExtern,
             "void" => TokenKind::KwVoid,
             "null" => TokenKind::KwNull,
             "true" => TokenKind::KwTrue,

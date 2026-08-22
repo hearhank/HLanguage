@@ -226,6 +226,9 @@ pub(crate) struct FnDef {
     method_of: Option<String>,
     /// 组 E E2：`async fn` 标记——调用点返回 `Future(R)`（延迟执行），await 运行体
     is_async: bool,
+    /// A1（ADR-0020）：`extern fn`——纯声明（无 body，链接期解析外部 C 符号）。
+    /// 解释器拒绝调用。
+    is_extern: bool,
     span: Span,
 }
 

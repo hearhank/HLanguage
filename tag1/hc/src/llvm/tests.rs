@@ -538,4 +538,28 @@ fn main() {
         // CallBuiltin spawn 执行（运行时首先命中 notcallable 中止块）。
         assert!(ll.contains("c\"error.NotCallable: function refs/closures/threads (spawn) not yet in native mode (Phase 8)\\00\""), "{ll}");
     }
+
+    // ---- A1（ADR-0020）：extern fn — LLVM declare 发射 ----
+
+    #[test]
+    fn a1_extern_fn_emits_declare() {
+        // `extern fn` → LLVM `declare` 而非 `define`
+        let ll = gen("extern fn add(a: i32, b: i32) i32;");
+        assert!(ll.contains("declare %Value @\"hc_fn0\""), "{ll}");
+        assert!(!ll.contains("define %Value @\"hc_fn0\""), "{ll}");
+    }
+
+    #[test]
+    fn a1_extern_fn_with_normal_fn() {
+        // extern fn 与正常 fn 共存：extern → declare，正常 → define
+        let ll = gen("extern fn add(a: i32, b: i32) i32;\nfn main() i32 { return 42; }");
+        assert!(
+            ll.contains("declare %Value @\"hc_fn0\""),
+            "extern fn -> declare: {ll}"
+        );
+        assert!(
+            ll.contains("define %Value @\"hc_fn1\""),
+            "normal fn -> define: {ll}"
+        );
+    }
 }

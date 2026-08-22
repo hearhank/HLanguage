@@ -136,6 +136,7 @@ fn decode_func(r: &mut Reader) -> Result<IrFunc, String> {
         body,
         is_test,
         exported,
+        is_extern: false,
     })
 }
 

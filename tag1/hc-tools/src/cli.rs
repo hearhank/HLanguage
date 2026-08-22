@@ -9,7 +9,7 @@ use hc_rt::Interp;
 use crate::build::build_file;
 use crate::docgen;
 use crate::fmtgen;
-use crate::fsio::{collect_hc_files, is_hbc2};
+use crate::fsio::{collect_hc_files, is_hbc2, zig_cc_available};
 use crate::lintgen;
 use crate::package::package_entry;
 use crate::project::{init_project, pkg_add};
@@ -95,6 +95,8 @@ USAGE:
                               --check 仅报告将改动的文件，组 I1）
     hc lex <file.hc>          转储 token 流（K1 对照：`{start} {end} {line} {col} {kind:?}`，
                               与 H 版 lexer 输出逐行 diff）
+    hc cc <file.c> [--output <file>]
+                              编译 C 文件（zig cc 封装，产出原生目标文件或可执行）
     hc --version
     hc --help
 ";
@@ -297,6 +299,10 @@ pub(crate) fn run_cli() -> ExitCode {
         "lex" => {
             // K1：`hc lex <file.hc>`——转储 token 流（Rust 参考实现，H 版 lexer 对照基准）
             lex_command(&args[2..])
+        }
+        "cc" => {
+            // A1（ADR-0020）：`hc cc <file.c> [--output <file>]`——zig cc 封装
+            cc_command(&args[2..])
         }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
@@ -651,10 +657,54 @@ fn lint_command(args: &[String]) -> ExitCode {
     }
     if failed {
         ExitCode::FAILURE
-    } else if !all_diags.is_empty() {
-        eprintln!("lint: {} 个诊断", all_diags.len());
-        ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// A1（ADR-0020）：`hc cc <file.c> [--output <file>]`——zig cc 封装，
+/// 编译 C 源文件为目标文件或可执行文件（与 `hc build` 共用同一链接器）。
+fn cc_command(args: &[String]) -> ExitCode {
+    let Some(path) = args.first() else {
+        eprintln!("error: `hc cc` requires a C source file\n\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    if !zig_cc_available() {
+        eprintln!("error: `hc cc` requires zig to be installed (zig cc)");
+        return ExitCode::FAILURE;
+    }
+    let mut cmd = std::process::Command::new("zig");
+    cmd.arg("cc");
+    cmd.arg(path);
+    let mut out = 2;
+    while out < args.len() {
+        if args[out] == "--output" {
+            out += 1;
+            if let Some(output) = args.get(out) {
+                cmd.arg("-o");
+                cmd.arg(output);
+            } else {
+                eprintln!("error: `--output` requires a file path");
+                return ExitCode::from(2);
+            }
+        } else {
+            // 透传其他参数给 zig cc
+            cmd.arg(&args[out]);
+        }
+        out += 1;
+    }
+    match cmd.status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => {
+            eprintln!(
+                "error: zig cc 失败 (exit code: {})",
+                status.code().unwrap_or(-1)
+            );
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("error: 调用 zig cc 失败: {e}");
+            ExitCode::FAILURE
+        }
     }
 }

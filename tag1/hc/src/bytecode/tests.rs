@@ -19,6 +19,7 @@ fn exhaustive_module() -> IrModule {
         n_slots: 8,
         is_test: false,
         exported: false,
+        is_extern: false,
         body: vec![
             IrInst::Const {
                 temp: 0,
@@ -200,6 +201,7 @@ fn exhaustive_module() -> IrModule {
         n_slots: 1,
         is_test: true,
         exported: true,
+        is_extern: false,
         body: vec![IrInst::ReturnVoid],
     };
     let c0 = IrFunc {
@@ -211,6 +213,7 @@ fn exhaustive_module() -> IrModule {
         n_slots: 2,
         is_test: false,
         exported: false,
+        is_extern: false,
         body: vec![IrInst::Return { temp: 1 }],
     };
     let mut error_codes = HashMap::new();

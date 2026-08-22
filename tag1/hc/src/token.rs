@@ -79,6 +79,7 @@ pub enum TokenKind {
     KwAsync,
     KwAwait,
     KwSpawn,
+    KwExtern,
     KwVoid,
     KwNull,
     KwTrue,

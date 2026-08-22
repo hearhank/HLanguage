@@ -47,6 +47,9 @@ pub enum Decl {
         /// K5（ADR-0014）：`export fn`——原生符号级导出（链接器可见干净符号，
         /// 生成外部 thunk；`_start` 导出 = 入口钩子）。与 `pub_` 正交（语言可见性 vs 符号导出）。
         exported: bool,
+        /// A1（ADR-0020）：`extern fn`——纯声明（无 body，链接期解析外部 C 符号）。
+        /// 语义层应跳过 body 检查，注册为外部符号；解释器拒绝调用；LLVM 生成 `declare`。
+        is_extern: bool,
     },
     Class {
         name: String,

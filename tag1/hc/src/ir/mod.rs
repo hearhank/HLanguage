@@ -90,6 +90,9 @@ pub struct IrFunc {
     pub is_test: bool,
     /// K5（ADR-0014）：`export fn`——原生符号级导出（LLVM 外部 thunk 生成依据）
     pub exported: bool,
+    /// A1（ADR-0020）：`extern fn`——纯声明（无 body，链接期解析外部 C 符号）。
+    /// LLVM 后端生成 `declare` 而非 `define`；解释器拒绝调用。
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

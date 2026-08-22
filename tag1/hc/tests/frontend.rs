@@ -867,3 +867,82 @@ fn m14_sibling_top_level_fn_is_file_private() {
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }
+
+// ---------- A1（ADR-0020）：extern fn — FFI 纯声明 ----------
+
+#[test]
+fn a1_parse_extern_fn() {
+    // `extern fn add(a: i32, b: i32) i32;` → is_extern: true, 无 body
+    let program = parse_source("extern fn add(a: i32, b: i32) i32;\n").expect("parse extern fn");
+    assert_eq!(program.decls.len(), 1);
+    match &program.decls[0] {
+        Decl::Fn {
+            name,
+            params,
+            ret,
+            is_extern,
+            body,
+            ..
+        } => {
+            assert_eq!(name, "add");
+            assert_eq!(params.len(), 2);
+            assert!(is_extern, "extern fn should have is_extern=true");
+            assert!(ret.is_some(), "extern fn should have return type");
+            assert!(body.stmts.is_empty(), "extern fn body should be empty");
+        }
+        other => panic!("expected Decl::Fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn a1_parse_extern_fn_no_return() {
+    // `extern fn foo();` → 无返回类型
+    let program = parse_source("extern fn foo();\n").expect("parse extern fn no return");
+    match &program.decls[0] {
+        Decl::Fn {
+            name,
+            ret,
+            is_extern,
+            ..
+        } => {
+            assert_eq!(name, "foo");
+            assert!(ret.is_none(), "extern fn without return type");
+            assert!(is_extern);
+        }
+        other => panic!("expected Decl::Fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn a1_parse_extern_fn_generic() {
+    // `extern fn swap<T>(a: *T, b: *mut T);` → 含泛型参数
+    let program =
+        parse_source("extern fn swap<T>(a: *T, b: *mut T);\n").expect("parse extern generic");
+    match &program.decls[0] {
+        Decl::Fn {
+            name,
+            type_params,
+            is_extern,
+            ..
+        } => {
+            assert_eq!(name, "swap");
+            assert_eq!(type_params.len(), 1);
+            assert_eq!(type_params[0], "T");
+            assert!(is_extern);
+        }
+        other => panic!("expected Decl::Fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn a1_sem_extern_fn_no_body_error() {
+    // extern fn 语义检查不应报错（无 body 是合法的）
+    let program = parse_source("extern fn add(a: i32, b: i32) i32;\n").expect("parse");
+    let diags = hc::check_semantics(&program);
+    let errors: Vec<_> = diags.iter().filter(|d| d.is_error()).collect();
+    assert!(
+        errors.is_empty(),
+        "extern fn 语义检查不应报错: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}

@@ -342,6 +342,7 @@ pub(crate) fn lower_decl(
             is_test,
             ret,
             exported,
+            is_extern,
             ..
         } => {
             // E1.2 组 D：类型函数（返回 `type`）= comptime-only，跳过体降级
@@ -349,6 +350,25 @@ pub(crate) fn lower_decl(
             // 经 `comptime::instantiate` 编译期求值）。函数名已在 funcs 集合，
             // 调用位判定不受影响。
             if comptime::is_type_fn(params, ret) {
+                return Ok(());
+            }
+            // A1（ADR-0020）：`extern fn`——纯声明（无 body，链接期解析外部 C 符号）。
+            // 跳过体降级，仅注册函数签名
+            if *is_extern {
+                let param_ty: Vec<Type> = params.iter().map(|p| p.ty.clone()).collect();
+                let func = IrFunc {
+                    name: name.clone(),
+                    params: (0..params.len()).collect(),
+                    param_ty,
+                    param_defaults: vec![],
+                    defaults: vec![],
+                    n_slots: params.len(),
+                    body: vec![],
+                    is_test: *is_test,
+                    exported: false,
+                    is_extern: true,
+                };
+                register_func(module, name, func);
                 return Ok(());
             }
             let func = lower_func(
@@ -594,6 +614,7 @@ pub(crate) fn lower_func(
         body: ctx.insts,
         is_test,
         exported,
+        is_extern: false,
     })
 }
 
@@ -646,6 +667,7 @@ pub(crate) fn lower_init_func(
         body: ctx.insts,
         is_test: false,
         exported: false,
+        is_extern: false,
     }))
 }
 
@@ -1914,6 +1936,7 @@ impl<'a> LowerCtx<'a> {
             body: body_insts,
             is_test: false,
             exported: false,
+            is_extern: false,
         });
         self.push(IrInst::MakeClosure {
             temp,

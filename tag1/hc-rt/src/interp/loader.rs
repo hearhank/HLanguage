@@ -531,6 +531,7 @@ impl Interp {
                         method_of: Some(qname.clone()),
                         // 组 E：async 方法留 E3/E4（示例无 async 方法）
                         is_async: false,
+                        is_extern: false,
                         span: m.span.clone(),
                     });
                 }
@@ -631,6 +632,7 @@ impl Interp {
                 is_test,
                 test_name,
                 is_async,
+                is_extern,
                 span,
                 ..
             } => {
@@ -653,6 +655,7 @@ impl Interp {
                     test_name: test_name.clone(),
                     method_of: None,
                     is_async: *is_async,
+                    is_extern: *is_extern,
                     span: span.clone(),
                 };
                 // 模块隔离（A2b）：`[module]` 成员不登记扁平名（仅限定名，供 import 复制）
@@ -737,7 +740,12 @@ impl Interp {
 
     /// M7.2：依赖包 global/const 初始化——限定名登记（`json.CONST`），仅 pub 项。
     /// 错误集别名不导出（错误码按包隔离）。
-    pub(crate) fn exec_decl_top_filter(&mut self, d: &Decl, prefix: &str, pub_only: bool) -> Result<()> {
+    pub(crate) fn exec_decl_top_filter(
+        &mut self,
+        d: &Decl,
+        prefix: &str,
+        pub_only: bool,
+    ) -> Result<()> {
         if pub_only && !d.is_pub() {
             return Ok(());
         }
@@ -848,7 +856,8 @@ impl Interp {
                 if d.name == "Thread" {
                     let done = matches!(d.fields.get("done"), Some(Value::Bool(true)));
                     let detached = matches!(d.fields.get("detached"), Some(Value::Bool(true)));
-                    if !done && !detached
+                    if !done
+                        && !detached
                         && !self
                             .root_threads
                             .iter()

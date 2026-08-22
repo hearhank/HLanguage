@@ -56,6 +56,11 @@ impl Parser {
                 self.expect(&TokenKind::KwFn, "`fn` after `async`")?;
                 self.finish_fn_decl(start, &traits, is_pub, true, is_export)
             }
+            TokenKind::KwExtern => {
+                // A1（ADR-0020）：`extern fn` 纯声明（无 body，链接期解析外部 C 符号）
+                self.advance();
+                self.parse_extern_fn_decl(start, &traits, is_pub)
+            }
             TokenKind::KwFn => {
                 self.advance();
                 self.finish_fn_decl(start, &traits, is_pub, false, is_export)
@@ -412,6 +417,67 @@ impl Parser {
             pub_: is_pub,
             is_async,
             exported: is_export,
+            is_extern: false,
+        })
+    }
+
+    /// A1：`extern fn` 声明——纯声明（无 body，链接期解析外部 C 符号）
+    pub(crate) fn parse_extern_fn_decl(
+        &mut self,
+        start: Span,
+        traits: &[Trait],
+        is_pub: bool,
+    ) -> Result<Decl, Diagnostic> {
+        self.expect(&TokenKind::KwFn, "`fn` after `extern`")?;
+        let name = self.expect_name_or_keyword()?;
+        let mut type_params: Vec<String> = Vec::new();
+        if self.at(&TokenKind::Lt) {
+            self.advance();
+            loop {
+                let tn = self.expect_ident()?;
+                type_params.push(tn);
+                if self.at(&TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_gt_generic()?;
+        }
+        self.expect(&TokenKind::LParen, "`(` after function name")?;
+        let params = self.parse_params()?;
+        self.expect(&TokenKind::RParen, "`)` after parameters")?;
+        let ret = if !self.at(&TokenKind::Semi) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Semi, "`;` after extern fn declaration")?;
+        let end = self.span();
+        let (is_test, test_name) = traits
+            .iter()
+            .find_map(|t| match t {
+                Trait::Test { name } => Some((true, name.clone())),
+                _ => None,
+            })
+            .unwrap_or((false, None));
+        Ok(Decl::Fn {
+            name,
+            type_params,
+            params,
+            ret,
+            where_clause: Vec::new(),
+            body: Block {
+                stmts: vec![],
+                span: end.clone(),
+            },
+            span: start.merge(&end),
+            is_test,
+            test_name,
+            pub_: is_pub,
+            is_async: false,
+            exported: false,
+            is_extern: true,
         })
     }
 
