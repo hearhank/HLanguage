@@ -19,7 +19,7 @@
 | 2 | **io = 标准库模块**：函数直接调用（`my.print(...)`）；模块内环境状态（env/exit/fs/net/time，**args 经入口 `main(args)` 注入，`io.args()` 取消**）；非对象注入 | Q13/F1 |
 | 3 | **库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）；**值类型栈上分配，经 `alloc` 堆上分配** | Q9 |
 | 4 | **扩展类型暂留语言内建**（String/集合族/Table），后期再评估分离标准库 | Q10 |
-| 5 | **线程进第二部分**：仅 E2.2 线程生命周期（`spawn(f, args...) o Thread<T>` / `join() !T` / `cancel()` / `is_done()` / `detach()` + 02 E2.2 捕获规则 + 每线程 alloc）；四模式/async/@atomic/mutex 留第三块 | Q10/Q15 |
+| 5 | **线程进第二部分**：仅 E2.2 线程生命周期（`spawn(f, args...) o Thread(T)` / `join() !T` / `cancel()` / `is_done()` / `detach()` + 02 E2.2 捕获规则 + 每线程 alloc）；四模式/async/@atomic/mutex 留第三块 | Q10/Q15 |
 | 6 | **代码管理组**（第二块扩展，排最后）：① 项目代码结构 ② 代码引用库 ③ 模块(domain) ④ 文档自动生成 | Q11/Q12 |
 | 7 | **模块(domain)** = `[module]` 特性标注的命名空间（F2 定案）——内容与其它命名空间**隔离**；需要其它库的数据经**上下文（init 参数列表）**初始化注入；第二部分以工程约定落地，模块实例化语法归第三块 E6 候选 | Q11/Q16/F2 |
 | 8 | **文档自动生成** = `hc doc` 输出 **Markdown**（标准库 + 用户项目，`///` 注释 + 声明签名）；HTML 归第三块 E5.1 | Q17 |
@@ -56,7 +56,7 @@
 | 差异项 | 04 文档 | tag1 现状 | 归口 |
 |---|---|---|---|
 | `io.stdout`/`io.stderr` 独立字节流 | read_all/write_all | 与 io 同实例 | 第三块 E3 |
-| `io.fs.list_dir` → `Vec<DirEntry>`（字段 name/is_dir） | Vec<DirEntry> | 字符串数组 | 第三块 E3 |
+| `io.fs.list_dir` → `Vec(DirEntry{name,is_dir})` | Vec(DirEntry) | 字符串数组 | 第三块 E3 |
 | `String.to_upper` | API 清单 | 未实现 | 第三块 E3 |
 | `io.net.get` / UDP | API 清单 | 未实现 | 第三块 E3.1 |
 | `io.fs.open_dir`/`Dir` | API 清单 | 未实现 | 第三块 E3 |
@@ -162,7 +162,7 @@
 
 | # | 任务（行为面） | 验收 | 依赖 | 预估 |
 |---|---|---|---|---|
-| ✅ G1 | `spawn(f, args...) o Thread<T>` 内建（interp）：每线程 alloc 实例（Q8）；线程栈与作用域根提升 | 线程测试绿（基本 spawn/join） | A3 | 2h |
+| ✅ G1 | `spawn(f, args...) o Thread(T)` 内建（interp）：每线程 alloc 实例（Q8）；线程栈与作用域根提升 | 线程测试绿（基本 spawn/join） | A3 | 2h |
 | ✅ G2 | `join() !T`（返回值传递）/ `cancel()`（协作式）/ `is_done()` / `detach()` | 线程生命周期测试绿 | G1 | 2h |
 | ✅ G3 | 捕获规则与所有权：值复制/move/global + Q18 绑定例外 + Q19 冻结窗口（02 E2.2） | 捕获规则测试绿 | G1 | 2h |
 | ✅ G4a | 三后端对齐 I：IR 线程指令 + 字节码 opcode 扩展 | ir/bytecode 测试绿 | G1/G2/G3 | 1.5h |
@@ -173,7 +173,7 @@
 >
 > ✅ **G2 已完成（2026-08-17）**：生命周期方法全量——`join`（返回值 + 错误 union 透传 + cancel 已置 → `error.Cancelled`）、`cancel`（置协作标志）、`is_done`、`detach`（立即运行到完成并丢弃结果）；未 join/未 detach 线程作用域退出提升根回收队列、程序结束运行；新增 `Cancelled` 错误名。`hc-rt/tests/thread.rs` 完整生命周期矩阵绿。
 >
-> ✅ **G3 已完成（2026-08-17）**：捕获规则 + Q18/Q19 静态检查——`hc/src/semantic.rs` `builtin_fn_ret` 新增 `"spawn"` → `Thread<T>`（T = callee 返回类型含错误 union）；绑定/逃逸数据流（Q18：句柄作用域内 join = 绑定；detach/退出 = 逃逸禁引用捕获）+ 冻结窗口（Q19：spawn→join 间禁止写被捕获引用目标）。`hc/tests/thread_capture.rs` 新增（9 项）：值/global/move 捕获逃逸安全、绑定引用捕获、detach 引用捕获、逃逸/条件 join 拒绝、冻结违例、join 后写回允许。
+> ✅ **G3 已完成（2026-08-17）**：捕获规则 + Q18/Q19 静态检查——`hc/src/semantic.rs` `builtin_fn_ret` 新增 `"spawn"` → `Thread(T)`（T = callee 返回类型含错误 union）；绑定/逃逸数据流（Q18：句柄作用域内 join = 绑定；detach/退出 = 逃逸禁引用捕获）+ 冻结窗口（Q19：spawn→join 间禁止写被捕获引用目标）。`hc/tests/thread_capture.rs` 新增（9 项）：值/global/move 捕获逃逸安全、绑定引用捕获、detach 引用捕获、逃逸/条件 join 拒绝、冻结违例、join 后写回允许。
 >
 > ✅ **G4a 已完成（2026-08-17）**：IR + 字节码对齐——`hc/src/ir.rs` `call_builtin` `"spawn"`（构造 `Cell::Class{name:"Thread"}` + `ctx.current_alloc` 每线程 alloc 覆盖，save/restore）+ `call_builtin_method` Thread 臂（join/detach/is_done/cancel 分派）；字节码零改动（执行委托 `run_ir`，class 走既有序列化）。`hc/tests/ir.rs` 增 7 项、`hc/tests/bytecode.rs` 增 4 项 round-trip，全绿。
 >

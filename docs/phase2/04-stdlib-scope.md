@@ -63,7 +63,7 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - `io.fs.append(path, data) !void` ≡ `f.append(data)`；`io.fs.rename(a, b) !void`；`io.fs.remove(path) !void`
 - `io.fs.read_int(path) !i64` / `io.fs.write_int(path, v) !void`
 - **随机访问（2026-08-14 定案）**：`f.seek(offset: usize) !void`（绝对定位游标）/ `f.pos() usize`（当前偏移）/ `f.read_at(buf, offset) !usize` / `f.write_at(data, offset) !void`（定位读写，不改游标）
-- `io.fs.list_dir(&dir, alloc) !Vec<DirEntry>`（DirEntry：name / is_dir；**G2 2026-08-18 落地**：路径形态 `io.fs.list_dir(path)` 亦支持，条目为 DirEntry 对象而非裸文件名数组）
+- `io.fs.list_dir(&dir, alloc) !Vec(DirEntry)`（DirEntry：name / is_dir；**G2 2026-08-18 落地**：路径形态 `io.fs.list_dir(path)` 亦支持，条目为 DirEntry 对象而非裸文件名数组）
 - `io.net.connect(host, port, alloc) !TcpConn` / `conn.read_all() !&[u8]` / `conn.write(data) !void` / `conn.shutdown() !void` / `conn.close()`——**Q20 双语**（命名空间形式 ≡ 实例形式）：`io.net.read_all(&conn, alloc)` / `io.net.write(&conn, data)` / `io.net.shutdown(&conn)` / `io.net.close(&conn)` / `io.net.local_port(&conn)`
 - `io.net.listen(host, port, alloc) !TcpListener` / `listener.accept() !TcpConn` / `listener.local_port() u16` / `listener.close()`——双语 `io.net.accept(&server) !Conn`（0 端口 = 临时端口，`local_port()` 取实际值）
 - **HTTP 客户端（G1，2026-08-18 落地）**：`io.net.get(url) !&[u8]`——仅 `http://`（https/TLS 未实现 → `error.InvalidUrl`）；非 200 状态 → `error.Http{code}`；体按 Content-Length 截取
@@ -73,13 +73,13 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - **ipc（G3 2026-08-18 落地；进程内 IPC 原语——真实 OS 进程/共享内存依赖 FFI 与进程模块，1.x）**：`io.ipc.pipe() !(PipeReader, PipeWriter)`（匿名管道 → **2 元素数组 `[reader, writer]`**，同 UDP recv_from 约定）——写端 `writer.write(data) !void` / `writer.close() !void`（置写端关闭标记）；读端 `reader.read(alloc) !&[u8]`（排空可读字节；空且写端开 → 空切片，不阻塞——协作式模型）/ `reader.read_all(alloc) !&[u8]` / `reader.is_closed() bool`（写端已关）/ `reader.close() !void`（注销管道；**close 幂等**，管道已拆除后再 close 为 no-op）。`io.ipc.shm(name, size) !Shm`（命名共享内存，定长字节区）——`shm.write(data) !void`（覆盖内容、截断到 size）/ `shm.read(alloc) !&[u8]` / `shm.close() !void`。跨执行上下文：pipe/shm 注册表为 Interp 全局，经 `spawn` 传 Pipe 值可在 H 线程间传数据。
 - **storage（G4 2026-08-18 落地；文件持久化键值存储——数据库连接抽象依赖真实 DB 驱动，1.x）**：`io.storage.open(path) !KvStore`——`kv.put(key, value) !void` / `kv.get(key) !?&[u8]`（缺失 → **null**，`orelse` 给默认）/ `kv.contains(key) bool` / `kv.remove(key) !void`（幂等）/ `kv.len() usize` / `kv.close() !void`（落盘 + 注销注册表；**close 幂等**，已关闭再 close 为 no-op）。持久化二进制格式（u32 键长 + 键 + u32 值长 + 值，小端）；缺文件视为空库、close 即建；close 后 reopen 读回既有条目。
 - **archive（G4 2026-08-18 落地；RLE 压缩——通用压缩算法如 gzip/zip 留 1.x）**：`io.archive.compress(data) !&[u8]` / `io.archive.decompress(data) !&[u8]`——token `0x00` 字面跑 / `0x01` 重复跑；含重复字节输入明显变短，round-trip 任意字节保真；非法压缩数据 → `error.InvalidFormat`。
-- **text（G5 2026-08-18 落地；正则子集文本处理——完整引擎/Unicode 留 1.x）**：`io.text.matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制全串）/ `io.text.find(pattern, text) ?int`（首个匹配起点；无 → null）/ `io.text.replace(pattern, text, repl) &[u8]`（替换全部非重叠匹配、每处取最长）/ `io.text.split(pattern, text) Vec<&[u8]>`（按匹配分割，含空段）——支持字面量 / `.` / `[...]`（范围、`^` 取反、`\d` `\w` `\s`）/ 分组 / `*` `+` `?` `{n,m}` / `|` / `^` `$` / `\n` `\t` `\r` `\xNN` 及转义元字符；非法模式 → `error.InvalidFormat`。
+- **text（G5 2026-08-18 落地；正则子集文本处理——完整引擎/Unicode 留 1.x）**：`io.text.matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制全串）/ `io.text.find(pattern, text) ?int`（首个匹配起点；无 → null）/ `io.text.replace(pattern, text, repl) &[u8]`（替换全部非重叠匹配、每处取最长）/ `io.text.split(pattern, text) Vec(&[u8])`（按匹配分割，含空段）——支持字面量 / `.` / `[...]`（范围、`^` 取反、`\d` `\w` `\s`）/ 分组 / `*` `+` `?` `{n,m}` / `|` / `^` `$` / `\n` `\t` `\r` `\xNN` 及转义元字符；非法模式 → `error.InvalidFormat`。
 - **rng（G5 2026-08-18 落地；伪随机数——真密码学随机依赖 OS 熵源，1.x）**：`io.rng.seed(v)`（0 → 回退默认）/ `io.rng.next() u64`（xorshift64* 原始 64 位）/ `io.rng.int(n) int`（[0, n) 均匀，拒绝采样免模偏差）/ `io.rng.float() f64`（[0, 1)，高 53 位）——全局态在 Interp 实例（协作式单线程安全）；命名空间类名 `RngNs` 避开用户类 `Rng`（内建先于用户方法分派，同名会被拦截）。
 
 ### 集合与字符串（Q15 构造；String = u8[] 别名 Q3）
 
-- `Vec<T>.init(alloc)` — append / len / extend / to_bytes / from_bytes
-- `Map<K, V>.init(alloc)` — put / get ?V / contains / remove / len
+- `Vec(T).init(alloc)` — append / len / extend / to_bytes / from_bytes
+- `Map(K, V).init(alloc)` — put / get ?V / contains / remove / len
 - `String.from(&[u8], alloc)` — concat / split / join / find ?usize / substring / replace / to_upper / to_bytes / **as_slice（内容视图，无前缀，R-2）** / == 内容比较（**G2 2026-08-18 落地**：`to_upper`/`to_lower`——ASCII 大小写转换，非 ASCII 字节不变）
 - `String.from_slice(&buf, arena)`（arena 分配形态）
 - 内建：`copy(&v)` / `box(v, alloc)`（Q12）
@@ -101,8 +101,8 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 
 ### 并发（12.21/12.24/Q14/Q20）
 
-- `spawn(f, args...) o Thread<T>` — `join() !T` / `cancel() !void` / `is_done() bool` / `detach()`
-- `async fn` → `Future<R>`（R 含 !）；`await f`
+- `spawn(f, args...) o Thread(T)` — `join() !T` / `cancel() !void` / `is_done() bool` / `detach()`
+- `async fn` → `Future(R)`（R 含 !）；`await f`
 - 四模式类型：`init(alloc)` / `write(v)` / `read() T` / `try_read() ?T` / `close()` / **`send(v)` / `recv() T`（通道，Q-R12）**
 - 原子原语（Q-S3）：`@atomicLoad` / `@atomicStore` / `@atomicRmw` + 内存序五值
 - `Io.evented(alloc)` / `Io.threaded()`（运行时显式切换，Q35）

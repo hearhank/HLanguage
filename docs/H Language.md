@@ -93,7 +93,7 @@
 | 浮点 | `f16` / `f32` / `f64` / `f128` | 实现 `INumber`/ `IDecimal` / `IEqual`/`ICompare` |
 | 布尔/空 | `bool` / `void` | `void` 仅函数返回 |
 | 数组 | `[N]T` | 定长，引用类型（传引用、复制需显式 `copy`） |
-| 表格 | `Table(T)` | 内建二维结构，代替 `[M][N]T` |
+| 表格 | `Table<T>` | 内建二维结构，代替 `[M][N]T` |
 | 元组 | `(T1, T2, ...)` | 匿名值类型 |
 | 切片 | `&[T]` / `&mut [T]` | 带位置与长度的指针视图 |
 | 可选 | `?T` | 使用前显式解包 |
@@ -242,7 +242,7 @@ while (e!) |v| { ... } else |err| { ... }  // error union 捕获（错误走 els
 
 for (items) |item| { ... }       // 数组/切片迭代，捕获默认只读；值类型迭代自动取引用
 for (items) |mut item| { ... }   // 可写捕获
-for (items) |move item| { ... }  // 拥有迭代（IIterable(o T)）
+for (items) |move item| { ... }  // 拥有迭代（IIterable<o T>）
 for (0..10) |i| { ... }          // 区间糖（底层仍是 while）
 
 break :label / continue :label   // 带标签退出嵌套
@@ -267,7 +267,7 @@ export fn foo(a: i32) i32 {}             // 原生符号级导出——链接器
 fn fun(y: owned *mut T) void {}              // owned T：参数拥有（退出销毁）
 fn add(a: *T) void where T: INumber {}  // 接口约束：where 子句在签名末尾
 fn f(x: &[u8]) !i32                      // 返回 error union
-async fn af() T                          // 返回 Future(T)
+async fn af() T                          // 返回 Future<T>
 fn f(a: i32, b: i32 = 0) i32 { ... }    // 重载 + 可选参数（尾部、编译期常量默认值）
 ```
 
@@ -479,14 +479,32 @@ var (q, r) = divmod(a, b);          // 调用解构
 ### 9.3 Table
 
 ```hc
-var tbl = Table<i32>.init(alloc, 4, 8, 0);   //分配器、行分配器、行数、列数、填充初始值（定长）
-var v = tbl[i, j];                                                   // 多参索引（仅 Table 合法）
+// 构造（定长）：分配器、行数、列数、填充初始值
+var tbl = Table<i32>.init(alloc, 4, 8, 0);
+var v = tbl[i, j];                  // 多参索引（仅 Table 合法）：读单元格
+
+tbl[i, j] = 5;                      // 写单元格
+// tbl[i] = 行;                     // 整行赋值不支持（行视图只读）
+
+// 密封构造（B 方案，2026-08-22）：回调内写格，返回编译期强制只读表
+var sealed = Table<*mut Obj>.init_with(alloc, 4, 8, |i, j, cell: *mut *mut Obj| {
+    cell.* = &mut obj;              // 回调内可写单元格（cell = 单元格可写引用）
+});
+// sealed[i, j] = v;  sealed[i, j] += v;  &mut sealed;   → 均编译错误（不可解除密封）
 ```
 
 - 内建泛型二维结构 `Table<T>`，**代替二维数组**（`[M][N]T` 语法不再提供，一维数组保留）
-- **引用类型**（与数组/集合一致：传参走引用、复制需显式 `copy`）
-- 底层**行主序连续内存**（可 `to_bytes`）
-- 不提供 `==`（显式遍历比较）；变长需求用集合组合（`Vec<Table<T>>` 等）
+- **引用类型**（与数组/集合一致：传参走引用、复制需显式 `copy`）；**底层 = 每行一个连续 `T[]` 数组，行主序**（逻辑连续、非整表单缓冲；可 `to_bytes`）
+- **访问**：`t[i, j]` 单元格（行、列，仅 Table 合法的多参索引）；`t[i]` 行视图（返回切片 `&[T]`/`&mut [T]`，`t[i][j]` ≡ `t[i,j]`，行视图 `.len()` = 列数）；越界检查按模式（Q24）
+- **写**：单元格赋值 `t[i,j] = v`、复合赋值 `t[i,j] += v`；**整行赋值 `t[i] = 行` 不支持**
+- **方法**：`t.len()` = 行数、`t.cols()` = 列数；不提供 `.get/.set`（索引即语法）
+- **迭代**：`for x in t` 产出**扁平单元格**（行主序，元素 = T，IIterable 三态套用）；行用 `t[i]` / 嵌套 for
+- **密封构造 `init_with`**：`Table<T>.init_with(alloc, rows, cols, cb)`——回调 `|i, j, cell: *mut T|` 内写格（`cell.* = v`）；返回**编译期强制只读表**（直接赋值 / 复合赋值 / `&mut t` 均编译错误，不可解除密封）；只读操作（读 / 行视图 / `&t` / `copy(t)` / 迭代 / to_bytes）全部可用。背景：H 绑定级只读（默认只读 Rust 式）**文档已写但未实现**（C4，1.x 待办），故用类型级密封补只读保证
+- **泛型参数**：T 可为任意类型（含指针）——`Table<T>` 拥有元素 / `Table<*T>` 存只读引用 / `Table<*mut T>` 存读写引用；`t[i,j]` 返回元素指针，`Table<*mut T>` 经 `t[i,j].*` 可写 pointee；**单元格指针替换**：密封表一律不可替换，普通表当前允许（待 1.x 绑定级只读门控）；只读指针表用 `init_with` 逐格赋 `&mut obj`，空指针表用 `Table<?*mut T>` + `null`
+- **copy / 所有权**：内建 `copy(t)` 深复制整表（保留 alloc，`CopyMode.shallow` 可选）；作用域退出释放所有行数组；`move` 合法
+- **嵌套**：`Table<Table<T>>` 合法（泛型递归）
+- **序列化**：to_bytes = u64 LE 行数 + u64 LE 列数 + 行主序元素字节（自描述，from_bytes 可恢复定长表）；**空表**（0×N / N×0 / 0×0）合法
+- 不提供 `==`（显式遍历比较）；变长需求用集合组合（`Vec<Table>` 等）
 
 ### 9.4 String（内建新类型）
 
@@ -524,13 +542,13 @@ interface IShape {
 
 class Rect: IShape { ... }              // implements 标注 = 冒号后缀
 class Foo: IShape, IDrawable { ... }    // 接口列表逗号分隔
-class Fib: IIterable(i32) { ... }       // 泛型接口在 implements 中实例化（圆括号类型参数）
+class Fib: IIterable<i32> { ... }       // 泛型接口在 implements 中实例化（尖括号类型参数）
 ```
 
 - **显式声明实现**（冒号后缀）；可描述复杂类型、标量、内建类型、用户定义类型
 - **存储形态（连续/堆上）由特性标注决定**，不参与接口标注
 - **三用途**：① 标记 class 功能；② 标记参数类型（`where T: IShape` 约束）；③ 类型参数编译可验证
-- 不提供运算符重载；闭包「调用契约」= 内置调用接口类型 `FnN(参数) 返回`
+- 不提供运算符重载；闭包「调用契约」= 内置调用接口类型 `FnN<参数> 返回`
 
 ### 10.2 接口指针（胖指针）
 
@@ -591,13 +609,13 @@ interface IPow {
 
 ### 10.6 迭代契约
 
-- 接口 **`IIterable`** 按元素访问形态三态（泛型实例化语法与 `Vec(i32)` 一致用圆括号）：
+- 接口 **`IIterable`** 按元素访问形态三态（泛型实例化语法与 `Vec<i32>` 一致用尖括号）：
 
 | 接口 | 形态 | 语法 |
 |---|---|---|
-| `IIterable(*T)` | 只读迭代 | `for (x) \|item\|` |
-| `IIterable(*mut T)` | 可写迭代 | `for (x) \|mut item\|` |
-| `IIterable(owned T)` | 拥有迭代 | `for (x) \|move item\|`（消耗元素/转移所有权） |
+| `IIterable<*T>` | 只读迭代 | `for (x) \|item\|` |
+| `IIterable<*mut T>` | 可写迭代 | `for (x) \|mut item\|` |
+| `IIterable<owned T>` | 拥有迭代 | `for (x) \|move item\|`（消耗元素/转移所有权） |
 
 - 元素类型 T 与形态由接口方法 `next(self: *mut Self) ?T` 按对应形态推断
 - 内建类型（数组/切片/Vec/Map/Table/String）编译器内建实现三态
@@ -806,7 +824,7 @@ fn List(T: type) type     // comptime 式泛型：编译期函数、类型即值
 - `anytype` 完整语义：调用点按实参具体类型实例化——返回 `anytype` 解析为体 return 表达式在具体绑定下的类型
 - `comptime_int` / `comptime_float` 类型识别与惰性宽度
 - `comptime` 块：装载期受限 Interp 求值、结果丢弃、失败 = 编译错误
-- **嵌套/递归实例化**：`PairPair(i32)` / `LinkedList(T)` 自引用
+- **嵌套/递归实例化**：`PairPair<i32>` / `LinkedList<T>` 自引用
 - **comptime 值函数**：参数含 `T: type`、非返回 `type` 的普通函数调用点编译期求值（如 `array_len(i32)` = 4 折叠）
 
 ---
@@ -816,21 +834,21 @@ fn List(T: type) type     // comptime 式泛型：编译期函数、类型即值
 ### 15.1 基础语法
 
 ```hc
-var shared: o ManyToMany(i32) = ...;        // 四模式共享容器
-var t: o Thread(i32) = spawn(af, ...);       // spawn = 函数 + 显式参数
+var shared: o ManyToMany<i32> = ...;        // 四模式共享容器
+var t: o Thread<i32> = spawn(af, ...);       // spawn = 函数 + 显式参数
 var r = try t.join();                        // 消耗所有权（await 同源）
 t.cancel() / t.is_done() / t.detach()
-var f: Future(R) = af(...); var v = await f;  // await 任何函数可用
+var f: Future<R> = af(...); var v = await f;  // await 任何函数可用
 ```
 
 ### 15.2 四模式类型 ✅
 
 | 类型 | 语义 |
 |---|---|
-| `OneToOne(T)` | 单读单写 |
-| `OneToMany(T)` | 单读多写 |
-| `ManyToOne(T)` | 多读单写 |
-| `ManyToMany(T)` | 多读多写 |
+| `OneToOne<T>` | 单读单写 |
+| `OneToMany<T>` | 单读多写 |
+| `ManyToOne<T>` | 多读单写 |
+| `ManyToMany<T>` | 多读多写 |
 
 - 内建泛型共享内存容器；写者数量由类型名保证（单写者无锁、多写者互斥）
 - **协作式透明实现**：单线程确定性模型下四变体运行时行为一致（读者/写者数量为类型层契约，不引入真锁/真并发；真 OS 并行归 1.x）
@@ -874,7 +892,7 @@ var f: Future(R) = af(...); var v = await f;  // await 任何函数可用
 
 ### 15.7 async/await ✅
 
-- `async fn` 返回 `Future(R)`（R = 完整返回类型含错误联合 `Future(!R)`）
+- `async fn` 返回 `Future<R>`（R = 完整返回类型含错误联合 `Future<!R>`）
 - **await ≡ join()** 且**任何函数可用**（无 async 传染）
 - 执行模型 = **协作式延迟执行**（非 Go 式协程/M/N）：async fn 调用点返回**惰性** `Future` 值，体延迟到 await 才执行
 - 协作式取消（cancel → `error.Cancelled`）、is_done 状态转移、await 幂等缓存
@@ -939,7 +957,7 @@ var f: Future(R) = af(...); var v = await f;  // await 任何函数可用
 ```
 <name>/
 ├── build.zon     # 清单：name/version/kind=Kind.exe/files=["main.hc"]/deps=[]
-└── main.hc       # 入口 fn main(args: o Vec(String)) !void + [test] 冒烟测试
+└── main.hc       # 入口 fn main(args: o Vec<String>) !void + [test] 冒烟测试
 ```
 
 - **名称校验**：`[A-Za-z0-9_-]`（目录名合法；非空、非 `.`/`..`）
@@ -1047,7 +1065,7 @@ var q = alloc.init(Person);                                         // 无参构
 enum Kind { player, enemy }                          // 合一式枚举
 interface INumber: ICompare { fn add(self: *Self, other: Self) Self }  // 接口（冒号标注，可继承）
 var t = (1, "a");                                    // 元组：访问 t.0 / 解构 var (a, b) = t;
-var tbl = Table(i32).init(alloc, 4, 8, 0);           // Table（方法构造 + t[i, j]）
+var tbl = Table<i32>.init(alloc, 4, 8, 0);           // Table（方法构造 + t[i, j]）
 fn f(a: i32, b: i32 = 0) i32 { ... }                 // 重载 + 可选参数（尾部、编译期常量默认值）
 [test] fn check() !void { try expect_eq(add(1, 2), 3); }  // 测试函数
 script { ... }  /  comptime { ... }                   // 元编程双轨

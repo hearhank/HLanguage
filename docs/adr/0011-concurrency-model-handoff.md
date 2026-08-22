@@ -13,7 +13,7 @@
 ## 决策
 
 1. **`async`/`await`（E2.3）在协作式模型上落地（本块内）**：
-   - `async fn f(...) R` 返回 `Future(R)`（R = 完整返回类型含错误 union，Q20）；`await` ≡ `join()`，任何函数可用（Q19，无 async 传染）
+   - `async fn f(...) R` 返回 `Future<R>`（R = 完整返回类型含错误 union，Q20）；`await` ≡ `join()`，任何函数可用（Q19，无 async 传染）
    - **执行模型 = 协作式延迟任务**：`Future` 复用组 G 的 `Thread` 机制（`{fn, args, alloc, cancel, done, detached, result}` 类名分派 + 每线程 alloc），不引入 OS 线程；await 时运行到完成（确定性）
    - 协作式取消沿用组 G：cancel 置协作标志，await/detach/程序结束为运行点
    - `Io.evented()`（单线程事件循环 + 非阻塞 IO + 协作调度）本块内实现；`Io.threaded()`（真线程）随四模式延迟

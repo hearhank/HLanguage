@@ -10,7 +10,7 @@ export fn foo(a: i32) i32 {}        // K5（ADR-0014，2026-08-18 落地）：�
 fn fun(y: o *mut T) void {}          // o T：参数拥有（Q22b 类型标注制；退出销毁）
 fn add(a: *T) void where T: INumber {}  // 接口约束：where 子句在签名末尾（Q22b）
 fn f(x: &[u8]) !i32                   // 返回 error union
-async fn af() T                       // 返回 Future<T>（第三块 E2）
+async fn af() T                       // 返回 Future(T)（第三块 E2）
 var hp: o *mut Point = box(p, alloc); // 装箱：值 → 堆引用（Q8，显式分配器）
 ```
 

@@ -24,7 +24,7 @@
 `Allocator` 是一个接口类型（接口三用途，见 `06-05-interfaces.md`）：函数需要分配时，以显式参数接收分配器。
 
 ```hc
-fn parse(io: *T, alloc: Allocator) !Vec<Node> where T: Io { ... }
+fn parse(io: *T, alloc: Allocator) !Vec(Node) where T: Io { ... }
 ```
 
 方法集（**对齐 2026-08-14 phase1 审计 C2 定案**，取代早前 `arena.alloc(T{...})` 单形态）：
@@ -72,7 +72,7 @@ fn parse(io: *T, alloc: Allocator) !Vec<Node> where T: Io { ... }
 `alloc` 分配的对象**默认注册当前作用域**（拥有所有权，ADR-0003 Q-S11）：作用域退出 LIFO 自动销毁；`o` 标注为冗余（不参与判定）。`move` 合法（非 Arena 来源）。典型：
 
 ```hc
-var mut v = alloc.init(Vec<i32>);   // 拥有，退出自动销毁
+var mut v = alloc.init(Vec(i32));   // 拥有，退出自动销毁
 ```
 
 ## 4. Arena
@@ -136,7 +136,7 @@ var sp: o *INumber = box(a, alloc);     // 胖指针：data + 虚表 + alloc 引
 
 ## 7. 与集合 / 序列化的交互
 
-- **集合持有分配器引用**：`Vec<T>.init(alloc)` / `Map<K,V>.init(alloc)` / `Table<T>.init(alloc, rows, cols, init)`——容器把 alloc 存为内部字段，扩容与子对象分配均走它。这使集合能在作用域退出时递归销毁其拥有内容
+- **集合持有分配器引用**：`Vec(T).init(alloc)` / `Map(K,V).init(alloc)` / `Table(T).init(alloc, rows, cols, init)`——容器把 alloc 存为内部字段，扩容与子对象分配均走它。这使集合能在作用域退出时递归销毁其拥有内容
 - **序列化**：`to_bytes` / `from_bytes` 输出目标缓冲需分配 → 接收 alloc 参数（或由调用方预分配传入）
 - **String**：`String.from(&[u8], alloc)`（复制构造，拥有）；`String.from_slice(&buf, arena)`（arena 形态视图）
 
@@ -169,7 +169,7 @@ tag1（第一块 M4 + 第二块 M5.1）已实现 alloc/arena 内建的 Value 模
 | G1 | ~~Arena 无真实内存管理（tag1 用 `Value` 模拟），`deinit` no-op~~ **✅ 已落地**（tag1）：`Value::Arena`/`IrValue::Arena` 为真实状态句柄——bump + 块链表（默认块 1024，超限按实际大小开新块）、`alloc(n)` 从当前块切出零初始化区域（不足向 backing 申请）、`deinit` 批量归还（清空块链表 + 归零统计 + 标记不可用）、deinit 后 alloc 抛 `error.ArenaDeinitialized`；OOM 仍返回可 catch 的 `error.OutOfMemory`。**`arena.init(T)`/`arena.init(T{...})` typed 构造已落地**（E1/E2）：按类型大小对齐后 bump 记账 + 字段默认值填充（对齐 `alloc.init(T)` 双形态；连续 class 按布局总大小，堆上 class = 指针宽 8；未知类型 `UnknownType`；deinit 后 init 同抛 `ArenaDeinitialized`）。跨两个后端（tree-walking interp + IR）各带测试 | bump + 块链表 + backing 归还 |
 | G2 | ~~无 `error.OutOfMemory` 错误码~~ **✅ 已落地**（tag1）：`hc::error_code_table` 追加内建 `BUILTIN_ERRORS` 注册（用户码序不变）；`alloc.alloc(n)` / `arena.alloc(n)` 分配失败返回 `error.OutOfMemory`（可 catch 的 error union 值，非进程 panic——`Vec::try_reserve_exact` 优雅失败） | 错误码表注册（M2.6 机制） |
 | G3 | ~~胖指针/装箱未携带 alloc 引用（tag1 `Value::Interface` 结构待扩为三字宽）~~ **✅ 已落地**（tag1）：`box(v)` 返回三字宽胖指针——`Value::Boxed`/`IrValue::Boxed` 承载 `data + vtbl + alloc`（interp `BoxedData`，IR `Cell::Boxed`）。`box` 取 1-2 参：显式传分配器则携带，未传回退全局 `alloc`（旧 1 参形态的 ArityMismatch 缺陷一并修复）；`p.alloc()` 返回携带的分配器引用；`p.*` 解引用读/写穿透 pointee；装箱 class 经 `*I` 接口分派鸭子类型达具体实现（Rect/Circle `s.area()`）。编译器内建类型对齐 `o *mut T`（`SType::Ptr(.., true)`）。跨两个后端（tree-walking interp + IR）各带 6 测试 | §6 定案落地 |
-| G4 | ~~集合未持有分配器引用（tag1 集合为 Value 内建）~~ **✅ 已落地**（tag1）：`Vec<T>.init(alloc)` / `Map<K,V>.init(alloc)` / `Table<T>.init(alloc, rows, cols, init)` 把 alloc 存为内部字段（interp `Value::Vec`/`Value::Map` 句柄，IR `Cell::Vec { arr, alloc }`/`Cell::Map { fields, alloc }`），`collection.alloc()` 返回携带的分配器引用；未显式传 alloc（含裸类型表达式 `Vec<i32>` 实例化）回退全局 `alloc`。集合句柄 `deref_value` 剥为共享底层 Arr（20 余个既有 Arr 方法/索引/遍历复用），`&Vec` 传参、`sort(&mut v)` 写穿、`for` 遍历均正常；Map 句柄方法与 `Class("Map")` 共用实现（put/get/contains/remove/len/iter/from_json/to_json）。跨两个后端（tree-walking interp + IR）各带 8 测试（`hc-rt/tests/collection.rs`、`hc/tests/ir.rs`） | §7 定案落地 |
+| G4 | ~~集合未持有分配器引用（tag1 集合为 Value 内建）~~ **✅ 已落地**（tag1）：`Vec(T).init(alloc)` / `Map(K,V).init(alloc)` / `Table(T).init(alloc, rows, cols, init)` 把 alloc 存为内部字段（interp `Value::Vec`/`Value::Map` 句柄，IR `Cell::Vec { arr, alloc }`/`Cell::Map { fields, alloc }`），`collection.alloc()` 返回携带的分配器引用；未显式传 alloc（含裸类型表达式 `Vec(i32)` 实例化）回退全局 `alloc`。集合句柄 `deref_value` 剥为共享底层 Arr（20 余个既有 Arr 方法/索引/遍历复用），`&Vec` 传参、`sort(&mut v)` 写穿、`for` 遍历均正常；Map 句柄方法与 `Class("Map")` 共用实现（put/get/contains/remove/len/iter/from_json/to_json）。跨两个后端（tree-walking interp + IR）各带 8 测试（`hc-rt/tests/collection.rs`、`hc/tests/ir.rs`） | §7 定案落地 |
 | G5 | ~~无对齐保证与泄漏检测~~ **✅ 已落地**（tag1）：对齐——`ALLOC_ALIGN = 16`（H 值承载 i128/f64），bump 切出前游标圆整到 16 倍数（interp `align_up`，IR `align_up_ir`），对齐填充计入 `arena.bytes()`（真实 bump 语义：alloc(1)+alloc(1)+alloc(16) → 游标 0→1→16→17→32→48）；泄漏检测——全局 `alloc.alloc(n)` 登记分配记录（interp `LeakRecord{size,line,weak}` 弱引用自动释放：值销毁 → weak 失效自动注销，作用域退出即释放；IR `Ctx::alloc_tracker` 纯计数无行号），`alloc.leaks()` 活跃数、`alloc.leak_report()` 清单文本（`"leak: line {line}: {size} bytes\n"`）；CLI `hc run`/`hc test`（interp + IR）程序/线程退出时打印 `[LEAK]` 清单到 stderr，**不改变退出码**（§11 已裁决：退出码留给将来）。跨两个后端（tree-walking interp + IR）各带测试（`hc-rt/tests/leak.rs`、`hc/tests/ir.rs`） | §2.3 / §8.3 定案落地 |
 | G6 | 分配零初始化（tag1 `vec![0u8; n]` 已零初始化 ✅） | 保持 |
 
