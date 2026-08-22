@@ -166,6 +166,7 @@ fn List(T: type) type { return struct { first: T, second: T }; }   // 类型函�
 - **数据栈对象**：自包含连续内存值类型（标量 + Continuous 类）；数组/集合为引用类型，不属数据栈对象。
 - **接口指针 = 胖指针**（三字宽 = data + 虚表 + alloc 引用）；具体类型指针 → 接口指针编译期自动收窄。
 - **泛型**：`where T: INumber` 约束；`anytype` 调用点按实参具体化；类型函数 `fn List(T: type) type`。
+- **无限大小类型拒绝（2026-08-22 定案，ADR-0018 C5-2）**：所有类型必须有限大小且可计算——值内嵌自引用/互递归（无间接层）= 编译错误（报类型名 + 循环链位置）；合法间接层（打破循环）= 指针/装箱/堆容器（Vec/Map/Table/String）/`?T`；`tree`/`LinkedList` 既有递归不受影响。
 
 ---
 
