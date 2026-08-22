@@ -1,13 +1,13 @@
 # H 语言工具链 · tag1（第一部分「最小功能集」）
 
 > **状态**：第一部分（最小功能集）已实现 —— 第一块语言系统（M0–M4）+ 第二块最小外围（M5–M7），**不自举**。
-> 实现状态详见 [`docs/SPEC/07-bootstrap-plan.md`](../docs/SPEC/07-bootstrap-plan.md) 第八节。
+> 实现状态详见 [`docs/SPEC/phase1/07-bootstrap-plan.md`](../docs/SPEC/phase1/07-bootstrap-plan.md) 第八节。
 
 ## 这是什么
 
 H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**的编程语言（源码后缀 `.hc`）。核心哲学：语言的职责是「**定义数据、修改数据、传输数据、保存数据**」。同一份源码既可编译为原生二进制，也可作为脚本解释执行，**两种模式语义一致**。
 
-`tag1/` 是 H 语言的第一阶段**垂直切片实现** —— 用 Rust 实现「源码 → 解析 → 语义检查 → 双后端（解释执行 / 原生编译）」的最小闭环，对应 `07-bootstrap-plan.md` 的**第一部分最小功能集**（`hc build` / `hc run` / `hc test` 完整可用）。
+`tag1/` 是 H 语言的第一阶段**垂直切片实现** —— 用 Rust 实现「源码 → 解析 → 语义检查 → 双后端（解释执行 / 原生编译）」的最小闭环，对应 `docs/SPEC/phase1/07-bootstrap-plan.md` 的**第一部分最小功能集**（`hc build` / `hc run` / `hc test` 完整可用）。
 
 ## 仓库结构
 
@@ -176,9 +176,9 @@ CI（`.github/workflows/ci.yml`）在每次 push/PR 运行 `cargo test --workspa
 | 文档 | 内容 |
 |---|---|
 | [`docs/SPEC/README.md`](../docs/SPEC/README.md) | 1.0 实现计划总纲 |
-| [`docs/SPEC/07-bootstrap-plan.md`](../docs/SPEC/07-bootstrap-plan.md) | 三块实现计划 + 实现状态表 |
-| [`docs/SPEC/09-part2-execution.md`](../docs/SPEC/09-part2-execution.md) | 第二部分执行细表（A–H 全完成） |
-| [`docs/SPEC/10-part3-execution.md`](../docs/SPEC/10-part3-execution.md) | 第三块执行细表（计划） |
+| [`docs/SPEC/phase1/07-bootstrap-plan.md`](../docs/SPEC/phase1/07-bootstrap-plan.md) | 三块实现计划 + 实现状态表 |
+| [`docs/SPEC/phase2/09-part2-execution.md`](../docs/SPEC/phase2/09-part2-execution.md) | 第二部分执行细表（A–H 全完成） |
+| [`docs/SPEC/phase3/10-part3-execution.md`](../docs/SPEC/phase3/10-part3-execution.md) | 第三块执行细表（计划） |
 | [`docs/SPEC/06-language-spec.md`](../docs/SPEC/06-language-spec.md) | 语言规范总纲 |
 | [`CONTEXT.md`](../CONTEXT.md) | 术语表与项目背景 |
 | [`examples/README.md`](../examples/README.md) | 示例套件说明 |
