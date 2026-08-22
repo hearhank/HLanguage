@@ -224,6 +224,7 @@ if (cond) a else b                 // if 是表达式；作表达式时 else 强
 if (opt) |v| { ... }               // optional 捕获
 if (e!) |v| else |err| { ... }     // error union 双向捕获（Q9：必须成对）
 switch (v) { int => |i| ..., none => ... }   // 穷举 + 负载捕获；也是表达式；else 兜底
+switch (v) { int => |i| i if i > 0 => ..., ... }  // switch 守卫（2026-08-22：模式后 if 守卫，失败继续下一分支）
 while (cond) { ... }
 while (i < n) : (i += 1) { ... }   // 续步表达式
 while (opt) |v| { ... }            // optional 捕获（空则退出）
@@ -237,6 +238,7 @@ defer expr / errdefer expr         // 作用域退出执行；errdefer 仅错误
 ```
 
 - 无 `do-while`、无 `loop`（用 `while (true)`）。
+- **switch 守卫（2026-08-22 定案，ADR-0017）**：`switch (v) { 模式 if 守卫 => 表达式 }`——守卫为任意布尔表达式，可引用负载捕获变量（`int => |i| i if i > 0 => ...`）；**守卫失败 → 继续尝试下一个分支**；**穷举性**：有守卫的分支仍算覆盖该值形态，但守卫可能失败 → 需存在无守卫分支或 `else` 兜底保证穷举（否则编译错误）；仍是表达式，与 `else` 兜底正交叠加。
 - **`for` 值类型自动取引用（L4）**：`for (fib)` ≡ `for (&mut fib)`（可写）/ `for (&fib)`（只读）；只读绑定时可写迭代编译错误。
 - 多值返回：`fn divmod(a, b) (i32, i32)`；调用 `var (q, r) = divmod(a, b);`。
 
@@ -289,6 +291,13 @@ defer expr / errdefer expr         // 作用域退出执行；errdefer 仅错误
 - `IIterable<*T>`（只读，`for (x) |item|`）/ `IIterable<*mut T>`（可写，`|mut item|`）/ `IIterable<o T>`（拥有，`|move item|`——迭代器持有容器所有权，迭代后容器不可再用）。
 - 内建类型（数组/切片/Vec/Map/Table/String）编译器内建实现三态；用户类型实现 `next(self: *mut Self) ?T`。
 - `arr.iter()` 显式迭代器对象；`filter()/map()` 立即求值链。
+- **迭代器对象 API（2026-08-22 定案，ADR-0017 C3-1）**：`iter()` 返回迭代器方法签名 = `next(self: *mut Self) ?T` + `filter(fn)` / `map(fn)` 组合子（返回**新的显式迭代器对象**，链式可组合）；**惰性求值（`next()` 按需求值、链式延迟计算）真实现仍留 1.x（A7 不动）**——迭代器/组合子为显式数据对象，非隐式求值机制，与「无隐藏控制」对齐。
+
+### 7.3 Send/Sync 标记接口（2026-08-22 定案，ADR-0017 C3-3）
+
+- **`Send` / `Sync` = 内建标记接口**（同标量接口族风格，编译器内建实现，不可自定义/重载）；用户类型显式标注：`class Foo: Send` / `class Bar: Send, Sync`（implements 冒号后缀，与既有接口一致）。
+- **可推导性（组合性验证）**：标量/值类型（Continuous/元组/枚举）自动 `Send`+`Sync`；指针/切片看指向类型；`Vec`/`Map`/`Table`/`String` 等内建容器看元素/负载；用户标注 class 由编译器验证字段全满足才合法（含 `*mut`/可变共享 → 非 `Sync`），验证失败编译错误。
+- **诊断模式（协作式，编译期）**：`spawn`/`await` 边界捕获非 `Send` 引用 → **编译错误带位置**（`captured value of type X is not Send at spawn boundary`）；非 `Send` 值不可跨线程捕获。真并行检查 1.x 启用（详见 06-10）。
 
 ---
 

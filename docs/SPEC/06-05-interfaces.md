@@ -70,6 +70,16 @@ interface IFloat: INumber {
 - 元素类型 T 与形态由接口方法（`next(self: *mut Self) ?T` 按对应形态）推断；内建类型（数组/切片/Vec/Map/Table/String）编译器内建实现三态
 - **拥有迭代语义（M4 定案，2026-08-14）**：`for (x) |move item|`（`IIterable<o T>`）= **迭代器持有容器所有权**——x 被 move 进迭代器，next 逐元素转移所有权，迭代后容器不可再用；内建实现——Vec/String/Deque 逐个 pop + 转移、数组逐元素 move（引用类型元素移出）
 - 用户类型实现迭代接口即可参与 `for`；`arr.iter()` 迭代器为**显式数据对象**（可传递/组合）；一次性迭代器 1.0 即可，惰性/组合子迭代留 1.x
+- **迭代器对象 API（2026-08-22 定案，ADR-0017 C3-1）**：`iter()` 返回的迭代器方法签名 = `next(self: *mut Self) ?T`（按对应访问形态）+ `filter(fn)` / `map(fn)` 组合子（返回**新的显式迭代器对象**，链式可组合）；**惰性求值（`next()` 按需求值、链式延迟计算）真实现仍留 1.x**（A7 不动）——迭代器/组合子为显式数据对象，非隐式求值机制，与「无隐藏控制」对齐
+
+## Send/Sync 标记接口（2026-08-22 定案，ADR-0017 C3-3；形态承 ADR-0016 #6）
+
+- **`Send` / `Sync` = 内建标记接口**（同 ICompare/INumber 族风格，编译器内建实现，不可用户自定义/重载）；用户类型显式标注：`class Foo: Send` / `class Bar: Send, Sync`（implements 冒号后缀，与既有接口一致）
+- **可推导性（组合性验证）**：
+  - 标量/值类型（Continuous/元组/枚举）自动 `Send`+`Sync`
+  - 指针/切片看指向类型；`Vec`/`Map`/`Table`/`String` 等内建容器看元素/负载类型
+  - 用户标注 `class Foo: Send` / `: Sync` 由编译器验证字段全满足才合法（含 `*mut` 或可变共享 → 非 `Sync`）；验证失败编译错误
+- **诊断模式（协作式，编译期）**：`spawn`/`await` 边界捕获跨线程引用，若目标类型非 `Send` → **编译错误带位置**（`captured value of type X is not Send at spawn boundary`）；非 `Send` 值不可跨线程捕获。真并行检查 1.x 启用（详细见 06-10 并发规范）
 
 ## 序列化内建契约（2026-08-14 定案：序列化 = 默认接口）
 
