@@ -107,10 +107,13 @@
 - **条目**：① Debug 悬垂标记切换粒度（编译单元 / 函数 / 引用点，#1）；② 无 GC 长运行脚本 Arena 惯例（#3，time/rng 同组推广）；③ 注册中心治理（#5，B3 已带）；④ 跨线程引用传递 Send/Sync 式静态标记（#6）
 - **备注**：**设计定案全部就绪（2026-08-22，ADR-0016，grill-with-docs 访谈 4 子项全推荐）**——① 编译单元级 + `--dangle=on|off|auto`；② 机制就绪 + 每请求一 arena + `mem.with_arena(fn)`；③ MVP 只做唯一包名 + 指纹发布、治理 1.0；④ Send/Sync 语法先行（编译期接口）、语义留 1.x、详细诊断归 C3。05 状态表 #1/#3/#5/#6 已关闭；待实施：`--dangle` CLI 标志 + tag1 `debug_dangling` 对齐 + `with_arena` stdlib 包装
 
-### C3｜惰性迭代、switch 守卫、Send/Sync 静态标记（编译期诊断）｜🟡（**设计已完成，待实施**）
+### C3｜惰性迭代、switch 守卫、Send/Sync 静态标记（编译期诊断）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 J2；`07-bootstrap-plan.md` E6.1
-- **落点**：语义层（`semantic.rs`）+ 迭代契约（`CONTEXT.md` IIterable）
-- **备注**：J2 三项，**设计定案全部就绪（2026-08-22，ADR-0017，grill-with-docs 访谈 3 子项全推荐）**：① **惰性迭代 = 只补迭代契约（选项 C）**——`iter()` 返回迭代器方法签名（`next()` + `filter(fn)`/`map(fn)` 组合子返回显式迭代器对象），真惰性求值留 1.x（A7 不动）；② **switch 守卫**——`switch (v) { 模式 if 守卫 => 表达式 }`，守卫失败继续下一分支，需无守卫分支或 `else` 保证穷举；③ **Send/Sync 编译期诊断**——内建标记接口 + 组合性验证 + spawn/await 边界非 Send → 编译错误带位置（形态承 ADR-0016 #6）。待实施：语义层 switch 守卫 + Send/Sync 推导/边界诊断 + 迭代器对象方法签名
+- **落点**：`hc/src/semantic/infer.rs`（`type_is_send`/`type_is_sync`/`type_has_interface`）/ `hc/src/semantic/check.rs`（类声明验证 + spawn 边界诊断）/ `hc-rt/src/interp/eval.rs`（`exec_switch` 守卫检查）/ `hc/src/ir/lower_impl.rs`（IR 守卫降级）/ `hc/tests/send_sync.rs`（11 测试）/ `hc-rt/tests/consistency.rs`（4 守卫测试）
+- **备注**：J2 三项全部实施完毕：
+  - ① **惰性迭代**（选项 C）：`iter()`/`filter()`/`map()` 立即求值链已落地；`iter()` 返回迭代器方法签名（`next()` + `filter`/`map` 组合子返回显式迭代器对象）；真惰性求值留 1.x（A7 不动）
+  - ② **switch 守卫**：`switch (v) { 模式 if 守卫 => 表达式 }`，守卫失败继续下一分支；语义层验证守卫为 bool + 穷举性检查（至少一个非守卫臂或 else）；解释器 + IR 双后端完整实现；4 测试
+  - ③ **Send/Sync 编译期诊断**：`type_is_send`/`type_is_sync` 递归类型检查（标量自动 Send+Sync、`*mut` 非 Sync、集合看元素、用户类检查接口声明）；`class Foo: Send/Sync` 字段验证；spawn 边界非 Send 捕获 → 编译错误；11 测试
 
 ### C4｜绑定级只读（默认只读，Rust 式）｜⏳ 1.x（**文档已写未实现**）
 - **出处**：2026-08-22 Table 设计会话关键发现
@@ -175,10 +178,10 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 3 🟡 / 1 ⏳ / 3 🟢）+ C 8（0 🔴 / 4 🟡 / 3 ⏳ / 1 🟣）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
+- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 3 🟡 / 1 ⏳ / 3 🟢）+ C 8（0 🔴 / 3 🟡 / 2 ⏳ / 1 🟣 / 2 🟢）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
   - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)；🟣 标记项（A8 端到端示例、C8 LLVM 原生内建）已移至第四阶段
-- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**C2 开放问题裁决**（`--dangle` 等）、**C3 惰性迭代/switch 守卫/Send-Sync**、**C5 泛型嵌套**、**D1 并发测试 runner**、**B6 启动时间指标**
-- **建议首项**：**C3（惰性迭代/switch 守卫/Send/Sync）**——设计已定案（ADR-0017），语义层改动，影响面可控
+- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**C2 开放问题裁决**（`--dangle` 等）、**C5 泛型嵌套**、**D1 并发测试 runner**、**B6 启动时间指标**
+- **建议首项**：**C5（泛型边界：内建泛型外层嵌套退化）**——设计已定案（ADR-0018），comptime resolve 修复，影响面可控
 
 ## 第四阶段（自举 + 1.x）
 
