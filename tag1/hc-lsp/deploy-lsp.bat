@@ -49,37 +49,77 @@ if %errorlevel% neq 0 (
 echo [OK] Node.js is installed
 
 REM Check Tree-sitter CLI
-where tree-sitter >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [WARN] Tree-sitter CLI is not installed. Installing...
-    echo Installing Tree-sitter CLI with allow-scripts...
-    npm install -g --allow-scripts=tree-sitter-cli tree-sitter-cli
-    if %errorlevel% neq 0 (
-        echo [ERROR] Failed to install Tree-sitter CLI
-        echo.
-        echo Please try one of the following:
-        echo   1. Run: npm install -g --allow-scripts=tree-sitter-cli tree-sitter-cli
-        echo   2. Or: npm config set allow-scripts=tree-sitter-cli --location=user
-        echo      Then: npm install -g tree-sitter-cli
-        echo   3. Or install manually from: https://github.com/tree-sitter/tree-sitter/releases
-        exit /b 1
-    )
-    echo [OK] Tree-sitter CLI installed
-) else (
-    echo [OK] Tree-sitter CLI is installed
-)
+REM Strategy: look for the native tree-sitter.exe first (in npm global), then
+REM fall back to PATH lookup. The npm .cmd shim misresolves CWD when launched
+REM from a batch after cd, so we prefer the native binary.
+set TREE_SITTER_INSTALLED=0
+set TREE_SITTER=
 
-REM Use the native tree-sitter.exe instead of the npm .cmd shim.
-REM The npm shim (tree-sitter.cmd -^> node cli.js) misresolves the working
-REM directory when launched from a batch that previously ran cd, so it cannot
-REM find grammar.js. The native binary handles CWD correctly.
-set TREE_SITTER=tree-sitter
+REM 1) Look for native tree-sitter.exe in npm global root
 for /f "delims=" %%i in ('npm root -g 2^>nul') do set NPM_GLOBAL_ROOT=%%i
-if exist "!NPM_GLOBAL_ROOT!\tree-sitter-cli\tree-sitter.exe" (
-    set "TREE_SITTER=!NPM_GLOBAL_ROOT!\tree-sitter-cli\tree-sitter.exe"
-    echo [OK] Using native tree-sitter.exe: !TREE_SITTER!
+if defined NPM_GLOBAL_ROOT (
+    if exist "%NPM_GLOBAL_ROOT%\tree-sitter-cli\tree-sitter.exe" (
+        set "TREE_SITTER=%NPM_GLOBAL_ROOT%\tree-sitter-cli\tree-sitter.exe"
+        set TREE_SITTER_INSTALLED=1
+        echo [OK] Found native tree-sitter.exe: !TREE_SITTER!
+        goto :ts_found
+    )
 )
 
+REM 2) Try tree-sitter in PATH (via where or where.exe)
+where tree-sitter.exe >nul 2>&1
+if %errorlevel% equ 0 (
+    for /f "delims=" %%i in ('where tree-sitter.exe 2^>nul') do set "TREE_SITTER=%%i"
+    set TREE_SITTER_INSTALLED=1
+    echo [OK] Found tree-sitter.exe in PATH: !TREE_SITTER!
+    goto :ts_found
+)
+
+REM 3) Try tree-sitter.cmd / tree-sitter in PATH (npm shim)
+where tree-sitter >nul 2>&1
+if %errorlevel% equ 0 (
+    set TREE_SITTER=tree-sitter
+    set TREE_SITTER_INSTALLED=1
+    echo [OK] Found tree-sitter in PATH (npm shim)
+    goto :ts_found
+)
+
+REM 4) Not found anywhere - try to install
+if not defined TREE_SITTER (
+    echo [WARN] Tree-sitter CLI is not found. Installing via npm...
+    npm install -g tree-sitter-cli
+    if %errorlevel% equ 0 (
+        REM After install, try native exe again
+        for /f "delims=" %%i in ('npm root -g 2^>nul') do set NPM_GLOBAL_ROOT=%%i
+        if defined NPM_GLOBAL_ROOT (
+            if exist "%NPM_GLOBAL_ROOT%\tree-sitter-cli\tree-sitter.exe" (
+                set "TREE_SITTER=%NPM_GLOBAL_ROOT%\tree-sitter-cli\tree-sitter.exe"
+                set TREE_SITTER_INSTALLED=1
+                echo [OK] Installed and found native tree-sitter.exe
+                goto :ts_found
+            )
+        )
+        REM Fall back to PATH
+        where tree-sitter >nul 2>&1
+        if %errorlevel% equ 0 (
+            set TREE_SITTER=tree-sitter
+            set TREE_SITTER_INSTALLED=1
+            echo [OK] Installed and found tree-sitter in PATH
+            goto :ts_found
+        )
+    )
+    echo [WARN] Failed to install/find Tree-sitter CLI.
+    echo        parser.c already exists, skipping generation.
+    echo        To install manually: npm install -g tree-sitter-cli
+    echo        Or download from: https://github.com/tree-sitter/tree-sitter/releases
+)
+
+goto :ts_continue
+
+:ts_found
+set TREE_SITTER_INSTALLED=1
+
+:ts_continue
 echo.
 echo ========================================
 echo [2/6] Building LSP server (hc-lsp)...
@@ -121,21 +161,25 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo Generating Tree-sitter parser...
-"%TREE_SITTER%" generate
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to generate Tree-sitter parser
-    exit /b 1
-)
-echo [OK] Tree-sitter parser generated
+if "%TREE_SITTER_INSTALLED%"=="1" (
+    echo Generating Tree-sitter parser...
+    "%TREE_SITTER%" generate
+    if %errorlevel% neq 0 (
+        echo [ERROR] Failed to generate Tree-sitter parser
+        exit /b 1
+    )
+    echo [OK] Tree-sitter parser generated
 
-REM Test parser
-echo Testing Tree-sitter parser...
-"%TREE_SITTER%" test
-if %errorlevel% neq 0 (
-    echo [WARN] Some Tree-sitter tests failed, but continuing...
+    REM Test parser
+    echo Testing Tree-sitter parser...
+    "%TREE_SITTER%" test
+    if %errorlevel% neq 0 (
+        echo [WARN] Some Tree-sitter tests failed, but continuing...
+    ) else (
+        echo [OK] All Tree-sitter tests passed
+    )
 ) else (
-    echo [OK] All Tree-sitter tests passed
+    echo [SKIP] Tree-sitter not installed, using existing parser.c
 )
 
 echo.
@@ -180,7 +224,7 @@ REM fallback if wasi-sdk is missing.
 echo Building Rust extension (wasm)...
 cd /d "%PROJECT_ROOT%\extensions\zed"
 call rustup target add wasm32-wasip2 >nul 2>&1
-cargo build --target wasm32-wasip2 --release 2>nul
+cargo build --target wasm32-wasip2 --release
 if %errorlevel% equ 0 (
     copy /Y "%PROJECT_ROOT%\extensions\zed\target\wasm32-wasip2\release\h_language.wasm" "%PROJECT_ROOT%\extensions\zed\extension.wasm" >nul
     echo [OK] Rust extension wasm built

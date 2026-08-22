@@ -294,7 +294,7 @@ module.exports = grammar({
     // Unlike `*T` (shared/read-only) and `*mut T` (mutable),  `owned T`
     // means the value is owned.
     owned_type: $ => seq(
-      'o',
+      'owned',
       field('type', $.type),
     ),
 
