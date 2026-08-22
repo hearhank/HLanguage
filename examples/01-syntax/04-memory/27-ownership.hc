@@ -21,7 +21,7 @@ fn borrow<T>(io: *T, v: *String) void where T: Io {
     io.print("borrowed: {}\n", v);        // 借用：调用方保留所有权
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // move 进函数（调用点显式；销毁责任转移，原绑定仍可访问——悬垂由用户负责）
     var s1 = String.from("hello", alloc);
     take(&io, move s1);

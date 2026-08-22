@@ -12,7 +12,7 @@ fn worker(tasks: *ManyToOne<i32>, out: *OneToMany<i32>) void {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var tasks = ManyToOne<i32>.init(alloc);
     var out = OneToMany<i32>.init(alloc);
 

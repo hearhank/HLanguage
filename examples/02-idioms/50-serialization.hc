@@ -16,7 +16,7 @@ class Order {
     mut amount: f64,
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 连续类型 → bytes：内建方法（零拷贝视图）
     var p = Point{x = 1.0, y = 2.0};
     var bytes: &[u8] = p.to_bytes();

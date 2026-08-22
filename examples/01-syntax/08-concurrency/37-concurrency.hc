@@ -16,7 +16,7 @@ async fn async_add(b: *i32, n: i32) i32 {
     return b.* + n;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 线程 = 数据对象（12.24）：spawn 归当前作用域，join 消耗所有权
     var t: o Thread<i32> = spawn(compute, 6, 7);
     var result = try t.join();

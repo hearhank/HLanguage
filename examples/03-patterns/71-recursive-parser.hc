@@ -44,7 +44,7 @@ fn eval(n: *Node) i64 {
     };
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
 

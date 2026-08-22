@@ -14,7 +14,7 @@ fn handle_request<T>(io: *T, arena: *Arena) !void where T: Io {
     // 函数结束：buf/text 不各自销毁（arena 统一回收）
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 每请求独立 arena：结束即整体回收（统一分配、统一销毁）
     var arena = Arena.init(alloc);   // 默认拥有，退出自动统一回收
     try handle_request(&io, &arena);

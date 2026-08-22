@@ -35,7 +35,7 @@ tree Node {                              // 递归组合
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // class：堆上、默认拥有（非 arena 分配器，Q16）；构造 = alloc.init（C1'）
     var c: o Counter = alloc.init(Counter);
     c.inc();

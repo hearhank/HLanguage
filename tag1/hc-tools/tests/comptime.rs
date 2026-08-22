@@ -66,7 +66,7 @@ fn comptime_block_passes_and_program_runs() {
          \x20   if (types.all.len() < 1) { return error.NoTypes; }\n\
          \x20   if (types.fields(\"User\").len() != 1) { return error.BadSchema; }\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"comptime ok\\n\");\n\
          }\n",
     );
@@ -99,7 +99,7 @@ fn comptime_return_error_is_compile_error() {
          comptime {\n\
          \x20   return error.BadSchema;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -129,7 +129,7 @@ fn comptime_unknown_type_fields_is_compile_error() {
          \x20   var f = types.fields(\"NoSuchType\");\n\
          \x20   _ = f;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -152,7 +152,7 @@ fn comptime_io_forbidden() {
          \x20   var x = io;\n\
          \x20   _ = x;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -184,7 +184,7 @@ fn comptime_sees_script_generated_types() {
          comptime {\n\
          \x20   if (types.fields(\"Gen\").len() < 1) { return error.NoGen; }\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"script+comptime ok\\n\");\n\
          }\n",
     );
@@ -213,7 +213,7 @@ fn comptime_arith_folding_expect_eq_passes() {
          \x20   var x: comptime_int = 1 + 2;\n\
          \x20   expect_eq(x, 3);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"fold ok\\n\");\n\
          }\n",
     );
@@ -239,7 +239,7 @@ fn comptime_folding_expect_eq_failure_is_compile_error() {
          comptime {\n\
          \x20   expect_eq(1 + 2, 4);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -262,7 +262,7 @@ fn comptime_int_var_decl_typechecks_and_folds() {
          \x20   var x: comptime_int = 40 + 2;\n\
          \x20   expect_eq(x, 42);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"varfold ok\\n\");\n\
          }\n",
     );
@@ -288,7 +288,7 @@ fn comptime_narrowing_u8_overflow_is_compile_error() {
          comptime {\n\
          \x20   var x: u8 = 256;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -313,7 +313,7 @@ fn comptime_narrowing_u8_in_range_passes() {
          comptime {\n\
          \x20   var x: u8 = 200;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"narrow ok\\n\");\n\
          }\n",
     );
@@ -340,7 +340,7 @@ fn comptime_float_folding_expect_eq_passes() {
          \x20   var x: comptime_float = 1.5 + 2.5;\n\
          \x20   expect_eq(x, 4.0);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"floatfold ok\\n\");\n\
          }\n",
     );
@@ -366,7 +366,7 @@ fn comptime_float_folding_expect_eq_failure_is_compile_error() {
          comptime {\n\
          \x20   expect_eq(1.5 + 2.5, 3.0);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -389,7 +389,7 @@ fn comptime_float_var_decl_typechecks_and_folds() {
          \x20   var x: comptime_float = 40.0 / 2.0;\n\
          \x20   expect_eq(x, 20.0);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"vardiv ok\\n\");\n\
          }\n",
     );
@@ -418,7 +418,7 @@ fn anytype_ret_resolves_concrete_across_modes() {
          fn max_value(a: anytype, b: anytype) anytype {\n\
          \x20   return if (a > b) a else b;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   var m: f64 = max_value(2.5, 1.5);\n\
          \x20   io.print(\"max = {}\\n\", m);\n\
          \x20   var n: i32 = max_value(3, 7);\n\
@@ -457,7 +457,7 @@ fn anytype_ret_concrete_mismatch_is_compile_error() {
          fn max_value(a: anytype, b: anytype) anytype {\n\
          \x20   return if (a > b) a else b;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   var s: String = max_value(2.5, 1.5);\n\
          \x20   io.print(\"{}\\n\", s);\n\
          }\n",
@@ -490,7 +490,7 @@ fn comptime_value_fn_type_param_folds_in_block() {
          \x20   var a: comptime_int = array_len(i32);\n\
          \x20   expect_eq(a, 4);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"valfn ok\\n\");\n\
          }\n",
     );
@@ -528,7 +528,7 @@ fn comptime_value_fn_mixed_type_and_value_params() {
          \x20   var b: comptime_int = byte_size(Vec<i32>, 0);\n\
          \x20   expect_eq(b, 1);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"mixed ok\\n\");\n\
          }\n",
     );
@@ -564,7 +564,7 @@ fn comptime_value_fn_runtime_call_folds_in_interp() {
          fn byte_size(T: type, n: comptime_int) comptime_int {\n\
          \x20   return n + 1;\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   var n: comptime_int = array_len(i32);\n\
          \x20   io.print(\"n = {}\\n\", n);\n\
          \x20   var m: comptime_int = byte_size(f64, 7);\n\
@@ -606,7 +606,7 @@ fn comptime_value_fn_self_recursion_is_compile_error() {
          \x20   var x: comptime_int = loop_fn(i32);\n\
          \x20   expect_eq(x, 1);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );
@@ -636,7 +636,7 @@ fn comptime_value_fn_non_type_arg_is_compile_error() {
          \x20   var x: comptime_int = array_len(mystery);\n\
          \x20   expect_eq(x, 4);\n\
          }\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
          \x20   io.print(\"unreachable\\n\");\n\
          }\n",
     );

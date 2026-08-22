@@ -5,7 +5,7 @@ import H.std.{io};
 //   - 拼接 concat（Q28 无运算符）；比较 == 内容（Q16）
 //   - split / join / find / substring / replace
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var csv = String.from("a,b,c,d", alloc);
 
     // split：按分隔符切分 → Vec<String>

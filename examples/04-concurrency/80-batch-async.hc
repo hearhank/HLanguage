@@ -10,7 +10,7 @@ async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     return String.from(body, alloc);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var urls = ["https://a.example.com", "https://b.example.com", "https://c.example.com"];
 
     // 批量发起（并行）

@@ -15,7 +15,7 @@
 
 | # | 定案 | 出处 |
 |---|---|---|
-| 1 | **入口与导入**：`fn main(args: o Vec<String>) !void`——main 不再注入 io；命令行参数仅经入口 args 注入（**`io.args()` 取消**）；`import pkg.mod.{sym as 别名}` 文件级导入**取代 `using`**（推翻 06-08「无文件级 import」），导入对象 = 模块（`[module]` 标注的命名空间/包）；`H.std` = 标准库根路径；`Io` 接口**保留**（并发 E2 的 `Io.threaded()/evented()` 仍是设计）；`test_io` **取消**，测试直接调 `main()` | Q9/Q13/Q14/F1，ADR-0010 |
+| 1 | **入口与导入**：`fn main() !void`——main 不再注入 io；命令行参数仅经入口 args 注入（**`io.args()` 取消**）；`import pkg.mod.{sym as 别名}` 文件级导入**取代 `using`**（推翻 06-08「无文件级 import」），导入对象 = 模块（`[module]` 标注的命名空间/包）；`H.std` = 标准库根路径；`Io` 接口**保留**（并发 E2 的 `Io.threaded()/evented()` 仍是设计）；`test_io` **取消**，测试直接调 `main()` | Q9/Q13/Q14/F1，ADR-0010 |
 | 2 | **io = 标准库模块**：函数直接调用（`my.print(...)`）；模块内环境状态（env/exit/fs/net/time，**args 经入口 `main(args)` 注入，`io.args()` 取消**）；非对象注入 | Q13/F1 |
 | 3 | **库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）；**值类型栈上分配，经 `alloc` 堆上分配** | Q9 |
 | 4 | **扩展类型暂留语言内建**（String/集合族/Table），后期再评估分离标准库 | Q10 |
@@ -84,7 +84,7 @@
 | A1 | `import` 语句词法与解析：`import pkg.mod.{sym as 别名}` 多符号选择 + `import pkg.mod;` 整模块 + `H.std` 路径；lexer/parser/AST 新顶层声明 | parse 单测绿；`study.hc` 可解析 | — | 1.5h |
 | A2a | `import` 语义与可见性：符号登记（前缀 + 别名）、冲突规则（显式优先通配，沿 06-08 既有规则）；`using` 迁移（旧语法诊断提示或兼容） | semantic 测试绿（import 用例） | A1 | 1.5h |
 | A2b | 模块识别与命名规范检查：`[module]` 标注命名空间 = 模块、隔离检查、上下文 init 签名；类型/命名空间 PascalCase 编译期诊断（与接口 `I` 前缀同机制；缩写全大写归第三块 lint） | semantic 测试绿（模块/命名规范用例） | A2a | 1h |
-| A3 | 入口 `main(args: o Vec<String>) !void`：运行时 args 注入（0 号 = 程序名）；**`io.args()` 取消**；main 不再注入 io；run_main/run_tests 调整 | 01-hello 等入口示例绿；args 测试绿 | A2a/A2b | 2h |
+| A3 | 入口 `main() !void`：运行时 args 注入（0 号 = 程序名）；**`io.args()` 取消**；main 不再注入 io；run_main/run_tests 调整 | 01-hello 等入口示例绿；args 测试绿 | A2a/A2b | 2h |
 | A4 | 入口三后端对齐：IR/native（`emit_main_wrapper`/`@__init__` 前置）+ `hc run --ir`/字节码 + 一致性套件入口用例 | consistency 绿；native 端到端绿 | A3 | 2h |
 | A5a | interp io 模块函数化：`io.*` 从对象方法 → 模块函数/子模块函数形态（print/fs/net/time/env/exit；args 经入口注入）；环境状态模块内管理；`Io` 接口保留（不再注入） | io 测试绿（interp 改造后形态） | A2a/A2b | 1.5h |
 | A5b | IR/native io 调用路径同步：`call_builtin`/llvm.rs io 分支对齐模块函数形态 + 一致性 io 用例 | consistency + native 绿 | A5a | 1.5h |

@@ -6,7 +6,7 @@ import H.std.{io};
 //   - &x 产生 *T：无 Rust 式「安全引用 vs 裸指针」之分，无 unsafe 关键字
 //   - 安全性由运行时登记统一承担（双向注册、Debug 悬垂检测）
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var mut x: i32 = 42;
     var p: *i32 = &x;           // 只读指针（& 对只读/可写变量均合法，读权限可降级）
     var w: *mut i32 = &mut x;   // 可写指针（&mut 仅对 var mut 变量合法）

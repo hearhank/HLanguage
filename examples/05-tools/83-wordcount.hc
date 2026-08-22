@@ -5,7 +5,7 @@ import H.std.{io};
 //   - 读文件（保存/IO）→ 分词（String split）→ 统计（Map）→ 输出
 //   - 综合：io.fs / String / Map / 迭代器
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 读文件
     var data = try io.fs.read_file("input.txt", alloc);
 

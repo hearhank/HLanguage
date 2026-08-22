@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 无 ++ 运算符、无 + 重载（函数 = 唯一处理逻辑，无运算符重载）
 //   - String = u8[] 别名（Q3）：引用类型、赋值 = 编译错误（Q1'）；== 比较内容
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 拼接：方法形态
     var name = String.from("alice", alloc);
     var greeting = String.from("hello, ", alloc).concat(name);

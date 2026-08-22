@@ -46,7 +46,7 @@ import pkg.mod;                 // 整模块导入
 - 跨包访问：`import pkg.mod` + `build.zon` 依赖声明
 - `hc build` 编译包内全部文件；`hc run file.hc` 单文件脚本运行（隐式单文件包）；`hc run <目录>` 目录包运行（入口 = `main.hc` 或首个 `.hc`，见 `09-part2-execution.md` 组 C）
 - **文件级 `import` 语句（2026-08-17 定案，ADR-0010）**——取代 2026-08-14「无文件级 import（C# 式）」定案；文件 = 物理单元 + 文件级导入的库引用形态
-- **入口**：`fn main(args: o Vec<String>) !void`——main 不再注入 io（2026-08-17，ADR-0010）；`args` 由运行时注入（0 号 = 程序名）；**`io.args()` 取消**（命令行参数仅经入口注入）；io/alloc 为标准库模块与预导入环境（`import H.std.{io}` 显式引用）
+- **入口**：`fn main() !void`——main 不再注入 io（2026-08-17，ADR-0010）；`args` 由运行时注入（0 号 = 程序名）；**`io.args()` 取消**（命令行参数仅经入口注入）；io/alloc 为标准库模块与预导入环境（`import H.std.{io}` 显式引用）
 - **包形态（2026-08-17 定案；C3/C4 落地）**：**应用** = 含 `main` 的包（`Kind::exe`，产出可运行 exe）；**库** = **不含 main** 的包（`Kind::lib`，代码集合 = 1+ 模块，不单独运行；产出 **lib 静态库**（`hc build`，编译时链接进 exe）或 **dll 动态库**（`hc build --dll`，exe 运行时加载），构建参数选择 = `--dll` 标志）——分层：包（应用/库）→ 模块（`[module]` 标注）→ 命名空间（组织代码）
 
 ## 包管理

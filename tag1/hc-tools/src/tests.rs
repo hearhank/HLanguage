@@ -84,14 +84,12 @@ fn unhandled_error_value() {
 #[test]
 fn ir_io_exit_maps_code() {
     // F2：io.exit 在 IR 侧映射退出码（Exited(code)，对齐 oracle Interp.exit_code）
-    let src =
-        "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.exit(ExitType.Error, 3); }\n";
+    let src = "import H.std.{io};\nfn main() !void { io.exit(ExitType.Error, 3); }\n";
     match run_ir_source(src) {
         Ok(IrRunOutcome::Exited(3)) => {}
         other => panic!("预期 Exited(3)，实际：{other:?}"),
     }
-    let ok =
-        "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.exit(ExitType.Exit, 0); }\n";
+    let ok = "import H.std.{io};\nfn main() !void { io.exit(ExitType.Exit, 0); }\n";
     match run_ir_source(ok) {
         Ok(IrRunOutcome::Exited(0)) => {}
         other => panic!("预期 Exited(0)，实际：{other:?}"),

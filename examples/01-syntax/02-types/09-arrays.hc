@@ -14,7 +14,7 @@ fn sum_row(row: &[i32]) i32 {
     return total;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 一维（推断式，Q4）
     var flat = [1, 2, 3];
 

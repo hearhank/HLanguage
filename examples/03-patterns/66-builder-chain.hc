@@ -20,7 +20,7 @@ class Query {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var mut q: o Query = alloc.init(Query);   // 无参构造（C1'）
 
     // 链式调用：where().limit()（*mut 链不复制——资格随链传递）

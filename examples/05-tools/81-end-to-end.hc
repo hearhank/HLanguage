@@ -52,7 +52,7 @@ fn handle_order<T>(io: *T, conn: *TcpConn) !void where T: Io {
     try f.append(resp);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var server = try io.net.listen(8080);
     defer server.close();
     io.print("listening on 8080\n");

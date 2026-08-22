@@ -49,7 +49,7 @@ fn sum(items: &[i32]) i32 {   // 具体重载与泛型并存
     return total;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     io.print("{}\n", describe(42));         // int（i32 精确匹配）
     io.print("{}\n", describe("hi"));       // bytes
     io.print("{}\n", describe(1.5));        // float（f64 精确匹配）

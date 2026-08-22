@@ -709,7 +709,7 @@ class Lexer {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var src = try io.fs.read_file(path, alloc);

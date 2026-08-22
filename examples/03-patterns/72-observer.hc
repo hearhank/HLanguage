@@ -19,7 +19,7 @@ class Subject {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var subject: o Subject = alloc.init(Subject);   // 无参构造（C1'）
 
     subject.subscribe(|event, payload| io.print("[{}] {}\n", event, payload));

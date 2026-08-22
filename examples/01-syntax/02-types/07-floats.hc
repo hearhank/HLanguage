@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 惰性宽度默认（comptime_float）+ 后缀（3.14f32）并存
 //   - 特殊值：标准库常量 math.nan / math.inf / math.inf_neg（Zig 式 std.math）
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 惰性宽度：标注类型处定型
     var pi: f64 = 3.14159;
     var half: f32 = 0.5;

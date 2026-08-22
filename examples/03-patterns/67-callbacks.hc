@@ -19,7 +19,7 @@ class EventBus {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var bus: o EventBus = alloc.init(EventBus);   // 无参构造（C1'）
     var mut count = 0;
 

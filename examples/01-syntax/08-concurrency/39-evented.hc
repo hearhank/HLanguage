@@ -12,7 +12,7 @@ async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
     return String.from(body, alloc);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 显式选择 Evented 运行时（协作调度，脚本模式库选项）
     var ev_io = Io.evented(alloc);
 

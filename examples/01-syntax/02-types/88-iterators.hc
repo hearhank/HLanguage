@@ -26,7 +26,7 @@ class Fib: IIterable<i32> {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 内建类型：只读迭代（IIterable<*T> 默认形态）
     var nums = [1, 2, 3, 4, 5];
     var sum = 0;

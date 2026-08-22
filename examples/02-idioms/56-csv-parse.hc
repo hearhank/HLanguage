@@ -28,7 +28,7 @@ fn parse_csv(data: &[u8]) CsvError!Vec<Row> {
     return rows;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var csv = "alice,30\nbob,25";
     var rows = try parse_csv(csv);
     for (rows) |row| {

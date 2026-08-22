@@ -23,7 +23,7 @@ fn bs(data: &[i32], target: i32, lo: usize, hi: usize) ?usize {
     return bs(data, target, mid + 1, hi);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var sorted = [1, 3, 5, 7, 9, 11];
     io.print("find 7: {}\n", binary_search(&sorted, 7) orelse -1);
     io.print("find 6: {}\n", binary_search(&sorted, 6) orelse -1);

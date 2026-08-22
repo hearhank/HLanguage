@@ -31,7 +31,7 @@ fn log<T>(self: *Self, io: *T, level: Level, msg: &[u8]) void where T: Io {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var logger: o Logger = alloc.init(Logger);   // 无参构造（C1'）
     logger.min_level = Level.info;
 

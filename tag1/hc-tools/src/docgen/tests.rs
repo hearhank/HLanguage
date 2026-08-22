@@ -11,10 +11,11 @@ fn doc_run_extraction() {
 
 #[test]
 fn page_contains_sig_and_doc() {
-    let src = "import H.std.{io};\n\n/// 入口函数\nfn main(args: o Vec<String>) !void {\n    io.print(\"hi\\n\");\n}\n";
+    let src =
+        "import H.std.{io};\n\n/// 入口函数\nfn main() !void {\n    io.print(\"hi\\n\");\n}\n";
     let page = render_file_page("main.hc", src).unwrap();
     assert!(page.contains("# `main`"), "page: {page}");
-    assert!(page.contains("fn main(args: o Vec<String>) !void"));
+    assert!(page.contains("fn main() !void"));
     assert!(page.contains("入口函数"));
     assert!(page.contains("import H.std.{io};"));
 }

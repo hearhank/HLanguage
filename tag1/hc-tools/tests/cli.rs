@@ -14,12 +14,8 @@ static EXIT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// F2：临时 .hc 文件（独立子目录，避免临时目录中其它 .hc 触发兄弟文件扫描噪音）
 fn temp_hc_file(tag: &str, src: &str) -> PathBuf {
     let n = EXIT_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "hc_cli_exit_{}_{}_{}",
-        std::process::id(),
-        tag,
-        n
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("hc_cli_exit_{}_{}_{}", std::process::id(), tag, n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("main.hc");
@@ -97,7 +93,7 @@ fn run_directory_prefers_main_hc_else_first_hc() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("a.hc"),
-        "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.print(\"first-hc\\n\"); }\n",
+        "import H.std.{io};\nfn main() !void { io.print(\"first-hc\\n\"); }\n",
     )
     .unwrap();
     let out = Command::new(hc_bin())
@@ -163,7 +159,10 @@ fn build_lib_static_archive_and_link_exe() {
         dir.join("jsonlib/libjsonlib.a").exists(),
         "应产出 libjsonlib.a: {stdout}{stderr}"
     );
-    assert!(dir.join("jsonlib/jsonlib.sym").exists(), "应产出 .sym 符号表");
+    assert!(
+        dir.join("jsonlib/jsonlib.sym").exists(),
+        "应产出 .sym 符号表"
+    );
 
     // 2) exe 链接本地库 + 运行
     let out = Command::new(hc_bin())
@@ -227,7 +226,10 @@ fn build_lib_dll_and_runtime_load() {
         .expect("hc build --dll app");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(out.status.success(), "app --dll 构建应成功: {stdout}{stderr}");
+    assert!(
+        out.status.success(),
+        "app --dll 构建应成功: {stdout}{stderr}"
+    );
     let exe = dir.join("app/main.exe");
     assert!(exe.exists(), "应产出 main.exe: {stdout}{stderr}");
     assert!(
@@ -259,7 +261,7 @@ fn build_lib_with_main_is_diagnosed() {
         "const build = Build{ name = \"badlib\", version = \"0.1.0\", kind = Kind.lib, files = [\"lib.hc\"], deps = [] };\n",
     )
     .unwrap();
-    std::fs::write(dir.join("lib.hc"), "fn main(args: o Vec<String>) !void { }\n").unwrap();
+    std::fs::write(dir.join("lib.hc"), "fn main() !void { }\n").unwrap();
     let out = Command::new(hc_bin())
         .arg("build")
         .arg(&dir)
@@ -280,7 +282,7 @@ fn run_exit_success_is_silent_and_aborts() {
     let path = temp_hc_file(
         "ok",
         "import H.std.{io};\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
              io.print(\"before\\n\");\n\
              io.exit(ExitType.Exit, 0);\n\
              io.print(\"after\\n\");\n\
@@ -296,7 +298,10 @@ fn run_exit_success_is_silent_and_aborts() {
     assert!(out.status.success(), "exit 0 应成功: {stdout}{stderr}");
     assert!(stdout.contains("before"), "exit 前代码应执行: {stdout}");
     assert!(!stdout.contains("after"), "exit 后代码不应执行: {stdout}");
-    assert!(!stderr.contains("error:"), "Exit 应静默无错误输出: {stderr}");
+    assert!(
+        !stderr.contains("error:"),
+        "Exit 应静默无错误输出: {stderr}"
+    );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -306,7 +311,7 @@ fn run_exit_nonzero_code_is_silent() {
     let path = temp_hc_file(
         "code5",
         "import H.std.{io};\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
              io.exit(ExitType.Exit, 5);\n\
          }\n",
     );
@@ -316,8 +321,15 @@ fn run_exit_nonzero_code_is_silent() {
         .output()
         .expect("run hc");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert_eq!(out.status.code(), Some(5), "Exit 非零码应映射进程退出码: {stderr}");
-    assert!(!stderr.contains("error:"), "Exit 应静默无错误输出: {stderr}");
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "Exit 非零码应映射进程退出码: {stderr}"
+    );
+    assert!(
+        !stderr.contains("error:"),
+        "Exit 应静默无错误输出: {stderr}"
+    );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -327,7 +339,7 @@ fn run_exit_error_prints_and_codes() {
     let path = temp_hc_file(
         "err",
         "import H.std.{io};\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
              io.exit(ExitType.Error, 3);\n\
          }\n",
     );
@@ -337,7 +349,11 @@ fn run_exit_error_prints_and_codes() {
         .output()
         .expect("run hc");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert_eq!(out.status.code(), Some(3), "Error 非零码应映射进程退出码: {stderr}");
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "Error 非零码应映射进程退出码: {stderr}"
+    );
     assert!(
         stderr.contains("error: program exited with code 3"),
         "Error 应打印错误消息: {stderr}"
@@ -351,7 +367,7 @@ fn run_ir_exit_propagates_code() {
     let path = temp_hc_file(
         "ir_err",
         "import H.std.{io};\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
              io.exit(ExitType.Error, 3);\n\
          }\n",
     );
@@ -362,7 +378,11 @@ fn run_ir_exit_propagates_code() {
         .output()
         .expect("run hc --ir");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert_eq!(out.status.code(), Some(3), "IR 侧 Error 退出码应传播: {stderr}");
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "IR 侧 Error 退出码应传播: {stderr}"
+    );
     assert!(
         stderr.contains("error: program exited with code 3"),
         "IR 侧 Error 应打印错误消息: {stderr}"
@@ -376,7 +396,7 @@ fn run_io_stdin_reads_line() {
     let path = temp_hc_file(
         "stdin",
         "import H.std.{io};\n\
-         fn main(args: o Vec<String>) !void {\n\
+         fn main() !void {\n\
              var line = io.stdin();\n\
              io.print(\"got:\");\n\
              io.print(line);\n\
@@ -399,7 +419,10 @@ fn run_io_stdin_reads_line() {
     let out = child.wait_with_output().expect("wait hc run");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(out.status.success(), "io.stdin 读取应成功: {stdout}{stderr}");
+    assert!(
+        out.status.success(),
+        "io.stdin 读取应成功: {stdout}{stderr}"
+    );
     assert!(
         stdout.contains("got:hello-stdin"),
         "应读到管道注入行（去换行）: {stdout}"
@@ -432,7 +455,7 @@ fn init_creates_runnable_scaffold() {
     let zon = std::fs::read_to_string(proj.join("build.zon")).expect("读 build.zon");
     assert!(zon.contains("name = \"demo\""), "清单应含项目名: {zon}");
     let main = std::fs::read_to_string(proj.join("main.hc")).expect("读 main.hc");
-    assert!(main.contains("fn main(args: o Vec<String>) !void"), "应含标准入口: {main}");
+    assert!(main.contains("fn main() !void"), "应含标准入口: {main}");
 
     // 脚手架运行绿（目录 = 包，入口 main.hc）
     let run = Command::new(hc_bin())
@@ -452,7 +475,10 @@ fn init_creates_runnable_scaffold() {
         .expect("test scaffold");
     let ts = String::from_utf8_lossy(&test.stdout).to_string();
     assert!(test.status.success(), "脚手架 test 应成功: {ts}");
-    assert!(ts.contains("1 passed, 0 failed"), "应 1 passed 0 failed: {ts}");
+    assert!(
+        ts.contains("1 passed, 0 failed"),
+        "应 1 passed 0 failed: {ts}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -478,7 +504,10 @@ fn init_refuses_nonempty_dir_and_bad_name() {
     assert!(!out.status.success(), "非空目录应拒绝");
     assert!(stderr.contains("拒绝覆盖"), "应提示拒绝覆盖: {stderr}");
     assert!(
-        std::fs::read_to_string(dir.join("demo/keep.txt")).ok().as_deref() == Some("keep"),
+        std::fs::read_to_string(dir.join("demo/keep.txt"))
+            .ok()
+            .as_deref()
+            == Some("keep"),
         "不应触碰现有文件"
     );
 
@@ -553,7 +582,7 @@ fn pkg_add_writes_local_dep_and_run_green() {
     // 4) 入口用依赖 + hc run 绿（依赖 pub 函数经包名前缀调用）
     std::fs::write(
         app.join("main.hc"),
-        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec<String>) !void { io.print(\"pkg = {}\\n\", parse(\"{}\")); }\n",
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main() !void { io.print(\"pkg = {}\\n\", parse(\"{}\")); }\n",
     )
     .unwrap();
     let run = Command::new(hc_bin())
@@ -586,7 +615,7 @@ fn missing_local_dep_is_diagnosed() {
     .unwrap();
     std::fs::write(
         app.join("main.hc"),
-        "import H.std.{io};\nfn main(args: o Vec<String>) !void { io.print(\"hi\\n\"); }\n",
+        "import H.std.{io};\nfn main() !void { io.print(\"hi\\n\"); }\n",
     )
     .unwrap();
     let out = Command::new(hc_bin())
@@ -646,10 +675,7 @@ fn doc_project_generates_index_and_file_pages() {
         "应含声明签名: {page}"
     );
     assert!(page.contains("把两个整数相加"), "应含 /// 文档: {page}");
-    assert!(
-        page.contains("import H.std.{io};"),
-        "应含导入列表: {page}"
-    );
+    assert!(page.contains("import H.std.{io};"), "应含导入列表: {page}");
     assert!(page.contains("[test]"), "应含测试签名: {page}");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -703,8 +729,7 @@ fn doc_single_file_and_default_out() {
         .output()
         .expect("hc doc file");
     assert!(out.status.success(), "单文件 doc 应成功");
-    let page =
-        std::fs::read_to_string(root.join("docs/api/util.md")).unwrap_or_default();
+    let page = std::fs::read_to_string(root.join("docs/api/util.md")).unwrap_or_default();
     assert!(page.contains("# `util`"), "文件页应含标题: {page}");
     assert!(page.contains("fn value() i32"), "应含签名: {page}");
     assert!(page.contains("返回常量的值"), "应含文档: {page}");
@@ -811,7 +836,11 @@ fn dep_version_mismatch_warns() {
         "const build = Build{ name = \"lib\", version = \"0.1.0\", kind = Kind.lib, files = [\"json.hc\"], deps = [] };\n",
     )
     .unwrap();
-    std::fs::write(lib.join("json.hc"), "pub fn parse(json: String) i32 { return 42; }\n").unwrap();
+    std::fs::write(
+        lib.join("json.hc"),
+        "pub fn parse(json: String) i32 { return 42; }\n",
+    )
+    .unwrap();
     // pkg add 声明 9.9.9，与本地 0.1.0 不符 → 运行仍绿但告警
     Command::new(hc_bin())
         .arg("pkg")
@@ -826,7 +855,7 @@ fn dep_version_mismatch_warns() {
         .expect("hc pkg add");
     std::fs::write(
         app.join("main.hc"),
-        "import H.std.{io};\nimport jsonlib.{parse};\nfn main(args: o Vec<String>) !void { io.print(\"n = {}\\n\", parse(\"{}\")); }\n",
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main() !void { io.print(\"n = {}\\n\", parse(\"{}\")); }\n",
     )
     .unwrap();
     let run = Command::new(hc_bin())

@@ -264,7 +264,7 @@ defer expr / errdefer expr       // 作用域退出执行；errdefer 仅错误�
 ### 6.1 函数声明
 
 ```hc
-fn main(args: o Vec<String>) !void {}    // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告
+fn main() !void {}    // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告
 export fn foo(a: i32) i32 {}             // 原生符号级导出——链接器可见干净符号（与 pub 正交，仅作用于 fn/async fn）
 extern fn c_add(a: i32, b: i32) i32;      // C ABI 外部声明（A1，ADR-0020）：纯声明无 body、链接期解析；MVP = 标量+指针+POD
 fn fun(y: owned *mut T) void {}              // owned T：参数拥有（退出销毁）
@@ -968,7 +968,7 @@ var f: Future<R> = af(...); var v = await f;  // await 任何函数可用
 ```
 <name>/
 ├── build.zon     # 清单：name/version/kind=Kind.exe/files=["main.hc"]/deps=[]
-└── main.hc       # 入口 fn main(args: o Vec<String>) !void + [test] 冒烟测试
+└── main.hc       # 入口 fn main() !void + [test] 冒烟测试
 ```
 
 - **名称校验**：`[A-Za-z0-9_-]`（目录名合法；非空、非 `.`/`..`）
@@ -983,7 +983,7 @@ var f: Future<R> = af(...); var v = await f;  // await 任何函数可用
 ### 17.1 架构
 
 - 共享前端 → 共享 IR → 双后端（字节码 VM 脚本模式 + LLVM 原生编译模式）
-- 入口：`fn main(args: o Vec<String>) !void`——`args` 由运行时注入（0 号 = 程序名）
+- 入口：`fn main() !void`——`args` 由运行时注入（0 号 = 程序名）
 - 程序环境：`io.env(name) ?&[u8]` / `io.stdin` / `io.stdout` / `io.stderr`；io/alloc 为标准库模块与预导入环境（`import H.std.{io}` 显式引用）；**`io.args()` 取消**
 
 ### 17.2 错误检测策略（独立维度）

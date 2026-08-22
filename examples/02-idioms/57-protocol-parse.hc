@@ -25,7 +25,7 @@ fn decode(data: &[u8]) !Message {
     return Message.from_bytes(data[8..8 + len]);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var msg = Message{id = 7, kind = 1};
     var frame = encode(&msg);
     io.print("frame len = {}\n", frame.len);   // 8 + 8 = 16

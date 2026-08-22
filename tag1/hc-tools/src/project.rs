@@ -64,7 +64,7 @@ pub(crate) fn init_project(name: &str) -> ExitCode {
          //   - 测试约定：`[test]` 标注函数与源码同文件（Q-T1）\n\
          //   - 运行：`hc run {name}`   测试：`hc test {name}`\n\
          \n\
-         fn main(args: o Vec<String>) !void {{\n\
+         fn main() !void {{\n\
          \x20   io.print(\"hello, {name}!\\n\");\n\
          }}\n\
          \n\

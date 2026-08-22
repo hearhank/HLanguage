@@ -19,7 +19,7 @@ async fn parse_json(data: &[u8]) !JsonValue {
     return json.parse(data);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 顺序 await：await 在任何函数可用（阻塞等待线程结果）
     var body = try await fetch_url(&io, "https://example.com", alloc);
     var value = try await parse_json(body);

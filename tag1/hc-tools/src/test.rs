@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hc_rt::Interp;
 
-use crate::cli::{color_test_line, err_color, out_color, paint, TestMode};
+use crate::cli::{color_test_line, err_color, out_color, paint, DangleMode, TestMode};
 use crate::fsio::{collect_hc_files, link_exe, zig_cc_available};
 use crate::package::programs_to_test_ll;
 use crate::run::{load_manifest_deps_into, report_leaks};
@@ -77,6 +77,11 @@ fn cross_validate_native(
 }
 
 pub(crate) fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
+    test_dir_dangle(target, mode, DangleMode::Auto)
+}
+
+/// C2（ADR-0016）：`hc test [--dangle=on|off|auto]`——设置悬垂检查模式后运行测试。
+pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode) -> ExitCode {
     let mut files: Vec<PathBuf> = Vec::new();
     if target.is_dir() {
         collect_hc_files(target, &mut files);

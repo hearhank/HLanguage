@@ -11,7 +11,7 @@ fn apply(f: Fn1<i32> i32, x: i32) i32 {
     return f(x);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var a = 10;
 
     var double = |v| v * 2;              // 无环境捕获

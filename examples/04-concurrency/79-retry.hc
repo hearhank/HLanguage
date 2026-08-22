@@ -20,7 +20,7 @@ async fn fetch_with_retry<T>(io: *T, url: &[u8], alloc: Allocator, max_retries: 
     return error.Exhausted;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var body = try await fetch_with_retry(&io, "https://example.com", alloc, 3);
     io.print("got {} bytes\n", body.len);
 }

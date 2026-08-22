@@ -9,6 +9,7 @@ use hc::diag;
 use hc_rt::Interp;
 
 use crate::buildzon;
+use crate::cli::DangleMode;
 use crate::cli::{err_color, paint};
 use crate::fsio::{read_bytecode, read_program};
 use crate::package::sibling_files;
@@ -358,4 +359,47 @@ pub(crate) fn load_deps_into(
         load_deps_into(interp, &canon, &dep_manifest, visited)?;
     }
     Ok(())
+}
+
+/// C2（ADR-0016）：`hc run [--dangle=on|off|auto]`——设置悬垂检查模式后运行。
+pub(crate) fn run_file_dangle(path: &Path, prog_args: &[String], dangle: DangleMode) -> ExitCode {
+    let source = match crate::fsio::read_program(path) {
+        Ok(s) => s,
+        Err(c) => return c,
+    };
+    let (source, program) = match crate::scriptgen::parse_with_scripts(&source) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut interp = Interp::new(&source);
+    interp.set_debug_dangling(dangle.is_on());
+    interp.args = prog_args.to_vec();
+    if let Err(code) = load_siblings_into(&mut interp, path) {
+        return code;
+    }
+    if let Err(code) = load_manifest_deps_into(&mut interp, path) {
+        return code;
+    }
+    if let Err(e) = interp.load(&program) {
+        eprintln!("{}", e.render(&source));
+        return ExitCode::FAILURE;
+    }
+    match interp.run_main() {
+        Ok(()) => {
+            report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
+            match interp.exit_code {
+                Some(0) => ExitCode::SUCCESS,
+                Some(c) => ExitCode::from(c),
+                None => ExitCode::SUCCESS,
+            }
+        }
+        Err(e) => {
+            report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
+            eprintln!("{}", e.render(&source));
+            ExitCode::FAILURE
+        }
+    }
 }

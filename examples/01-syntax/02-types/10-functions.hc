@@ -16,7 +16,7 @@ fn apply(f: Fn1<i32> i32, x: i32) i32 {
     return f(x);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 函数直接作值传递（满足调用接口）
     io.print("{}\n", apply(square, 5));   // 25
     io.print("{}\n", apply(cube, 3));     // 27

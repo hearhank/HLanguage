@@ -22,7 +22,7 @@ fn consumer(ch: *OneToOne<i32>, count: i32) i32 {
     return sum;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var ch: o OneToOne<i32> = OneToOne<i32>.init(alloc);
 
     // 两个线程共享同一容器：各持 &ch（内建共享特例，Q32）

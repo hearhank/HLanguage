@@ -8,7 +8,7 @@ import H.std.{io};
 using Orders;
 using Pricing;
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var lines = Vec<Orders.Line>.init(alloc);
     lines.append(Orders.Line{item = String.from("apple", alloc), price = 3.0});
     lines.append(Orders.Line{item = String.from("banana", alloc), price = 2.0});

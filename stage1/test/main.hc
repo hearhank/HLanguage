@@ -20,7 +20,7 @@ import H.std.{io};
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     io.print("hello, test111!\n");
     io.print("{}\n", 255);
     var rect = HP.Rect.new(alloc);

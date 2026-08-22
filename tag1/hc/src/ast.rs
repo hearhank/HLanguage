@@ -783,3 +783,44 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
         | Expr::FnRef(..) => {}
     }
 }
+
+/// K2：类型调试输出——返回类型名的简洁字符串表示（供 `hc parse` dump 使用）
+pub fn fmt_type_debug(t: &Type) -> String {
+    match t {
+        Type::Named(name, args) => {
+            if args.is_empty() {
+                name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(fmt_type_debug).collect();
+                format!("{}({})", name, args_str.join(", "))
+            }
+        }
+        Type::Ptr(inner, mut_) => {
+            if *mut_ {
+                format!("*mut {}", fmt_type_debug(inner))
+            } else {
+                format!("*{}", fmt_type_debug(inner))
+            }
+        }
+        Type::Slice(inner, mut_) => {
+            if *mut_ {
+                format!("&mut [{}]", fmt_type_debug(inner))
+            } else {
+                format!("&[{}]", fmt_type_debug(inner))
+            }
+        }
+        Type::Optional(inner) => format!("?{}", fmt_type_debug(inner)),
+        Type::ErrorUnion(e, t) => match e {
+            Some(e) => format!("{}!{}", fmt_type_debug(e), fmt_type_debug(t)),
+            None => format!("!{}", fmt_type_debug(t)),
+        },
+        Type::Tuple(items) => {
+            let items_str: Vec<String> = items.iter().map(fmt_type_debug).collect();
+            format!("({})", items_str.join(", "))
+        }
+        Type::Array(n, inner) => format!("[{}]{}", n, fmt_type_debug(inner)),
+        Type::ComptimeInt(n) => format!("comptime_int({})", n),
+        Type::Infer => "_infer_".to_string(),
+        Type::Owned(inner) => format!("o {}", fmt_type_debug(inner)),
+    }
+}

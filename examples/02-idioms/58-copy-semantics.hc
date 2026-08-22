@@ -11,7 +11,7 @@ import H.std.{io};
     y: f32,
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 标量：赋值即复制
     var a: i32 = 5;
     var b = a;

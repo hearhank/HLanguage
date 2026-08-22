@@ -21,7 +21,7 @@ class Rng {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var rng: o Rng = Rng.new(0x1234_5678_9abc_def0);
 
     // 骰子模拟（1..6）

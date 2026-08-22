@@ -20,7 +20,7 @@ fn Pair(T: type) type {
     };
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     io.print("{}\n", max_value(3, 5));       // anytype：整数
     io.print("{}\n", max_value(3.5, 2.0));   // anytype：浮点
 

@@ -42,7 +42,7 @@ fn save<T>(self: *Self, io: *T) !void where T: Io {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var doc: o Document = alloc.init(Document);   // 无参构造（C1'）
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));

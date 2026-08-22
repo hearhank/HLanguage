@@ -42,7 +42,7 @@ fn count_strings(v: *JsonValue) i32 {
     };
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 构造一个简单 JSON：{"a": "x", "list": [1, "y"]}
     var arr = Vec<JsonValue>.init(alloc);
     arr.append(JsonValue{number = 1.0});

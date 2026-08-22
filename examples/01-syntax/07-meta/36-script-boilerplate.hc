@@ -98,7 +98,7 @@ script {
     out.concat(j);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var u = alloc.init(User{name = "alice", age = 30, email = "a@x.com"});
     try user_validate(&u);   // 生成函数：类型驱动校验通过
     io.print("user_field_count = {}\n", user_field_count());

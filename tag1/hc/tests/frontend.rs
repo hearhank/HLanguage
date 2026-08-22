@@ -720,7 +720,7 @@ fn a1_parse_study_example() {
 import H.std.{io as my};
 import H.std.net.{http,tcp};
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     my.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
     http.print();

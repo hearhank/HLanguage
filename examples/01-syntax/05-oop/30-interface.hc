@@ -28,7 +28,7 @@ interface IShape {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
 

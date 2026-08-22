@@ -5,7 +5,7 @@ import H.std.{io};
 //   - 键值操作：put / get / contains / remove
 //   - 遍历：键值对捕获（|kv|）
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     m.put("banana", 7);

@@ -30,7 +30,7 @@ class Point {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var q: Point = Point{x = 4.0, y = 6.0};
 

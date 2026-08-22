@@ -29,7 +29,7 @@ fn load_config<T>(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     });
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var cfg = try load_config(&io, "config.json");
     io.print("{}:{}\n", cfg.host, cfg.port);
 }

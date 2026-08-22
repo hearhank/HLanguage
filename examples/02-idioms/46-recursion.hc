@@ -28,7 +28,7 @@ tree Node {
     }
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     io.print("fib(10) = {}\n", fib(10));
 
     // tree 构建：Node.new 构造样板 + move 进 Vec（Q23 调用点显式 move）

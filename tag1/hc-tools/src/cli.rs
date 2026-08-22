@@ -15,16 +15,49 @@ use crate::package::package_entry;
 use crate::project::{init_project, pkg_add, pkg_publish};
 use crate::run::{
     load_manifest_deps_into, load_siblings_into, program_args, run_file, run_file_bytecode,
-    run_file_ir,
+    run_file_dangle, run_file_ir,
 };
 use crate::scriptgen;
-use crate::test::test_dir;
+use crate::test::{test_dir, test_dir_dangle};
 
 /// `hc test` 运行模式：解释器（默认）或原生编译（Q-T5 交叉验证）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TestMode {
     Interpret,
     Compile,
+}
+
+/// C2（ADR-0016）：Debug 悬垂标记切换模式（编译单元级，`--dangle=on|off|auto`）。
+/// `auto` = Debug 开 / Release 关（默认）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DangleMode {
+    On,
+    Off,
+    Auto,
+}
+
+impl DangleMode {
+    /// 返回当前模式是否应启用悬垂检查（Auto 按 Debug 模式处理）。
+    pub(crate) fn is_on(self) -> bool {
+        match self {
+            DangleMode::On => true,
+            DangleMode::Off => false,
+            DangleMode::Auto => true, // tag1 默认 Debug 开
+        }
+    }
+}
+
+/// 解析 `--dangle` 取值，非法值报错退出。
+pub(crate) fn parse_dangle_mode(v: &str) -> Result<DangleMode, ExitCode> {
+    match v {
+        "on" => Ok(DangleMode::On),
+        "off" => Ok(DangleMode::Off),
+        "auto" => Ok(DangleMode::Auto),
+        other => {
+            eprintln!("error: 未知 --dangle `{other}`（可选 on|off|auto）");
+            Err(ExitCode::from(2))
+        }
+    }
 }
 
 /// 解析 `--mode` 取值，非法值报错退出。
@@ -73,10 +106,12 @@ pub(crate) const USAGE: &str = "hc <command> [args...]
 H 语言工具链（tag1 垂直切片）
 
 USAGE:
-    hc run <file.hc>           运行脚本模式（解释执行）
-    hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；全语言，同 IR）
+    hc run <file.hc> [--dangle=on|off|auto]
+                              运行脚本模式（解释执行；--dangle 控制悬垂指针检查）
+    hc run <file.hbc> [--dangle=on|off|auto]
+                              运行字节码 VM（M3.2，装载 HBC2；全语言，同 IR）
     hc run --ir <file.hc>      用 IR 参考解释器运行（全语言，interp == IR）
-    hc test [--mode=interpret|compile] [file.hc|dir]
+    hc test [--mode=interpret|compile] [--dangle=on|off|auto] [file.hc|dir]
                               运行 test fn（默认当前目录全部 .hc；--mode=compile 原生交叉验证）
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
@@ -124,6 +159,8 @@ pub(crate) fn run_cli() -> ExitCode {
                 eprintln!("error: `hc run` requires a file path");
                 return ExitCode::from(2);
             };
+            // C2（ADR-0016）：从剩余参数提取 --dangle 标志
+            let (dangle_mode, rest_start) = extract_dangle(&args, 3);
             // 显式模式标志：`hc run --ir <file>` 走 IR 参考解释器；
             // `.hbc`（HBC2 字节码）走字节码 VM；否则默认 tree-walking
             if path == "--ir" {
@@ -132,10 +169,10 @@ pub(crate) fn run_cli() -> ExitCode {
                     return ExitCode::from(2);
                 };
                 // 程序参数：`hc run --ir <file> <args...>` → [程序名] + args（0 号 = 程序名）
-                let prog_args = program_args(&args[4..], p);
+                let prog_args = program_args(&args[rest_start..], p);
                 run_file_ir(Path::new(p), &prog_args)
             } else if is_hbc2(Path::new(path)) {
-                let prog_args = program_args(&args[3..], path);
+                let prog_args = program_args(&args[rest_start..], path);
                 run_file_bytecode(Path::new(path), &prog_args)
             } else if Path::new(path).is_dir() {
                 // C1：`hc run <目录>`——包加载：入口 `main.hc` 或首个 `.hc`，
@@ -143,8 +180,8 @@ pub(crate) fn run_cli() -> ExitCode {
                 match package_entry(Path::new(path)) {
                     Ok(entry) => {
                         let entry_s = entry.to_string_lossy().into_owned();
-                        let prog_args = program_args(&args[3..], &entry_s);
-                        run_file(&entry, &prog_args)
+                        let prog_args = program_args(&args[rest_start..], &entry_s);
+                        run_file_dangle(&entry, &prog_args, dangle_mode)
                     }
                     Err(msg) => {
                         eprintln!("error: {msg}");
@@ -152,8 +189,8 @@ pub(crate) fn run_cli() -> ExitCode {
                     }
                 }
             } else {
-                let prog_args = program_args(&args[3..], path);
-                run_file(Path::new(path), &prog_args)
+                let prog_args = program_args(&args[rest_start..], path);
+                run_file_dangle(Path::new(path), &prog_args, dangle_mode)
             }
         }
         // 调试：打印 script 块展开后的源码（组 C 开发辅助）
@@ -183,6 +220,7 @@ pub(crate) fn run_cli() -> ExitCode {
         "test" => {
             // 解析可选 --mode=interpret|compile（默认 interpret）与目标路径
             let mut mode = TestMode::Interpret;
+            let mut dangle_mode = DangleMode::Auto;
             let mut target = PathBuf::from(".");
             let mut i = 2;
             while i < args.len() {
@@ -202,12 +240,17 @@ pub(crate) fn run_cli() -> ExitCode {
                         Ok(m) => m,
                         Err(c) => return c,
                     };
+                } else if let Some(v) = a.strip_prefix("--dangle=") {
+                    dangle_mode = match parse_dangle_mode(v) {
+                        Ok(m) => m,
+                        Err(c) => return c,
+                    };
                 } else {
                     target = PathBuf::from(a);
                 }
                 i += 1;
             }
-            test_dir(&target, mode)
+            test_dir_dangle(&target, mode, dangle_mode)
         }
         "check" => {
             let Some(path) = args.get(2) else {
@@ -300,6 +343,10 @@ pub(crate) fn run_cli() -> ExitCode {
             // B1：`hc lint <file.hc|dir> [--json] [--fix]`——静态诊断
             lint_command(&args[2..])
         }
+        "parse" => {
+            // K2：`hc parse <file.hc>`——转储 AST 树（Rust 参考实现，H 版 parser 对照基准）
+            parse_command(&args[2..])
+        }
         "lex" => {
             // K1：`hc lex <file.hc>`——转储 token 流（Rust 参考实现，H 版 lexer 对照基准）
             lex_command(&args[2..])
@@ -316,6 +363,613 @@ pub(crate) fn run_cli() -> ExitCode {
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(2)
+        }
+    }
+}
+
+/// K2：`hc parse <file.hc>`——Rust 参考 parser 输出 AST 树。
+///
+/// 每行一个节点，缩进表示嵌套层级，格式 `深度:NodeType|field=val|field=val`。
+/// H 版 parser（stage1/parser.hc）输出同一格式，对照测试逐行 diff。
+fn parse_command(args: &[String]) -> ExitCode {
+    let Some(path_str) = args.first() else {
+        eprintln!("error: `hc parse` requires a file\n\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    let source = match read_source(Path::new(path_str)) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let tokens = hc::lexer::lex(&source);
+    let diags: Vec<_> = tokens
+        .iter()
+        .filter_map(|t| match &t.kind {
+            hc::token::TokenKind::Error(msg) => Some(hc::Diagnostic::error(
+                t.span.clone(),
+                format!("lex error: {msg}"),
+            )),
+            _ => None,
+        })
+        .collect();
+    if !diags.is_empty() {
+        for d in &diags {
+            eprintln!("{}:{}: {}", d.span.line, d.span.col, d.message);
+        }
+        return ExitCode::FAILURE;
+    }
+    let parser = hc::parser::Parser::new(&source, tokens);
+    match parser.parse_program() {
+        Ok(program) => {
+            dump_ast(&program, 0);
+            ExitCode::SUCCESS
+        }
+        Err(diags) => {
+            for d in &diags {
+                eprintln!("{}:{}: {}", d.span.line, d.span.col, d.message);
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// K2：递归输出 AST 树（格式：`深度:NodeType|field=val|field=val`）。
+fn dump_ast(program: &hc::ast::Program, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    println!("{indent}Program");
+    for decl in &program.decls {
+        dump_decl(decl, depth + 1);
+    }
+}
+
+fn dump_decl(decl: &hc::ast::Decl, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    match decl {
+        hc::ast::Decl::Global {
+            name,
+            ty,
+            init,
+            pub_,
+            ..
+        } => {
+            print!("{indent}Global|name={name}");
+            if let Some(t) = ty {
+                print!("|ty={:?}", hc::ast::fmt_type_debug(t));
+            }
+            if init.is_some() {
+                print!("|has_init=true");
+            }
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+        }
+        hc::ast::Decl::Const { name, ty, pub_, .. } => {
+            print!("{indent}Const|name={name}");
+            if let Some(t) = ty {
+                print!("|ty={:?}", hc::ast::fmt_type_debug(t));
+            }
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+        }
+        hc::ast::Decl::Fn {
+            name,
+            type_params,
+            params,
+            ret,
+            is_test,
+            is_async,
+            pub_,
+            exported,
+            is_extern,
+            body,
+            ..
+        } => {
+            print!("{indent}Fn|name={name}");
+            if !type_params.is_empty() {
+                print!("|type_params={:?}", type_params);
+            }
+            if *pub_ {
+                print!("|pub=true");
+            }
+            if *is_test {
+                print!("|test=true");
+            }
+            if *is_async {
+                print!("|async=true");
+            }
+            if *exported {
+                print!("|exported=true");
+            }
+            if *is_extern {
+                print!("|extern=true");
+            }
+            println!();
+            for p in params {
+                dump_param(p, depth + 1);
+            }
+            if let Some(t) = ret {
+                println!("{}  ret: {:?}", indent, hc::ast::fmt_type_debug(t));
+            }
+            dump_block(body, depth + 1);
+        }
+        hc::ast::Decl::Class {
+            name,
+            fields,
+            methods,
+            pub_,
+            ..
+        } => {
+            print!("{indent}Class|name={name}");
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+            for f in fields {
+                println!(
+                    "{}  Field|name={}|ty={:?}",
+                    indent,
+                    f.name,
+                    hc::ast::fmt_type_debug(&f.ty)
+                );
+            }
+            for m in methods {
+                dump_method(m, depth + 1);
+            }
+        }
+        hc::ast::Decl::Enum {
+            name,
+            variants,
+            pub_,
+            ..
+        } => {
+            print!("{indent}Enum|name={name}");
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+            for v in variants {
+                print!("{}  Variant|name={}", indent, v.name);
+                if let Some(pty) = &v.payload {
+                    print!("|payload={:?}", hc::ast::fmt_type_debug(pty));
+                }
+                println!();
+            }
+        }
+        hc::ast::Decl::Union {
+            name, fields, pub_, ..
+        } => {
+            print!("{indent}Union|name={name}");
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+            for f in fields {
+                println!(
+                    "{}  Field|name={}|ty={:?}",
+                    indent,
+                    f.name,
+                    hc::ast::fmt_type_debug(&f.ty)
+                );
+            }
+        }
+        hc::ast::Decl::Interface {
+            name,
+            methods,
+            pub_,
+            ..
+        } => {
+            print!("{indent}Interface|name={name}");
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+            for m in methods {
+                dump_method(m, depth + 1);
+            }
+        }
+        hc::ast::Decl::Namespace {
+            name,
+            decls,
+            pub_,
+            is_module,
+            ..
+        } => {
+            print!("{indent}Namespace|name={name}");
+            if *pub_ {
+                print!("|pub=true");
+            }
+            if *is_module {
+                print!("|module=true");
+            }
+            println!();
+            for d in decls {
+                dump_decl(d, depth + 1);
+            }
+        }
+        hc::ast::Decl::Using { path, alias, .. } => {
+            print!("{indent}Using|path={:?}", path);
+            if let Some(a) = alias {
+                print!("|alias={a}");
+            }
+            println!();
+        }
+        hc::ast::Decl::Import {
+            path,
+            alias,
+            select,
+            ..
+        } => {
+            print!("{indent}Import|path={:?}", path);
+            if let Some(a) = alias {
+                print!("|alias={a}");
+            }
+            if let Some(s) = select {
+                print!("|select={:?}", s);
+            }
+            println!();
+        }
+        hc::ast::Decl::Script { .. } => {
+            println!("{indent}Script");
+        }
+        hc::ast::Decl::Comptime { .. } => {
+            println!("{indent}Comptime");
+        }
+    }
+}
+
+fn dump_param(p: &hc::ast::Param, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    print!(
+        "{indent}Param|name={}|ty={:?}",
+        p.name,
+        hc::ast::fmt_type_debug(&p.ty)
+    );
+    if p.default.is_some() {
+        print!("|has_default=true");
+    }
+    println!();
+}
+
+fn dump_method(m: &hc::ast::Method, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    println!("{indent}Method|name={}", m.name);
+    for p in &m.params {
+        dump_param(p, depth + 1);
+    }
+    if let Some(t) = &m.ret {
+        println!("{}  ret: {:?}", indent, hc::ast::fmt_type_debug(t));
+    }
+    dump_block(&m.body, depth + 1);
+}
+
+fn dump_block(b: &hc::ast::Block, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    println!("{indent}Block");
+    for stmt in &b.stmts {
+        dump_stmt(stmt, depth + 1);
+    }
+}
+
+fn dump_stmt(stmt: &hc::ast::Stmt, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    match stmt {
+        hc::ast::Stmt::VarDecl {
+            name,
+            mut_,
+            ty,
+            init,
+            ..
+        } => {
+            print!("{indent}VarDecl|name={name}");
+            if *mut_ {
+                print!("|mut=true");
+            }
+            if let Some(t) = ty {
+                print!("|ty={:?}", hc::ast::fmt_type_debug(t));
+            }
+            if init.is_some() {
+                print!("|has_init=true");
+            }
+            println!();
+        }
+        hc::ast::Stmt::ConstDecl { name, .. } => {
+            println!("{indent}ConstDecl|name={name}");
+        }
+        hc::ast::Stmt::Expr(e) => {
+            print!("{indent}ExprStmt ");
+            dump_expr(e, depth);
+        }
+        hc::ast::Stmt::If(s) => {
+            print!("{indent}If");
+            if let Some((_, cap)) = &s.capture {
+                print!("|capture={cap}");
+            }
+            if let Some((_, err)) = &s.err_capture {
+                print!("|err_capture={err}");
+            }
+            println!();
+            dump_expr(&s.cond, depth + 1);
+            dump_block(&s.then_b, depth + 1);
+            if let Some(el) = &s.else_b {
+                dump_stmt(el, depth + 1);
+            }
+        }
+        hc::ast::Stmt::While(s) => {
+            print!("{indent}While");
+            if let Some(l) = &s.label {
+                print!("|label={l}");
+            }
+            if let Some((_, cap)) = &s.capture {
+                print!("|capture={cap}");
+            }
+            println!();
+            dump_expr(&s.cond, depth + 1);
+            dump_block(&s.body, depth + 1);
+        }
+        hc::ast::Stmt::For(s) => {
+            print!("{indent}For");
+            if let Some(l) = &s.label {
+                print!("|label={l}");
+            }
+            println!("|capture={} iter={:?}", s.capture_name, s.capture);
+            dump_expr(&s.iter, depth + 1);
+            dump_block(&s.body, depth + 1);
+        }
+        hc::ast::Stmt::Switch(s) => {
+            println!("{indent}Switch");
+            dump_expr(&s.subject, depth + 1);
+            for arm in &s.arms {
+                print!("{}  SwitchArm", indent);
+                if let Some((_, cap)) = &arm.capture {
+                    print!("|capture={cap}");
+                }
+                if arm.guard.is_some() {
+                    print!("|has_guard=true");
+                }
+                println!();
+                for pat in &arm.patterns {
+                    print!("{}    Pattern", indent);
+                    match pat {
+                        hc::ast::SwitchPattern::Error(s) => println!("|error={s}"),
+                        hc::ast::SwitchPattern::Ident(s) => println!("|ident={s}"),
+                        hc::ast::SwitchPattern::Int(s) => println!("|int={s}"),
+                        hc::ast::SwitchPattern::Float(s) => println!("|float={s}"),
+                        hc::ast::SwitchPattern::Str(s) => println!("|str={s}"),
+                        hc::ast::SwitchPattern::Char(c) => println!("|char={c}"),
+                        hc::ast::SwitchPattern::Else => println!("|else"),
+                    }
+                }
+                dump_block(&arm.body, depth + 2);
+            }
+        }
+        hc::ast::Stmt::Return(v, _) => {
+            print!("{indent}Return");
+            if let Some(val) = v {
+                println!();
+                dump_expr(val, depth + 1);
+            } else {
+                println!();
+            }
+        }
+        hc::ast::Stmt::Break(l, _) => {
+            print!("{indent}Break");
+            if let Some(label) = l {
+                print!("|label={label}");
+            }
+            println!();
+        }
+        hc::ast::Stmt::Continue(l, _) => {
+            print!("{indent}Continue");
+            if let Some(label) = l {
+                print!("|label={label}");
+            }
+            println!();
+        }
+        hc::ast::Stmt::Defer(_, _) => println!("{indent}Defer"),
+        hc::ast::Stmt::Errdefer(_, _) => println!("{indent}Errdefer"),
+        hc::ast::Stmt::Block(b) => dump_block(b, depth),
+        hc::ast::Stmt::Empty => println!("{indent}Empty"),
+    }
+}
+
+fn dump_expr(expr: &hc::ast::Expr, depth: usize) {
+    let indent = " ".repeat(depth * 2);
+    match expr {
+        hc::ast::Expr::IntLit { text, .. } => println!("{indent}IntLit|text={text}"),
+        hc::ast::Expr::FloatLit { text, .. } => println!("{indent}FloatLit|text={text}"),
+        hc::ast::Expr::StrLit { value, raw, .. } => {
+            println!("{indent}StrLit|value={value}|raw={raw}")
+        }
+        hc::ast::Expr::CharLit(v, _) => println!("{indent}CharLit|value={v}"),
+        hc::ast::Expr::BoolLit(v, _) => println!("{indent}BoolLit|value={v}"),
+        hc::ast::Expr::NullLit(_) => println!("{indent}NullLit"),
+        hc::ast::Expr::VoidLit(_) => println!("{indent}VoidLit"),
+        hc::ast::Expr::Ident(name, _) => println!("{indent}Ident|name={name}"),
+        hc::ast::Expr::ArrayLit(items, _) => {
+            println!("{indent}ArrayLit");
+            for e in items {
+                dump_expr(e, depth + 1);
+            }
+        }
+        hc::ast::Expr::TupleLit(items, _) => {
+            println!("{indent}TupleLit");
+            for e in items {
+                dump_expr(e, depth + 1);
+            }
+        }
+        hc::ast::Expr::NamedLit {
+            ty,
+            ty_args,
+            fields,
+            ..
+        } => {
+            print!("{indent}NamedLit|ty={ty}");
+            if !ty_args.is_empty() {
+                print!(
+                    "|ty_args={:?}",
+                    ty_args
+                        .iter()
+                        .map(|t| hc::ast::fmt_type_debug(t))
+                        .collect::<Vec<_>>()
+                );
+            }
+            println!();
+            for (name, val) in fields {
+                println!("{}  field={name}", indent);
+                dump_expr(val, depth + 2);
+            }
+        }
+        hc::ast::Expr::StructType { fields, .. } => {
+            println!("{indent}StructType");
+            for (name, ty) in fields {
+                println!(
+                    "{}  field={name}|ty={:?}",
+                    indent,
+                    hc::ast::fmt_type_debug(ty)
+                );
+            }
+        }
+        hc::ast::Expr::ArrayType { len, elem, .. } => {
+            println!("{indent}ArrayType");
+            dump_expr(len, depth + 1);
+            dump_expr(elem, depth + 1);
+        }
+        hc::ast::Expr::Dot { base, field, .. } => {
+            println!("{indent}Dot|field={field}");
+            dump_expr(base, depth + 1);
+        }
+        hc::ast::Expr::Field { base, field, .. } => {
+            println!("{indent}Field|field={field}");
+            dump_expr(base, depth + 1);
+        }
+        hc::ast::Expr::Index { base, indices, .. } => {
+            println!("{indent}Index");
+            dump_expr(base, depth + 1);
+            for i in indices {
+                dump_expr(i, depth + 1);
+            }
+        }
+        hc::ast::Expr::Deref(e, _) => {
+            println!("{indent}Deref");
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::AddrOf(e, mut_, _) => {
+            println!("{indent}AddrOf|mut={mut_}");
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Unary(op, e, _) => {
+            println!("{indent}Unary|op={:?}", op);
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Binary(op, l, r, _) => {
+            println!("{indent}Binary|op={:?}", op);
+            dump_expr(l, depth + 1);
+            dump_expr(r, depth + 1);
+        }
+        hc::ast::Expr::Orelse(l, r, _) => {
+            println!("{indent}Orelse");
+            dump_expr(l, depth + 1);
+            dump_expr(r, depth + 1);
+        }
+        hc::ast::Expr::Unwrap(e, _) => {
+            println!("{indent}Unwrap");
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Try(e, _) => {
+            println!("{indent}Try");
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Await(e, _) => {
+            println!("{indent}Await");
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Catch(e, kind, _) => {
+            println!("{indent}Catch");
+            dump_expr(e, depth + 1);
+            match kind.as_ref() {
+                hc::ast::CatchKind::Default(d) => {
+                    println!("{}  Default", indent);
+                    dump_expr(d, depth + 2);
+                }
+                hc::ast::CatchKind::Bind { name, body } => {
+                    println!("{}  Bind|name={name}", indent);
+                    dump_block(body, depth + 2);
+                }
+            }
+        }
+        hc::ast::Expr::Call { callee, args, .. } => {
+            println!("{indent}Call");
+            dump_expr(callee, depth + 1);
+            for a in args {
+                dump_expr(a, depth + 1);
+            }
+        }
+        hc::ast::Expr::IfExpr {
+            cond,
+            capture,
+            then_e,
+            else_e,
+            ..
+        } => {
+            print!("{indent}IfExpr");
+            if let Some((_, cap)) = capture {
+                print!("|capture={cap}");
+            }
+            println!();
+            dump_expr(cond, depth + 1);
+            dump_expr(then_e, depth + 1);
+            dump_expr(else_e, depth + 1);
+        }
+        hc::ast::Expr::SwitchExpr { subject, arms, .. } => {
+            println!("{indent}SwitchExpr");
+            dump_expr(subject, depth + 1);
+            for arm in arms {
+                println!("{}  SwitchArm", indent);
+                for pat in &arm.patterns {
+                    match pat {
+                        hc::ast::SwitchPattern::Ident(s) => {
+                            println!("{}    Pattern|ident={s}", indent)
+                        }
+                        _ => println!("{}    Pattern", indent),
+                    }
+                }
+                dump_block(&arm.body, depth + 2);
+            }
+        }
+        hc::ast::Expr::Block(b, _) => dump_block(b, depth),
+        hc::ast::Expr::Assign {
+            target, op, value, ..
+        } => {
+            println!("{indent}Assign|op={:?}", op);
+            dump_expr(target, depth + 1);
+            dump_expr(value, depth + 1);
+        }
+        hc::ast::Expr::ErrorLit(name, _) => println!("{indent}ErrorLit|name={name}"),
+        hc::ast::Expr::FnRef(name, _) => println!("{indent}FnRef|name={name}"),
+        hc::ast::Expr::TupleDestructure(names, e, _) => {
+            println!("{indent}TupleDestructure|names={:?}", names);
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Move(e, _) => {
+            println!("{indent}Move");
+            dump_expr(e, depth + 1);
+        }
+        hc::ast::Expr::Closure {
+            params,
+            is_mut,
+            is_move,
+            ..
+        } => {
+            print!("{indent}Closure|params={:?}", params);
+            if *is_mut {
+                print!("|mut");
+            }
+            if *is_move {
+                print!("|move");
+            }
+            println!();
         }
     }
 }
@@ -716,4 +1370,18 @@ fn cc_command(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// C2（ADR-0016）：从参数列表提取 `--dangle=on|off|auto` 标志，返回模式与程序参数起始位置。
+/// 不匹配则返回 `Auto` 默认，起始位置不变。
+fn extract_dangle(args: &[String], start: usize) -> (DangleMode, usize) {
+    for i in start..args.len() {
+        if let Some(v) = args[i].strip_prefix("--dangle=") {
+            match parse_dangle_mode(v) {
+                Ok(m) => return (m, i + 1),
+                Err(_) => return (DangleMode::Auto, start),
+            }
+        }
+    }
+    (DangleMode::Auto, start)
 }

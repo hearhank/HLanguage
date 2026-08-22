@@ -10,7 +10,7 @@ import H.std.{io};
 //   - 复杂类型（分配器创建）除 Arena 外默认拥有——作用域退出自动销毁（无需显式 o/deinit）
 //   - String = u8[] 别名（Q3）：引用类型、赋值 = 编译错误（共享走指针、复制走显式 copy）
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // Vec：构造 + 追加（非 arena 分配器 → 默认拥有，作用域退出自动销毁）
     var v = Vec<i32>.init(alloc);
     v.append(1);

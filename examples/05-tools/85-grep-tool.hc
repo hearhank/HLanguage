@@ -20,7 +20,7 @@ fn search_file<T>(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     return hits;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var needle = "fn ";
     var dir = try io.fs.open_dir(".");
     defer dir.close();

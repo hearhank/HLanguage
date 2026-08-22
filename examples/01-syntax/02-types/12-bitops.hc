@@ -9,7 +9,7 @@ const FLAG_READ = 0b001;
 const FLAG_WRITE = 0b010;
 const FLAG_EXEC = 0b100;
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 标志位组合
     var flags = FLAG_READ | FLAG_WRITE;     // 0b011
     io.print("readable = {}\n", (flags & FLAG_READ) != 0);

@@ -20,7 +20,7 @@ fn read_config<T>(io: *T, path: &[u8]) FileError!&[u8] where T: Io {
     return io.fs.read_all(f, alloc);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var data = read_config(&io, "config.txt") catch |err| {
         io.print("config error: {}\n", err);
         return;

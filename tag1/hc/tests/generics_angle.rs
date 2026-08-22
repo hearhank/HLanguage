@@ -18,17 +18,17 @@ fn generics_angle_parse() {
     // 类型位置 Vec<i32>
     try_parse(
         "Vec type position",
-        "fn f(a: Vec<i32>) void {}\nfn main(args: o Vec<String>) !void {}\n",
+        "fn f(a: Vec<i32>) void {}\nfn main() !void {}\n",
     );
     // 嵌套 Vec<Vec<i32>>
     try_parse(
         "nested",
-        "fn f(a: Vec<Vec<i32>>) void {}\nfn main(args: o Vec<String>) !void {}\n",
+        "fn f(a: Vec<Vec<i32>>) void {}\nfn main() !void {}\n",
     );
     // 泛型函数 fn swap<T>
     try_parse(
         "generic fn <T>",
-        "fn swap<T>(a: *mut T, b: *mut T) void {}\nfn main(args: o Vec<String>) !void {}\n",
+        "fn swap<T>(a: *mut T, b: *mut T) void {}\nfn main() !void {}\n",
     );
     // 泛型函数 fn sum<T> where
     try_parse(
@@ -38,12 +38,12 @@ fn generics_angle_parse() {
     // 表达式位置 Vec<i32>.init(alloc)
     try_parse(
         "expr Vec<i32>.init",
-        "fn main(args: o Vec<String>) !void { var v = Vec<i32>.init(alloc); }\n",
+        "fn main() !void { var v = Vec<i32>.init(alloc); }\n",
     );
     // 泛型字面量 Pair<i32>{...}
     try_parse(
         "Pair<i32> literal",
-        "fn main(args: o Vec<String>) !void { var p: Pair<i32> = Pair<i32>{first = 1, second = 2}; }\n",
+        "fn main() !void { var p: Pair<i32> = Pair<i32>{first = 1, second = 2}; }\n",
     );
     // 比较运算符仍正常
     try_parse(
@@ -58,7 +58,7 @@ fn generics_angle_parse() {
     // 三重嵌套 Vec<Vec<Vec<i32>>>
     try_parse(
         "triple nested",
-        "fn f(a: Vec<Vec<Vec<i32>>>) void {}\nfn main(args: o Vec<String>) !void {}\n",
+        "fn f(a: Vec<Vec<Vec<i32>>>) void {}\nfn main() !void {}\n",
     );
     // Map<&[u8], Vec<i32>> 混合嵌套
     try_parse(
@@ -80,6 +80,6 @@ fn generics_angle_parse() {
     // Vec<&[u8]>.init 表达式
     try_parse(
         "Vec<&[u8]>.init",
-        "fn main(args: o Vec<String>) !void { var v = Vec<&[u8]>.init(alloc); }\n",
+        "fn main() !void { var v = Vec<&[u8]>.init(alloc); }\n",
     );
 }

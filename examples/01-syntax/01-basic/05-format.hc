@@ -5,7 +5,7 @@ import H.std.{io};
 //   - comptime 校验（Q2）：说明符与参数类型不匹配编译报错
 //   - Zig 式说明符：{} 默认 / {d} / {x} / {b} / {e} / {s} / 宽度/精度/对齐
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     io.print("{}\n", 255);          // 默认（comptime 定型）
     io.print("{d}\n", 255);         // 十进制
     io.print("{x}\n", 255);         // 十六进制小写：ff

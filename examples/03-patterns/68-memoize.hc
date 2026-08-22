@@ -22,7 +22,7 @@ fn slow_square(x: i32) i32 {
     return x * x;                    // 模拟慢计算（纯函数）
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var memo: o Memo = alloc.init(Memo);   // 无参构造（C1'）
 
     var r1 = memo.get_or_compute(5, slow_square);

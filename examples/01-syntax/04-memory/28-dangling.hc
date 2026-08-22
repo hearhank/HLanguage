@@ -15,7 +15,7 @@ fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {
     buf.append(&temp);      // 登记 &temp；fill 返回后 temp 销毁 → 容器内引用被标记悬垂
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 唯一写者：同一变量同一时间最多一个 &mut（运行时登记）
     var mut x: i32 = 42;
     var w: *mut i32 = &mut x;

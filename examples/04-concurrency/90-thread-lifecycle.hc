@@ -35,7 +35,7 @@ fn bump_g() void {
     g = g + 1;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // spawn 立即返回句柄；join 运行到完成并返回值
     var th = spawn(add, 6, 7);
     var r = try th.join();

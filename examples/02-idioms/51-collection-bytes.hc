@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 字节序固定小端（LE，跨平台一致）；元素递归用内建转换
 //   - 定制格式（压缩/加密/版本化）走脚本生成覆盖（Q38 C）
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);

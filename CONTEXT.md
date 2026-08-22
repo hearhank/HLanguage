@@ -291,7 +291,7 @@ _Avoid_: 多套导入机制并存
 _Avoid_: 把「模块」当无边界的大杂烩目录
 
 **程序环境 (io 模块)**:
-标准库模块形态的程序环境句柄（2026-08-17 定案，ADR-0010）：`io.print`/`io.fs.*`/`io.net.*`/`io.time.*`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)` 均为模块函数 + 模块内环境状态（**命令行参数仅经入口 `main(args)` 注入，`io.args()` 取消**）；经 `import H.std.{io}` 引入，**main 不再注入 io 参数**（`fn main(args: o Vec<String>) !void`）。`Io` 接口保留（并发 E2 的 `Io.threaded()/evented()`）。
+标准库模块形态的程序环境句柄（2026-08-17 定案，ADR-0010）：`io.print`/`io.fs.*`/`io.net.*`/`io.time.*`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)` 均为模块函数 + 模块内环境状态（**命令行参数仅经入口 `main(args)` 注入，`io.args()` 取消**）；经 `import H.std.{io}` 引入，**main 不再注入 io 参数**（`fn main() !void`）。`Io` 接口保留（并发 E2 的 `Io.threaded()/evented()`）。
 _Avoid_: 把程序环境当全局可变状态泄漏
 
 **应用程序 (Application, 2026-08-17 定案)**:

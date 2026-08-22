@@ -5,7 +5,7 @@
 ## 函数
 
 ```hc
-fn main(args: o Vec<String>) !void {}   // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告；环境经 `import H.std.{io}`（io.env(n)/io.stdin/io.stdout/io.stderr）；退出 io.exit(ExitType.Exit|Error, code)（2026-08-14 定案；2026-08-17 修订入口形态，ADR-0010）
+fn main() !void {}   // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告；环境经 `import H.std.{io}`（io.env(n)/io.stdin/io.stdout/io.stderr）；退出 io.exit(ExitType.Exit|Error, code)（2026-08-14 定案；2026-08-17 修订入口形态，ADR-0010）
 export fn foo(a: i32) i32 {}        // K5（ADR-0014，2026-08-18 落地）：原生符号级导出——链接器可见干净符号（外部 thunk）；与 pub 正交，仅作用于 fn/async fn
 extern fn add_c(a: i32, b: i32) i32;   // A1（ADR-0020，2026-08-22 设计定案）：C ABI 外部函数纯声明（无 body，链接期解析）；反向由 export fn 覆盖
 fn fun(y: o *mut T) void {}          // o T：参数拥有（Q22b 类型标注制；退出销毁）

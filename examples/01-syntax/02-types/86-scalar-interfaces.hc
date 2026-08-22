@@ -21,7 +21,7 @@ fn divmod(a: i32, b: i32) (i32, i32) {
     return (a / b, a % b);
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // 方法形式（a.add(b) ≡ a + b，双向一致）
     var a: i32 = 7;
     var b: i32 = 5;

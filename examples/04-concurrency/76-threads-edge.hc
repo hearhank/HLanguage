@@ -14,7 +14,7 @@ async fn async_add(b: *i32, n: i32) i32 {
     return b.* + n;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // Thread 接口：is_done / join（消耗所有权，返回 !T）
     var t: o Thread<i32> = spawn(worker, 9);
     io.print("is_done = {}\n", t.is_done());

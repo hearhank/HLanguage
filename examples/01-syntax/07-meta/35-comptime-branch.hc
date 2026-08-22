@@ -14,7 +14,7 @@ fn max_value(a: anytype, b: anytype) anytype {
     return if (a > b) a else b;
 }
 
-fn main(args: o Vec<String>) !void {
+fn main() !void {
     // comptime 类型应用：ArrayLen<i32, 3> = [3]i32
     var arr: ArrayLen<i32, 3> = [1, 2, 3];
     io.print("len = {}\n", arr.len);
