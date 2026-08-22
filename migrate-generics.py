@@ -3,8 +3,8 @@
 """Migrate H generic type syntax from `Name(...)` to `Name<...>`.
 
 Balanced-paren aware and recursive:
-  - `Vec(i32)` -> `Vec<i32>`
-  - `Vec(Vec(i32))` -> `Vec<Vec<i32>>`
+  - `Vec<i32>` -> `Vec<i32>`
+  - `Vec(Vec<i32>)` -> `Vec<Vec<i32>>`
   - `Vec(Fn1(&[u8]) void)` -> `Vec<Fn1<&[u8]> void>`
   - comments are converted too; strings are preserved verbatim.
 Skips `::Name(...)` (Rust path, e.g. Value::Int) and `.Name(...)` (method call).

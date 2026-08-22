@@ -367,7 +367,7 @@ pub struct Interp {
     /// 命中即返回键本身（叶），防止无限实例化。
     instantiating: Vec<String>,
     /// E1.2 组 D D4c：comptime 值函数调用深度（自递归守卫——`fn f(T: type)` 体再调
-    /// `f(i32)` 无限编译期求值会栈溢出，超限报编译错误）。
+    /// `f<i32>` 无限编译期求值会栈溢出，超限报编译错误）。
     comptime_value_depth: usize,
 }
 

@@ -298,7 +298,7 @@ impl Parser {
                         args,
                         span: start.merge(&end),
                     };
-                    // 泛型类型实例化后字面量：Pair(i32){ first = 1, ... }。
+                    // 泛型类型实例化后字面量：Pair<i32>{ first = 1, ... }。
                     // call 实参按类型实参收集（E1.2 组 D comptime 类型应用——不再丢弃）。
                     if self.at(&TokenKind::LBrace) {
                         match &e {
@@ -887,8 +887,8 @@ impl Parser {
         Ok(fields)
     }
 
-    /// 表达式 → 类型实参（E1.2 组 D）：`Pair(i32){...}` 的 call 实参转为泛型实参。
-    /// 支持裸标识符 `i32`、限定名 `Math.Vec`、嵌套泛型 `Vec(i32)`；非类型形态返回 None
+    /// 表达式 → 类型实参（E1.2 组 D）：`Pair<i32>{...}` 的 call 实参转为泛型实参。
+    /// 支持裸标识符 `i32`、限定名 `Math.Vec`、嵌套泛型 `Vec<i32>`；非类型形态返回 None
     /// （调用方按「无类型实参」处理——tag1 泛型实参必须可解析为类型）。
     pub(crate) fn expr_to_type(&self, e: &Expr) -> Option<Type> {
         match e {

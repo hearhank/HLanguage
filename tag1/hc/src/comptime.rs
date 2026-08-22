@@ -1,7 +1,7 @@
 //! comptime 类型函数具体化（E1.2 组 D；ADR-0012）
 //!
 //! 类型函数（`fn List(T: type) type`）= 返回 `type` 的编译期函数：实例化（调用点在
-//! 类型位置应用 `List(i32)`）= 名字 + 实参列表的具体化（monomorphization）+ 惰性缓存。
+//! 类型位置应用 `List<i32>`）= 名字 + 实参列表的具体化（monomorphization）+ 惰性缓存。
 //!
 //! D1 最小切片（2026-08-18）：类型函数体求值支持 `return struct { name: Type, ... };`
 //! 与 `return T;`（透传类型参数）。`comptime { }` 块 / comptime_int / anytype 完整语义
@@ -57,7 +57,7 @@ pub fn is_comptime_value_fn(params: &[ast::Param], ret: &Option<ast::Type>) -> b
 }
 
 /// 调用点实参表达式 → 类型（comptime 值函数 `T: type` 形参绑定用）。支持类型名
-/// （`i32`）与类型函数应用（`Vec(i32)` / `List(Pair(i32))`）；其余形态（变量、
+/// （`i32`）与类型函数应用（`Vec<i32>` / `List(Pair<i32>)`）；其余形态（变量、
 /// 算术、字面量）→ None（值实参，走运行时求值）。
 pub fn expr_to_type(e: &ast::Expr) -> Option<ast::Type> {
     match e {
@@ -76,7 +76,7 @@ pub fn expr_to_type(e: &ast::Expr) -> Option<ast::Type> {
     }
 }
 
-/// 具体化名（缓存键）：`Pair(i32)` → `Pair<@i32>`。`<@...>` 不会出现在用户类型名中
+/// 具体化名（缓存键）：`Pair<i32>` → `Pair<@i32>`。`<@...>` 不会出现在用户类型名中
 /// （标识符不含 `<`/`>`/`@`），保证与手写类型不冲突、可作类型表键。
 pub fn concrete_name(name: &str, args: &[ast::Type]) -> String {
     let arg_str: Vec<String> = args.iter().map(|a| type_key(a)).collect();
@@ -149,7 +149,7 @@ pub fn subst(ty: &ast::Type, bindings: &HashMap<String, ast::Type>) -> ast::Type
 /// 深度遍历类型，把每个「类型函数应用」`Named(n, args)`（args 非空）替换为
 /// `resolve(n, args)` 返回的具体化键（`Named(concrete, [])`）。复合类型递归。
 /// 自/互递归类型函数由后端 in-progress 守卫终止（resolve 返回键而不重入）。
-/// D3：嵌套/递归实例化——`List(Pair(i32))` 内层先登记、字段类型落具体化键。
+/// D3：嵌套/递归实例化——`List(Pair<i32>)` 内层先登记、字段类型落具体化键。
 pub fn map_type_apps(
     ty: &ast::Type,
     resolve: &mut dyn FnMut(&str, &[ast::Type]) -> Result<String, String>,

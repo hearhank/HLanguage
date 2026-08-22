@@ -2524,7 +2524,7 @@ abort:
 }
 "#;
 
-/// fmt_int(i32) String：i128 → 十进制 → 堆缓冲 Str 值（对齐 oracle display）
+/// fmt_int<i32> String：i128 → 十进制 → 堆缓冲 Str 值（对齐 oracle display）
 
 pub(crate) const HC_FMT_INT: &str = r#"define %Value @hc_fmt_int(%Value %v) {
 entry:

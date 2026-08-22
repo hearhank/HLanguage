@@ -25,7 +25,7 @@ var q = alloc.init(Person);                                         // 无参构
 enum Kind { player, enemy }                          // 合一式枚举
 interface INumber: ICompare { fn add(self: *Self, other: Self) Self }  // 接口（冒号标注，可继承）
 var t = (1, "a");                                    // 元组：访问 t.0 / 解构 var (a, b) = t;
-var tbl = Table(i32).init(alloc, 4, 8, 0);           // Table（M8：方法构造 + t[i, j]）
+var tbl = Table<i32>.init(alloc, 4, 8, 0);           // Table（M8：方法构造 + t[i, j]）
 fn f(a: i32, b: i32 = 0) i32 { ... }                 // 重载 + 可选参数（尾部、编译期常量默认值）
 [test] fn check() !void { try expect_eq(add(1, 2), 3); }  // 测试函数（[test("名称")] 特性标记）
 script { ... }  /  comptime { ... }                   // 元编程双轨（第三块 E1 完整实现；最小集不实现）

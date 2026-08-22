@@ -265,7 +265,11 @@ pub(crate) fn call_file_method_ir(
     }
 }
 
-pub(crate) fn call_time_method_ir(ctx: &mut Ctx, field: &str, args: &[IrValue]) -> R<Option<IrValue>> {
+pub(crate) fn call_time_method_ir(
+    ctx: &mut Ctx,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
     match field {
         "now" => {
             let ms = std::time::SystemTime::now()
@@ -537,7 +541,10 @@ pub(crate) fn call_ipc_method_ir(
             );
             let reader = {
                 let mut fld = HashMap::new();
-                fld.insert("pipe".into(), ctx.alloc(Cell::Value(IrValue::Int(pid as i128))));
+                fld.insert(
+                    "pipe".into(),
+                    ctx.alloc(Cell::Value(IrValue::Int(pid as i128))),
+                );
                 IrValue::Class(ctx.alloc(Cell::Class {
                     name: "PipeReader".into(),
                     fields: fld,
@@ -545,7 +552,10 @@ pub(crate) fn call_ipc_method_ir(
             };
             let writer = {
                 let mut fld = HashMap::new();
-                fld.insert("pipe".into(), ctx.alloc(Cell::Value(IrValue::Int(pid as i128))));
+                fld.insert(
+                    "pipe".into(),
+                    ctx.alloc(Cell::Value(IrValue::Int(pid as i128))),
+                );
                 IrValue::Class(ctx.alloc(Cell::Class {
                     name: "PipeWriter".into(),
                     fields: fld,
@@ -561,7 +571,10 @@ pub(crate) fn call_ipc_method_ir(
             ctx.next_shm_fd += 1;
             ctx.shms.insert(id, vec![0u8; size]);
             let mut fld = HashMap::new();
-            fld.insert("shm".into(), ctx.alloc(Cell::Value(IrValue::Int(id as i128))));
+            fld.insert(
+                "shm".into(),
+                ctx.alloc(Cell::Value(IrValue::Int(id as i128))),
+            );
             Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
                 name: "Shm".into(),
                 fields: fld,
@@ -703,7 +716,10 @@ pub(crate) fn call_storage_method_ir(
             ctx.next_store_fd += 1;
             ctx.stores.insert(id, (path, entries));
             let mut fld = HashMap::new();
-            fld.insert("store".into(), ctx.alloc(Cell::Value(IrValue::Int(id as i128))));
+            fld.insert(
+                "store".into(),
+                ctx.alloc(Cell::Value(IrValue::Int(id as i128))),
+            );
             Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
                 name: "KvStore".into(),
                 fields: fld,
@@ -950,7 +966,11 @@ pub(crate) fn call_rng_method_ir(
     match field {
         "seed" => {
             let v = int_arg_ir(ctx, args, 0)?;
-            ctx.rng_state = if v == 0 { 0x9e37_79b9_7f4a_7c15 } else { v as u64 };
+            ctx.rng_state = if v == 0 {
+                0x9e37_79b9_7f4a_7c15
+            } else {
+                v as u64
+            };
             Ok(Some(IrValue::Void))
         }
         "next" => {
@@ -1942,7 +1962,7 @@ pub(crate) fn call_builtin(
                 fields,
             })))
         }
-        // ---------- 组 F：四模式类型实例化（OneToOne(i32) → 空容器标记） ----------
+        // ---------- 组 F：四模式类型实例化（OneToOne<i32> → 空容器标记） ----------
         // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
         "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {
             Ok(IrValue::Class(ctx.alloc(Cell::Class {
@@ -2097,10 +2117,7 @@ pub(crate) fn call_builtin(
                     match data {
                         Some(d) => ctx.set_cell(d, v),
                         None => {
-                            return Err(IrError::msg(
-                                "BadAssign",
-                                "@volatileStore to non-pointer",
-                            ))
+                            return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer"))
                         }
                     }
                 }
@@ -2167,10 +2184,7 @@ pub(crate) fn call_builtin(
                     match data {
                         Some(d) => ctx.set_cell(d, v),
                         None => {
-                            return Err(IrError::msg(
-                                "BadAssign",
-                                "@atomicStore to non-pointer",
-                            ))
+                            return Err(IrError::msg("BadAssign", "@atomicStore to non-pointer"))
                         }
                     }
                 }
@@ -2194,11 +2208,9 @@ pub(crate) fn call_builtin(
                     let old = ctx.cell_value(cell).clone();
                     let new = match op_name.as_str() {
                         "add" | "sub" => match (&old, &v) {
-                            (IrValue::Int(a), IrValue::Int(b)) => IrValue::Int(if op_name == "add" {
-                                a + b
-                            } else {
-                                a - b
-                            }),
+                            (IrValue::Int(a), IrValue::Int(b)) => {
+                                IrValue::Int(if op_name == "add" { a + b } else { a - b })
+                            }
                             _ => {
                                 return Err(IrError::msg(
                                     "TypeError",

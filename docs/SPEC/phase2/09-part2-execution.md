@@ -45,7 +45,7 @@
 
 ### 2.1 硬缺口 + 描述补定
 
-1. **M5.3 serialize 库（描述补定）**——`serialize` 为命名空间形态（库封装，非内建）：内建序列化（M4.4）之上的**格式辅助** `fmt_int(i32) String` / `fmt_float(f64) String`（含宽度/精度参数形态待定，对齐 04「待定归属」清单）+ **解析辅助组**（parse_int/parse_float/json.parse/csv.parse/parse_number/skip_space/peek/advance/is_digit/expect——已实现，组织为库并补测试）。`fmt_int`/`fmt_float` 运行时零实现 → 组 D1。
+1. **M5.3 serialize 库（描述补定）**——`serialize` 为命名空间形态（库封装，非内建）：内建序列化（M4.4）之上的**格式辅助** `fmt_int<i32> String` / `fmt_float(f64) String`（含宽度/精度参数形态待定，对齐 04「待定归属」清单）+ **解析辅助组**（parse_int/parse_float/json.parse/csv.parse/parse_number/skip_space/peek/advance/is_digit/expect——已实现，组织为库并补测试）。`fmt_int`/`fmt_float` 运行时零实现 → 组 D1。
 2. **M7.1 `hc run` 目录/包形态**——`hc run <目录>`：包加载（入口 `main.hc` 或首个 `.hc`）+ 兄弟文件合并 + build.zon 依赖装载（复用 `load_deps`）→ 组 C。
 3. **io.print 格式串静默输出**——`{d}`/`{X}`/宽度/精度/对齐未实现且**被当字面量静默输出（无诊断）** → 组 B。
 4. **arena.init(T) typed 构造**——08 设计 §4.1/§4.2 已定（bump + 字段默认值填充，与 `alloc.init(T)` 同一构造逻辑），tag1 返回 Void 占位 → 组 E。

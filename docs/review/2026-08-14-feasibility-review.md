@@ -33,7 +33,7 @@
 | **M5** | **胖指针的销毁语义未定义** | `var hp: o *INumber = box(a, alloc)`——拥有胖指针（data + 虚表）销毁时须释放 data——运行时需知分配器/大小，胖指针需携带释放信息（alloc 引用）或约定统一分配器。文档未提。 | 定义：胖指针 data 部分携带 alloc 引用（三字宽：data/虚表/alloc）或装箱用默认分配器（销毁走默认）；建议前者（显式分配器哲学） |
 | **M6** | **错误检测策略 × 双后端 = 4 组合** | Debug/Release × VM/LLVM：越界/溢出/悬垂检测行为 4 种不同——一致性测试套件需覆盖 4 组合矩阵；脚本模式 Debug 语义 vs 编译 Release 裸——`hc test` 默认脚本（Debug），编译模式 Release 下测试结果可能不同（越界不再报错）。 | 明确测试矩阵：一致性套件必须跑 `{脚本, 编译} × {Debug, Release}`；或编译模式测试默认 Debug 语义 |
 | **M7** | **global 跨文件初始化顺序** | 「声明序」单文件清晰；跨文件 global 运行时初始化顺序未定义（文件顺序？依赖图？）——`global A = f()` 依赖另一文件 `global B` 时可能读未初始化值。 | 定义：跨文件 global 初始化按依赖分析排序（编译器检测循环依赖）；无依赖时按文件声明序 |
-| **M8** | **Table 语法未完全落词法** | `t[i, j]` 逗号索引、`table(alloc, rows, cols, init)` 函数形态——逗号索引在 token/运算符表未定义（`a[i, j]` 与「下标+逗号」歧义）；构造形态与集合方法形态（`Vec(i32).init(alloc)`）不一致。 | 词法/语法补 `a[i, j]` 索引规则；Table 构造统一为方法形态 `Table(T).init(alloc, rows, cols, init)` 或函数形态二选一 |
+| **M8** | **Table 语法未完全落词法** | `t[i, j]` 逗号索引、`table(alloc, rows, cols, init)` 函数形态——逗号索引在 token/运算符表未定义（`a[i, j]` 与「下标+逗号」歧义）；构造形态与集合方法形态（`Vec<i32>.init(alloc)`）不一致。 | 词法/语法补 `a[i, j]` 索引规则；Table 构造统一为方法形态 `Table(T).init(alloc, rows, cols, init)` 或函数形态二选一 |
 
 ### 🟢 低严重度（细节缺口，可后补）
 
@@ -55,7 +55,7 @@
 | 86 / 87 | `sum(&ints)` 依赖未定义的数组→切片转换 | 见 **H4** |
 | 87 | 「i32 数组走具体重载」注释与文档「统一参与解析」矛盾 | 见 **M1** |
 | 87 | `fn parse(s) i32`/`fn parse(s) f64` 仅在绑定形态可用 | 嵌套表达式（`io.print("{}", parse(s))`）歧义——见 **M2**；示例未展示受限形态，易误导 |
-| 88 | `class Fib: IIterable(i32)`——泛型接口在 implements 标注中的实例化语法未在规范定义 | 接口实例化标注（`IIterable(i32)`）需入语法规范（06-05） |
+| 88 | `class Fib: IIterable<i32>`——泛型接口在 implements 标注中的实例化语法未在规范定义 | 接口实例化标注（`IIterable<i32>`）需入语法规范（06-05） |
 | 50 / 81 | `Order.new(alloc)`——new 签名（alloc 首参）为示例约定 | 见 **L2** |
 | 86 | `var hp: o *INumber = box(a, alloc)`——装箱胖指针销毁语义 | 见 **M5** |
 

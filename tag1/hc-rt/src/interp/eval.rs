@@ -289,9 +289,9 @@ impl Interp {
             None => Ok(Value::Void),
             Some(t) => match t.strip() {
                 Type::Named(n, args) => {
-                    // E1.2 组 D：泛型类型应用（`Pair(i32)`）→ 惰性具体化后递归。
+                    // E1.2 组 D：泛型类型应用（`Pair<i32>`）→ 惰性具体化后递归。
                     // 具体化产物：struct → `Pair<@i32>`（登记后按 class 空实例）；
-                    // `return T;` 透传 → 实参类型自身（`Pair(i32)` ≡ `i32`）。
+                    // `return T;` 透传 → 实参类型自身（`Pair<i32>` ≡ `i32`）。
                     if !args.is_empty() {
                         let cn = self.concrete_type_name(n, args)?;
                         return self.default_value(Some(&Type::Named(cn, vec![])));
@@ -348,14 +348,14 @@ impl Interp {
         }
     }
 
-    /// E1.2 组 D：惰性具体化——`Pair(i32)` → 具体化名 `Pair<@i32>`。
+    /// E1.2 组 D：惰性具体化——`Pair<i32>` → 具体化名 `Pair<@i32>`。
     ///
     /// `self.types` 缓存命中即回（纯查找，immutable）；未命中则查类型函数定义
     /// （`funcs` 中返回 `type` 的函数）→ `comptime::instantiate` → 以具体化名登记
     /// 伪 Class 声明 → 返回具体化名。`args` 为空 → 原样返回（普通类型名）。
     ///
     /// 透传形态（`return T;`）产物是**实参类型自身**：返回其规范名（`type_key`），
-    /// 使 `Pair(i32)` 与 `i32` 同义（递归 `default_value` 自然落到原始类型分支）。
+    /// 使 `Pair<i32>` 与 `i32` 同义（递归 `default_value` 自然落到原始类型分支）。
     pub(crate) fn concrete_type_name(&mut self, name: &str, args: &[Type]) -> Result<String> {
         if args.is_empty() {
             return Ok(name.to_string());
@@ -370,7 +370,7 @@ impl Interp {
         if self.types.contains_key(&cname) {
             return Ok(cname);
         }
-        // 自/互递归守卫：`LinkedList(i32)` 字段内自引用在登记期重入 → 返回键本身（叶）。
+        // 自/互递归守卫：`LinkedList<i32>` 字段内自引用在登记期重入 → 返回键本身（叶）。
         if self.instantiating.contains(&cname) {
             return Ok(cname);
         }
@@ -394,7 +394,7 @@ impl Interp {
                         }
                     }
                     Ok(Instantiated::Type(t)) => {
-                        // 透传：`Pair(i32)` ≡ 实参类型自身
+                        // 透传：`Pair<i32>` ≡ 实参类型自身
                         Ok(comptime::type_key(&t))
                     }
                     Err(msg) => Err(RtError::msg("TypeInstantiation", msg)),
@@ -405,7 +405,7 @@ impl Interp {
         }
         // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：
         // 若实参含具体化名（含 `@`），则生成具体化名保留嵌套类型信息
-        // （如 `Vec<@List<@i32>>`）；否则回退基础名（`Vec(i32)` → `Vec`），
+        // （如 `Vec<@List<@i32>>`）；否则回退基础名（`Vec<i32>` → `Vec`），
         // 由既有非泛型路径处理（空集合 / 类型未登记 → UnknownType，保持原语义）。
         let has_concrete_arg = resolved.iter().any(|a| match a.strip() {
             Type::Named(n, _) => n.contains('@'),
@@ -418,7 +418,7 @@ impl Interp {
         }
     }
 
-    /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair(i32)` → `Pair<@i32>`）。
+    /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair<i32>` → `Pair<@i32>`）。
     /// 内层先具体化登记；自/互递归经 `instantiating` 守卫返回键（叶）。
     pub(crate) fn resolve_nested_types(&mut self, ty: &Type) -> Result<Type> {
         let src = self.source.clone();
@@ -429,7 +429,7 @@ impl Interp {
     }
 
     /// E1.2 组 D D3：把具体化 Class 声明的字段类型深度规范化——嵌套类型函数应用
-    /// （`Pair(i32)`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
+    /// （`Pair<i32>`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
     pub(crate) fn normalize_decl_fields(&mut self, decl: &mut Decl) -> Result<()> {
         if let Decl::Class { fields, .. } = decl {
             for fd in fields.iter_mut() {

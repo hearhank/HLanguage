@@ -83,9 +83,9 @@
 - **出处**：`02-milestones.md` M5（「脚本启动时间指标」）
 - **备注**：字节码 VM 复用 `run_ir`（盒式表示），性能优化留后续；需一致性套件证明等价后优化。**设计定案（2026-08-22 grilling 会话）**：指标 = 零到 script 块展开完成时间；`hc run --bench` 分阶段输出（parse / script_expand / sema_check / lower / exec）；空脚本 <10ms / 含 script 块 <50ms 基线；`~/.hc/cache/script/<source_hash>` 缓存展开结果
 
-### B7｜质量工具完整（LSP / 格式化 / lint 集）｜🟡
+### B7｜质量工具完整（LSP / 格式化 / lint 集）｜🟢（**已实施**）
 - **出处**：`02-milestones.md` M8
-- **备注**：`hc fmt` 已落地（I1）；lint / LSP 整合 = B1/B2
+- **备注**：`hc fmt` 已落地（I1）；lint / LSP 整合 = B1/B2；LSP 跳转定义/hover/补全已完整实现
 
 ---
 

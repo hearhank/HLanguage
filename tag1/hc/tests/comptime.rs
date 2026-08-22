@@ -125,7 +125,7 @@ fn is_comptime_value_fn_detects_type_params_but_not_type_fns() {
 
 #[test]
 fn expr_to_type_converts_type_exprs_only() {
-    // D4c：调用点实参表达式 → 类型（`i32` → Named；`Vec(i32)` → 嵌套应用；值 → None）
+    // D4c：调用点实参表达式 → 类型（`i32` → Named；`Vec<i32>` → 嵌套应用；值 → None）
     let sp = Span::new(0, 0, 0, 0);
     assert_eq!(
         expr_to_type(&Expr::Ident("i32".into(), sp.clone())),
@@ -166,7 +166,7 @@ fn expr_to_type_converts_type_exprs_only() {
 #[test]
 fn concrete_name_anytype_instance() {
     // anytype 调用点具体化键：`max_value(i32, i32)` → `max_value<@i32,i32>`
-    // （对齐类型函数 `Pair(i32)` → `Pair<@i32>`；ADR-0012 #5 调用点按实参类型实例化）
+    // （对齐类型函数 `Pair<i32>` → `Pair<@i32>`；ADR-0012 #5 调用点按实参类型实例化）
     assert_eq!(
         concrete_name("max_value", &[t_i32(), t_i32()]),
         "max_value<@i32,i32>"
@@ -227,7 +227,7 @@ fn subst_replaces_type_params() {
         subst(&Type::Named("String".into(), vec![]), &bindings),
         t_str()
     );
-    // 嵌套形态（Vec(T) → Vec(i32)；T 仅在内部替换）
+    // 嵌套形态（Vec(T) → Vec<i32>；T 仅在内部替换）
     assert_eq!(
         subst(
             &Type::Named("Vec".into(), vec![Type::Named("T".into(), vec![])]),
@@ -467,7 +467,7 @@ fn instantiate_type_param_gets_comptime_int_errors() {
 
 #[test]
 fn parser_nested_type_application() {
-    // 组 D D3 parser 回归：`L(L(i32))` 嵌套类型实参按 `Named` 树保留
+    // 组 D D3 parser 回归：`L(L<i32>)` 嵌套类型实参按 `Named` 树保留
     // （内层先于外层——具体化键由后端在登记期递归计算，见 `map_type_apps`）。
     let prog = parse_source(
         r#"
@@ -499,7 +499,7 @@ fn parser_nested_type_application() {
 fn map_type_apps_resolves_nested_apps() {
     // 组 D D3：`map_type_apps` 深度遍历，把嵌套类型函数应用替换为具体化键。
     // 假 resolver 模拟后端 `concrete_type_name` 的预解析实参步骤：内层类型函数
-    // 应用先具体化（`Pair(i32)` → `Pair<@i32>`），外层以已解析实参生成键。
+    // 应用先具体化（`Pair<i32>` → `Pair<@i32>`），外层以已解析实参生成键。
     fn fake_resolve(n: &str, args: &[Type]) -> Result<String, String> {
         let mut resolved: Vec<Type> = Vec::new();
         for a in args {
@@ -516,7 +516,7 @@ fn map_type_apps_resolves_nested_apps() {
         ))
     }
 
-    // `Pair(Pair(i32))` → 外层具体化键 `Pair<@Pair<@i32>>`
+    // `Pair(Pair<i32>)` → 外层具体化键 `Pair<@Pair<@i32>>`
     let root = Type::Named(
         "Pair".into(),
         vec![Type::Named("Pair".into(), vec![t_i32()])],
@@ -527,7 +527,7 @@ fn map_type_apps_resolves_nested_apps() {
         "嵌套类型函数应用 → 深层具体化键"
     );
 
-    // 复合形态递推：`?Pair(i32)` / `[2]Pair(i32)` / `*mut Pair(i32)` / `(Pair(i32), i32)`
+    // 复合形态递推：`?Pair<i32>` / `[2]Pair<i32>` / `*mut Pair<i32>` / `(Pair<i32>, i32)`
     let opt = Type::Optional(Box::new(Type::Named("Pair".into(), vec![t_i32()])));
     assert_eq!(
         map_type_apps(&opt, &mut fake_resolve).unwrap(),

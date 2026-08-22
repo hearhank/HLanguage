@@ -119,12 +119,10 @@ impl LanguageServer for HcLspServer {
         let result = compile_document(&content);
         let diagnostics: Vec<_> = result.diagnostics.iter().map(to_lsp_diagnostic).collect();
 
-        // Build symbol table if parsing succeeded
-        if let Some(program) = &result.program {
-            let symbol_table = SymbolTable::build_from_ast(program, uri.clone());
-            let mut symbols = self.symbols.lock().await;
-            symbols.insert(uri.clone(), symbol_table);
-        }
+        // Build symbol table from source (includes doc comments, signatures)
+        let symbol_table = SymbolTable::build_from_source(&content, uri.clone());
+        let mut symbols = self.symbols.lock().await;
+        symbols.insert(uri.clone(), symbol_table);
 
         self.client
             .publish_diagnostics(uri, diagnostics, Some(version))
@@ -156,12 +154,10 @@ impl LanguageServer for HcLspServer {
         let result = compile_document(&content);
         let diagnostics: Vec<_> = result.diagnostics.iter().map(to_lsp_diagnostic).collect();
 
-        // Build symbol table if parsing succeeded
-        if let Some(program) = &result.program {
-            let symbol_table = SymbolTable::build_from_ast(program, uri.clone());
-            let mut symbols = self.symbols.lock().await;
-            symbols.insert(uri.clone(), symbol_table);
-        }
+        // Build symbol table from source (includes doc comments, signatures)
+        let symbol_table = SymbolTable::build_from_source(&content, uri.clone());
+        let mut symbols = self.symbols.lock().await;
+        symbols.insert(uri.clone(), symbol_table);
 
         self.client
             .publish_diagnostics(uri, diagnostics, Some(version))
@@ -220,46 +216,21 @@ impl LanguageServer for HcLspServer {
         };
         drop(docs);
 
-        // Get symbol table for this document
-        let symbols = self.symbols.lock().await;
-        let symbol_table = match symbols.get(&uri) {
-            Some(table) => table,
+        // Find identifier at cursor position
+        let identifier = extract_identifier(&content, position);
+        let identifier = match identifier {
+            Some(id) => id,
             None => return Ok(None),
         };
 
-        // Find identifier at cursor position
-        // Simple approach: extract identifier from the line
-        let line = content.lines().nth(position.line as usize);
-        if let Some(line) = line {
-            // Find identifier at cursor position
-            // Simple approach: find word boundaries around cursor
-            let col = position.character as usize;
-            let chars: Vec<char> = line.chars().collect();
-
-            // Find start of identifier (move left until non-identifier char)
-            let mut start = col;
-            while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
-                start -= 1;
-            }
-
-            // Find end of identifier (move right until non-identifier char)
-            let mut end = col;
-            while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
-                end += 1;
-            }
-
-            // Extract identifier
-            if start < end {
-                let identifier: String = chars[start..end].iter().collect();
-
-                // Look up identifier in symbol table
-                if let Some(symbols) = symbol_table.find(&identifier) {
-                    // Return the first definition (could be improved to handle overloading)
-                    if let Some(symbol) = symbols.first() {
-                        return Ok(Some(GotoDefinitionResponse::Scalar(
-                            symbol.location.clone(),
-                        )));
-                    }
+        // Search across all symbol tables (cross-file support)
+        let symbols = self.symbols.lock().await;
+        for (_doc_uri, table) in symbols.iter() {
+            if let Some(symbols) = table.find(&identifier) {
+                if let Some(symbol) = symbols.first() {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(
+                        symbol.location.clone(),
+                    )));
                 }
             }
         }
@@ -279,72 +250,70 @@ impl LanguageServer for HcLspServer {
         };
         drop(docs);
 
-        // Get symbol table for this document
-        let symbols = self.symbols.lock().await;
-        let symbol_table = match symbols.get(&uri) {
-            Some(table) => table,
+        // Find identifier at cursor position
+        let identifier = extract_identifier(&content, position);
+        let identifier = match identifier {
+            Some(id) => id,
             None => return Ok(None),
         };
 
-        // Find identifier at cursor position
-        // Simple approach: extract identifier from the line
-        let line = content.lines().nth(position.line as usize);
-        if let Some(line) = line {
-            // Find identifier at cursor position
-            // Simple approach: find word boundaries around cursor
-            let col = position.character as usize;
-            let chars: Vec<char> = line.chars().collect();
+        // Search across all symbol tables
+        let symbols = self.symbols.lock().await;
+        for (_doc_uri, table) in symbols.iter() {
+            if let Some(symbols) = table.find(&identifier) {
+                if let Some(symbol) = symbols.first() {
+                    let kind_str = match symbol.kind {
+                        crate::symbol::SymbolKind::Function => "function",
+                        crate::symbol::SymbolKind::Class => "class",
+                        crate::symbol::SymbolKind::Enum => "enum",
+                        crate::symbol::SymbolKind::Interface => "interface",
+                        crate::symbol::SymbolKind::Variable => "variable",
+                        crate::symbol::SymbolKind::Constant => "constant",
+                        crate::symbol::SymbolKind::Namespace => "namespace",
+                        crate::symbol::SymbolKind::Field => "field",
+                        crate::symbol::SymbolKind::Method => "method",
+                    };
 
-            // Find start of identifier (move left until non-identifier char)
-            let mut start = col;
-            while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
-                start -= 1;
-            }
+                    let mut parts = Vec::new();
 
-            // Find end of identifier (move right until non-identifier char)
-            let mut end = col;
-            while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
-                end += 1;
-            }
+                    // Name + kind
+                    parts.push(format!("**{}** ({})", symbol.name, kind_str));
 
-            // Extract identifier
-            if start < end {
-                let identifier: String = chars[start..end].iter().collect();
-
-                // Look up identifier in symbol table
-                if let Some(symbols) = symbol_table.find(&identifier) {
-                    // Return the first symbol (could be improved to handle overloading)
-                    if let Some(symbol) = symbols.first() {
-                        // Create hover content
-                        let kind_str = match symbol.kind {
-                            crate::symbol::SymbolKind::Function => "function",
-                            crate::symbol::SymbolKind::Class => "class",
-                            crate::symbol::SymbolKind::Enum => "enum",
-                            crate::symbol::SymbolKind::Interface => "interface",
-                            crate::symbol::SymbolKind::Variable => "variable",
-                            crate::symbol::SymbolKind::Constant => "constant",
-                            crate::symbol::SymbolKind::Namespace => "namespace",
-                            crate::symbol::SymbolKind::Field => "field",
-                            crate::symbol::SymbolKind::Method => "method",
-                        };
-
-                        let hover_text = format!(
-                            "**{}** ({})\n\nDefined at {}:{}:{}",
-                            symbol.name,
-                            kind_str,
-                            symbol.location.uri,
-                            symbol.location.range.start.line + 1,
-                            symbol.location.range.start.character + 1,
-                        );
-
-                        return Ok(Some(Hover {
-                            contents: HoverContents::Markup(MarkupContent {
-                                kind: MarkupKind::Markdown,
-                                value: hover_text,
-                            }),
-                            range: None,
-                        }));
+                    // Signature (if available)
+                    if let Some(sig) = &symbol.signature {
+                        parts.push(format!("```hc\n{}\n```", sig));
                     }
+
+                    // Type info (if available and different from signature)
+                    if let Some(ti) = &symbol.type_info {
+                        if symbol.signature.as_deref() != Some(ti.as_str()) {
+                            parts.push(format!("_Type_: {}", ti));
+                        }
+                    }
+
+                    // Location
+                    let loc = &symbol.location;
+                    parts.push(format!(
+                        "Defined at {}:{}:{}",
+                        loc.uri.as_str(),
+                        loc.range.start.line + 1,
+                        loc.range.start.character + 1,
+                    ));
+
+                    // Doc comment (if available)
+                    if let Some(doc) = &symbol.doc {
+                        parts.push(format!("\n---\n{}", doc));
+                    }
+
+                    let hover_text = parts.join("\n\n");
+
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: hover_text,
+                        }),
+                        range: None,
+                    }));
                 }
             }
         }
@@ -364,34 +333,81 @@ impl LanguageServer for HcLspServer {
         };
         drop(docs);
 
-        // Get symbol table for this document
+        // Get symbol tables for all documents (for cross-file completions)
         let symbols = self.symbols.lock().await;
-        let symbol_table = symbols.get(&uri);
+        let all_tables: Vec<&SymbolTable> = symbols.values().collect();
+        let current_table = symbols.get(&uri);
 
-        // Find prefix at cursor position
-        // Simple approach: extract identifier prefix from the line
+        // Check if we're in a dot-qualified context (e.g. "io." or "vec.")
         let line = content.lines().nth(position.line as usize);
         if let Some(line) = line {
             let col = position.character as usize;
             let chars: Vec<char> = line.chars().collect();
 
-            // Find start of identifier (move left until non-identifier char)
-            let mut start = col;
+            // Check for dot before cursor
+            if col > 0 && col <= chars.len() && chars[col - 1] == '.' {
+                // Find the namespace prefix before the dot
+                let mut start = col - 1;
+                // Skip the dot
+                if start > 0 {
+                    start -= 1;
+                }
+                // Find start of namespace name
+                while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+                    start -= 1;
+                }
+                let namespace: String = chars[start..col - 1].iter().collect();
+
+                // Get dot-qualified completions
+                let completions = self
+                    .completion_engine
+                    .get_dot_qualified_completions(&namespace, &all_tables);
+
+                return Ok(Some(CompletionResponse::Array(completions)));
+            }
+
+            // Find prefix at cursor position
+            let mut start = col.min(chars.len());
             while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
                 start -= 1;
             }
 
             // Extract prefix
-            let prefix: String = chars[start..col].iter().collect();
+            let prefix: String = chars[start..col.min(chars.len())].iter().collect();
 
             // Get completions
             let completions = self
                 .completion_engine
-                .get_completions(symbol_table, &prefix);
+                .get_completions(current_table, &prefix);
 
             return Ok(Some(CompletionResponse::Array(completions)));
         }
 
         Ok(None)
+    }
+}
+
+/// Extract identifier at cursor position from source content
+fn extract_identifier(content: &str, position: Position) -> Option<String> {
+    let line = content.lines().nth(position.line as usize)?;
+    let col = position.character as usize;
+    let chars: Vec<char> = line.chars().collect();
+
+    // Find start of identifier (move left until non-identifier char)
+    let mut start = col.min(chars.len());
+    while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+        start -= 1;
+    }
+
+    // Find end of identifier (move right until non-identifier char)
+    let mut end = col.min(chars.len());
+    while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
+        end += 1;
+    }
+
+    if start < end {
+        Some(chars[start..end].iter().collect())
+    } else {
+        None
     }
 }

@@ -2062,7 +2062,7 @@ class Parser {
                     i += 1;
                 }
                 e = call;
-                // 娉涘瀷瀛楅潰閲忥細Pair(i32){...}
+                // 娉涘瀷瀛楅潰閲忥細Pair<i32>{...}
                 if (self.at("LBrace")) {
                     // 绠€鍗曞鐞嗭細璺宠繃瀛楅潰閲忓瓧娈?
                     self.advance();

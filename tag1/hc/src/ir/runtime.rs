@@ -1,10 +1,14 @@
 use super::*;
 
-
 /// 重载/可选参数分派（对齐 oracle `pick_fn` `interp.rs:2665-2796`）：
 /// ① 精确参数数（非空则用；空则全池）→ ② 按实参值类型匹配（具体优先泛型）→ ③ 尾参默认回退。
 /// 返回类型匹配（`expected_ret`）IR 未跟踪，留待 Phase 7 期望类型传播补齐。
-pub(crate) fn pick_func(ctx: &Ctx, module: &IrModule, name: &str, arg_vals: &[IrValue]) -> Option<usize> {
+pub(crate) fn pick_func(
+    ctx: &Ctx,
+    module: &IrModule,
+    name: &str,
+    arg_vals: &[IrValue],
+) -> Option<usize> {
     let candidates = module.func_index.get(name)?;
     // ① 精确参数数量匹配
     let exact: Vec<usize> = candidates
@@ -1077,7 +1081,11 @@ pub(crate) fn make_vec_with(ctx: &mut Ctx, items: Vec<IrValue>, alloc: IrValue) 
 }
 
 /// 集合 Map（G4）：键 → 字段 cell；`alloc` = 构造时携带的分配器引用
-pub(crate) fn make_map_with(ctx: &mut Ctx, fields: HashMap<String, usize>, alloc: IrValue) -> IrValue {
+pub(crate) fn make_map_with(
+    ctx: &mut Ctx,
+    fields: HashMap<String, usize>,
+    alloc: IrValue,
+) -> IrValue {
     IrValue::Map(ctx.alloc(Cell::Map { fields, alloc }))
 }
 
@@ -1113,19 +1121,28 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
     fields.insert("fs".into(), fs_cell);
     fields.insert("time".into(), time_cell);
     fields.insert("net".into(), net_cell);
-    fields.insert("runtime".into(), ctx.alloc(Cell::Value(str_val("threaded"))));
+    fields.insert(
+        "runtime".into(),
+        ctx.alloc(Cell::Value(str_val("threaded"))),
+    );
     // G2（io 差异项）：io.stdout/io.stderr 独立字节流（write_all 写真实句柄；
     // 类名 Stdout/Stderr 供分派，无 fd 注册表）
     let stdout = ctx.alloc(Cell::Class {
         name: "Stdout".into(),
         fields: HashMap::new(),
     });
-    fields.insert("stdout".into(), ctx.alloc(Cell::Value(IrValue::Class(stdout))));
+    fields.insert(
+        "stdout".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(stdout))),
+    );
     let stderr = ctx.alloc(Cell::Class {
         name: "Stderr".into(),
         fields: HashMap::new(),
     });
-    fields.insert("stderr".into(), ctx.alloc(Cell::Value(IrValue::Class(stderr))));
+    fields.insert(
+        "stderr".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(stderr))),
+    );
     // G3（E3.2 ipc）：io.ipc.pipe() / io.ipc.shm(name, size)——进程内 IPC 原语
     let ipc = ctx.alloc(Cell::Class {
         name: "Ipc".into(),
@@ -1137,12 +1154,18 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         name: "Storage".into(),
         fields: HashMap::new(),
     });
-    fields.insert("storage".into(), ctx.alloc(Cell::Value(IrValue::Class(storage))));
+    fields.insert(
+        "storage".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(storage))),
+    );
     let archive = ctx.alloc(Cell::Class {
         name: "Archive".into(),
         fields: HashMap::new(),
     });
-    fields.insert("archive".into(), ctx.alloc(Cell::Value(IrValue::Class(archive))));
+    fields.insert(
+        "archive".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(archive))),
+    );
     // G5（E3.3 text/rng）：io.text.* 正则；io.rng.* 伪随机数（类名 RngNs 避开示例
     // 84-rng 的用户类 Rng——内建方法先于用户方法分派）
     let text = ctx.alloc(Cell::Class {
@@ -1180,7 +1203,7 @@ pub(crate) fn implicit_env_value(ctx: &mut Ctx, name: &str) -> IrValue {
         "Arena" => IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new()))),
         "io" | "test_io" | "stdout" | "stderr" => io_value_ir(ctx),
         "pi" => IrValue::Float(std::f64::consts::PI),
-        // G4：集合隐式根 = 空容器，持全局 alloc（`Vec(i32)` 类型表达式 / `Vec.init(alloc)` 基）
+        // G4：集合隐式根 = 空容器，持全局 alloc（`Vec<i32>` 类型表达式 / `Vec.init(alloc)` 基）
         "Vec" | "Deque" | "Table" => {
             let alloc = implicit_env_value(ctx, "alloc");
             make_vec_with(ctx, Vec::new(), alloc)
@@ -1260,7 +1283,12 @@ pub(crate) fn arr_items(ctx: &mut Ctx, v: &IrValue) -> R<Vec<IrValue>> {
 }
 
 /// 任意可迭代值 → 元素数组（含用户 IIterable——复用 `make_iter` 的 next() 展开）
-pub(crate) fn iter_to_arr_ir(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<IrValue> {
+pub(crate) fn iter_to_arr_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    v: &IrValue,
+    depth: usize,
+) -> R<IrValue> {
     let items = make_iter(ctx, module, v, depth)?;
     let mut out = Vec::new();
     for it in items {
@@ -1458,22 +1486,14 @@ pub(crate) fn union_ty_name(t: &Type) -> Option<String> {
 pub(crate) fn write_scalar_ir(out: &mut [u8], n: &str, v: &IrValue) {
     match (n, v) {
         ("i8" | "u8", IrValue::Int(i)) => out[0] = *i as u8,
-        ("i16" | "u16", IrValue::Int(i)) => {
-            out[..2].copy_from_slice(&(*i as i16).to_le_bytes())
-        }
-        ("i32" | "u32", IrValue::Int(i)) => {
-            out[..4].copy_from_slice(&(*i as i32).to_le_bytes())
-        }
+        ("i16" | "u16", IrValue::Int(i)) => out[..2].copy_from_slice(&(*i as i16).to_le_bytes()),
+        ("i32" | "u32", IrValue::Int(i)) => out[..4].copy_from_slice(&(*i as i32).to_le_bytes()),
         ("i64" | "u64" | "isize" | "usize", IrValue::Int(i)) => {
             out[..8].copy_from_slice(&(*i as i64).to_le_bytes())
         }
-        ("i128" | "u128", IrValue::Int(i)) => {
-            out[..16].copy_from_slice(&i.to_le_bytes())
-        }
+        ("i128" | "u128", IrValue::Int(i)) => out[..16].copy_from_slice(&i.to_le_bytes()),
         ("f32", IrValue::Float(f)) => out[..4].copy_from_slice(&(*f as f32).to_le_bytes()),
-        ("f64" | "f16" | "f128", IrValue::Float(f)) => {
-            out[..8].copy_from_slice(&f.to_le_bytes())
-        }
+        ("f64" | "f16" | "f128", IrValue::Float(f)) => out[..8].copy_from_slice(&f.to_le_bytes()),
         ("bool", IrValue::Bool(b)) => out[0] = if *b { 1 } else { 0 },
         _ => {}
     }
@@ -1485,27 +1505,47 @@ pub(crate) fn read_scalar_ir(bytes: &[u8], n: &str) -> R<IrValue> {
     match n {
         "i8" | "u8" => Ok(IrValue::Int(bytes.first().copied().unwrap_or(0) as i128)),
         "i16" | "u16" => {
-            let b = bytes.get(..2).ok_or_else(|| trunc("truncated union bytes"))?;
-            Ok(IrValue::Int(i16::from_le_bytes(b.try_into().unwrap()) as i128))
+            let b = bytes
+                .get(..2)
+                .ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(
+                i16::from_le_bytes(b.try_into().unwrap()) as i128
+            ))
         }
         "i32" | "u32" => {
-            let b = bytes.get(..4).ok_or_else(|| trunc("truncated union bytes"))?;
-            Ok(IrValue::Int(i32::from_le_bytes(b.try_into().unwrap()) as i128))
+            let b = bytes
+                .get(..4)
+                .ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(
+                i32::from_le_bytes(b.try_into().unwrap()) as i128
+            ))
         }
         "i64" | "u64" | "isize" | "usize" => {
-            let b = bytes.get(..8).ok_or_else(|| trunc("truncated union bytes"))?;
-            Ok(IrValue::Int(i64::from_le_bytes(b.try_into().unwrap()) as i128))
+            let b = bytes
+                .get(..8)
+                .ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Int(
+                i64::from_le_bytes(b.try_into().unwrap()) as i128
+            ))
         }
         "i128" | "u128" => {
-            let b = bytes.get(..16).ok_or_else(|| trunc("truncated union bytes"))?;
+            let b = bytes
+                .get(..16)
+                .ok_or_else(|| trunc("truncated union bytes"))?;
             Ok(IrValue::Int(i128::from_le_bytes(b.try_into().unwrap())))
         }
         "f32" => {
-            let b = bytes.get(..4).ok_or_else(|| trunc("truncated union bytes"))?;
-            Ok(IrValue::Float(f32::from_le_bytes(b.try_into().unwrap()) as f64))
+            let b = bytes
+                .get(..4)
+                .ok_or_else(|| trunc("truncated union bytes"))?;
+            Ok(IrValue::Float(
+                f32::from_le_bytes(b.try_into().unwrap()) as f64
+            ))
         }
         "f64" | "f16" | "f128" => {
-            let b = bytes.get(..8).ok_or_else(|| trunc("truncated union bytes"))?;
+            let b = bytes
+                .get(..8)
+                .ok_or_else(|| trunc("truncated union bytes"))?;
             Ok(IrValue::Float(f64::from_le_bytes(b.try_into().unwrap())))
         }
         "bool" => Ok(IrValue::Bool(bytes.first().copied().unwrap_or(0) != 0)),
@@ -1520,14 +1560,16 @@ pub(crate) fn union_sync_ir(ctx: &mut Ctx, module: &IrModule, c: usize, written:
         Cell::Class { name, fields } => (name.clone(), fields.clone()),
         _ => return Err(IrError::msg("TypeError", "union sync on non-class")),
     };
-    let decls = module.unions.get(&cname).cloned().ok_or_else(|| {
-        IrError::msg(
-            "TypeError",
-            format!("`{cname}` 不是 union 类型"),
-        )
-    })?;
+    let decls = module
+        .unions
+        .get(&cname)
+        .cloned()
+        .ok_or_else(|| IrError::msg("TypeError", format!("`{cname}` 不是 union 类型")))?;
     let wcell = fields.get(written).copied().ok_or_else(|| {
-        IrError::msg("NoField", format!("union `{cname}` has no field `{written}`"))
+        IrError::msg(
+            "NoField",
+            format!("union `{cname}` has no field `{written}`"),
+        )
     })?;
     let wv = ctx.cell_value(wcell).clone();
     let wty = decls
@@ -1540,9 +1582,8 @@ pub(crate) fn union_sync_ir(ctx: &mut Ctx, module: &IrModule, c: usize, written:
                 format!("union `{cname}` has no field `{written}`"),
             )
         })?;
-    let wname = union_ty_name(&wty).ok_or_else(|| {
-        IrError::msg("TypeError", "union 字段必须为标量类型")
-    })?;
+    let wname =
+        union_ty_name(&wty).ok_or_else(|| IrError::msg("TypeError", "union 字段必须为标量类型"))?;
     let width = scalar_size_ir(&wname)
         .ok_or_else(|| IrError::msg("TypeError", format!("字段 `{wname}` 无标量宽度")))?;
     let mut buf = vec![0u8; width];
@@ -1551,7 +1592,9 @@ pub(crate) fn union_sync_ir(ctx: &mut Ctx, module: &IrModule, c: usize, written:
         if fdname == written {
             continue;
         }
-        let Some(fname) = union_ty_name(fdty) else { continue };
+        let Some(fname) = union_ty_name(fdty) else {
+            continue;
+        };
         let dv = read_scalar_ir(&buf, &fname)?;
         let nc = ctx.alloc(Cell::Value(dv));
         if let Cell::Class { fields: fs, .. } = &mut ctx.cells[c] {
@@ -2039,8 +2082,8 @@ pub(crate) fn http_get_ir(url: &str) -> std::result::Result<Vec<u8>, String> {
         ),
         None => (authority.to_string(), 80u16),
     };
-    let mut stream = std::net::TcpStream::connect((host.as_str(), port))
-        .map_err(|e| io_error_name_ir(&e))?;
+    let mut stream =
+        std::net::TcpStream::connect((host.as_str(), port)).map_err(|e| io_error_name_ir(&e))?;
     let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     stream
         .write_all(req.as_bytes())
@@ -2059,11 +2102,7 @@ pub(crate) fn http_get_ir(url: &str) -> std::result::Result<Vec<u8>, String> {
     let body = &raw[head_end..];
     if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
         // 非 200：体返回给调用方诊断（错误名 = Http{code}）
-        let code = head
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or("000")
-            .to_string();
+        let code = head.split_whitespace().nth(1).unwrap_or("000").to_string();
         return Err(format!("Http{code}"));
     }
     let mut len: Option<usize> = None;

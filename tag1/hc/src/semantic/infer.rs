@@ -1067,7 +1067,7 @@ impl Checker {
                 field,
                 span: _,
             } => {
-                // 类型方法：Vec(i32).init / Table(i32).init / JsonParser.parse
+                // 类型方法：Vec<i32>.init / Table<i32>.init / JsonParser.parse
                 // 实例方法：p.dist(q)
                 let bt = self.expr_ty(base, scopes, None);
                 // 类型方法（base = 类型名）
@@ -2070,7 +2070,7 @@ impl Checker {
                     SType::Array(_, elem) => self.param_rank(inner, elem, map),
                     SType::Slice(elem) => self.param_rank(inner, elem, map),
                     SType::Named(n, args) if n == "Vec" || n == "String" || n == "Deque" => {
-                        // 整体匹配优先（&Vec(i32) 形参）；失败则元素级（&[u8] 形参收 Vec(u8)）
+                        // 整体匹配优先（&Vec<i32> 形参）；失败则元素级（&[u8] 形参收 Vec(u8)）
                         let whole = self.param_rank(inner, a, map);
                         let elem =
                             self.param_rank(inner, args.first().unwrap_or(&SType::Unknown), map);
@@ -2338,7 +2338,10 @@ impl Checker {
             SType::Int { .. } | SType::Float | SType::Bool | SType::Void | SType::Str => true,
             SType::Slice(inner) => self.type_is_send(inner),
             SType::Named(n, args) => {
-                if is_collection(n) {
+                if is_collection(n) || is_builtin_type(n) {
+                    // 集合类型（Vec/Map/Deque/Table/String）与内建类型（包括四模式共享
+                    // 容器 OneToOne/OneToMany/ManyToOne/ManyToMany）均为 Send——
+                    // 四模式容器是内建共享特例（Q32），内部同步，Send 由实现保证
                     args.iter().all(|a| self.type_is_send(a))
                 } else {
                     self.type_has_interface(n, "Send")
@@ -2361,7 +2364,9 @@ impl Checker {
             SType::Int { .. } | SType::Float | SType::Bool | SType::Void | SType::Str => true,
             SType::Slice(inner) => self.type_is_sync(inner),
             SType::Named(n, args) => {
-                if is_collection(n) {
+                if is_collection(n) || is_builtin_type(n) {
+                    // 集合类型与内建类型（含四模式容器）均为 Sync——
+                    // 四模式容器内部同步，&T 共享引用安全
                     args.iter().all(|a| self.type_is_sync(a))
                 } else {
                     self.type_has_interface(n, "Sync")

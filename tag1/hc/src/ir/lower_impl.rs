@@ -216,7 +216,7 @@ pub(crate) fn collect_fn_names(decls: &[Decl], names: &mut HashSet<String>, path
 /// E1.2 组 D：收集类型函数定义（name → params+body），供 NamedLit 惰性具体化。
 /// 顶层 + namespace 内均收集；键 = 扁平名 + 限定名（对齐 `collect_fn_names`）。
 /// 类型函数体本身由降级**跳过**（comptime-only，运行时不执行），仅在类型应用点
-/// （`Pair(i32)`）经 `comptime::instantiate` 编译期求值。
+/// （`Pair<i32>`）经 `comptime::instantiate` 编译期求值。
 pub(crate) fn collect_type_fns(program: &Program) -> HashMap<String, (Vec<Param>, Block)> {
     let mut map = HashMap::new();
     collect_type_fns_in(&program.decls, &mut map, &[]);
@@ -746,7 +746,7 @@ struct LowerCtx<'a> {
     types: TypeTable,
     /// 已知函数名集合（Phase 4）：未解析 Ident → 函数引用（FnRef）/ 静态方法调用判定
     funcs: &'a HashSet<String>,
-    /// E1.2 组 D：类型函数定义表（name → params+body，comptime-only）。`Pair(i32)`
+    /// E1.2 组 D：类型函数定义表（name → params+body，comptime-only）。`Pair<i32>`
     /// 类型应用点惰性具体化：instantiate → 具体化 Class 登记进 `self.types`。
     type_fns: &'a HashMap<String, (Vec<Param>, Block)>,
     /// E1.2 组 D D5：comptime 值函数定义表（name → params+body）。运行时调用点
@@ -1536,7 +1536,7 @@ impl<'a> LowerCtx<'a> {
                 span,
                 ..
             } => {
-                // E1.2 组 D：泛型应用 `Pair(i32){...}` → 惰性具体化后按具体化名构造。
+                // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 // 具体化失败（实参个数/形态不符）→ 硬错误。
                 let ty = if ty_args.is_empty() {
                     ty.clone()
@@ -2341,7 +2341,7 @@ impl<'a> LowerCtx<'a> {
         let t = self.alloc_slot();
         match ty.strip() {
             Type::Named(n, args) => {
-                // E1.2 组 D D3：类型函数应用（`Pair(i32)`）声明式无初值 → 惰性具体化后
+                // E1.2 组 D D3：类型函数应用（`Pair<i32>`）声明式无初值 → 惰性具体化后
                 // 递归（对齐 oracle default_value interp.rs:1438-1440，消除 `__none__`
                 // 静默损坏）。具体化失败（类型函数体形状非法）→ 降级硬错误 + void 占位。
                 if !args.is_empty() {
@@ -2467,14 +2467,14 @@ impl<'a> LowerCtx<'a> {
         t
     }
 
-    /// E1.2 组 D：惰性具体化——`Pair(i32)` → 具体化名 `Pair<@i32>`。
+    /// E1.2 组 D：惰性具体化——`Pair<i32>` → 具体化名 `Pair<@i32>`。
     ///
     /// `self.types` 缓存命中即回；未命中则查类型函数定义表（`type_fns`，comptime-only）
     /// → `comptime::instantiate` → 以具体化名登记 `ClassInfo` → 返回具体化名。
     /// `args` 为空 / 非类型函数（内建泛型 `Vec(T)` 等）→ 回退基础名，由调用方既有路径处理。
     ///
     /// 透传形态（`return T;`）产物是**实参类型自身**：返回其规范名（`type_key`），
-    /// 使 `Pair(i32)` 与 `i32` 同义。
+    /// 使 `Pair<i32>` 与 `i32` 同义。
     pub(crate) fn concrete_type_name(
         &mut self,
         name: &str,
@@ -2493,7 +2493,7 @@ impl<'a> LowerCtx<'a> {
         if self.types.classes.contains_key(&cname) || self.types.enums.contains_key(&cname) {
             return Ok(cname);
         }
-        // 自/互递归守卫：`LinkedList(i32)` 字段内自引用在登记期重入 → 返回键本身（叶）。
+        // 自/互递归守卫：`LinkedList<i32>` 字段内自引用在登记期重入 → 返回键本身（叶）。
         if self.instantiating.contains(&cname) {
             return Ok(cname);
         }
@@ -2533,7 +2533,7 @@ impl<'a> LowerCtx<'a> {
         }
         // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：
         // 若实参含具体化名（含 `@`），则生成具体化名保留嵌套类型信息
-        // （如 `Vec<@List<@i32>>`）；否则回退基础名（`Vec(i32)` → `Vec`），
+        // （如 `Vec<@List<@i32>>`）；否则回退基础名（`Vec<i32>` → `Vec`），
         // 由既有路径处理（空集合 / 类型未登记 → 未知类型，保持原语义）。
         let has_concrete_arg = resolved.iter().any(|a| match a.strip() {
             Type::Named(n, _) => n.contains('@'),
@@ -2546,14 +2546,14 @@ impl<'a> LowerCtx<'a> {
         }
     }
 
-    /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair(i32)` → `Pair<@i32>`）。
+    /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair<i32>` → `Pair<@i32>`）。
     /// 内层先具体化登记；自/互递归经 `instantiating` 守卫返回键（叶）。
     pub(crate) fn resolve_nested_types(&mut self, ty: &Type) -> Result<Type, String> {
         comptime::map_type_apps(ty, &mut |n, a| self.concrete_type_name(n, a))
     }
 
     /// E1.2 组 D D3：把具体化 Class 声明的字段类型深度规范化——嵌套类型函数应用
-    /// （`Pair(i32)`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
+    /// （`Pair<i32>`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
     pub(crate) fn normalize_decl_fields(&mut self, decl: &mut Decl) -> Result<(), String> {
         if let Decl::Class { fields, .. } = decl {
             for fd in fields.iter_mut() {

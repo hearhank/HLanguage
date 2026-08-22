@@ -95,7 +95,7 @@ M7 结束前必须存在一个**同时使用四大支柱的示例程序**（如�
 - `sort(&mut arr)` / `sort(&mut vec, cmp 闭包)` / `binary_search(&arr, v) ?usize`
 - `json.parse(data)` / `Order.from_json(data)`（class 序列化分层）
 - `utf8.decode(data)`；`math.nan(f64)` / `math.inf(f32)` / `math.inf_neg(f64)`（类型参数 comptime 式）
-- 待定归属：`fmt_int(i32) String`、`parse_int(&[u8]) ?i32`、`min(a, b)`、`sqrt(x)`、`read_u64_le(&[u8]) u64`（57 使用）
+- 待定归属：`fmt_int<i32> String`、`parse_int(&[u8]) ?i32`、`min(a, b)`、`sqrt(x)`、`read_u64_le(&[u8]) u64`（57 使用）
 - `debug` 断言（Q-T1 定案，测试块内隐式可用）：`expect(cond)` / `expect_eq(a, b)` / `expect_neq(a, b)` / `expect_error(e, expr)` / `expect_eq_slices(a, b)`——均 `anyerror!void`
 - `test_io`（Q-T4 定案）——**2026-08-17 取消**（ADR-0010）：测试直接调 `main()`；需要 io 的测试经 `import H.std.{io}` 使用环境
 

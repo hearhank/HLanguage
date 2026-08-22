@@ -60,6 +60,9 @@ impl Interp {
                     "Vec" | "Deque" => return Ok(Value::vec(vec![], Value::Alloc)),
                     "Map" => return Ok(Value::map(HashMap::new(), Value::Alloc)),
                     "Table" => return Ok(Value::vec(vec![], Value::Alloc)),
+                    "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {
+                        return Ok(Value::class(name, HashMap::new()))
+                    }
                     _ => {}
                 }
                 // ADR-0010：import 环境别名（`import H.std.{io as my}` → `my` = io 环境）
@@ -119,7 +122,7 @@ impl Interp {
                 ..
             } => {
                 // class 字面量构造 / enum 带负载字面量。
-                // E1.2 组 D：泛型应用 `Pair(i32){...}` → 惰性具体化后按具体化名构造。
+                // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 let ty = if ty_args.is_empty() {
                     ty.clone()
                 } else {
@@ -1239,7 +1242,7 @@ impl Interp {
                         }
                         return Ok(Value::vec(grid, alloc_v));
                     }
-                    // Vec(i32).from_bytes：集合反序列化（u64 长度前缀 + 元素）
+                    // Vec<i32>.from_bytes：集合反序列化（u64 长度前缀 + 元素）
                     if matches!(bname.as_str(), "Vec" | "Deque") && field == "from_bytes" {
                         let bytes = self.eval(&args[0])?;
                         let bytes = self.deref_value(bytes);
@@ -1370,7 +1373,7 @@ impl Interp {
                 Err(RtError::new("NoMethod", Some(span.clone())))
             }
             Expr::Ident(name, _) => {
-                // 集合类型实例化 Vec(i32)/Map(...)（类型表达式上下文 → 空容器，G4 持全局 alloc）
+                // 集合类型实例化 Vec<i32>/Map(...)（类型表达式上下文 → 空容器，G4 持全局 alloc）
                 if matches!(name.as_str(), "Vec" | "Deque") {
                     return Ok(Value::vec(vec![], Value::Alloc));
                 }
@@ -1378,10 +1381,10 @@ impl Interp {
                     return Ok(Value::map(HashMap::new(), Value::Alloc));
                 }
                 if name == "Table" {
-                    // Table(i32) 类型实例化：空二维容器（init 填充）
+                    // Table<i32> 类型实例化：空二维容器（init 填充）
                     return Ok(Value::vec(vec![], Value::Alloc));
                 }
-                // 组 F：四模式类型实例化 OneToOne(i32) → 空容器标记（init 构造真实容器）
+                // 组 F：四模式类型实例化 OneToOne<i32> → 空容器标记（init 构造真实容器）
                 if is_four_mode_type(name) {
                     return Ok(Value::class(name, HashMap::new()));
                 }
@@ -1691,7 +1694,7 @@ impl Interp {
             if !ok {
                 continue;
             }
-            // 自递归守卫：`fn f(T: type) { return f(i32); }` 无限编译期求值 → 报错
+            // 自递归守卫：`fn f(T: type) { return f<i32>; }` 无限编译期求值 → 报错
             if self.comptime_value_depth >= 100 {
                 return Err(RtError::new("ComptimeRecursion", Some(span.clone())));
             }

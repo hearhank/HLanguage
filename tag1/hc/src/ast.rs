@@ -222,7 +222,7 @@ pub struct EnumVariant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    /// 简单命名类型：i32 / String / Point / Vec(i32) / I(T1,T2)
+    /// 简单命名类型：i32 / String / Point / Vec<i32> / I(T1,T2)
     Named(String, Vec<Type>),
     /// 只读指针 *T / 可写指针 *mut T
     Ptr(Box<Type>, bool),
@@ -395,7 +395,7 @@ pub enum Expr {
     ArrayLit(Vec<Expr>, Span),
     TupleLit(Vec<Expr>, Span),
     /// Type{field = value, ...}（struct/enum 字面量）。
-    /// `ty_args` = 泛型实参（`Pair(i32){...}` 的 `[i32]`；E1.2 组 D comptime 类型应用，
+    /// `ty_args` = 泛型实参（`Pair<i32>{...}` 的 `[i32]`；E1.2 组 D comptime 类型应用，
     /// 无泛型 = 空）。类型函数名 + 实参 → 具体化（monomorphization）后登记具体类型。
     NamedLit {
         ty: String,

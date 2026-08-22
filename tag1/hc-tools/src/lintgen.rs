@@ -3,7 +3,7 @@
 //! 6 条规则（L001–L006）：
 //! - L001 `unused_var`：未使用变量
 //! - L002 `unused_import`：未使用导入
-//! - L003 `simplifiable_construct`：可简化构造（如 `Vec(List(i32))` → `Vec<List<i32>>`）
+//! - L003 `simplifiable_construct`：可简化构造（如 `Vec(List<i32>)` → `Vec<List<i32>>`）
 //! - L004 `upper_case_abbr`：缩写应全大写（如 `json` → `JSON`）
 //! - L005 `simplifiable_if_else`：可简化 if-else（`if (x) true else false` → `x`）
 //! - L006 `redundant_eq_false`：多余的 `== false`（`x == false` → `!x`）
@@ -922,7 +922,7 @@ fn check_type_simplifiable_in_type(
 ) {
     match ty {
         Type::Named(_name, args) => {
-            // L003 检测可简化类型构造（如 `Vec(List(i32))` → `Vec<List<i32>>`）
+            // L003 检测可简化类型构造（如 `Vec(List<i32>)` → `Vec<List<i32>>`）
             // 当前简化版本：检查泛型参数是否可内联
             // 这个规则检测：泛型参数是 Named 类型且只有一个参数时，可简化
             if args.len() == 1 {

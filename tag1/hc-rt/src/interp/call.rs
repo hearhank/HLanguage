@@ -1068,7 +1068,7 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // Vec(i32).init(alloc)：集合空容器（G4：捕获分配器引用，缺省回退全局）
+            // Vec<i32>.init(alloc)：集合空容器（G4：捕获分配器引用，缺省回退全局）
             (Value::Arr(_), "init") => {
                 let alloc_v = if !args.is_empty() {
                     let a = self.eval(&args[0])?;
@@ -1078,7 +1078,7 @@ impl Interp {
                 };
                 Ok(Some(Value::vec(vec![], alloc_v)))
             }
-            // Vec(i32).from_bytes 集合反序列化（u64 长度前缀 + i32 元素）
+            // Vec<i32>.from_bytes 集合反序列化（u64 长度前缀 + i32 元素）
             (Value::Arr(_), "from_bytes") => {
                 let bytes = self.eval(&args[0])?;
                 let bytes = self.deref_value(bytes);
