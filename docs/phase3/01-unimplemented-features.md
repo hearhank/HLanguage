@@ -10,10 +10,10 @@
 
 ## A. 标准库扩展（第三阶段主项）
 
-### A1｜FFI（`extern fn` + `@cImport` + `hc cc`）｜🟡（**设计已完成，待实施**）
+### A1｜FFI（`extern fn` + `@cImport` + `hc cc`）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 G6；`07-bootstrap-plan.md` E3.5；`04-stdlib-scope.md`
-- **落点**：语义（`extern fn`）/ 前端（`@cImport` 内建 C 解析器，Q-S4）/ 工具链（`hc cc`）/ 运行时（C 指针外置 + `box` 进入 + 错误码手动映射）
-- **备注**：此前组 G 按用户决定跳过（2026-08-18）；现为第三阶段标准库首要缺口。**设计定案就绪（2026-08-22，ADR-0020，grill-with-docs 访谈 Round 1 八子项 + Round 2 七子项全推荐）**——① `extern fn` 纯声明（MVP 类型范围 = 标量 + 指针 + `[continuous] class` POD，无 varargs）；② `@cImport` = 顶层 `const c = @cImport("header.h");` 导入对象（限定名引用；只解析直接声明体，不展开 include/宏）；③ `hc cc` = zig cc 薄封装 + build.zon C 源声明（**B5 并入 A1**）；④ C 指针上下文推导外置 + `box(c_ptr, alloc)` 复制进托管堆；⑤ C struct/enum 自动生成 `[continuous] class`/H enum；⑥ 错误码纯手动映射；⑦ **FFI 原生-only**（interp/IR 响亮拒绝，测试走 `hc test --mode=compile`，不进 interp 一致性套件）；⑧ 回调（传 H 回调）/ C 字符串专用类型 1.x。待实施：lexer/parser 增 `extern` + `@cImport` 解析 + C 解析器 + LLVM extern 声明 + `hc cc` 子命令 + build.zon 集成
+- **落点**：`hc/src/parser/decl.rs`（`extern fn` 解析）/ `hc/src/llvm/emit.rs`（LLVM `declare` 发射）/ `hc-tools/src/cli.rs`（`hc cc` 子命令）/ `hc/src/ir/`（`IrFunc.is_extern`）
+- **备注**：`extern fn` 已实现（parser + IR + LLVM declare + 6 测试）；`hc cc`（zig cc 封装）已实现；`@cImport` 尚未实现（C 解析器依赖外部库，留 1.x）
 
 ### A2｜数据库连接抽象｜⏳ 1.x
 - **出处**：`10-part3-execution.md` G4 完成注记
@@ -54,10 +54,10 @@
 - **验收**：静态诊断（命名规范补全——缩写全大写、未用变量、可简化构造）+ lint 测试绿
 - **备注**：6 条规则（L001–L006）已实现：`unused_var` / `unused_import` / `simplifiable_construct` / `upper_case_abbr` / `simplifiable_if_else` / `redundant_eq_false`；4 条支持 `--fix`（接口预留）；`// @lint(off rule_name)` 内联关闭；`hc lint` 独立子命令 + `hc check` 默认集成；文本+JSON 输出
 
-### B2｜LSP 完整化（`hc lsp` 子命令 + 脚本实时预览）｜🟡
+### B2｜LSP 完整化（`hc lsp` 子命令 + 脚本实时预览）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 I3；`07-bootstrap-plan.md` E5.1
-- **落点**：`tag1/hc-lsp/`（已有独立 crate：诊断 / 补全 / 跳转 / hover，git `aa3ea85`/`491ade9`）+ `hc-tools` CLI 集成 + Zed 扩展（`feature/improv_code_v0.1.5`）
-- **备注**：LSP 已独立实现且配 tree-sitter 语法 + Zed 扩展；**未整合为 `hc lsp` 子命令**；脚本实时预览通道（M3 实时预览）未接通
+- **落点**：`tag1/hc-lsp/`（独立 crate：诊断 / 补全 / 跳转 / hover）+ `hc-tools/src/cli.rs`（`hc lsp` 子命令）+ Zed 扩展
+- **备注**：LSP 已独立实现（诊断 / 补全 / 跳转 / hover 全功能）；`hc lsp` 子命令已整合（`hc-lsp` 作为 `hc-tools` 依赖，通过 `hc_lsp::run_server()` 启动）；Zed 扩展配置指向 `hc lsp`。脚本实时预览通道（M3 实时预览）未接通，留 1.x
 
 ### B3｜注册中心 MVP（`hc pkg` 完整：指纹 / 审计 / 供应链校验）｜🟡（**设计已完成**）
 - **出处**：`10-part3-execution.md` 组 I4；`07-bootstrap-plan.md` E5.2
@@ -168,10 +168,10 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（0 🔴 / 1 🟡 / 6 ⏳ / 1 🟣）+ B 7（0 🔴 / 6 🟡 / 1 ⏳）+ C 8（0 🔴 / 4 🟡 / 3 ⏳ / 1 🟣）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
+- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 4 🟡 / 1 ⏳ / 2 🟢）+ C 8（0 🔴 / 4 🟡 / 3 ⏳ / 1 🟣）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
   - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)；🟣 标记项（A8 端到端示例、C8 LLVM 原生内建）已移至第四阶段
-- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**A1 ffi + B5 `hc cc`**（设计已定案，ADR-0020，联动）、**B1 lint**（设计已定案）、**B2 lsp 整合**、**B3 注册中心**（设计已定案）、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、**C7 原生 ABI**（设计已定案，ADR-0019）、**D1 并发测试**（设计已定案）、**B6 启动时间**（设计已定案）
-- **建议首项**：**C1（J4 Table 多索引）**——设计已定案，直接施工（对应「先实现 4」）；其次 **A1/B5（ffi + hc cc，设计已定案）**或 B1（lint）
+- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**B3 注册中心 MVP**（指纹 / 供应链校验）、**C2 开放问题裁决**（`--dangle` 等）、**C3 惰性迭代/switch 守卫/Send-Sync**、**C5 泛型嵌套**、**D1 并发测试 runner**、**B6 启动时间指标**
+- **建议首项**：**C3（惰性迭代/switch 守卫/Send/Sync）**——设计已定案（ADR-0017），语义层改动，影响面可控
 
 ## 第四阶段（自举 + 1.x）
 

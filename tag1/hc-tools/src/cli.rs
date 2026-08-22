@@ -97,6 +97,7 @@ USAGE:
                               与 H 版 lexer 输出逐行 diff）
     hc cc <file.c> [--output <file>]
                               编译 C 文件（zig cc 封装，产出原生目标文件或可执行）
+    hc lsp                    启动 LSP 语言服务器（stdio 通道，供编辑器集成）
     hc --version
     hc --help
 ";
@@ -303,6 +304,11 @@ pub(crate) fn run_cli() -> ExitCode {
         "cc" => {
             // A1（ADR-0020）：`hc cc <file.c> [--output <file>]`——zig cc 封装
             cc_command(&args[2..])
+        }
+        "lsp" => {
+            // B2：`hc lsp`——启动 LSP 语言服务器
+            hc_lsp::run_server();
+            ExitCode::SUCCESS
         }
         other => {
             eprintln!("error: unknown command `{other}`\n\n{USAGE}");

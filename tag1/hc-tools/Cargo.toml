@@ -8,6 +8,7 @@ description = "H language toolchain CLI (hc run / hc test / hc build)"
 [dependencies]
 hc = { path = "../hc" }
 hc-rt = { path = "../hc-rt" }
+hc-lsp = { path = "../hc-lsp" }
 
 # 安装产物命名为 `hc`（工具链对外命令名），与包名 `hc-tools` 解耦。
 [[bin]]
