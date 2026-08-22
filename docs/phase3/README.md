@@ -9,7 +9,7 @@
 ## 范围
 
 - **第三阶段**：标准库扩展（net / ipc / storage / text / ffi 剩余项）+ 前两阶段未实现功能（工具链：lint / lsp 完整 / 注册中心；语言扩展：惰性迭代 / switch 守卫 / Send/Sync / Table 多索引 / 绑定级只读等；测试：并发测试 runner；系统编程：K3 asm 等）
-- **第四阶段（不属本阶段）**：自举闭环 + 1.x 延迟项（见 [`docs/phase4/`](../phase4/)）
+- **第四阶段（不属本阶段）**：自举闭环 + 1.x 延迟项 + 端到端示例（A8）+ LLVM 原生内建（C8）（见 [`docs/phase4/`](../phase4/)）
 - **1.x 延迟项**：真 OS 并行 / mutex / freestanding / 位域 / 指针算术等（已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)）
 
 ## 工作文档（本文件夹核心）

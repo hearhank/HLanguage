@@ -39,29 +39,30 @@
 - **出处**：`CONTEXT.md` 迭代契约条目；`02-milestones.md` M4.6
 - **备注**：`iter()`/`filter()/map()` 立即求值链已落地；**迭代器对象 API 已补定（2026-08-22，ADR-0017 C3-1）**——`iter()` 返回迭代器方法签名（`next()` + `filter`/`map` 组合子返回显式迭代器对象）；惰性求值（`next()` 按需求值、链式延迟计算）真实现仍 1.x
 
-### A8｜端到端示例程序（四大支柱同时使用）｜🔴
+### A8｜端到端示例程序（四大支柱同时使用）｜🟣（**已迁移至第四阶段**）
 - **出处**：`02-milestones.md` M7 验收（「端到端示例程序（同时用到四大支柱）作为验收基准」）
 - **落点**：`examples/` 新示例 + 测试
-- **备注**：每支柱 API 已稳定（G1–G5），缺四大支柱合一验收示例
+- **备注**：设计已定案（2026-08-22 grilling 会话），**已移至第四阶段**。TCP 聊天服务器（`server.hc` + `client.hc`），行文本协议，广播 + 昵称 + 私信，异步事件循环架构，双模式集成测试，代码注释标注四支柱映射。见 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
 
 ---
 
 ## B. 工具链扩展（第三阶段主项）
 
-### B1｜`hc lint`｜🔴
+### B1｜`hc lint`｜🟡（**设计已完成**）
 - **出处**：`10-part3-execution.md` 组 I2；`07-bootstrap-plan.md` E5.1
 - **落点**：`tag1/hc-tools/`（lintgen 类）
 - **验收**：静态诊断（命名规范补全——缩写全大写、未用变量、可简化构造）+ lint 测试绿
+- **备注**：**设计定案（2026-08-22 grilling 会话）**：6 条规则（L001–L006）——`unused_var` / `unused_import` / `simplifiable_construct` / `upper_case_abbr` / `simplifiable_if_else` / `redundant_eq_false`；4 条支持 `--fix`；`// @lint(off rule_name)` 内联关闭；`hc lint` 独立子命令 + `hc check` 默认集成；文本+JSON 输出
 
 ### B2｜LSP 完整化（`hc lsp` 子命令 + 脚本实时预览）｜🟡
 - **出处**：`10-part3-execution.md` 组 I3；`07-bootstrap-plan.md` E5.1
 - **落点**：`tag1/hc-lsp/`（已有独立 crate：诊断 / 补全 / 跳转 / hover，git `aa3ea85`/`491ade9`）+ `hc-tools` CLI 集成 + Zed 扩展（`feature/improv_code_v0.1.5`）
 - **备注**：LSP 已独立实现且配 tree-sitter 语法 + Zed 扩展；**未整合为 `hc lsp` 子命令**；脚本实时预览通道（M3 实时预览）未接通
 
-### B3｜注册中心 MVP（`hc pkg` 完整：指纹 / 审计 / 供应链校验）｜🔴
+### B3｜注册中心 MVP（`hc pkg` 完整：指纹 / 审计 / 供应链校验）｜🟡（**设计已完成**）
 - **出处**：`10-part3-execution.md` 组 I4；`07-bootstrap-plan.md` E5.2
 - **落点**：`hc-tools`（build.zon 指纹 + 依赖来源审计）+ 自托管 MVP
-- **备注**：`hc pkg add`（本地依赖）已落地；build.zon 指纹 / 供应链校验未实现；注册中心治理（冲突 / 审计 / 失联）**已定案 1.0（2026-08-22，ADR-0016 #5）**——MVP 只做唯一包名 + 指纹发布，治理不阻塞本条目
+- **备注**：`hc pkg add`（本地依赖）已落地；build.zon 指纹 / 供应链校验未实现。**设计定案（2026-08-22 grilling 会话）**：文件系统直连注册中心（`~/.hc/registry/<name>/<version>/`），全局唯一平名 + semver，`hc pkg publish` 从当前目录发布，`hc build` 自动 fetch 缺失依赖，SHA-256 指纹发布时生成 + fetch 时对比校验。注册中心治理（冲突 / 审计 / 失联）已定案 1.0（ADR-0016 #5）——MVP 只做唯一包名 + 指纹发布，治理不阻塞
 
 ### B4｜包管理器正式版 + 官方注册中心（1.0 项）｜⏳ 1.x
 - **出处**：`02-milestones.md` M8 / M10
@@ -71,9 +72,9 @@
 - **出处**：`02-milestones.md` M8；`10-part3-execution.md` G6（ffi 验收依赖）
 - **备注**：**与 A1（ffi）统一设计（2026-08-22，ADR-0020）**——`hc cc` = zig cc 薄封装 + build.zon C 源声明，A1 完成即 B5 完成
 
-### B6｜脚本启动时间指标（TS 式低摩擦）｜🔴
+### B6｜脚本启动时间指标（TS 式低摩擦）｜🟡（**设计已完成**）
 - **出处**：`02-milestones.md` M5（「脚本启动时间指标」）
-- **备注**：字节码 VM 复用 `run_ir`（盒式表示），性能优化留后续；需一致性套件证明等价后优化
+- **备注**：字节码 VM 复用 `run_ir`（盒式表示），性能优化留后续；需一致性套件证明等价后优化。**设计定案（2026-08-22 grilling 会话）**：指标 = 零到 script 块展开完成时间；`hc run --bench` 分阶段输出（parse / script_expand / sema_check / lower / exec）；空脚本 <10ms / 含 script 块 <50ms 基线；`~/.hc/cache/script/<source_hash>` 缓存展开结果
 
 ### B7｜质量工具完整（LSP / 格式化 / lint 集）｜🟡
 - **出处**：`02-milestones.md` M8
@@ -123,19 +124,19 @@
 - **落点**：LLVM 后端（`llvm.rs`）
 - **备注**：**设计定案就绪（2026-08-22，ADR-0019，grill-with-docs 访谈 3 子项全确认）**——① 函数值 = 胖闭包对象 `{ fn_ptr, env_ptr }`（堆上分配，`%Value` 载荷存指针，新增闭包 tag）；`FnRef` = LLVM 函数符号地址；② 调用复用 `%Value` 参数/返回值通道，闭包隐藏 env 首参，零动态分发；③ spawn 原生子集边界解除（G4b 定案 A「响亮拒绝」被真实支持替换），`NotCallable` mismatch（10-functions / 21-closures / 48-iterator-chain）归零，K4 H 后端编写时联动。实施 = LLVM 后端 Phase 8 大改造，实现另计
 
-### C8｜LLVM 原生内建子集扩展（mismatch 归零）｜🟡
+### C8｜LLVM 原生内建子集扩展（mismatch 归零）｜🟣（**已迁移至第四阶段**）
 - **出处**：`07-bootstrap-plan.md` §八 P11d 收束注记（2026-08-17 用户裁定到此收束）
 - **落点**：`llvm.rs` 原生内建 / 方法 / 序列化 / 标量接口族
-- **备注**：compile mismatch **52–57** 构成——21 Unsupported（12 defer-try-f 设计内硬错误 + 6 `Orders.Line` 跨包字面量 + 3 匿名 struct）+ 31 运行时（20 NotBuiltin + 6 NoMethod + 3 NotCallable + 2 AssertFailed）。用户已裁定 P11d 收束，留后续阶段；若第三阶段重开需授权
+- **备注**：compile mismatch **52–57** 构成——21 Unsupported（12 defer-try-f 设计内硬错误 + 6 `Orders.Line` 跨包字面量 + 3 匿名 struct）+ 31 运行时（20 NotBuiltin + 6 NoMethod + 3 NotCallable + 2 AssertFailed）。**已移至第四阶段**，若重开需授权。见 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
 
 ---
 
 ## D. 测试基建（第三阶段主项）
 
-### D1｜并发测试 runner（`[test]` 并发形态：异步 / 线程测试）｜🔴
+### D1｜并发测试 runner（`[test]` 并发形态：异步 / 线程测试）｜🟡（**设计已完成**）
 - **出处**：`10-part3-execution.md` 组 J3；`07-bootstrap-plan.md` E6.1
 - **落点**：`hc-rt` 测试基建 + `hc test`
-- **备注**：当前测试串行（Q-T3）；异步 / 线程形态测试 runner 未实现
+- **备注**：当前测试串行（Q-T3）。**设计定案（2026-08-22 grilling 会话）**：`[test(async)]` 共享事件循环（复用 `Io.threaded()`）+ `[test(thread)]` 串行化独立线程；`[test]` 保持串行（向后兼容）；可配置超时 `[test(timeout=5)]` 默认 5s；每测试输出缓冲避免交错；测试间串行化保持确定性
 
 ### D2｜一致性套件扩展（新增语言构造纳入）｜🟡
 - **出处**：`10-part3-execution.md` §0.1（双模式承诺延续）
@@ -167,9 +168,9 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（1 🔴 / 1 🟡 / 6 ⏳）+ B 7（3 🔴 / 3 🟡 / 1 ⏳）+ C 8（0 🔴 / 5 🟡 / 3 ⏳）+ D 2（1 🔴 / 1 🟡）+ E 4（4 ⏳）
-  - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
-- **第三阶段立即实施候选（🔴/🟡 且 1.x 无关）**：**A1 ffi + B5 `hc cc`**（设计已定案，ADR-0020，联动）、B1 lint、B2 lsp 整合、B3 注册中心、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、**C7 原生 ABI**（设计已定案，ADR-0019）、D1 并发测试、B6 启动时间、A8 端到端示例
+- **第三阶段活动项**：A 8（0 🔴 / 1 🟡 / 6 ⏳ / 1 🟣）+ B 7（0 🔴 / 6 🟡 / 1 ⏳）+ C 8（0 🔴 / 4 🟡 / 3 ⏳ / 1 🟣）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
+  - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)；🟣 标记项（A8 端到端示例、C8 LLVM 原生内建）已移至第四阶段
+- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**A1 ffi + B5 `hc cc`**（设计已定案，ADR-0020，联动）、**B1 lint**（设计已定案）、**B2 lsp 整合**、**B3 注册中心**（设计已定案）、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、**C7 原生 ABI**（设计已定案，ADR-0019）、**D1 并发测试**（设计已定案）、**B6 启动时间**（设计已定案）
 - **建议首项**：**C1（J4 Table 多索引）**——设计已定案，直接施工（对应「先实现 4」）；其次 **A1/B5（ffi + hc cc，设计已定案）**或 B1（lint）
 
 ## 第四阶段（自举 + 1.x）

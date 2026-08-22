@@ -8,6 +8,8 @@
 
 - **第四阶段核心**：自举闭环（`stage1/` H 版 lexer 已就绪，parser / 语义 / 后端 / stage2 / 可复现构建）
 - **1.x 延迟项**：真 OS 并行 / mutex / freestanding / 位域 / 指针算术 / 数据库 / 压缩 / 时区 / 惰性迭代 / 绑定级只读 / bignum / asm / Atomic 类型等
+- **端到端示例（A8）**：四大支柱合一验收示例（TCP 聊天室），设计已定案
+- **LLVM 原生内建（C8）**：mismatch 归零（52–57 mismatch），用户裁定 P11d 收束，重开需授权
 
 ## 工作文档（本文件夹核心）
 
