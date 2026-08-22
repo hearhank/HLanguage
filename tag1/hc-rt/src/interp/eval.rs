@@ -403,9 +403,19 @@ impl Interp {
                 return result;
             }
         }
-        // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：回退基础名，由调用方
-        // 既有非泛型路径处理（空集合 / 类型未登记 → UnknownType，保持原语义）。
-        Ok(name.to_string())
+        // 非类型函数（内建泛型 `Vec(T)`/`Map(K,V)` 等）：
+        // 若实参含具体化名（含 `@`），则生成具体化名保留嵌套类型信息
+        // （如 `Vec<@List<@i32>>`）；否则回退基础名（`Vec(i32)` → `Vec`），
+        // 由既有非泛型路径处理（空集合 / 类型未登记 → UnknownType，保持原语义）。
+        let has_concrete_arg = resolved.iter().any(|a| match a.strip() {
+            Type::Named(n, _) => n.contains('@'),
+            _ => false,
+        });
+        if has_concrete_arg {
+            Ok(comptime::concrete_name(name, &resolved))
+        } else {
+            Ok(name.to_string())
+        }
     }
 
     /// E1.2 组 D D3：深度解析类型中的嵌套类型函数应用（`Pair(i32)` → `Pair<@i32>`）。
