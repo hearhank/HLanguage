@@ -1,8 +1,9 @@
-use super::{
-    check_and_merge, color_test_line, merge_modules, paint, programs_to_test_ll,
-    run_ir_source_with_args, source_to_bytecode, strip_test_funcs_in_place,
-    write_bytecode_artifact, IrRunOutcome,
+use crate::cli::{color_test_line, paint};
+use crate::fsio::{source_to_bytecode, write_bytecode_artifact};
+use crate::package::{
+    check_and_merge, merge_modules, programs_to_test_ll, strip_test_funcs_in_place,
 };
+use crate::run::{run_ir_source_with_args, IrRunOutcome};
 
 /// M7.1：入口 + 同包兄弟 → LLVM IR 文本（`main` 入口）。仅测试用（C3 后生产路径
 /// 走 [`check_and_merge_deps`] + `codegen_with_links`）。
