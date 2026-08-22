@@ -7,6 +7,7 @@
 ```hc
 fn main(args: o Vec<String>) !void {}   // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告；环境经 `import H.std.{io}`（io.env(n)/io.stdin/io.stdout/io.stderr）；退出 io.exit(ExitType.Exit|Error, code)（2026-08-14 定案；2026-08-17 修订入口形态，ADR-0010）
 export fn foo(a: i32) i32 {}        // K5（ADR-0014，2026-08-18 落地）：原生符号级导出——链接器可见干净符号（外部 thunk）；与 pub 正交，仅作用于 fn/async fn
+extern fn add_c(a: i32, b: i32) i32;   // A1（ADR-0020，2026-08-22 设计定案）：C ABI 外部函数纯声明（无 body，链接期解析）；反向由 export fn 覆盖
 fn fun(y: o *mut T) void {}          // o T：参数拥有（Q22b 类型标注制；退出销毁）
 fn add(a: *T) void where T: INumber {}  // 接口约束：where 子句在签名末尾（Q22b）
 fn f(x: &[u8]) !i32                   // 返回 error union
@@ -23,6 +24,7 @@ var hp: o *mut Point = box(p, alloc); // 装箱：值 → 堆引用（Q8，显�
 - **返回值**：`fn() oT` 返回拥有（所有权移出）；`fn() *T` / `*mut T` 返回引用；函数内新建的值必须 move 返回（无所有权的除外）；返回引用必须指向函数参数，不得返回局部变量引用；**元组多值返回** `fn f() (T1, T2)`（2026-08-14）
 - **作用域退出销毁顺序 = 声明逆序（LIFO）**（Q26 定案）
 - 方法 = 类型声明内的函数成员；方法调用双语：`p.dist(q)` ≡ `Point.dist(p, q)`（Q5，接收者自动取引用：首参 `*Self` 取 `&p`、`*mut Self` 取 `&mut p`）
+- **FFI `extern fn`（2026-08-22 设计定案，ADR-0020）**：C ABI 外部函数**纯声明**（无 body，链接期解析；反向 = `export fn` K5）。**类型范围（MVP）**：标量（iN/uN/fN/bool/usize）+ `*T`/`*mut T` + `[continuous] class` POD；不允许错误联合/切片/接口/泛型/闭包；C 可变参数 1.x。**C 指针 = 上下文推导外部**（extern fn 签名 / `@cImport` 生成声明中的指针自动不参与 Debug 悬垂登记，复用 `*T`）；进入引用体系 `box(c_ptr, alloc)` 复制进托管堆（返回 `o *mut T` 参与登记）。**错误码纯手动映射**（`if (ret != 0) return error.X;`，无辅助内建）。**FFI 原生-only**——interp/IR 对 extern fn 调用响亮拒绝（`error.NotCallable` 风格），测试走 `hc test --mode=compile`。回调（传 H 函数作 C 回调）与 C 字符串专用类型 1.x（依赖 K7/C7）
 
 ## 闭包
 
@@ -51,7 +53,7 @@ var hp: o *mut Point = box(p, alloc); // 装箱：值 → 堆引用（Q8，显�
 | 指针转换（地址） | `@ptrFromInt(addr) *mut Unknown` / `@intFromPtr(p) usize` | 整数 ↔ 指针转换（物理地址 → 虚拟指针）：`@intFromPtr(p)` 取地址（round-trip 保真）、`@ptrFromInt(addr)` 重建原指针/合成匿名槽（未登记地址同地址幂等）；`@ptrFromInt` 恒返回 `*mut Unknown`（经 `@ptrCast`/注解定型）；原生 = i128 载荷 tag 交换（真实地址往返安全，任意物理地址 deref 为未定义行为）；K4（ADR-0014，2026-08-18 落地） |
 | 溢出 | `@addWithOverflow(a, b)` / `@subWithOverflow` / `@mulWithOverflow` | 返回元组 `(T, bool)`（value, overflow）；不受模式影响 |
 | 编译期 | `@compileError("msg")` | 显式编译失败（comptime/脚本用） |
-| FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明（Q-S4 定案；第三块 E3） |
+| FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明（Q-S4 定案；第三块 E3）。**设计定案（2026-08-22，ADR-0020）**：顶层 `const c = @cImport("header.h");` 编译期导入对象，成员经限定名引用 `c.printf(...)`；MVP 只解析直接声明体（struct/enum/typedef/函数），不展开 include/宏；失败 = 编译错误带位置；自动生成 `[continuous] class`（POD 直映射 + C enum → H enum）；FFI 原生-only（interp 响亮拒绝） |
 | 原子操作 | `@atomicLoad(T, p, order)` / `@atomicStore(T, p, v, order)` / `@atomicRmw(T, p, op, v, order)` | 无锁原语（Q-S3 定案；**组 F 已落地，2026-08-18——协作式透明实现**：load = deref、store = 写穿、Rmw `op` = `.add`/`.sub`/`.exchange`（返回旧值），内存序求值后丢弃；`.cmpxchg` 等 1.x） |
 
 - **内存序（Q-S3 定案，C11 五序子集）**：`relaxed` / `acquire` / `release` / `acq_rel` / `seq_cst`——**默认 `seq_cst`**（弱序需显式写）；四模式类型内部实现基于这些原语；**组 F 落地后**：协作式单线程无竞争，内存序求值后丢弃，真并发语义归 1.x

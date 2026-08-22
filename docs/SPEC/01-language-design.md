@@ -365,4 +365,6 @@ Zig 无闭包，按参考规则取 Rust 第二；捕获模式与 H 语法体系�
 
 **2026-08-14 确认（清理待定标记）**：① C 头导入 = 内建 `@cImport`（Q-S4 已定：编译期解析 C 头生成 H 声明，内建 C 解析器；范围：基本类型/struct/enum/函数指针）；② C 指针 = **外置**——`*T` 不参与 Debug 悬垂标记，进入引用体系需显式 `box` 包装（Q-S4 已定）；③ C 错误码 → error union = **手动映射**（Q-S4 已定，无隐式转换）。
 
+**2026-08-22 设计定案（ADR-0020）**：① `extern fn` = 纯声明（无 body，反向由 `export fn` 覆盖）；MVP 类型范围 = 标量 + 指针 + `[continuous] class` POD（无错误联合/切片/接口/泛型/闭包；C 可变参数 1.x）；② `@cImport` = 顶层 `const c = @cImport("header.h");` 编译期导入对象（成员限定名引用 `c.xxx`）；MVP 只解析直接声明体（struct/enum/typedef/函数），不展开 include/宏，失败 = 编译错误带位置；③ C 指针外部标记 = **上下文推导**（extern fn 签名 / `@cImport` 生成声明中的指针自动外置）；`box(c_ptr, alloc)` 复制进托管堆（`o *mut T` 参与登记）；④ C struct/enum = `@cImport` 自动生成 `[continuous] class`（POD 直映射 + 布局验证）/ H 纯常量 enum（`@enumFromInt`/`@intFromEnum` 转换）；⑤ 错误码 = 纯手动映射（不加辅助内建）；⑥ **FFI 原生-only**（interp/IR 响亮拒绝 `error.NotCallable` 风格，测试走 `hc test --mode=compile`，不进 interp 一致性套件）；⑦ `hc cc` = zig cc 薄封装 + build.zon C 源声明（B5 并入 A1）；⑧ 回调（传 H 回调）/ C 字符串专用类型 = 1.x。
+
 > 定义推进方式：项目所有者逐项给出定义 → 更新到对应小节 → 同步更新里程碑（`02-milestones.md` 映射表）。

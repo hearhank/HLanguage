@@ -110,7 +110,7 @@ from_bytes(b):
 
 | # | 缺口 | 内核场景 | 状态/建议 |
 |---|---|---|---|
-| K1 | **无标签 union（裸内存双关）** | 页表项/寄存器多视图、调度上下文、FXSAVE 区、C 头中 union 对接（`@cImport` 无法映射）——合一式 enum 带判别标签，不能在同一内存上叠加多种解释 | ✅ **已落地（H1，2026-08-18 ADR-0014）**：无标签 union——字段内存重叠、无判别标签；见 06-02 类型 |
+| K1 | **无标签 union（裸内存双关）** | 页表项/寄存器多视图、调度上下文、FXSAVE 区、C 头中 union 对接（`@cImport` 映射——**2026-08-22 A1 定案 ADR-0020：C union → H 无标签 union 直映射，前提即本项已落地**）——合一式 enum 带判别标签，不能在同一内存上叠加多种解释 | ✅ **已落地（H1，2026-08-18 ADR-0014）**：无标签 union——字段内存重叠、无判别标签；见 06-02 类型 |
 | K2 | **volatile 访问** | MMIO 寄存器（读清标志/轮询就绪位）、设备内存写顺序——无 volatile 会被 LLVM 后端优化掉（视为无副作用） | ✅ **已落地（H2，2026-08-18 ADR-0014）**：机制级 `@volatileLoad`/`@volatileStore`——LLVM `load volatile`/`store volatile`（防优化掉）；见 06-04 `@` 内建表 |
 | K3 | **内联汇编 asm** | cli/sti、hlt、cpuid、rdmsr/wrmsr、CR3 切换、上下文切换、原子指令扩展（cmpxchg16b） | 已标注 1.x（h-vs-rust 表）；需设计语法（Zig asm 式）；1.0 明确不支持特权指令 |
 | K4 | **整数 ↔ 指针转换**（`@ptrFromInt`/`@intFromPtr`） | 物理地址 → 虚拟指针（MMIO 基址）、页框号 ↔ 地址换算、位图索引——`@ptrCast` 仅指针↔指针 | ✅ **已落地（H3，2026-08-18 ADR-0014）**：`@ptrFromInt(addr) *mut Unknown` / `@intFromPtr(p) usize`——地址注册表 + 匿名槽（interp/IR）与 i128 载荷 tag 交换（原生）；见 06-04 `@` 内建表 |

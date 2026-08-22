@@ -314,7 +314,7 @@
 
 ### 组 G（E3 标准库扩展，2026-08-18）
 
-**已落地**（G6 ffi 按用户决定跳过）：
+**已落地**（G6 ffi 按用户决定跳过——**2026-08-22 设计已定案 ADR-0020，待实施**）：
 - **G1 net**：UDP（`io.net.udp.bind(port)`/`bind(host, port)` + `send_to`/`recv_from`/`local_port`/`close`，Q20 双语；空队列 200ms 读超时 → `error.TimedOut`；`recv_from` 返回 2 元素数组）+ HTTP 客户端 `io.net.get(url)`（仅 `http://`，非 200 → `error.Http{code}`）+ HTTP 服务端（`io.net.listen`+`accept`+`read_all`/`write`）+ Q20 双语补齐（命名空间形式 ≡ 实例方法）。hc-rt net.rs 直测 6。
 - **G2 io 差异项**：`io.stdout`/`io.stderr` 独立字节流；`String.to_upper`/`to_lower`（ASCII）；`io.fs.list_dir` → `Vec<DirEntry>`（`{name, is_dir}`，路径/句柄双形态）；`io.fs.open_dir(path) !Dir`（fd→路径注册表，`dir.list_dir`/`dir.close`）。hc-rt io.rs 直测 9→13。
 - **G3 ipc**：`io.ipc.pipe() ![PipeReader, PipeWriter]`（匿名管道：`write`/`close`/`read`（排空不阻塞）/`read_all`/`is_closed`，close 幂等）+ `io.ipc.shm(name, size) !Shm`（定长共享内存：`write` 截断/`read`/`close`）。进程内注册表，跨 H 线程经 spawn 传值。hc-rt ipc.rs 直测 6。

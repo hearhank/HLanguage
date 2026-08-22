@@ -266,6 +266,7 @@ defer expr / errdefer expr       // 作用域退出执行；errdefer 仅错误�
 ```hc
 fn main(args: o Vec<String>) !void {}    // 入口：args 注入（0 号 = 程序名）；!void 入口错误运行时报告
 export fn foo(a: i32) i32 {}             // 原生符号级导出——链接器可见干净符号（与 pub 正交，仅作用于 fn/async fn）
+extern fn c_add(a: i32, b: i32) i32;      // C ABI 外部声明（A1，ADR-0020）：纯声明无 body、链接期解析；MVP = 标量+指针+POD
 fn fun(y: owned *mut T) void {}              // owned T：参数拥有（退出销毁）
 fn add(a: *T) void where T: INumber {}  // 接口约束：where 子句在签名末尾
 fn f(x: &[u8]) !i32                      // 返回 error union
@@ -367,7 +368,7 @@ f(x)                  // 调用
 | 指针转换（地址） | `@ptrFromInt(addr) *mut Unknown` / `@intFromPtr(p) usize` | 整数 ↔ 指针转换；`@intFromPtr` 取地址（round-trip 保真）、`@ptrFromInt` 重建原指针/合成匿名槽；`@ptrFromInt` 恒返回 `*mut Unknown` |
 | 溢出 | `@addWithOverflow(a, b)` / `@subWithOverflow` / `@mulWithOverflow` | 返回元组 `(T, bool)`（value, overflow）；不受模式影响 |
 | 编译期 | `@compileError("msg")` | 显式编译失败（comptime/脚本用） |
-| FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明 |
+| FFI | `@cImport("header.h")` | 编译期解析 C 头文件生成 H 声明（A1，ADR-0020）：顶层 `const c = @cImport(...);` 导入对象 + 限定名引用；MVP 只解析直接声明体（struct/enum/typedef/函数）；自动生成 `[continuous] class`；FFI 原生-only |
 | 原子操作 | `@atomicLoad(T, p, order)` / `@atomicStore(T, p, v, order)` / `@atomicRmw(T, p, op, v, order)` | 无锁原语；`op` = `.add`/`.sub`/`.exchange`（返回旧值）；`.cmpxchg` 等 1.x |
 
 - **内存序**（C11 五序子集）：`relaxed` / `acquire` / `release` / `acq_rel` / `seq_cst`——**默认 `seq_cst`**（弱序需显式写）

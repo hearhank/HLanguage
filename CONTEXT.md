@@ -58,8 +58,8 @@ _Avoid_: 把「数据」仅理解为标量或记录（内存块、内存树、�
 **保存数据 (Persist)**:
 数据的持久化存储，如文件与数据库。数据为中心的第四支柱。**存储方式（2026-08-14 定案）**：数据序列化为字节后可保存在三处——**内存**（缓冲区/共享内存）、**文件系统**（文件）、**数据库**（记录/表）——序列化是存储的前提（见数据序列化分层）。
 
-**跨语言调用 (FFI, 2026-08-13 Q-S4 定案)**:
-C ABI 互操作：`extern fn` 声明外部 C 函数（链接期解析，`hc cc` 编译 C 源码链接）；`@cImport("header.h")` 编译期解析 C 头文件生成 H 声明；**C 指针 = `*T` 但不参与 Debug 悬垂标记**（外部内存、用户负责——悬垂检测不适用，进入引用体系需显式 `box` 包装）；**C 错误码 → error union 手动映射**（无隐式转换，`if (ret != 0) return error.X;`）；C struct ↔ H Continuous 类型 POD 直映射 + `@offsetOf`/`@alignOf` 布局验证。
+**跨语言调用 (FFI, 2026-08-13 Q-S4 定案；2026-08-22 设计定案 ADR-0020)**:
+C ABI 互操作：`extern fn` 声明外部 C 函数（**纯声明无 body，链接期解析**；反向由 `export fn` K5 覆盖）；`@cImport("header.h")` 编译期解析 C 头生成 H 声明（**顶层 `const c = @cImport(...);` 导入对象，限定名引用 `c.xxx`；MVP 只解析直接声明体，不展开 include/宏；自动生成 `[continuous] class`/H enum**）；**C 指针 = `*T` 但不参与 Debug 悬垂标记**（外部内存、用户负责——悬垂检测不适用；**外部标记 = 上下文推导**：extern fn 签名 / @cImport 声明中的指针自动外置；**进入引用体系需显式 `box` = 复制进托管堆**）；**C 错误码 → error union 手动映射**（无隐式转换，`if (ret != 0) return error.X;`，不加辅助内建）；C struct ↔ H Continuous 类型 POD 直映射 + `@offsetOf`/`@alignOf` 布局验证；**`hc cc` = zig cc 薄封装 + build.zon C 源声明（B5 并入 A1）**；**FFI 原生-only**（interp/IR 响亮拒绝 `error.NotCallable` 风格，测试走 `hc test --mode=compile`，不进 interp 一致性套件）；回调（传 H 回调）/ C 字符串专用类型 = 1.x。
 _Avoid_: 隐式错误码翻译 / C 指针裸入引用体系
 
 **数据序列化分层 (Serialization tiers, 2026-08-13 定案)**:

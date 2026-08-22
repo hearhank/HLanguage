@@ -85,11 +85,13 @@ fn add(a: i32, b: i32) i32 { return a + b; }
 fn f(a: i32, b: i32 = 0) i32 { ... }        // 可选参数（尾部、编译期常量默认值）
 async fn g() Future<i32> { ... }            // 异步（调用点返回惰性 Future）
 export fn main() i32 { ... }                // 原生符号导出（K5）
+extern fn c_add(a: i32, b: i32) i32;        // C ABI 外部声明（A1，ADR-0020）：纯声明无 body、链接期解析；MVP 类型范围 = 标量+指针+POD
 ```
 
 - 支持**重载**（具体优先于泛型）、**多值返回**（元组）、**错误联合返回** `E!T` / `!T`。
 - 方法 = 类型声明的函数成员（Zig 式，无 `impl`）；实例方法默认公开。
 - 闭包：`|x| { ... }` / `|mut x|` / `|move x|`；捕获精确化（只捕获实际引用变量）+ 非 mut 闭包只读强制 + move 深拷贝。**原生 ABI（Phase 8 设计定案，ADR-0019）**：函数值 = 胖闭包对象 `{ fn_ptr, env_ptr }`，FnRef = 函数符号地址，调用复用 `%Value` 通道 + 隐藏 env 首参。
+- **FFI（2026-08-22 设计定案，ADR-0020）**：`extern fn` 纯声明（C ABI，链接期解析）；`@cImport("header.h")` 顶层导入对象 `const c = @cImport(...);`（限定名引用 `c.xxx`）；C 指针上下文推导外置 + `box` 复制进托管堆；FFI 原生-only（interp 响亮拒绝）。
 
 ### 2.3 类型定义
 

@@ -34,7 +34,7 @@
 |---|---|
 | `net` | TCP/UDP、HTTP 客户端/服务端 |
 | `ipc` | 进程间通信、管道、共享内存 |
-| `ffi` | C ABI 互操作（`hc cc` 配套）、外部符号绑定；`extern fn` + `@cImport`（Q-S4 定案，C 指针外置不参与登记） |
+| `ffi` | C ABI 互操作（`hc cc` 配套）、外部符号绑定；`extern fn` + `@cImport`（Q-S4 定案，C 指针外置不参与登记）。**设计定案（2026-08-22，ADR-0020）**：extern fn 纯声明 + @cImport 导入对象 + hc cc（zig cc 薄封装，B5 并入）+ box 复制进托管堆 + 错误码手动映射；FFI 原生-only |
 | `channel` | 线程间数据传递（配合 `io` 接口） |
 
 ## 支柱四：保存数据

@@ -10,10 +10,10 @@
 
 ## A. 标准库扩展（第三阶段主项）
 
-### A1｜FFI（`extern fn` + `@cImport` + `hc cc`）｜🔴
+### A1｜FFI（`extern fn` + `@cImport` + `hc cc`）｜🟡（**设计已完成，待实施**）
 - **出处**：`10-part3-execution.md` 组 G6；`07-bootstrap-plan.md` E3.5；`04-stdlib-scope.md`
 - **落点**：语义（`extern fn`）/ 前端（`@cImport` 内建 C 解析器，Q-S4）/ 工具链（`hc cc`）/ 运行时（C 指针外置 + `box` 进入 + 错误码手动映射）
-- **备注**：此前组 G 按用户决定跳过（2026-08-18）；现为第三阶段标准库首要缺口。`hc cc` 子命令不存在（已核实 CLI 无 `cc`）
+- **备注**：此前组 G 按用户决定跳过（2026-08-18）；现为第三阶段标准库首要缺口。**设计定案就绪（2026-08-22，ADR-0020，grill-with-docs 访谈 Round 1 八子项 + Round 2 七子项全推荐）**——① `extern fn` 纯声明（MVP 类型范围 = 标量 + 指针 + `[continuous] class` POD，无 varargs）；② `@cImport` = 顶层 `const c = @cImport("header.h");` 导入对象（限定名引用；只解析直接声明体，不展开 include/宏）；③ `hc cc` = zig cc 薄封装 + build.zon C 源声明（**B5 并入 A1**）；④ C 指针上下文推导外置 + `box(c_ptr, alloc)` 复制进托管堆；⑤ C struct/enum 自动生成 `[continuous] class`/H enum；⑥ 错误码纯手动映射；⑦ **FFI 原生-only**（interp/IR 响亮拒绝，测试走 `hc test --mode=compile`，不进 interp 一致性套件）；⑧ 回调（传 H 回调）/ C 字符串专用类型 1.x。待实施：lexer/parser 增 `extern` + `@cImport` 解析 + C 解析器 + LLVM extern 声明 + `hc cc` 子命令 + build.zon 集成
 
 ### A2｜数据库连接抽象｜⏳ 1.x
 - **出处**：`10-part3-execution.md` G4 完成注记
@@ -67,9 +67,9 @@
 - **出处**：`02-milestones.md` M8 / M10
 - **备注**：M10 冻结前正式版；B3 为基础
 
-### B5｜`hc cc`（C 互操作编译）｜🔴
+### B5｜`hc cc`（C 互操作编译）｜🟡（**设计已并入 A1，待实施**）
 - **出处**：`02-milestones.md` M8；`10-part3-execution.md` G6（ffi 验收依赖）
-- **备注**：与 A1（ffi）联动
+- **备注**：**与 A1（ffi）统一设计（2026-08-22，ADR-0020）**——`hc cc` = zig cc 薄封装 + build.zon C 源声明，A1 完成即 B5 完成
 
 ### B6｜脚本启动时间指标（TS 式低摩擦）｜🔴
 - **出处**：`02-milestones.md` M5（「脚本启动时间指标」）
@@ -186,6 +186,6 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（4 🔴 / 4 ⏳）+ B 7（4 🔴 / 2 🟡 / 1 ⏳）+ C 8（0 🔴 / 5 🟡 / 3 ⏳）+ D 2（1 🔴 / 1 🟡）+ E 4（4 ⏳）
-- **第三阶段立即实施候选（🔴/🟡 且 1.x 无关）**：A1 ffi + B5 `hc cc`（联动）、B1 lint、B2 lsp 整合、B3 注册中心、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、**C7 原生 ABI**（设计已定案，ADR-0019）、D1 并发测试、B6 启动时间、A8 端到端示例
-- **建议首项**：**C1（J4 Table 多索引）**——设计已定案，直接施工（对应「先实现 4」）；其次 A1/B5（ffi + hc cc）或 B1（lint）
+- **第三阶段活动项**：A 8（1 🔴 / 1 🟡 / 6 ⏳）+ B 7（3 🔴 / 3 🟡 / 1 ⏳）+ C 8（0 🔴 / 5 🟡 / 3 ⏳）+ D 2（1 🔴 / 1 🟡）+ E 4（4 ⏳）
+- **第三阶段立即实施候选（🔴/🟡 且 1.x 无关）**：**A1 ffi + B5 `hc cc`**（设计已定案，ADR-0020，联动）、B1 lint、B2 lsp 整合、B3 注册中心、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、**C7 原生 ABI**（设计已定案，ADR-0019）、D1 并发测试、B6 启动时间、A8 端到端示例
+- **建议首项**：**C1（J4 Table 多索引）**——设计已定案，直接施工（对应「先实现 4」）；其次 **A1/B5（ffi + hc cc，设计已定案）**或 B1（lint）
