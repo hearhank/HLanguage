@@ -255,15 +255,8 @@ impl Interp {
                     Some(TypeDef::Enum { variants }) => {
                         let mut out = Vec::new();
                         for v in variants {
-                            let payload = v
-                                .payload
-                                .as_ref()
-                                .map(fmt_type_str)
-                                .unwrap_or_default();
-                            out.push(Value::arr(vec![
-                                Value::str(&v.name),
-                                Value::str(&payload),
-                            ]));
+                            let payload = v.payload.as_ref().map(fmt_type_str).unwrap_or_default();
+                            out.push(Value::arr(vec![Value::str(&v.name), Value::str(&payload)]));
                         }
                         Ok(Value::arr(out))
                     }
@@ -808,6 +801,13 @@ impl Interp {
         for arm in &sw.arms {
             for pat in &arm.patterns {
                 if self.match_pattern(&subject, pat)? {
+                    // C3：switch 守卫——模式匹配后检查守卫条件，守卫失败继续下一分支
+                    if let Some(guard) = &arm.guard {
+                        let guard_val = self.eval(guard)?;
+                        if !matches!(guard_val, Value::Bool(true)) {
+                            continue;
+                        }
+                    }
                     return self.exec_switch_arm(arm, subject.clone());
                 }
             }
@@ -819,6 +819,13 @@ impl Interp {
                     .iter()
                     .any(|p| matches!(p, SwitchPattern::Else))
                 {
+                    // C3：else 臂守卫也检查
+                    if let Some(guard) = &arm.guard {
+                        let guard_val = self.eval(guard)?;
+                        if !matches!(guard_val, Value::Bool(true)) {
+                            continue;
+                        }
+                    }
                     return self.exec_switch_arm(arm, subject.clone());
                 }
             }
@@ -960,7 +967,12 @@ impl Interp {
     }
 
     /// 调用闭包返回 bool（filter 谓词）
-    pub(crate) fn call_closure_bool(&mut self, c: &ClosureData, args: &[Value], span: &Span) -> Result<bool> {
+    pub(crate) fn call_closure_bool(
+        &mut self,
+        c: &ClosureData,
+        args: &[Value],
+        span: &Span,
+    ) -> Result<bool> {
         let v = self.call_closure(c, args, span)?;
         Ok(v.as_bool())
     }
@@ -976,7 +988,12 @@ impl Interp {
     }
 
     /// 调用闭包：绑定参数到捕获环境之上
-    pub(crate) fn call_closure(&mut self, c: &ClosureData, arg_vals: &[Value], span: &Span) -> Result<Value> {
+    pub(crate) fn call_closure(
+        &mut self,
+        c: &ClosureData,
+        arg_vals: &[Value],
+        span: &Span,
+    ) -> Result<Value> {
         if c.params.len() != arg_vals.len() {
             return Err(RtError::new("ArityMismatch", Some(span.clone())));
         }

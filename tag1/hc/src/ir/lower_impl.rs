@@ -3166,6 +3166,14 @@ impl<'a> LowerCtx<'a> {
                 temp: t_pat,
                 label: l_next,
             });
+            // C3：switch 守卫——模式匹配后检查守卫条件，守卫失败跳下一模式
+            if let Some(guard) = &arm.guard {
+                let t_guard = self.lower_expr(guard);
+                self.push(IrInst::JumpIfNot {
+                    temp: t_guard,
+                    label: l_next,
+                });
+            }
             self.emit_switch_arm_body(arm, s, value_slot);
             self.push(IrInst::Jump { label: l_done });
             if i + 1 < n {

@@ -409,6 +409,13 @@ impl Parser {
             if matches!(patterns.last(), Some(SwitchPattern::Else)) {
                 has_else = true;
             }
+            // C3：switch 守卫——`pattern if guard => expr`
+            let guard = if self.at(&TokenKind::KwIf) {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
             self.expect(&TokenKind::FatArrow, "`=>` in switch arm")?;
             let capture = if self.at(&TokenKind::Pipe) {
                 let (m, n) = self.parse_capture()?;
@@ -445,6 +452,7 @@ impl Parser {
             let end = self.span();
             arms.push(SwitchArm {
                 patterns,
+                guard,
                 capture,
                 body,
                 span: astart.merge(&end),

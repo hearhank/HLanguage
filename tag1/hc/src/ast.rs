@@ -348,6 +348,8 @@ pub struct SwitchStmt {
 #[derive(Debug, Clone)]
 pub struct SwitchArm {
     pub patterns: Vec<SwitchPattern>,
+    /// C3：switch 守卫——`pattern if guard => expr`，守卫失败继续下一分支
+    pub guard: Option<Expr>,
     pub capture: Option<(CaptureMode, String)>,
     pub body: Block,
     pub span: Span,
@@ -651,6 +653,9 @@ fn visit_stmt(s: &Stmt, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
         Stmt::Switch(SwitchStmt { subject, arms, .. }) => {
             visit_expr(subject, scopes, fv);
             for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    visit_expr(guard, scopes, fv);
+                }
                 match &arm.capture {
                     Some((_, name)) => visit_block_seeded(name, &arm.body, scopes, fv),
                     None => visit_block(&arm.body, scopes, fv),

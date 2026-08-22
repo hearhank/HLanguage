@@ -435,6 +435,37 @@ impl Checker {
             }
             Stmt::Switch(sw) => {
                 let st = self.expr_ty(&sw.subject, scopes, None);
+                // C3：switch 守卫验证——每个守卫必须是 bool 类型
+                for arm in &sw.arms {
+                    if let Some(guard) = &arm.guard {
+                        let guard_ty = self.expr_ty(guard, scopes, Some(&SType::Bool));
+                        if let Some(t) = guard_ty {
+                            if !matches!(t, SType::Bool) {
+                                self.diags.push(Diagnostic::error(
+                                    guard.span(),
+                                    format!(
+                                        "switch guard must be a bool expression (got `{}`)",
+                                        t.name()
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+                // C3：穷举性检查——至少一个非守卫臂或 else 臂
+                let has_non_guard = sw.arms.iter().any(|arm| arm.guard.is_none());
+                let has_else = sw.arms.iter().any(|arm| {
+                    arm.patterns
+                        .iter()
+                        .any(|p| matches!(p, SwitchPattern::Else))
+                });
+                if !has_non_guard && !has_else {
+                    self.diags.push(Diagnostic::error(
+                        sw.span.clone(),
+                        "switch with guards must have at least one non-guard branch or `else` arm \
+                         for exhaustiveness",
+                    ));
+                }
                 // G3 Q18：分支体内 join 非直线路径
                 self.conditional_depth += 1;
                 for arm in &sw.arms {

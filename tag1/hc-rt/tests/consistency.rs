@@ -1081,6 +1081,109 @@ fn pickn(x: ?i32) i32 {
 }
 
 #[test]
+fn switch_guard_basic() {
+    // C3：switch 守卫——模式匹配后检查守卫条件，守卫失败继续下一分支
+    let src = r#"
+[test] fn t() void {
+    // 守卫为 true → 执行该臂
+    var x: i32 = 42;
+    var r = switch (x) {
+        42 if true => 1,
+        42 => 2,
+        else => 3,
+    };
+    expect_eq(r, 1);
+    // 守卫为 false → 继续下一分支
+    var r2 = switch (x) {
+        42 if false => 1,
+        42 => 2,
+        else => 3,
+    };
+    expect_eq(r2, 2);
+    // 所有守卫都失败 → 进入 else
+    var r3 = switch (x) {
+        42 if false => 1,
+        42 if false => 2,
+        else => 3,
+    };
+    expect_eq(r3, 3);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_guard_with_enum() {
+    // C3：枚举 switch 守卫
+    let src = r#"
+enum Value { int: i32, str: String, none }
+[test] fn t() void {
+    var v: Value = Value{int = 7};
+    // 枚举变体匹配 + 守卫检查负载
+    var r = switch (v) {
+        int if true => |i| i,
+        int => 0,
+        str => |_| -1,
+        none => -2,
+    };
+    expect_eq(r, 7);
+    // 守卫失败 → 下一分支
+    var r2 = switch (v) {
+        int if false => |i| i,
+        int => 99,
+        str => |_| -1,
+        none => -2,
+    };
+    expect_eq(r2, 99);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_guard_exhaustiveness() {
+    // C3：switch 守卫检查——至少一个非守卫臂或 else 臂
+    let src = r#"
+[test] fn t() void {
+    var x: i32 = 42;
+    // 有非守卫臂 → 通过穷举检查
+    var r = switch (x) {
+        1 if x > 0 => 10,
+        else => 20,
+    };
+    expect_eq(r, 20);
+    // 只有守卫臂 + else → 通过
+    var r2 = switch (x) {
+        1 if x > 100 => 10,
+        else => 20,
+    };
+    expect_eq(r2, 20);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
+fn switch_guard_in_statement() {
+    // C3：语句形态 switch 守卫
+    let src = r#"
+[test] fn t() void {
+    var mut r: i32 = 0;
+    var x: i32 = 3;
+    switch (x) {
+        1 if true => { r = 1; },
+        2 if true => { r = 2; },
+        3 if false => { r = 3; },
+        3 => { r = 33; },
+        else => { r = -1; },
+    }
+    expect_eq(r, 33);
+}
+"#;
+    assert_all_pass(src);
+}
+
+#[test]
 fn for_range_sugar() {
     // `for (lo..hi)` 区间糖：MakeRange + 只读捕获
     let src = r#"
