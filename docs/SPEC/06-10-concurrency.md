@@ -2,7 +2,7 @@
 
 > 对应实现模块：07 **第三块 E2**（并发与异步）。**第一部分最小功能集明确不实现**——最小例子不必实现多线程。
 >
-> **组 G 已提前落地（2026-08-17，第二部分）**：E2.2 **线程生命周期**子集 = `spawn(f, args...) o Thread<T>` / `join() !T` / `cancel() !void` / `is_done() bool` / `detach()` + 每线程 alloc（Q8）+ 捕获规则（Q18 绑定/逃逸 + Q19 冻结窗口静态检查）。并发模型为**协作式延迟执行**（确定性、单线程）：spawn 立即返回句柄但不并发运行，join/detach/程序结束时才执行到完成。实现覆盖三后端（interp / IR / 字节码一致）；**原生 LLVM 为子集边界**——spawn 需函数引用（FnRef），原生 ABI 未支持（Phase 8），编译模式响亮拒绝（`error.NotCallable`），不静默误编译（G4b 定案 A）。
+> **组 G 已提前落地（2026-08-17，第二部分）**：E2.2 **线程生命周期**子集 = `spawn(f, args...) o Thread<T>` / `join() !T` / `cancel() !void` / `is_done() bool` / `detach()` + 每线程 alloc（Q8）+ 捕获规则（Q18 绑定/逃逸 + Q19 冻结窗口静态检查）。并发模型为**协作式延迟执行**（确定性、单线程）：spawn 立即返回句柄但不并发运行，join/detach/程序结束时才执行到完成。实现覆盖三后端（interp / IR / 字节码一致）；**原生 LLVM 为子集边界**——spawn 需函数引用（FnRef），原生 ABI 未支持（Phase 8），编译模式响亮拒绝（`error.NotCallable`），不静默误编译（G4b 定案 A）。**C7 设计已定案（2026-08-22，ADR-0019）**：原生函数值/闭包 ABI 已定（胖闭包对象 + FnRef 函数符号地址 + 隐藏 env 首参 + 复用 `%Value` 通道），原生 spawn 子集边界待 Phase 8 实施解除。
 >
 > **状态（2026-08-18 组 F 落地后更新）**：`async`/`await`/`Future<T>`/`Io.threaded()/evented()` 已随组 E（E2.3 异步，协作式 Future）落地（标注 ✅）；**四模式类型（OneToOne/OneToMany/ManyToOne/ManyToMany）与 `@atomic*` 已随组 F（E2.1/E2.4）落地（2026-08-18，ADR-0011 逆转）**——协作式透明实现：单线程确定性下四变体运行时行为一致（读者/写者数量为类型层契约），原子操作无竞争 → 透明（标注 ✅）。**真 OS 并行与 `mutex` 仍按 ADR-0011 延迟 1.x**（需真并发硬件语义，本块不实现）。
 

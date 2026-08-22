@@ -118,10 +118,10 @@
 - **出处**：`10-part3-execution.md` 组 D D4 完成注记（已知边界）
 - **备注**：`Value::Int(i128)` 无 bignum，偏离 ADR 任意精度
 
-### C7｜原生 ABI 函数值 / 闭包（Phase 8 原生改造）｜🔴
+### C7｜原生 ABI 函数值 / 闭包（Phase 8 原生改造）｜🟡（**设计已完成，待实施**）
 - **出处**：`10-part3-execution.md` §2.2（「原生 ABI 函数值/闭包（Phase 8 原生改造）」+ 组 G4b 定案 A）
 - **落点**：LLVM 后端（`llvm.rs`）
-- **备注**：原生 compile mismatch 中 `NotCallable`（10-functions / 21-closures / 48-iterator-chain）与 spawn 原生子集边界依赖此；K4 H 后端编写时联动
+- **备注**：**设计定案就绪（2026-08-22，ADR-0019，grill-with-docs 访谈 3 子项全确认）**——① 函数值 = 胖闭包对象 `{ fn_ptr, env_ptr }`（堆上分配，`%Value` 载荷存指针，新增闭包 tag）；`FnRef` = LLVM 函数符号地址；② 调用复用 `%Value` 参数/返回值通道，闭包隐藏 env 首参，零动态分发；③ spawn 原生子集边界解除（G4b 定案 A「响亮拒绝」被真实支持替换），`NotCallable` mismatch（10-functions / 21-closures / 48-iterator-chain）归零，K4 H 后端编写时联动。实施 = LLVM 后端 Phase 8 大改造，实现另计
 
 ### C8｜LLVM 原生内建子集扩展（mismatch 归零）｜🟡
 - **出处**：`07-bootstrap-plan.md` §八 P11d 收束注记（2026-08-17 用户裁定到此收束）
@@ -186,6 +186,6 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（4 🔴 / 4 ⏳）+ B 7（4 🔴 / 2 🟡 / 1 ⏳）+ C 8（1 🔴 / 4 🟡 / 3 ⏳）+ D 2（1 🔴 / 1 🟡）+ E 4（4 ⏳）
-- **第三阶段立即实施候选（🔴/🟡 且 1.x 无关）**：A1 ffi + B5 `hc cc`（联动）、B1 lint、B2 lsp 整合、B3 注册中心、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、C7 原生 ABI、D1 并发测试、B6 启动时间、A8 端到端示例
+- **第三阶段活动项**：A 8（4 🔴 / 4 ⏳）+ B 7（4 🔴 / 2 🟡 / 1 ⏳）+ C 8（0 🔴 / 5 🟡 / 3 ⏳）+ D 2（1 🔴 / 1 🟡）+ E 4（4 ⏳）
+- **第三阶段立即实施候选（🔴/🟡 且 1.x 无关）**：A1 ffi + B5 `hc cc`（联动）、B1 lint、B2 lsp 整合、B3 注册中心、**C1 Table 多索引**（设计已定案）、**C2 开放问题裁决**（设计已定案，ADR-0016）、**C3 惰性迭代/switch 守卫/Send-Sync**（设计已定案，ADR-0017）、**C5 泛型嵌套**（设计已定案，ADR-0018）、**C7 原生 ABI**（设计已定案，ADR-0019）、D1 并发测试、B6 启动时间、A8 端到端示例
 - **建议首项**：**C1（J4 Table 多索引）**——设计已定案，直接施工（对应「先实现 4」）；其次 A1/B5（ffi + hc cc）或 B1（lint）
