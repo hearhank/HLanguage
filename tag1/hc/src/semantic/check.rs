@@ -111,6 +111,23 @@ impl Checker {
                         _ => {}
                     }
                 }
+                // C5-2：无限大小类型检测——检测值嵌入自引用/互递归（无间接层）
+                for f in fields {
+                    let ft = self.ty_of(&f.ty);
+                    let mut path = vec![name.clone()];
+                    if let Some(cycle) = self.detect_type_cycle(name, &mut path, &ft) {
+                        self.diags.push(Diagnostic::error(
+                            f.span.clone(),
+                            format!(
+                                "type `{}` has infinite size (field `{}` creates a cycle: {})",
+                                name,
+                                f.name,
+                                cycle.join(" → ")
+                            ),
+                        ));
+                        break; // 每个类只报一次错误
+                    }
+                }
                 for m in methods {
                     let ret_ty = self.ret_stype(&m.ret);
                     let constraint = self.fn_error_constraint(&m.ret);
@@ -659,6 +676,65 @@ impl Checker {
                 let _ = self.expr_ty(expr, scopes, None);
             }
             _ => {}
+        }
+    }
+
+    /// C5-2：检测类型图是否包含无限大自引用（值嵌入无间接层）。
+    /// 返回 Some(cycle_path) 如果检测到非法循环，None 表示安全。
+    /// `root` = 正在检查的类名，`path` = 当前类型链（用于路径追踪和防重复）。
+    fn detect_type_cycle(
+        &self,
+        root: &str,
+        path: &mut Vec<String>,
+        t: &SType,
+    ) -> Option<Vec<String>> {
+        match t {
+            // 指针/可选/切片 → 间接层，安全（固定大小）
+            SType::Ptr(_, _) | SType::Optional(_) | SType::Slice(_) => None,
+            SType::Named(n, _) => {
+                // 集合类型 Vec/Map/Deque/Table/String → 堆分配，安全
+                if is_collection(n) {
+                    return None;
+                }
+                // 发现根类型 → 循环
+                if n == root {
+                    let mut cycle = path.clone();
+                    cycle.push(n.clone());
+                    return Some(cycle);
+                }
+                // 已在路径中 → 菱形引用，非循环，跳过防无限递归
+                if path.contains(n) {
+                    return None;
+                }
+                // 递归检查该类的字段
+                if let Some(TypeInfo {
+                    kind: TypeKind::Class { fields, .. },
+                    ..
+                }) = self.types.get(n)
+                {
+                    path.push(n.clone());
+                    for f in fields {
+                        let ft = self.ty_of(&f.ty);
+                        if let Some(cycle) = self.detect_type_cycle(root, path, &ft) {
+                            return Some(cycle);
+                        }
+                    }
+                    path.pop();
+                }
+                None
+            }
+            SType::Array(_, inner) => self.detect_type_cycle(root, path, inner),
+            SType::Tuple(items) => {
+                for item in items {
+                    if let Some(cycle) = self.detect_type_cycle(root, path, item) {
+                        return Some(cycle);
+                    }
+                }
+                None
+            }
+            SType::ErrorUnion(_, inner) => self.detect_type_cycle(root, path, inner),
+            // 基础类型/泛型/未知 → 安全
+            _ => None,
         }
     }
 }
