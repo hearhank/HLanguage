@@ -10,6 +10,7 @@ use crate::build::build_file;
 use crate::docgen;
 use crate::fmtgen;
 use crate::fsio::{collect_hc_files, is_hbc2};
+use crate::lintgen;
 use crate::package::package_entry;
 use crate::project::{init_project, pkg_add};
 use crate::run::{
@@ -86,6 +87,9 @@ USAGE:
     hc doc [target] [--out <dir>]
                               生成 Markdown 文档（/// 注释 + 声明签名；target 默认当前目录包，
                               `std` = 标准库内置目录页；输出默认 <target 目录>/docs/api/，组 H4）
+    hc lint <file.hc|dir> [--json] [--fix]
+                              静态诊断（命名规范补全——缩写全大写、未用变量、可简化构造；
+                              6 条规则 L001–L006；--json 输出 JSON，--fix 自动修复 4 规则）
     hc fmt <file.hc|dir> [--check]
                               格式化 .hc 源码（token 级重排，AST 保真；默认原地写回，
                               --check 仅报告将改动的文件，组 I1）
@@ -286,6 +290,10 @@ pub(crate) fn run_cli() -> ExitCode {
             // I1：`hc fmt <file.hc|dir> [--check]`——token 级格式化，AST 保真
             fmt_command(&args[2..])
         }
+        "lint" => {
+            // B1：`hc lint <file.hc|dir> [--json] [--fix]`——静态诊断
+            lint_command(&args[2..])
+        }
         "lex" => {
             // K1：`hc lex <file.hc>`——转储 token 流（Rust 参考实现，H 版 lexer 对照基准）
             lex_command(&args[2..])
@@ -464,6 +472,11 @@ fn check_file(path: &Path) -> Result<(), ExitCode> {
                 eprintln!("{}", e.render(&source));
                 ExitCode::FAILURE
             })?;
+            // B1：lint 诊断（仅警告，不阻塞 check 成功）
+            let lint_diags = lintgen::lint_source(&source, &program, false);
+            for d in &lint_diags {
+                eprintln!("{}: {}", path.display(), d.render(&source));
+            }
             Ok(())
         }
         Err(msg) => {
@@ -561,6 +574,85 @@ fn fmt_command(args: &[String]) -> ExitCode {
     if failed {
         ExitCode::FAILURE
     } else if check && would_change {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// B1：`hc lint <file.hc|dir> [--json] [--fix]`——静态诊断（6 条规则 L001–L006）
+fn lint_command(args: &[String]) -> ExitCode {
+    let mut json = false;
+    let mut fix = false;
+    let mut targets: Vec<&String> = Vec::new();
+    for a in args {
+        if a == "--json" {
+            json = true;
+        } else if a == "--fix" {
+            fix = true;
+        } else {
+            targets.push(a);
+        }
+    }
+    if targets.is_empty() {
+        eprintln!("error: `hc lint` requires a file or directory\n\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    for t in targets {
+        let p = Path::new(t);
+        if p.is_dir() {
+            collect_hc_files(p, &mut files);
+        } else if p.is_file() {
+            files.push(p.to_path_buf());
+        } else {
+            eprintln!("error: 找不到 {t}");
+            return ExitCode::FAILURE;
+        }
+    }
+    files.sort();
+    files.dedup();
+    let mut all_diags = Vec::new();
+    let mut failed = false;
+    for f in &files {
+        let source = match std::fs::read_to_string(f) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: 读取 {} 失败: {e}", f.display());
+                failed = true;
+                continue;
+            }
+        };
+        match scriptgen::parse_with_scripts(&source) {
+            Ok((_expanded, program)) => {
+                let diags = lintgen::lint_source(&source, &program, fix);
+                if !json {
+                    for d in &diags {
+                        eprintln!("{}: {}", f.display(), d.render(&source));
+                    }
+                }
+                all_diags.extend(diags);
+            }
+            Err(msg) => {
+                eprintln!("error: {}: {msg}", f.display());
+                failed = true;
+            }
+        }
+    }
+    if json {
+        if !all_diags.is_empty() {
+            let file = if files.len() == 1 {
+                files[0].to_string_lossy().to_string()
+            } else {
+                "(multiple)".to_string()
+            };
+            println!("{}", lintgen::diags_to_json(&all_diags, &file));
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else if !all_diags.is_empty() {
+        eprintln!("lint: {} 个诊断", all_diags.len());
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS

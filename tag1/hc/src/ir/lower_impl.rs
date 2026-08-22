@@ -84,7 +84,9 @@ pub(crate) fn collect_globals(program: &Program) -> HashSet<String> {
 
 /// C3：文件级 import 展开表——(符号选择 bound → 完整限定名, 整模块 bound → 包路径)。
 /// `H.std` 根跳过（内建虚拟根，`io.print` 等走 CallBuiltin 路由，不展开）。
-pub(crate) fn collect_imports(program: &Program) -> (HashMap<String, String>, HashMap<String, String>) {
+pub(crate) fn collect_imports(
+    program: &Program,
+) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut syms = HashMap::new();
     let mut mods = HashMap::new();
     for d in &program.decls {
@@ -1464,10 +1466,7 @@ impl<'a> LowerCtx<'a> {
                     temp: a,
                     label: l_null,
                 });
-                self.push(IrInst::Unwrap {
-                    temp: unwrapped,
-                    a,
-                });
+                self.push(IrInst::Unwrap { temp: unwrapped, a });
                 self.push(IrInst::Store {
                     slot: res_slot,
                     temp: unwrapped,
@@ -1508,7 +1507,13 @@ impl<'a> LowerCtx<'a> {
                     items: item_ts,
                 });
             }
-            Expr::NamedLit { ty, ty_args, fields, span, .. } => {
+            Expr::NamedLit {
+                ty,
+                ty_args,
+                fields,
+                span,
+                ..
+            } => {
                 // E1.2 组 D：泛型应用 `Pair(i32){...}` → 惰性具体化后按具体化名构造。
                 // 具体化失败（实参个数/形态不符）→ 硬错误。
                 let ty = if ty_args.is_empty() {
@@ -1591,7 +1596,11 @@ impl<'a> LowerCtx<'a> {
             // struct 类型字面量（E1.2 组 D）：类型值——仅 comptime 类型函数体内求值；
             // 运行时表达式位置 = 用法错误（类型函数体由 IR 降级跳过，不会到达这里）
             Expr::StructType { span, .. } => {
-                self.fail_void(t, "类型值 `struct { ... }`（仅 comptime 类型函数内可求值）", span);
+                self.fail_void(
+                    t,
+                    "类型值 `struct { ... }`（仅 comptime 类型函数内可求值）",
+                    span,
+                );
             }
             // 数组类型值 `[n]T`（组 D）：同 struct 类型字面量——仅 comptime 类型函数
             // 体内编译期求值；运行时表达式位置 = 用法错误（类型函数体降级跳过）
@@ -1679,7 +1688,20 @@ impl<'a> LowerCtx<'a> {
                         index: idx,
                     });
                 } else {
-                    self.fail_void(t, "多索引访问（Table 行/列）", span);
+                    // 多索引 t[i,j] → Index(base, indices[0]) → Index(row, indices[1])
+                    let row = self.lower_expr(&indices[0]);
+                    let row_t = self.alloc_slot();
+                    self.push(IrInst::Index {
+                        temp: row_t,
+                        base: b,
+                        index: row,
+                    });
+                    let col = self.lower_expr(&indices[1]);
+                    self.push(IrInst::Index {
+                        temp: t,
+                        base: row_t,
+                        index: col,
+                    });
                 }
             }
             // 指针（Phase 1）：`p.*` 解引用
@@ -1920,7 +1942,12 @@ impl<'a> LowerCtx<'a> {
 
     /// 赋值：返回写入目标槽的新值临时槽（目标不在 IR 范围 → None）
     /// 复合赋值 x op= v → x = x op v（对齐解释器 eval_assign）
-    pub(crate) fn lower_assign(&mut self, op: AssignOp, target: &Expr, value: &Expr) -> Option<usize> {
+    pub(crate) fn lower_assign(
+        &mut self,
+        op: AssignOp,
+        target: &Expr,
+        value: &Expr,
+    ) -> Option<usize> {
         match target {
             Expr::Ident(name, _) => {
                 if let Some(slot) = self.resolve(name) {
@@ -2088,9 +2115,50 @@ impl<'a> LowerCtx<'a> {
                 indices,
                 span,
             } => {
-                if indices.len() != 1 {
-                    self.fail("多索引赋值（Table 行/列）", span);
-                    return None;
+                if indices.len() >= 2 {
+                    // 多索引赋值 t[i,j] = v → Index(base, indices[0]) → StoreIndex(row, indices[1], value)
+                    let b = self.lower_expr(base);
+                    if op == AssignOp::Set {
+                        let row = self.lower_expr(&indices[0]);
+                        let row_t = self.alloc_slot();
+                        self.push(IrInst::Index {
+                            temp: row_t,
+                            base: b,
+                            index: row,
+                        });
+                        let col = self.lower_expr(&indices[1]);
+                        let v = self.lower_expr(value);
+                        self.push(IrInst::StoreIndex {
+                            base: row_t,
+                            index: col,
+                            value: v,
+                        });
+                        return Some(v);
+                    }
+                    // 复合赋值：先读 target（t[i,j]）得到当前值，计算，再写回
+                    let cur = self.lower_expr(target);
+                    let rhs = self.lower_expr(value);
+                    let r = self.alloc_slot();
+                    self.push(IrInst::Bin {
+                        op: to_assign_binop(op),
+                        temp: r,
+                        a: cur,
+                        b: rhs,
+                    });
+                    let row = self.lower_expr(&indices[0]);
+                    let row_t = self.alloc_slot();
+                    self.push(IrInst::Index {
+                        temp: row_t,
+                        base: b,
+                        index: row,
+                    });
+                    let col = self.lower_expr(&indices[1]);
+                    self.push(IrInst::StoreIndex {
+                        base: row_t,
+                        index: col,
+                        value: r,
+                    });
+                    return Some(r);
                 }
                 if let Expr::Binary(BinOp::Range, lo, hi, _) = &indices[0] {
                     // 复合区间赋值：对齐 oracle 仅允许 Set → 运行时 BadAssign
@@ -2267,87 +2335,87 @@ impl<'a> LowerCtx<'a> {
                     }
                 }
                 match n.as_str() {
-                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
-                | "u128" | "usize" => {
-                    self.push(IrInst::Const {
-                        temp: t,
-                        val: IrConst::Int(0),
-                    });
-                }
-                "f32" | "f64" | "f16" | "f128" => {
-                    self.push(IrInst::Const {
-                        temp: t,
-                        val: IrConst::Float(0.0),
-                    });
-                }
-                "bool" => {
-                    self.push(IrInst::Const {
-                        temp: t,
-                        val: IrConst::Bool(false),
-                    });
-                }
-                "void" => {
-                    self.push(IrInst::Const {
-                        temp: t,
-                        val: IrConst::Void,
-                    });
-                }
-                "String" | "&[u8]" => {
-                    self.push(IrInst::Const {
-                        temp: t,
-                        val: IrConst::Str(String::new()),
-                    });
-                }
-                // G4：集合默认值 = 隐式环境空容器（持全局 alloc）
-                "Vec" | "Deque" | "Table" => {
-                    self.push(IrInst::LoadGlobal {
-                        temp: t,
-                        name: "Vec".into(),
-                    });
-                }
-                "Map" => {
-                    self.push(IrInst::LoadGlobal {
-                        temp: t,
-                        name: "Map".into(),
-                    });
-                }
-                _ => {
-                    // Vec(T) / Map(K,V) 泛型集合形态
-                    if n == "Vec" || n == "Deque" {
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                    | "u64" | "u128" | "usize" => {
+                        self.push(IrInst::Const {
+                            temp: t,
+                            val: IrConst::Int(0),
+                        });
+                    }
+                    "f32" | "f64" | "f16" | "f128" => {
+                        self.push(IrInst::Const {
+                            temp: t,
+                            val: IrConst::Float(0.0),
+                        });
+                    }
+                    "bool" => {
+                        self.push(IrInst::Const {
+                            temp: t,
+                            val: IrConst::Bool(false),
+                        });
+                    }
+                    "void" => {
+                        self.push(IrInst::Const {
+                            temp: t,
+                            val: IrConst::Void,
+                        });
+                    }
+                    "String" | "&[u8]" => {
+                        self.push(IrInst::Const {
+                            temp: t,
+                            val: IrConst::Str(String::new()),
+                        });
+                    }
+                    // G4：集合默认值 = 隐式环境空容器（持全局 alloc）
+                    "Vec" | "Deque" | "Table" => {
                         self.push(IrInst::LoadGlobal {
                             temp: t,
                             name: "Vec".into(),
                         });
-                    } else if n == "Map" {
+                    }
+                    "Map" => {
                         self.push(IrInst::LoadGlobal {
                             temp: t,
                             name: "Map".into(),
                         });
-                    } else if let Some(ci) = self.types.classes.get(n) {
-                        // 命名 class：递归默认字段（先克隆字段表释放 `self.types` 借用）
-                        let cls_fields = ci.fields.clone();
-                        let mut fields = Vec::with_capacity(cls_fields.len());
-                        for (fname, fty) in &cls_fields {
-                            let v = self.lower_default_value(fty);
-                            fields.push((fname.clone(), v));
+                    }
+                    _ => {
+                        // Vec(T) / Map(K,V) 泛型集合形态
+                        if n == "Vec" || n == "Deque" {
+                            self.push(IrInst::LoadGlobal {
+                                temp: t,
+                                name: "Vec".into(),
+                            });
+                        } else if n == "Map" {
+                            self.push(IrInst::LoadGlobal {
+                                temp: t,
+                                name: "Map".into(),
+                            });
+                        } else if let Some(ci) = self.types.classes.get(n) {
+                            // 命名 class：递归默认字段（先克隆字段表释放 `self.types` 借用）
+                            let cls_fields = ci.fields.clone();
+                            let mut fields = Vec::with_capacity(cls_fields.len());
+                            for (fname, fty) in &cls_fields {
+                                let v = self.lower_default_value(fty);
+                                fields.push((fname.clone(), v));
+                            }
+                            self.push(IrInst::MakeClass {
+                                temp: t,
+                                ty: n.clone(),
+                                fields,
+                            });
+                        } else {
+                            // 未知命名类型（enum 等）：空变体（对齐 oracle default_value Enum 臂）
+                            self.push(IrInst::MakeEnum {
+                                temp: t,
+                                name: n.clone(),
+                                variant: "__none__".into(),
+                                payload: None,
+                            });
                         }
-                        self.push(IrInst::MakeClass {
-                            temp: t,
-                            ty: n.clone(),
-                            fields,
-                        });
-                    } else {
-                        // 未知命名类型（enum 等）：空变体（对齐 oracle default_value Enum 臂）
-                        self.push(IrInst::MakeEnum {
-                            temp: t,
-                            name: n.clone(),
-                            variant: "__none__".into(),
-                            payload: None,
-                        });
                     }
                 }
-                }
-            },
+            }
             Type::Optional(_) => {
                 self.push(IrInst::Const {
                     temp: t,
@@ -2384,7 +2452,11 @@ impl<'a> LowerCtx<'a> {
     ///
     /// 透传形态（`return T;`）产物是**实参类型自身**：返回其规范名（`type_key`），
     /// 使 `Pair(i32)` 与 `i32` 同义。
-    pub(crate) fn concrete_type_name(&mut self, name: &str, args: &[Type]) -> Result<String, String> {
+    pub(crate) fn concrete_type_name(
+        &mut self,
+        name: &str,
+        args: &[Type],
+    ) -> Result<String, String> {
         if args.is_empty() {
             return Ok(name.to_string());
         }
@@ -2406,34 +2478,30 @@ impl<'a> LowerCtx<'a> {
             self.instantiating.push(cname.clone());
             let inst = comptime::instantiate(name, params, body, &resolved);
             let result = match inst {
-                Ok(Instantiated::Class(mut decl)) => {
-                    match self.normalize_decl_fields(&mut decl) {
-                        Ok(()) => {
-                            if let Decl::Class {
-                                name: cn,
-                                traits,
-                                fields,
-                                methods,
-                                ..
-                            } = &decl
-                            {
-                                let ci = ClassInfo {
-                                    fields: fields
-                                        .iter()
-                                        .map(|f| (f.name.clone(), f.ty.clone()))
-                                        .collect(),
-                                    methods: methods.iter().map(|m| m.name.clone()).collect(),
-                                    continuous: traits
-                                        .iter()
-                                        .any(|t| matches!(t, Trait::Continuous)),
-                                };
-                                self.types.classes.insert(cn.clone(), ci);
-                            }
-                            Ok(cname)
+                Ok(Instantiated::Class(mut decl)) => match self.normalize_decl_fields(&mut decl) {
+                    Ok(()) => {
+                        if let Decl::Class {
+                            name: cn,
+                            traits,
+                            fields,
+                            methods,
+                            ..
+                        } = &decl
+                        {
+                            let ci = ClassInfo {
+                                fields: fields
+                                    .iter()
+                                    .map(|f| (f.name.clone(), f.ty.clone()))
+                                    .collect(),
+                                methods: methods.iter().map(|m| m.name.clone()).collect(),
+                                continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
+                            };
+                            self.types.classes.insert(cn.clone(), ci);
                         }
-                        Err(msg) => Err(msg),
+                        Ok(cname)
                     }
-                }
+                    Err(msg) => Err(msg),
+                },
                 Ok(Instantiated::Type(t)) => Ok(comptime::type_key(&t)),
                 Err(msg) => Err(msg),
             };
@@ -2512,7 +2580,12 @@ impl<'a> LowerCtx<'a> {
     /// 类型实参经 `comptime::expr_to_type` 收已知类型表达式（编译期类型值，无运行时
     /// 残留）；值实参常量求值入 bindings；体常量求值取最后 return。任一失败回退
     /// `false` → 调用方走既有路径（未知类型实参等错误在实参降级处报告）。
-    pub(crate) fn try_fold_comptime_value_call(&mut self, name: &str, args: &[Expr], t: usize) -> bool {
+    pub(crate) fn try_fold_comptime_value_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        t: usize,
+    ) -> bool {
         let Some((params, body)) = self.value_fns.get(name).cloned() else {
             return false;
         };
@@ -2544,7 +2617,11 @@ impl<'a> LowerCtx<'a> {
 
     /// 常量表达式求值（编译期纯函数）：字面量、值参数引用、一元/二元、if 分支折叠、
     /// 块（委托 `eval_const_block`）。不支持 → None（回退既有路径）。
-    pub(crate) fn eval_const_expr(&self, e: &Expr, bindings: &HashMap<String, IrConst>) -> Option<IrConst> {
+    pub(crate) fn eval_const_expr(
+        &self,
+        e: &Expr,
+        bindings: &HashMap<String, IrConst>,
+    ) -> Option<IrConst> {
         match e {
             Expr::IntLit { text, .. } => Some(IrConst::Int(parse_int_lit(text))),
             Expr::FloatLit { text, .. } => {
@@ -2606,7 +2683,9 @@ impl<'a> LowerCtx<'a> {
         for stmt in &body.stmts {
             match stmt {
                 Stmt::VarDecl {
-                    name, init: Some(e), ..
+                    name,
+                    init: Some(e),
+                    ..
                 } => {
                     let v = self.eval_const_expr(e, bindings).ok_or(())?;
                     bindings.insert(name.clone(), v);
@@ -3093,7 +3172,12 @@ impl<'a> LowerCtx<'a> {
     }
 
     /// 发射单臂体：捕获绑定（EnumPayload 负载或 subject 本身）+ 臂体。
-    pub(crate) fn emit_switch_arm_body(&mut self, arm: &SwitchArm, subject: usize, value_slot: Option<usize>) {
+    pub(crate) fn emit_switch_arm_body(
+        &mut self,
+        arm: &SwitchArm,
+        subject: usize,
+        value_slot: Option<usize>,
+    ) {
         // 对齐 oracle `exec_switch_arm`：push_scope → bind capture → exec body → pop_scope
         self.push_scope();
         if let Some((_, name)) = &arm.capture {

@@ -15,6 +15,7 @@ mod comptimegen;
 mod docgen;
 mod fmtgen;
 mod fsio;
+mod lintgen;
 mod package;
 mod project;
 mod run;

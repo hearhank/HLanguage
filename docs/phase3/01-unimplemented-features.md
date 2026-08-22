@@ -48,11 +48,11 @@
 
 ## B. 工具链扩展（第三阶段主项）
 
-### B1｜`hc lint`｜🟡（**设计已完成**）
+### B1｜`hc lint`｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 I2；`07-bootstrap-plan.md` E5.1
-- **落点**：`tag1/hc-tools/`（lintgen 类）
+- **落点**：`tag1/hc-tools/src/lintgen.rs`
 - **验收**：静态诊断（命名规范补全——缩写全大写、未用变量、可简化构造）+ lint 测试绿
-- **备注**：**设计定案（2026-08-22 grilling 会话）**：6 条规则（L001–L006）——`unused_var` / `unused_import` / `simplifiable_construct` / `upper_case_abbr` / `simplifiable_if_else` / `redundant_eq_false`；4 条支持 `--fix`；`// @lint(off rule_name)` 内联关闭；`hc lint` 独立子命令 + `hc check` 默认集成；文本+JSON 输出
+- **备注**：6 条规则（L001–L006）已实现：`unused_var` / `unused_import` / `simplifiable_construct` / `upper_case_abbr` / `simplifiable_if_else` / `redundant_eq_false`；4 条支持 `--fix`（接口预留）；`// @lint(off rule_name)` 内联关闭；`hc lint` 独立子命令 + `hc check` 默认集成；文本+JSON 输出
 
 ### B2｜LSP 完整化（`hc lsp` 子命令 + 脚本实时预览）｜🟡
 - **出处**：`10-part3-execution.md` 组 I3；`07-bootstrap-plan.md` E5.1
@@ -84,7 +84,7 @@
 
 ## C. 语言扩展（第三阶段主项）
 
-### C1｜J4 Table 多索引完整（M8 记录项）｜🔴（**设计已完成**）
+### C1｜J4 Table 多索引完整（M8 记录项）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 J4；2026-08-22 Table 设计会话（grill-with-docs）
 - **落点**：`semantic.rs`（`check_index` 放宽 1/2 索引）、`interp.rs`（多索引写 `eval_assign` 修 bug）、`ir.rs`（`lower_expr`/`lower_assign` 链式降级）、新测试
 - **备注**：**设计定案全部就绪**（见 SPEC `06-03-extended-types.md` Table 段 + `CONTEXT.md`）：行视图 `t[i]`、单元格读写 `t[i,j]`/复合赋值、扁平迭代、`len()/cols()`、to_bytes 双前缀、空表、`init_with` 密封构造（B 方案）、copy 深复制、嵌套、指针元素替换规则。实施影响清单：

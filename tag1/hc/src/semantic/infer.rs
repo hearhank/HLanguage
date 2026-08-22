@@ -237,7 +237,14 @@ impl Checker {
                         args.first().cloned().unwrap_or(SType::Unknown)
                     }
                     Some(SType::Named(n, args)) if n == "Table" => {
-                        args.first().cloned().unwrap_or(SType::Unknown)
+                        let inner = args.first().cloned().unwrap_or(SType::Unknown);
+                        if indices.len() == 1 {
+                            // Row view: t[i] -> Slice<T>
+                            SType::Slice(Box::new(inner))
+                        } else {
+                            // Cell: t[i,j] -> T
+                            inner
+                        }
                     }
                     Some(SType::Named(n, _)) if n == "Map" => SType::Unknown,
                     _ => SType::Unknown,
@@ -864,15 +871,15 @@ impl Checker {
         }
     }
 
-    /// 索引校验：Table 双整数索引；其余单索引
+    /// 索引校验：Table 支持 1 索引（行视图 `t[i]`）或 2 索引（单元格 `t[i,j]`）；其余单索引
     pub(crate) fn check_index(&mut self, bt: Option<&SType>, indices: &[Expr], span: &Span) {
         match bt {
             Some(SType::Named(n, _)) if n == "Table" => {
-                if indices.len() != 2 {
+                if indices.len() < 1 || indices.len() > 2 {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!(
-                            "`Table` requires exactly 2 indices `t[i, j]` (got {})",
+                            "`Table` requires 1 index `t[i]` (row view) or 2 indices `t[i, j]` (cell) (got {})",
                             indices.len()
                         ),
                     ));

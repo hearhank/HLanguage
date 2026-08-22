@@ -293,3 +293,27 @@ fn color_helpers_paint_and_test_line() {
     assert_eq!(color_test_line("[PASS] a", false), "[PASS] a");
     assert_eq!(color_test_line("other line", true), "other line");
 }
+
+#[test]
+fn lint_unused_var_detected() {
+    let src = "fn main() void { var x: i32 = 42; }";
+    let program = hc::parse_source(src).unwrap();
+    let diags = crate::lintgen::lint_source(src, &program, false);
+    assert!(diags.iter().any(|d| d.rule.name == "unused_var"));
+}
+
+#[test]
+fn lint_unused_var_skipped_underscore() {
+    let src = "fn main() void { var _x: i32 = 42; }";
+    let program = hc::parse_source(src).unwrap();
+    let diags = crate::lintgen::lint_source(src, &program, false);
+    assert!(!diags.iter().any(|d| d.rule.name == "unused_var"));
+}
+
+#[test]
+fn lint_redundant_eq_false_detected() {
+    let src = "fn main() bool { var x: bool = true; return x == false; }";
+    let program = hc::parse_source(src).unwrap();
+    let diags = crate::lintgen::lint_source(src, &program, false);
+    assert!(diags.iter().any(|d| d.rule.name == "redundant_eq_false"));
+}

@@ -112,7 +112,12 @@ impl Interp {
                     span.line, span.col
                 ),
             )),
-            Expr::NamedLit { ty, ty_args, fields, .. } => {
+            Expr::NamedLit {
+                ty,
+                ty_args,
+                fields,
+                ..
+            } => {
                 // class 字面量构造 / enum 带负载字面量。
                 // E1.2 组 D：泛型应用 `Pair(i32){...}` → 惰性具体化后按具体化名构造。
                 let ty = if ty_args.is_empty() {
@@ -447,10 +452,7 @@ impl Interp {
                         return self.future_run(&fut, span);
                     }
                 }
-                Err(RtError::new(
-                    "TypeError",
-                    Some(span.clone()),
-                ))
+                Err(RtError::new("TypeError", Some(span.clone())))
             }
             Expr::Catch(e, kind, _) => {
                 let v = self.eval(e)?;
@@ -683,7 +685,13 @@ impl Interp {
         }
     }
 
-    pub(crate) fn eval_binary(&mut self, op: BinOp, l: &Expr, r: &Expr, span: &Span) -> Result<Value> {
+    pub(crate) fn eval_binary(
+        &mut self,
+        op: BinOp,
+        l: &Expr,
+        r: &Expr,
+        span: &Span,
+    ) -> Result<Value> {
         // 短路
         match op {
             BinOp::And => {
@@ -709,7 +717,13 @@ impl Interp {
         self.binop_values(op, &lv, &rv, span)
     }
 
-    pub(crate) fn binop_values(&self, op: BinOp, l: &Value, r: &Value, span: &Span) -> Result<Value> {
+    pub(crate) fn binop_values(
+        &self,
+        op: BinOp,
+        l: &Value,
+        r: &Value,
+        span: &Span,
+    ) -> Result<Value> {
         let l = self.deref_value(l.clone());
         let r = self.deref_value(r.clone());
         match op {
@@ -954,6 +968,58 @@ impl Interp {
                         }
                     }
                 }
+                if indices.len() >= 2 {
+                    // 多索引表格赋值：t[i,j] = v
+                    if let Value::Arr(a) = b {
+                        let r = self.eval(&indices[0])?;
+                        let c = self.eval(&indices[1])?;
+                        let ri = self.as_index(&r, span)?;
+                        let ci = self.as_index(&c, span)?;
+                        let arr = a.borrow();
+                        if ri >= arr.len() {
+                            return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
+                        }
+                        let row_v = arr[ri].borrow().clone();
+                        drop(arr);
+                        let row_v = self.deref_value(row_v);
+                        if let Value::Arr(row) = row_v {
+                            let new_v = match op {
+                                AssignOp::Set => self.eval(value)?,
+                                _ => {
+                                    let row_ref = row.borrow();
+                                    if ci >= row_ref.len() {
+                                        return Err(RtError::new(
+                                            "IndexOutOfBounds",
+                                            Some(span.clone()),
+                                        ));
+                                    }
+                                    let cur = row_ref[ci].borrow().clone();
+                                    drop(row_ref);
+                                    let rhs = self.eval(value)?;
+                                    let bop = match op {
+                                        AssignOp::Add => BinOp::Add,
+                                        AssignOp::Sub => BinOp::Sub,
+                                        AssignOp::Mul => BinOp::Mul,
+                                        AssignOp::Div => BinOp::Div,
+                                        AssignOp::BitOr => BinOp::BitOr,
+                                        AssignOp::BitAnd => BinOp::BitAnd,
+                                        AssignOp::BitXor => BinOp::BitXor,
+                                        AssignOp::Set => unreachable!(),
+                                    };
+                                    self.binop_values(bop, &cur, &rhs, span)?
+                                }
+                            };
+                            let row_ref = row.borrow_mut();
+                            if ci >= row_ref.len() {
+                                return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
+                            }
+                            *row_ref[ci].borrow_mut() = new_v;
+                            return Ok(Value::Void);
+                        }
+                        return Err(RtError::new("BadIndex", Some(span.clone())));
+                    }
+                    return Err(RtError::new("TypeError", Some(span.clone())));
+                }
                 if let Value::Arr(a) = b {
                     let idx = self.eval(&indices[0])?;
                     let i = self.as_index(&idx, span)?;
@@ -1099,7 +1165,11 @@ impl Interp {
                     // （serialize.parse_int / parse_number / skip_space / … 对齐自由内建；
                     // serialize.json.parse 等三级名经 Field 分支路由）
                     if bname == "serialize" {
-                        return self.call_serialize_builtin(&format!("serialize.{field}"), args, span);
+                        return self.call_serialize_builtin(
+                            &format!("serialize.{field}"),
+                            args,
+                            span,
+                        );
                     }
                     // Arena.init(alloc) 内建：真实 arena 句柄（G1：bump + 块链表）
                     if bname == "Arena" && field == "init" {
@@ -1112,9 +1182,11 @@ impl Interp {
                         for a in args {
                             let _ = self.eval(a)?;
                         }
-                        return Ok(self.io_value_with_runtime(
-                            if field == "evented" { "evented" } else { "threaded" },
-                        ));
+                        return Ok(self.io_value_with_runtime(if field == "evented" {
+                            "evented"
+                        } else {
+                            "threaded"
+                        }));
                     }
                     // String.from / String.concat 内建（String = 内建新类型，M3 定案）
                     if bname == "String" {
@@ -1534,7 +1606,12 @@ impl Interp {
         }
     }
 
-    pub(crate) fn call_fn(&mut self, fdef: &FnDef, arg_vals: &[Value], span: &Span) -> Result<Value> {
+    pub(crate) fn call_fn(
+        &mut self,
+        fdef: &FnDef,
+        arg_vals: &[Value],
+        span: &Span,
+    ) -> Result<Value> {
         if fdef.params.len() < arg_vals.len() {
             return Err(RtError::new("ArityMismatch", Some(span.clone())));
         }
