@@ -31,9 +31,7 @@ pub mod opcode;
 mod tests;
 
 use crate::ast::Type;
-use crate::ir::{
-    run_ir, IrBinOp, IrConst, IrError, IrFunc, IrInst, IrModule, IrPattern, IrUnOp, IrValue,
-};
+use crate::ir::{run_ir, IrConst, IrError, IrFunc, IrInst, IrModule, IrPattern, IrValue};
 use std::collections::{HashMap, HashSet};
 
 pub const MAGIC: [u8; 4] = *b"HBC2";

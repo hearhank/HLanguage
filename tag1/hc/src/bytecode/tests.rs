@@ -2,6 +2,7 @@
 
 use super::encode::{push_str, push_u32};
 use super::*;
+use crate::ir::{IrBinOp, IrUnOp};
 
 /// 手工构造覆盖全部指令 + 全部常量标签 + 全部 binop/unop 标签 + 闭包表的模块
 fn exhaustive_module() -> IrModule {
