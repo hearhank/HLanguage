@@ -2718,3 +2718,26 @@ entry:
   ret %Value %io
 }
 "#;
+
+pub(crate) const HC_STR_CONCAT: &str = r#"define %Value @hc_str_concat(%Value %a, %Value %b) {
+entry:
+  %da = extractvalue %Value %a, 1
+  %pa = inttoptr i128 %da to i8*
+  %db = extractvalue %Value %b, 1
+  %pb = inttoptr i128 %db to i8*
+  %la = call i64 @strlen(i8* %pa)
+  %lb = call i64 @strlen(i8* %pb)
+  %total = add i64 %la, %lb
+  %bufsiz = add i64 %total, 1
+  %buf = call noalias i8* @malloc(i64 %bufsiz)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %pa, i64 %la, i1 false)
+  %buf2 = getelementptr i8, i8* %buf, i64 %la
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf2, i8* %pb, i64 %lb, i1 false)
+  %end = getelementptr i8, i8* %buf, i64 %total
+  store i8 0, i8* %end
+  %ptr = ptrtoint i8* %buf to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v1 = insertvalue %Value %v0, i128 %ptr, 1
+  ret %Value %v1
+}
+"#;

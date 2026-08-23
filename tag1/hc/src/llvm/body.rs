@@ -1148,6 +1148,18 @@ impl BodyEmitter {
                 | "put"
         );
 
+        let is_str_method = matches!(
+            method,
+            "concat"
+                | "as_slice"
+                | "split"
+                | "find"
+                | "substring"
+                | "replace"
+                | "to_upper"
+                | "to_lower"
+        );
+
         // 编译期候选拥有者：内建 Io.print + 用户 `{Type}.{method}`（canon 键点分前缀）
         let mut owners: Vec<String> = Vec::new();
         if method == "print" {
@@ -1160,7 +1172,7 @@ impl BodyEmitter {
         user_owners.sort();
         user_owners.dedup();
         owners.extend(user_owners);
-        if owners.is_empty() && !is_coll_method {
+        if owners.is_empty() && !is_coll_method && !is_str_method {
             self.abort_feature("nomethod");
             return;
         }
@@ -1176,18 +1188,37 @@ impl BodyEmitter {
         self.emit(format!("{is_cls} = icmp eq i32 {tag}, {T_CLASS}"));
         let is_arr = self.r();
         self.emit(format!("{is_arr} = icmp eq i32 {tag}, {T_ARR}"));
+        let is_str = self.r();
+        self.emit(format!("{is_str} = icmp eq i32 {tag}, {T_STR}"));
         let l_done = self.fb();
 
         if is_coll_method {
-            // Arr 接收者 → 内建集合方法；否则落 Class 分派
+            // Arr 接收者 → 内建集合方法；否则落 Str/Class 分派
             let l_coll = self.fb();
-            let l_cls = self.fb();
-            self.term(format!("br i1 {is_arr}, label %{l_coll}, label %{l_cls}"));
+            let l_not_arr = self.fb();
+            self.term(format!(
+                "br i1 {is_arr}, label %{l_coll}, label %{l_not_arr}"
+            ));
             self.cur = format!("{l_coll}:\n");
             self.terminated = false;
             self.call_coll_method(temp, method, &dv, args);
             self.term(format!("br label %{l_done}"));
-            self.cur = format!("{l_cls}:\n");
+            self.cur = format!("{l_not_arr}:\n");
+            self.terminated = false;
+        }
+
+        if is_str_method {
+            // Str 接收者 → 内建字符串方法；否则落 Class 分派
+            let l_str = self.fb();
+            let l_not_str = self.fb();
+            self.term(format!(
+                "br i1 {is_str}, label %{l_str}, label %{l_not_str}"
+            ));
+            self.cur = format!("{l_str}:\n");
+            self.terminated = false;
+            self.call_str_method(temp, method, &dv, args);
+            self.term(format!("br label %{l_done}"));
+            self.cur = format!("{l_not_str}:\n");
             self.terminated = false;
         }
 
@@ -1400,6 +1431,37 @@ impl BodyEmitter {
                 self.emit(format!(
                     "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
                 ));
+            }
+            _ => {
+                self.abort_feature("nomethod");
+            }
+        }
+    }
+
+    /// Str 接收者内建字符串方法（对齐 run_ir `call_builtin_method` Str 臂）。
+    /// `dv` 为解引用后的基值（tag 5，data = i8* C 字符串）。
+    pub(crate) fn call_str_method(&mut self, temp: usize, method: &str, dv: &str, args: &[usize]) {
+        let load_arg = |s: &mut Self, slot: usize| {
+            let v = s.r();
+            s.emit(format!("{v} = load %Value, %Value* %sp.{slot}"));
+            v
+        };
+        match method {
+            "concat" => {
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let v = load_arg(self, a0);
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_str_concat(%Value {dv}, %Value {v})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "as_slice" => {
+                // Str is already a byte slice; return self
+                self.emit(format!("store %Value {dv}, %Value* %sp.{temp}"));
             }
             _ => {
                 self.abort_feature("nomethod");

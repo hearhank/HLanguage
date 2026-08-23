@@ -223,6 +223,11 @@ pub(crate) fn emit_io_helper(out: &mut String) {
     out.push('\n');
 }
 
+pub(crate) fn emit_str_helpers(out: &mut String) {
+    out.push_str(HC_STR_CONCAT);
+    out.push('\n');
+}
+
 pub(crate) fn emit_assert_helpers(out: &mut String) {
     let amsg = "error.AssertFailed";
     let an = amsg.len() + 1;

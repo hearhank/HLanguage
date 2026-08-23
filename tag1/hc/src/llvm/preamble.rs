@@ -156,6 +156,7 @@ pub(crate) fn emit_preamble(
         emit_print_helpers(out);
         emit_scalar_builtin_helpers(out);
         emit_io_helper(out);
+        emit_str_helpers(out);
         emit_deep_copy_gate(out, strings, continuous);
     }
 }
