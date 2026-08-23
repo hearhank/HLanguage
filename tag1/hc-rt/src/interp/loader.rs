@@ -694,6 +694,7 @@ impl Interp {
                 test_timeout,
                 is_async,
                 is_extern,
+                extension_of,
                 span,
                 ..
             } => {
@@ -716,7 +717,7 @@ impl Interp {
                     test_name: test_name.clone(),
                     test_mode: *test_mode,
                     test_timeout: *test_timeout,
-                    method_of: None,
+                    method_of: extension_of.clone(),
                     is_async: *is_async,
                     is_extern: *is_extern,
                     span: span.clone(),
@@ -728,7 +729,11 @@ impl Interp {
                         .or_default()
                         .push(fdef.clone());
                 }
-                if !prefix.is_empty() {
+                if let Some(ext_ty) = extension_of {
+                    // 扩展方法：注册到类型名下（TypeName.method_name）
+                    let qname = format!("{ext_ty}.{name}");
+                    self.funcs.entry(qname).or_default().push(fdef);
+                } else if !prefix.is_empty() {
                     let qname = format!("{prefix}.{name}");
                     self.funcs.entry(qname).or_default().push(fdef);
                 }

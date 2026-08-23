@@ -54,6 +54,8 @@ pub enum Decl {
         /// A1（ADR-0020）：`extern fn`——纯声明（无 body，链接期解析外部 C 符号）。
         /// 语义层应跳过 body 检查，注册为外部符号；解释器拒绝调用；LLVM 生成 `declare`。
         is_extern: bool,
+        /// Q8：`[Extension(Type)]`——扩展方法，附着到指定类型上
+        extension_of: Option<String>,
     },
     Class {
         name: String,
@@ -178,6 +180,8 @@ pub enum Trait {
     /// `[module]`（2026-08-17 定案）：命名空间 = 模块——内容与其它命名空间隔离
     /// （不参与同包共享命名空间），需要其它库的数据经上下文（init 参数列表）注入
     Module,
+    /// Q8：`[Extension(Type)]`——扩展方法，附着到指定类型上（Q15：不能访问私有字段）
+    Extension(String),
 }
 
 impl std::fmt::Debug for Trait {
@@ -186,6 +190,7 @@ impl std::fmt::Debug for Trait {
             Trait::Pad => write!(f, "[pad]"),
             Trait::Align(n) => write!(f, "[align({n})]"),
             Trait::Module => write!(f, "[module]"),
+            Trait::Extension(ty) => write!(f, "[Extension({ty})]"),
             Trait::Test {
                 name,
                 mode,
@@ -214,6 +219,7 @@ impl Clone for Trait {
             Trait::Pad => Trait::Pad,
             Trait::Align(n) => Trait::Align(*n),
             Trait::Module => Trait::Module,
+            Trait::Extension(ty) => Trait::Extension(ty.clone()),
             Trait::Test {
                 name,
                 mode,

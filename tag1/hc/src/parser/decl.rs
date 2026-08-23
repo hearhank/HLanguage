@@ -8,6 +8,14 @@ use crate::trait_registry::TraitRegistry;
 
 // ---------- 特性处理器函数（Q24：字典式查找注册） ----------
 
+fn parse_extension_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
+    // [Extension(TypeName)]：解析类型名
+    p.expect(&TokenKind::LParen, "`(` after Extension")?;
+    let ty = p.expect_ident()?;
+    p.expect(&TokenKind::RParen, "`)")?;
+    Ok(Trait::Extension(ty))
+}
+
 fn parse_pad_trait(_p: &mut Parser) -> Result<Trait, Diagnostic> {
     Ok(Trait::Pad)
 }
@@ -120,6 +128,7 @@ pub(crate) fn register_system_trait_handlers(reg: &mut TraitRegistry) {
     reg.register_handler("module", parse_module_trait);
     reg.register_handler("align", parse_align_trait);
     reg.register_handler("test", parse_test_trait);
+    reg.register_handler("extension", parse_extension_trait);
 }
 
 impl Parser {
@@ -378,16 +387,17 @@ impl Parser {
         let start = self.span();
         self.expect(&TokenKind::LBracket, "`[`")?;
         let name = self.expect_ident()?;
+        let name_lower = name.to_lowercase();
 
         // 支持 struct 字面量语法：`[name{field=value, ...}]`
         if self.at(&TokenKind::LBrace) {
-            let tr = self.parse_trait_struct_literal(&name, start)?;
+            let tr = self.parse_trait_struct_literal(&name_lower, start)?;
             self.expect(&TokenKind::RBracket, "`]`")?;
             return Ok(Some(tr));
         }
 
         // 旧语法：`[name]` 或 `[name(...)]`
-        let tr = match self.trait_registry.lookup_handler(&name) {
+        let tr = match self.trait_registry.lookup_handler(&name_lower) {
             Some(handler) => handler(self)?,
             None => {
                 let known = self.trait_registry.known_names().join(", ");
@@ -638,6 +648,10 @@ impl Parser {
                 _ => None,
             })
             .unwrap_or((false, None, TestMode::Serial, None));
+        let extension_of = traits.iter().find_map(|t| match t {
+            Trait::Extension(ty) => Some(ty.clone()),
+            _ => None,
+        });
         Ok(Decl::Fn {
             name,
             type_params,
@@ -654,6 +668,7 @@ impl Parser {
             is_async,
             exported: is_export,
             is_extern: false,
+            extension_of,
         })
     }
 
@@ -720,6 +735,7 @@ impl Parser {
             is_async: false,
             exported: false,
             is_extern: true,
+            extension_of: None,
         })
     }
 

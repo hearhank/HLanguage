@@ -46,29 +46,22 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 4.3 注册表识别 `IAttribute` struct | ✅ | `trait_registry.rs` |
 | 4.4 测试验证 | ✅ | `trait_registry.rs` |
 
-### 任务 5: 扩展方法（P3，~2h）
-
-| 功能点 | 预估 | 验证方法 |
-|--------|------|---------|
-| 5.1 解析 `[Extension(StructType)] fn method(...)` | 30min | 解析正确 |
-| 5.2 语义分析：扩展方法绑定 | 30min | 扩展方法可通过实例调用 |
-| 5.3 运行时方法分派 | 45min | 调用正确的扩展方法 |
-| 5.4 测试 + 边界检查 | 30min | 私有字段不可访问 |
-
-### 任务 6: Struct 化 test 特性 ✅（2026-08-24 完成）
-
-| 功能点 | 状态 | 文件 |
-|--------|------|------|
-| 6.1 `[test{name="x", mode=async, timeout=5}]` 语法 | ✅ | `parser/decl.rs` |
-| 6.2 `[align{value=8}]` 语法 | ✅ | `parser/decl.rs` |
-| 6.3 兼容旧 `[test("x")]` / `[test(async)]` 语法 | ✅ | 保持 |
-| 6.4 测试验证 | ✅ | `hc-rt/tests/semantics.rs` |
-
 ## 完成总结
 
-所有 Phase 1-4 功能已实现并测试通过。
-未实现（推迟到 1.x）：
-- 扩展方法 `[Extension(Type)]`（P3）
+### 已实现
+
+| 任务 | 状态 | 描述 |
+|------|------|------|
+| 1. 字段默认值 | ✅ | `FieldDecl` 添加 `default` 字段，`alloc.init`/`arena.init` 使用默认值 |
+| 2. 字段级 `[Align(n)]` | ✅ | 布局计算支持字段级对齐 |
+| 3. 特性解析改用字典查找 | ✅ | `parse_trait()` 通过 `TraitRegistry` 字典查找 |
+| 4. `IAttribute` 接口基础设施 | ✅ | `AttributeKind` 区分系统/用户特性 |
+| 5. 扩展方法（部分） | 🔶 | 解析 + AST + 加载器支持，运行时方法分派待实现 |
+| 6. Struct 化 test 特性 | ✅ | 支持 `[test{name="x", mode=async}]` 和 `[align{value=8}]` 语法 |
+
+### 未实现（推迟到 1.x）
+
+- 扩展方法运行时方法分派（P3）
 - 第四阶段自举（Phase 4 Bootstrapping）
 
 ## 执行顺序

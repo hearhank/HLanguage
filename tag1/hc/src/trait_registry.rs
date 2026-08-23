@@ -122,6 +122,13 @@ impl TraitRegistry {
             description: "测试函数标记，支持名称/模式(async/thread)/超时(timeout=N)",
             kind: AttributeKind::System,
         });
+        // [Extension(TypeName)]：扩展方法
+        self.register(TraitInfo {
+            name: "extension",
+            params: &[TraitParam::Positional { ty: "type_name" }],
+            description: "扩展方法，附着到指定类型上",
+            kind: AttributeKind::System,
+        });
     }
 
     /// 注册一个特性
