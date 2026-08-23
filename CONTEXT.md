@@ -272,39 +272,68 @@ _Avoid_: 普通函数用 anyerror 偷懒
 内置终止原语（2026-08-13 Q-S2 定案）：不可恢复运行时错误（Debug 悬垂标记开启时访问已标记悬垂指针）调用 `@panic("消息", 位置)`——打印消息 + 位置（Debug 带堆栈）后 **abort 终止**；**不执行 defer 清理**、**无 unwind/recover**（回卷是隐式控制流，不引入）；测试环境内 panic → 该测试记 FAIL（不终止整个 hc test）。
 _Avoid_: 用 panic 替代 error union（可恢复错误走 `E!T`）
 
-## 10. 模块与包（M1/M8）
+## 10. 模块与包（M1/M8，2026-08-23 重构）
 
-**命名空间 (Namespace)**:
-C# 式逻辑分组（2026-08-13 Q21 定案）：`namespace Math { ... }` 块式声明，可跨文件、一文件多组；文件退化为物理单元；`pub` 管包边界（同包 using 即达；跨包需 pub + build.zon 依赖声明）。
-_Avoid_: 用文件路径当命名空间
+**命名空间 (Namespace, 2026-08-23 重构)**:
+**文件路径即命名空间**——不再使用 C# 式块式 `namespace { }` 声明。规则：
+- 根入口文件 `src/main.hc` 的命名空间 = **项目名称**（build.zon 的 `name` 字段）
+- 标准库的根命名空间 = `H.std`
+- 子目录文件的命名空间 = `{上级命名空间}.{当前文件夹名称}`
+- 示例：`src/math/algebra.hc` → `{项目名}.math`（`main.hc` 的命名空间为 `{项目名}`，`math` 文件夹追加为 `{项目名}.math`）
+- 文件内不写 `namespace` 关键字时，自动归属上述路径命名空间
+- 文件内写 `namespace abc { }` 时，**覆盖**默认路径命名空间，指定为 `abc`
+- 编译时按命名空间将同空间文件编译在一起
+- `namespace` 关键字仍可用于**显式覆盖**默认路径命名空间
+_Avoid_: 一文件多命名空间
 
-**引入 (using, 已废弃)**:
-`using Math;` 引入命名空间（2026-08-13 Q21 定案）——**2026-08-17 被 `import` 取代**（ADR-0010）：限定访问（`Math.square(5)`）与直接使用（`square(5)`）均可用；测试块继承文件级导入。
+**引入 (using, 已废弃 → 将移除)**:
+`using Math;` 引入命名空间（2026-08-13 Q21 定案）——**2026-08-17 被 `import` 取代**（ADR-0010），**2026-08-23 决定移除**（解析到 `using` 直接报错）。
 _Avoid_: 通配符式隐式引入一切
 
 **导入 (import)**:
-文件级导入语句（2026-08-17 定案，ADR-0010——取代 using，推翻「无文件级 import」）：`import pkg.mod.{sym as 别名}` 符号选择 + `as` 重名重命名 / `import pkg.mod;` 整模块；**导入对象 = 模块**（`[module]` 标注的命名空间或包）；`H.std` = 内置标准库根路径，用户库经 build.zon 声明后按包名引用。**库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）；**值类型栈上分配，经 `alloc` 堆上分配**。
+文件级导入语句（2026-08-17 定案，ADR-0010——取代 using，推翻「无文件级 import」）：
+- `import pkg.mod.{sym as 别名}` — 符号选择 + `as` 重名重命名
+- `import pkg.mod;` — 整模块导入
+- `import pkg.mod as m;` — 整模块 + 别名
+
+`H.std` = 内置标准库根路径，用户库经 build.zon 声明后按依赖名引用。**依赖解析顺序**：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。**重名冲突规则**：同名导入符号冲突 → 编译错误，用户必须用 `as` 显式消歧。**库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）。
 _Avoid_: 多套导入机制并存
 
-**模块 (module, 2026-08-17 定案)**:
-`[module]` 特性标注的命名空间——**语言级机制**（组 A2 实现模块识别/隔离检查）：内容与其它命名空间**隔离**（不参与同包共享命名空间）；需要其它库的数据时经**上下文（init 参数列表）**初始化注入。**模块间连接（Q24 定案）**：`import` = 符号引用（类型/函数，API 面）；**上下文 = 数据/依赖注入**——两者正交。边界 = 模块 owns 的数据与对外 pub API；`namespace` 关键字 = 声明模块的块式语法。模块组织实践（DDD 按领域拆分、上下文设计）为组 H3 工程约定；「模块实例化（带参创建）」语法归第三块 E6 候选。
-_Avoid_: 把「模块」当无边界的大杂烩目录
+**`[module]` 特性标记 (2026-08-23 定案)**:
+`[module]` 是编译时特性标记（类似 `[test]` / `[Continuous]`），作用于文件级命名空间：
+- **不写 `[module]`**：该文件所在文件夹的**所有子文件夹内容编译为私有**（对外不可见）；当前文件夹内容编译为**公开**
+- **标记 `[module]`**：当前文件内容编译为公开；子文件夹内容编译为私有。对外部调用者来说，**该模块无子命名空间可见**
+- `[module]` 标记的文件必须定义 `context`（见下文）
+- 模块是高度集中的功能集，有明确的边界和依赖
+
+**`context`**：语言级关键字，**每个 `[module]` 只能有一个 `context`**。`context` 是模块的 `global` 变量，模块内所有类型默认可访问。设计参考：**Windows IOC 容器模式**——
+  - **接口注册**：`context.register(Interface, Implementation)`，在 `main` 中填充
+  - **IoC 反转实例化**：模块内部通过 `context.new(Interface, args...)` 实例化对象，由 context 解析依赖图
+  - **接口不可实例化**，但可继承（含默认实现）
+  - **类型安全**：`context.get(name: String, T: type) ?T` 通过 comptime 类型参数获得类型安全
+  - **初始化顺序**：`main` 中显式控制，编译器不做自动排序
+- 模块内类型直接创建外部类型 → 编译错误
+- 模块间连接：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交
 
 **程序环境 (io 模块)**:
-标准库模块形态的程序环境句柄（2026-08-17 定案，ADR-0010）：`io.print`/`io.fs.*`/`io.net.*`/`io.time.*`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)` 均为模块函数 + 模块内环境状态（**命令行参数仅经入口 `main(args)` 注入，`io.args()` 取消**）；经 `import H.std.{io}` 引入，**main 不再注入 io 参数**（`fn main() !void`）。`Io` 接口保留（并发 E2 的 `Io.threaded()/evented()`）。
+标准库模块形态的程序环境句柄（2026-08-17 定案，ADR-0010）：`io.print`/`io.fs.*`/`io.net.*`/`io.time.*`/`io.text.*`/`io.rng.*`/`io.storage.*`/`io.archive.*`/`io.ipc.*`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)` 均为模块函数 + 模块内环境状态；经 `import H.std.{io}` 引入。`H.std` 是标准库的统一导入路径。`Io` 接口保留（并发 E2 的 `Io.threaded()/evented()`）。
 _Avoid_: 把程序环境当全局可变状态泄漏
 
 **应用程序 (Application, 2026-08-17 定案)**:
 含 `main` 入口函数的包（build.zon `Kind::exe`）——编译产出可运行的 exe（平台原生形态）。与库相对：库不含 main（见库）。
 _Avoid_: 把库当应用运行
 
-**库 (Library, 2026-08-17 定案)**:
+**库 (Library, 2026-08-23 定案)**:
 不含 `main` 入口的包（build.zon `Kind::lib`）——代码集合（1+ 模块），**不单独运行**；产出形态构建参数选择：**lib 静态库**（编译时链接进 exe）或 **dll 动态库**（exe 运行时加载）。
 _Avoid_: 库内写 main 入口
 
-**包与依赖 (Package & deps)**:
-包管理器内置编译器；**包形态 = 应用（`Kind::exe`，含 main）/ 库（`Kind::lib`，无 main，1+ 模块，产出 lib/dll）**；依赖清单 = **H 数据字面量**（`const build = Build{ ... }`，build.zon 式，2026-08-13 Q26 定案）；官方注册中心；`hc build` / `hc cc`（M8 工具链，系统库自带、静态链接默认）。
+**包与依赖 (Package & deps, 2026-08-23 细化)**:
+包管理器内置编译器；**包形态 = 应用（`Kind::exe`，含 main）/ 库（`Kind::lib`，无 main，1+ 模块，产出 lib/dll）**；依赖清单 = **H 数据字面量**（`const build = Build{ ... }`，build.zon 式）。**依赖解析**：`import <name>.<sym>` 中 `<name>` 对应 build.zon 依赖声明的 `name` 字段。解析顺序：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。官方注册中心；`hc build` / `hc cc`（M8 工具链，系统库自带、静态链接默认）。
 _Avoid_: 隐藏系统依赖
+
+**`.hs` 脚本导入 (2026-08-23 定案)**:
+`.hs` 文件使用 `import "path/to/file.hs"` 引用其他 `.hs` 文件。Parser 扩展：`import` 后跟字符串字面量 → 文件引用（AST 新增 `Decl::ImportFile` 变体）；跟标识符路径 → 模块引用（既有 `Decl::Import`）。文件引用与标准库引用是同一 `import` 语句的两种形态，parser 按引号检测区分。脚本项目不需要 `build.zon`。
+_Avoid_: 混用 `.hs` 文件引用与 `.hc` 模块引用
 
 ## 11. 工具链（M8）
 
