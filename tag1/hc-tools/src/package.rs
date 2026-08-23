@@ -14,8 +14,20 @@ pub(crate) fn lower_err(e: hc::ir::IrError) -> String {
     format!("error.{}: {}", e.name, e.message)
 }
 
-/// C1：包目录入口文件——`main.hc` 优先，否则目录内首个 `.hc`（排序后）；无 .hc 报错。
+/// C1：包目录入口文件——`src/main.hc` 优先，`main.hc` 次之，否则目录内首个 `.hc`；无 .hc 报错。
+/// 2026-08-23：新增 `src/` 子目录支持（新项目结构）。
 pub(crate) fn package_entry(dir: &Path) -> Result<PathBuf, String> {
+    // 先检查 src/main.hc（新项目结构）
+    let src_main = dir.join("src").join("main.hc");
+    if src_main.exists() {
+        return Ok(src_main);
+    }
+    // 再检查根目录 main.hc（旧项目结构兼容）
+    let root_main = dir.join("main.hc");
+    if root_main.exists() {
+        return Ok(root_main);
+    }
+    // 最后检查根目录下任意 .hc 文件
     let mut hc_files: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -26,12 +38,6 @@ pub(crate) fn package_entry(dir: &Path) -> Result<PathBuf, String> {
         }
     }
     hc_files.sort();
-    if let Some(main) = hc_files.iter().find(|p| {
-        p.file_name()
-            .map_or(false, |n| n.to_string_lossy() == "main.hc")
-    }) {
-        return Ok(main.clone());
-    }
     hc_files.into_iter().next().ok_or_else(|| {
         format!(
             "目录 {} 中无 .hc 文件（入口 main.hc 或任意 .hc）",
@@ -77,6 +83,7 @@ pub(crate) fn package_programs(
 pub(crate) fn sibling_files(path: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(dir) = path.parent() {
+        // 同一目录下的 .hc 文件
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let p = entry.path();
@@ -88,19 +95,49 @@ pub(crate) fn sibling_files(path: &Path) -> Vec<PathBuf> {
                 }
             }
         }
+        // 如果入口在 src/ 子目录，src/ 内同目录兄弟文件
+        if dir.ends_with("src") {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p == path {
+                        continue;
+                    }
+                    if p.extension().map_or(false, |e| e == "hc") {
+                        if !out.contains(&p) {
+                            out.push(p);
+                        }
+                    }
+                }
+            }
+        }
     }
     out.sort();
     out
 }
 
 /// 目录顶层 .hc 文件（依赖包文件清单；不递归——目录 = 包）
+/// 2026-08-23：新增 `src/` 子目录支持（新项目结构）。
 pub(crate) fn dir_hc_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
+    // 检查根目录 .hc 文件
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.extension().map_or(false, |e| e == "hc") {
                 out.push(p);
+            }
+        }
+    }
+    // 检查 src/ 子目录 .hc 文件（新项目结构）
+    let src_dir = dir.join("src");
+    if src_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&src_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().map_or(false, |e| e == "hc") {
+                    out.push(p);
+                }
             }
         }
     }

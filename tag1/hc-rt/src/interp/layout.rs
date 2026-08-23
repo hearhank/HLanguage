@@ -1115,6 +1115,8 @@ impl Interp {
         tests.sort_by(|a, b| a.span.line.cmp(&b.span.line));
         let (mut passed, mut failed, mut skipped) = (0, 0, 0);
         for t in tests {
+            // D1-5：每测试独立输出缓冲——保存主缓冲，创建临时缓冲
+            let main_out = std::mem::take(&mut self.test_out);
             let start = std::time::Instant::now();
             self.push_scope();
             self.fail_info = None;
@@ -1196,6 +1198,9 @@ impl Interp {
                     failed += 1;
                 }
             }
+            // D1-5：测试完成后，将临时缓冲内容追加到主缓冲
+            let test_output = std::mem::replace(&mut self.test_out, main_out);
+            self.test_out.extend(test_output);
         }
         // E2.2 根回收：未 join/未 detach 的线程在全部测试结束后运行到完成
         self.drain_root_threads();

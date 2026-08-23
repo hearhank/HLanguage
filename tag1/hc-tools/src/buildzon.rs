@@ -15,6 +15,12 @@ pub struct Manifest {
     pub kind: Kind,
     pub files: Vec<String>,
     pub deps: Vec<Dep>,
+    /// 项目元数据（2026-08-23 新增）
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub license: Option<String>,
+    pub homepage: Option<String>,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +66,11 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
     let mut kind = Kind::Exe;
     let mut files = Vec::new();
     let mut deps = Vec::new();
+    let mut author = None;
+    let mut description = None;
+    let mut license = None;
+    let mut homepage = None;
+    let mut keywords = Vec::new();
     for (key, val) in fields {
         match key.as_str() {
             "name" => name = Some(expect_str(key, val)?),
@@ -67,7 +78,12 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
             "kind" => kind = parse_kind(val)?,
             "files" => files = expect_str_array(key, val)?,
             "deps" => deps = parse_deps(val)?,
-            _ => {} // 未知字段（作者/构建选项等）——tag1 忽略
+            "author" => author = Some(expect_str(key, val)?),
+            "description" => description = Some(expect_str(key, val)?),
+            "license" => license = Some(expect_str(key, val)?),
+            "homepage" => homepage = Some(expect_str(key, val)?),
+            "keywords" => keywords = expect_str_array(key, val)?,
+            _ => {} // 未知字段（构建选项等）——tag1 忽略
         }
     }
     Ok(Manifest {
@@ -76,6 +92,11 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
         kind,
         files,
         deps,
+        author,
+        description,
+        license,
+        homepage,
+        keywords,
     })
 }
 
