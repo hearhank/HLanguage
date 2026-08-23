@@ -243,6 +243,8 @@ pub struct FieldDecl {
     pub pub_: bool,
     /// 字段级特性（如 `[Align(n)]`）
     pub traits: Vec<Trait>,
+    /// 字段默认值（如 `x: i32 = 42`）
+    pub default: Option<Expr>,
     pub span: Span,
 }
 

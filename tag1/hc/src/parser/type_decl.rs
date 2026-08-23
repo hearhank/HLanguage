@@ -64,6 +64,7 @@ impl Parser {
                     ty: fty,
                     pub_: member_pub,
                     traits: vec![],
+                    default: None,
                     span: fstart,
                 });
                 if self.at(&TokenKind::Comma) {
@@ -131,6 +132,7 @@ impl Parser {
                 pub_: member_pub,
                 span: fstart,
                 traits: field_traits,
+                default,
             });
             if self.at(&TokenKind::Comma) {
                 self.advance();
@@ -226,6 +228,7 @@ impl Parser {
                 ty: fty,
                 pub_: member_pub,
                 traits: vec![],
+                default: None,
                 span: fstart,
             });
             if self.at(&TokenKind::Comma) {

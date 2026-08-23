@@ -186,6 +186,58 @@ fn definite_assignment_ignores_continuous() {
     );
 }
 
+#[test]
+fn struct_defaults_alloc_init() {
+    // Q13：字段默认值——alloc.init(T) 使用默认值初始化
+    run_ok(
+        r#"struct Point { x: f32 = 1.0, y: f32 = 2.0 }
+[test] fn t() !void {
+    var p = alloc.init(Point);
+    try expect_eq(p.x, 1.0);
+    try expect_eq(p.y, 2.0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_arena_init() {
+    // Q13：字段默认值——arena.init(T) 使用默认值初始化
+    run_ok(
+        r#"struct Point { x: f32 = 1.0, y: f32 = 2.0 }
+[test] fn t() !void {
+    var arena = Arena.init(alloc);
+    var p = arena.init(Point);
+    try expect_eq(p.x, 1.0);
+    try expect_eq(p.y, 2.0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_override() {
+    // Q13：字段默认值——字面量可覆盖默认值
+    run_ok(
+        r#"struct Point { x: f32 = 1.0, y: f32 = 2.0 }
+[test] fn t() !void {
+    var p = Point{ x = 99.0, y = 2.0 };
+    try expect_eq(p.x, 99.0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_mixed() {
+    // Q13：部分字段有默认值、部分无默认值——alloc.init 自动填充默认值
+    run_ok(
+        r#"struct Config { timeout: i32 = 5000, retries: i32 }
+[test] fn t() !void {
+    var c = alloc.init(Config);
+    try expect_eq(c.timeout, 5000);
+    try expect_eq(c.retries, 0);
+}"#,
+    );
+}
+
 // ---------- M2.2 表达式级类型检查验收 ----------
 
 #[test]

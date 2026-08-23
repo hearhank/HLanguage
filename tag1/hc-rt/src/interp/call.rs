@@ -1220,13 +1220,18 @@ impl Interp {
                 if let Expr::Ident(tname, _) = &args[0] {
                     if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
                         let mut f = HashMap::new();
-                        // 先克隆字段类型：default_value(&mut self) 具体化会重新借用 self
-                        let ftypes: Vec<(String, Type)> = fields
+                        // 先克隆字段类型/默认值：default_value(&mut self) 具体化会重新借用 self
+                        let ftypes: Vec<(String, Type, Option<Expr>)> = fields
                             .iter()
-                            .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                            .map(|fd| (fd.name.clone(), fd.ty.clone(), fd.default.clone()))
                             .collect();
-                        for (fname, fty) in &ftypes {
-                            f.insert(fname.clone(), self.default_value(Some(fty))?);
+                        for (fname, fty, default) in &ftypes {
+                            let val = if let Some(de) = default {
+                                self.eval(de)?
+                            } else {
+                                self.default_value(Some(fty))?
+                            };
+                            f.insert(fname.clone(), val);
                         }
                         return Ok(Some(Value::class(tname, f)));
                     }
@@ -1387,7 +1392,7 @@ impl Interp {
                 a.borrow_mut().deinit();
                 Ok(Some(Value::Void))
             }
-            (Value::Allocator(a), "init") => {
+            (Value::Allocator(_), "init") => {
                 // allocator.init(T) / allocator.init(T{...})
                 if args.len() != 1 {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -1395,12 +1400,17 @@ impl Interp {
                 if let Expr::Ident(tname, _) = &args[0] {
                     if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
                         let mut f = HashMap::new();
-                        let ftypes: Vec<(String, Type)> = fields
+                        let ftypes: Vec<(String, Type, Option<Expr>)> = fields
                             .iter()
-                            .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                            .map(|fd| (fd.name.clone(), fd.ty.clone(), fd.default.clone()))
                             .collect();
-                        for (fname, fty) in &ftypes {
-                            f.insert(fname.clone(), self.default_value(Some(fty))?);
+                        for (fname, fty, default) in &ftypes {
+                            let val = if let Some(de) = default {
+                                self.eval(de)?
+                            } else {
+                                self.default_value(Some(fty))?
+                            };
+                            f.insert(fname.clone(), val);
                         }
                         return Ok(Some(Value::class(tname, f)));
                     }
@@ -2327,13 +2337,18 @@ impl Interp {
                 if let Expr::Ident(tname, _) = &args[0] {
                     let inst = if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
                         let mut f = HashMap::new();
-                        // 先克隆字段类型：default_value(&mut self) 具体化会重新借用 self
-                        let ftypes: Vec<(String, Type)> = fields
+                        // 先克隆字段类型/默认值：default_value(&mut self) 具体化会重新借用 self
+                        let ftypes: Vec<(String, Type, Option<Expr>)> = fields
                             .iter()
-                            .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                            .map(|fd| (fd.name.clone(), fd.ty.clone(), fd.default.clone()))
                             .collect();
-                        for (fname, fty) in &ftypes {
-                            f.insert(fname.clone(), self.default_value(Some(fty))?);
+                        for (fname, fty, default) in &ftypes {
+                            let val = if let Some(de) = default {
+                                self.eval(de)?
+                            } else {
+                                self.default_value(Some(fty))?
+                            };
+                            f.insert(fname.clone(), val);
                         }
                         Value::class(tname, f)
                     } else if self.types.contains_key(tname) {
