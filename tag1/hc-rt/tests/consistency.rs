@@ -2736,3 +2736,33 @@ fn a6_ringbuf_consistent() {
 "#,
     );
 }
+
+#[test]
+/// A6 标准库数据结构：PageMem 页内存池——interp == IR 双模式一致。
+fn a6_pagemem_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var pm = try io.pagemem.init(5);
+    try expect_eq(pm.total(), 5);
+    try expect_eq(pm.available(), 5);
+    var a = pm.alloc();
+    try expect_eq(a, 0);
+    var b = pm.alloc();
+    try expect_eq(b, 1);
+    try expect_eq(pm.available(), 3);
+    pm.free(a);
+    try expect_eq(pm.available(), 4);
+    var c = pm.alloc();
+    try expect_eq(c, a);
+    try expect_eq(pm.alloc(), 2);
+    try expect_eq(pm.alloc(), 3);
+    try expect_eq(pm.alloc(), 4);
+    try expect_eq(pm.alloc(), null);
+    try expect_eq(pm.available(), 0);
+    pm.free(100);
+    try expect_eq(pm.available(), 0);
+}
+"#,
+    );
+}

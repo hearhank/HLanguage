@@ -1602,6 +1602,14 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_ringbuf_method(m, &v, args, span)
             }
+            // A6：标准库数据结构——PageMem 页内存池命名空间
+            (Value::Class(c), m) if c.borrow().name == "PageMemNs" => {
+                self.call_pagemem_ns_method(m, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "PageMem" => {
+                let v = Value::Class(c.clone());
+                self.call_pagemem_method(m, &v, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();

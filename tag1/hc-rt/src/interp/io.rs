@@ -1475,6 +1475,112 @@ impl Interp {
         }
     }
 
+    // ---------- A6：PageMem 页内存池 ----------
+
+    /// io.pagemem.init(num_pages) !PageMem——创建 num_pages 页的 PageMem。
+    pub(crate) fn call_pagemem_ns_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "init" => {
+                let num = self.eval_int_arg(args, 0, span)?;
+                if num < 0 {
+                    return Ok(Some(self.err_val("InvalidArgument")));
+                }
+                let mut fields = HashMap::new();
+                // 空闲页栈：全部页索引（LIFO）
+                let n = num as usize;
+                let items: Vec<Rc<RefCell<Value>>> = (0..n)
+                    .rev()
+                    .map(|i| Rc::new(RefCell::new(Value::Int(i as i128))))
+                    .collect();
+                fields.insert("free".into(), Value::Arr(Rc::new(RefCell::new(items))));
+                fields.insert("total".into(), Value::Int(num));
+                Ok(Some(Value::class("PageMem", fields)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// PageMem 实例方法：alloc/free/available/total。
+    pub(crate) fn call_pagemem_method(
+        &mut self,
+        method: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let class_data = match self.deref_value(v.clone()) {
+            Value::Class(c) => c,
+            _ => return Ok(Some(self.err_val("TypeError"))),
+        };
+
+        let get_i = |name: &str| -> Option<i128> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Int(n) => Some(*n),
+                _ => None,
+            }
+        };
+        let get_arr = |name: &str| -> Option<Rc<RefCell<Vec<Rc<RefCell<Value>>>>>> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Arr(a) => Some(a.clone()),
+                _ => None,
+            }
+        };
+
+        match method {
+            "alloc" => {
+                if let Some(free) = get_arr("free") {
+                    let mut f = free.borrow_mut();
+                    if let Some(cell) = f.pop() {
+                        let val = cell.borrow().clone();
+                        return Ok(Some(val));
+                    }
+                }
+                Ok(Some(Value::Opt(None)))
+            }
+            "free" => {
+                let idx = self.eval_int_arg(args, 0, span)?;
+                if idx < 0 {
+                    return Ok(Some(self.err_val("InvalidArgument")));
+                }
+                let total = get_i("total").unwrap_or(0) as usize;
+                if (idx as usize) >= total {
+                    return Ok(Some(Value::Void));
+                }
+                // 检查是否已空闲（double-free 安全）
+                if let Some(free) = get_arr("free") {
+                    let f = free.borrow();
+                    let already_free = f.iter().any(|cell| match *cell.borrow() {
+                        Value::Int(v) => v == idx,
+                        _ => false,
+                    });
+                    if !already_free {
+                        drop(f);
+                        free.borrow_mut()
+                            .push(Rc::new(RefCell::new(Value::Int(idx))));
+                    }
+                }
+                Ok(Some(Value::Void))
+            }
+            "available" => {
+                let n = if let Some(free) = get_arr("free") {
+                    free.borrow().len()
+                } else {
+                    0
+                };
+                Ok(Some(Value::Int(n as i128)))
+            }
+            "total" => Ok(Some(
+                get_i("total").map(Value::Int).unwrap_or(Value::Int(0)),
+            )),
+            _ => Ok(None),
+        }
+    }
+
     // ---------- G5（E3.3 text）正则文本处理 ----------
 
     /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制

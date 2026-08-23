@@ -1157,6 +1157,129 @@ pub(crate) fn call_ringbuf_method_ir(
     }
 }
 
+/// io.pagemem.init(num_pages) !PageMem——创建 PageMem。
+pub(crate) fn call_pagemem_ns_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "init" => {
+            let num = int_arg_ir(ctx, args, 0)?;
+            if num < 0 {
+                return Ok(Some(err_val(module, "InvalidArgument")));
+            }
+            let n = num as usize;
+            let items: Vec<IrValue> = (0..n).rev().map(|i| IrValue::Int(i as i128)).collect();
+            let arr = make_arr(ctx, items);
+            let arr_cell = match arr {
+                IrValue::Arr(c) => c,
+                _ => unreachable!(),
+            };
+            let mut fields = HashMap::new();
+            fields.insert("free".into(), arr_cell);
+            fields.insert("total".into(), ctx.alloc(Cell::Value(IrValue::Int(num))));
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "PageMem".into(),
+                fields,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// PageMem 实例方法：alloc/free/available/total。
+pub(crate) fn call_pagemem_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    method: &str,
+    self_v: &IrValue,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let class_cell = match self_v {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "expected PageMem")),
+    };
+    let get_field = |ctx: &Ctx, name: &str| -> Option<usize> {
+        match &ctx.cells[class_cell] {
+            Cell::Class { fields, .. } => fields.get(name).copied(),
+            _ => None,
+        }
+    };
+    let get_int = |ctx: &Ctx, name: &str| -> Option<i128> {
+        let cell = get_field(ctx, name)?;
+        match &ctx.cells[cell] {
+            Cell::Value(IrValue::Int(n)) => Some(*n),
+            _ => None,
+        }
+    };
+
+    match method {
+        "alloc" => {
+            if let Some(free_cell) = get_field(ctx, "free") {
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                if let Some(last) = elems.last() {
+                    let val = match &ctx.cells[*last] {
+                        Cell::Value(v) => v.clone(),
+                        _ => IrValue::Int(0),
+                    };
+                    // 移除最后一个元素
+                    let mut new_elems = elems;
+                    new_elems.pop();
+                    ctx.cells[free_cell] = Cell::Elems(new_elems);
+                    return Ok(Some(val));
+                }
+            }
+            Ok(Some(IrValue::Opt(None)))
+        }
+        "free" => {
+            let idx = int_arg_ir(ctx, args, 0)?;
+            if idx < 0 {
+                return Ok(Some(err_val(module, "InvalidArgument")));
+            }
+            let total = get_int(ctx, "total").unwrap_or(0) as usize;
+            if (idx as usize) >= total {
+                return Ok(Some(IrValue::Void));
+            }
+            if let Some(free_cell) = get_field(ctx, "free") {
+                // 检查是否已空闲（double-free 安全）
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let already_free = elems.iter().any(|&ec| match &ctx.cells[ec] {
+                    Cell::Value(IrValue::Int(v)) => *v == idx,
+                    _ => false,
+                });
+                if !already_free {
+                    let new_elem = ctx.alloc(Cell::Value(IrValue::Int(idx)));
+                    let mut new_elems = elems;
+                    new_elems.push(new_elem);
+                    ctx.cells[free_cell] = Cell::Elems(new_elems);
+                }
+            }
+            Ok(Some(IrValue::Void))
+        }
+        "available" => {
+            let n = if let Some(free_cell) = get_field(ctx, "free") {
+                match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.len(),
+                    _ => 0,
+                }
+            } else {
+                0
+            };
+            Ok(Some(IrValue::Int(n as i128)))
+        }
+        "total" => Ok(Some(IrValue::Int(get_int(ctx, "total").unwrap_or(0)))),
+        _ => Ok(None),
+    }
+}
+
 // ---- G5（E3.3 text）正则文本处理 ----
 
 /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制
@@ -1989,6 +2112,13 @@ pub(crate) fn call_builtin_method(
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "RingBuf" => {
             call_ringbuf_method_ir(ctx, module, m, &IrValue::Class(*c), args)
+        }
+        // A6：标准库数据结构——PageMem 页内存池
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "PageMemNs" => {
+            call_pagemem_ns_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "PageMem" => {
+            call_pagemem_method_ir(ctx, module, m, &IrValue::Class(*c), args)
         }
         // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
         (IrValue::Class(_), "to_bytes") => Err(IrError::msg(

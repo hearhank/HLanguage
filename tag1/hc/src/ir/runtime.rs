@@ -1196,6 +1196,15 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         "ringbuf".into(),
         ctx.alloc(Cell::Value(IrValue::Class(ringbuf))),
     );
+    // A6：标准库数据结构——PageMem 页内存池命名空间
+    let pagemem = ctx.alloc(Cell::Class {
+        name: "PageMemNs".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert(
+        "pagemem".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(pagemem))),
+    );
     IrValue::Class(ctx.alloc(Cell::Class {
         name: "Io".into(),
         fields,
