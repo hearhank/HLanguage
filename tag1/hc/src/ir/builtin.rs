@@ -1962,59 +1962,7 @@ pub(crate) fn call_builtin(
                 fields,
             })))
         }
-        // C2（ADR-0016）：`with_arena(fn)`——创建临时 Arena，调用函数，
-        // 函数结束后自动释放 Arena（无论成功或失败）。
-        "with_arena" => {
-            if args.is_empty() {
-                return Err(IrError::msg(
-                    "ArityMismatch",
-                    "with_arena expects at least callee",
-                ));
-            }
-            let callee = deref_value(ctx, &args[0]).clone();
-            match &callee {
-                IrValue::Fn(_) | IrValue::Closure { .. } => {}
-                _ => {
-                    return Err(IrError::msg(
-                        "NotCallable",
-                        "with_arena callee is not callable",
-                    ))
-                }
-            }
-            // 创建临时 Arena
-            let arena_cell = ctx.alloc(Cell::Arena(ArenaStateIr::new()));
-            let arena_val = IrValue::Arena(arena_cell);
-            let arg_vals = vec![arena_val];
-            // 调用函数
-            let result = match &callee {
-                IrValue::Fn(fname) => {
-                    let idx = pick_func(ctx, module, fname, &arg_vals).ok_or_else(|| {
-                        IrError::msg("NoFunction", format!("no function `{fname}`"))
-                    })?;
-                    exec_func(ctx, module, idx, &arg_vals, ctx.cur_depth + 1)
-                }
-                IrValue::Closure {
-                    func,
-                    captures,
-                    is_mut,
-                    ..
-                } => call_closure_ir(
-                    ctx,
-                    module,
-                    *func,
-                    captures,
-                    &arg_vals,
-                    *is_mut,
-                    ctx.cur_depth + 1,
-                ),
-                _ => unreachable!(),
-            };
-            // 释放 Arena（无论成功或失败）
-            if let Cell::Arena(st) = &mut ctx.cells[arena_cell] {
-                st.deinit();
-            }
-            result
-        }
+        // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
         // ---------- 组 F：四模式类型实例化（OneToOne<i32> → 空容器标记） ----------
         // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
         "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {

@@ -20,9 +20,17 @@ const MAX_EXPANSION_ROUNDS: usize = 1000;
 
 /// 展开源码中的全部 script 块，返回展开后源码。无 script 块时原样返回
 /// （快速路径：文本不含 `script` 标识符即跳过解析）。
+/// B6-2：结果按 source hash 缓存到 `~/.hc/cache/script/<hash>`，
+/// 同一源码多次编译时跳过展开。
 pub fn expand_scripts(source: &str) -> Result<String, String> {
     if !source.contains("script") {
         return Ok(source.to_string());
+    }
+    // B6-2：缓存检查——同一源码 hash 的展开结果复用
+    let key = source_cache_key(source);
+    let cache_path = cache_dir().join(&key);
+    if let Some(cached) = try_read_cache(&cache_path) {
+        return Ok(cached);
     }
     let mut cur = source.to_string();
     for _round in 0..MAX_EXPANSION_ROUNDS {
@@ -37,6 +45,8 @@ pub fn expand_scripts(source: &str) -> Result<String, String> {
         out.push_str(&cur[site.close_end..]);
         cur = out;
     }
+    // B6-2：最终展开结果写入缓存（内容寻址，同一源码 hash 复用）
+    write_cache(&cache_path, &cur);
     Err("script 展开超过最大轮数（疑似产物含自引用 script 块）".into())
 }
 
@@ -60,16 +70,14 @@ pub fn parse_with_scripts(source: &str) -> Result<(String, hc::Program), String>
 }
 
 /// 计算源码缓存键（hash 十六进制串）
-/// 用于 `.hs` 文件缓存（见 `run_hs_file`）。
-#[allow(dead_code)]
+/// 用于 `.hs` 文件缓存和 script 展开缓存（B6-2）。
 pub(crate) fn source_cache_key(source: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
-/// 脚本缓存目录：`~/.hc/cache/script/`
-#[allow(dead_code)]
+/// 脚本缓存目录：`~/.hc/cache/script/`（B6-2：script 展开 + `.hs` 文件引用）
 pub(crate) fn cache_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -82,7 +90,6 @@ pub(crate) fn cache_dir() -> PathBuf {
 }
 
 /// 尝试读取缓存；返回 None 表示缓存缺失或不可读
-#[allow(dead_code)]
 pub(crate) fn try_read_cache(path: &PathBuf) -> Option<String> {
     if path.exists() {
         std::fs::read_to_string(path).ok()
@@ -92,7 +99,6 @@ pub(crate) fn try_read_cache(path: &PathBuf) -> Option<String> {
 }
 
 /// 写入缓存（忽略失败——缓存非关键路径）
-#[allow(dead_code)]
 pub(crate) fn write_cache(path: &PathBuf, content: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

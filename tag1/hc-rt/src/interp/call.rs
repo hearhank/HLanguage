@@ -702,42 +702,7 @@ impl Interp {
                 f.insert("result".to_string(), Value::Void);
                 Ok(Some(Value::class("Thread", f)))
             }
-            // C2（ADR-0016）：`with_arena(fn)`——创建临时 Arena，调用函数，
-            // 函数结束后自动释放 Arena（无论成功或失败）。
-            // Phase 1：使用 AllocatorImpl::Arena 包装
-            "with_arena" => {
-                if args.is_empty() {
-                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
-                }
-                let callee = self.eval(&args[0])?;
-                let callee = self.deref_value(callee);
-                match &callee {
-                    Value::Fn(_) | Value::Closure(_) => {}
-                    _ => return Err(RtError::new("NotCallable", Some(span.clone()))),
-                }
-                // 创建临时 Arena（通过 AllocatorImpl）
-                let arena_v = Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Arena(
-                    Rc::new(RefCell::new(ArenaState::new())),
-                ))));
-                let arg_vals = vec![arena_v.clone()];
-                // 调用函数
-                let result = match &callee {
-                    Value::Fn(fname) => {
-                        let fdef = self.pick_fn(fname, &arg_vals)?;
-                        self.call_fn(&fdef, &arg_vals, span)
-                    }
-                    Value::Closure(cl) => self.call_closure(cl, &arg_vals, span),
-                    _ => unreachable!(),
-                };
-                // 释放 Arena（无论成功或失败）
-                if let Value::Allocator(a) = &arena_v {
-                    a.borrow_mut().deinit();
-                }
-                match result {
-                    Ok(v) => Ok(Some(v)),
-                    Err(e) => Err(e),
-                }
-            }
+            // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
             _ => Ok(None),
         }
     }
@@ -1333,7 +1298,15 @@ impl Interp {
             (Value::Arena(a), m) => self.call_arena_method(a.clone(), m, args, span),
             // Allocator 方法（Phase 1：统一分配器接口，替代 Value::Alloc / Value::Arena）
             (Value::Allocator(a), "alloc") => {
-                let n = self.eval(&args[0])?;
+                let n = if args.is_empty() {
+                    // 无参 alloc → Pool 使用 item_size；否则 ArityMismatch
+                    match &*a.borrow() {
+                        AllocatorImpl::Pool(p) => Value::Int(p.borrow().item_size as i128),
+                        _ => return Err(RtError::new("ArityMismatch", Some(span.clone()))),
+                    }
+                } else {
+                    self.eval(&args[0])?
+                };
                 let n = self.deref_value(n);
                 if let Value::Int(i) = n {
                     if i < 0 {
@@ -1365,6 +1338,26 @@ impl Interp {
                     }
                 } else {
                     Err(RtError::new("TypeError", Some(span.clone())))
+                }
+            }
+            (Value::Allocator(a), "free") => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let ptr = self.eval(&args[0])?;
+                let ptr = self.deref_value(ptr);
+                match ptr {
+                    Value::Bytes(data) => {
+                        let len = data.borrow().len();
+                        let block = AllocBlock {
+                            data,
+                            offset: 0,
+                            len,
+                        };
+                        a.borrow_mut().free(&block);
+                        Ok(Some(Value::Void))
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
                 }
             }
             (Value::Allocator(a), "bytes") => {

@@ -256,12 +256,31 @@ fn copy_alloc_block(src: &AllocBlock, dst: &AllocBlock, len: usize) {
     d[dst.offset..dst.offset + len].copy_from_slice(&src_data);
 }
 
-/// 分配器实现枚举（Phase 1：统一分配器接口，三变体）
+/// 固定大小对象池状态（空闲链表 + 后备分配器）
+pub struct PoolState {
+    pub item_size: usize,
+    pub free_list: Vec<AllocBlock>,
+    pub backing: Box<AllocatorImpl>,
+}
+
+impl PoolState {
+    pub fn new(backing: AllocatorImpl, item_size: usize) -> Self {
+        Self {
+            item_size,
+            free_list: Vec::new(),
+            backing: Box::new(backing),
+        }
+    }
+}
+
+/// 分配器实现枚举（Phase 1：统一分配器接口，四变体）
 pub enum AllocatorImpl {
     /// 无状态全局分配器（每 alloc 创建独立 Vec）
     Page,
     /// Arena bump 分配器（复用现有 ArenaState）
     Arena(Rc<RefCell<ArenaState>>),
+    /// 固定大小对象池（空闲链表复用 + 后备分配器）
+    Pool(Rc<RefCell<PoolState>>),
     /// 自定义分配器（Rust 侧实现，后续开放 H 侧）
     Custom(Box<dyn AllocatorTrait>),
 }
@@ -279,6 +298,15 @@ impl std::fmt::Debug for AllocatorImpl {
                     d.blocks.len()
                 )
             }
+            Self::Pool(p) => {
+                let d = p.borrow();
+                write!(
+                    f,
+                    "PoolAllocator(item_size={}, free={})",
+                    d.item_size,
+                    d.free_list.len()
+                )
+            }
             Self::Custom(_) => write!(f, "CustomAllocator(...)"),
         }
     }
@@ -289,6 +317,14 @@ impl Clone for AllocatorImpl {
         match self {
             Self::Page => Self::Page,
             Self::Arena(a) => Self::Arena(a.clone()),
+            Self::Pool(p) => {
+                let d = p.borrow();
+                Self::Pool(Rc::new(RefCell::new(PoolState {
+                    item_size: d.item_size,
+                    free_list: d.free_list.clone(),
+                    backing: d.backing.clone(),
+                })))
+            }
             Self::Custom(c) => Self::Custom(c.clone_box()),
         }
     }
@@ -327,6 +363,19 @@ impl AllocatorImpl {
                     len: n,
                 })
             }
+            Self::Pool(pool) => {
+                let mut p = pool.borrow_mut();
+                if n > p.item_size {
+                    return Err(AllocErr::InvalidSize);
+                }
+                // 先从空闲链表取，没有再分配
+                if let Some(block) = p.free_list.pop() {
+                    Ok(block)
+                } else {
+                    let item_size = p.item_size;
+                    p.backing.alloc(item_size)
+                }
+            }
             Self::Custom(impl_) => impl_.alloc(n),
         }
     }
@@ -339,6 +388,16 @@ impl AllocatorImpl {
             }
             Self::Arena(_) => {
                 // Arena：不逐对象 free，deinit 统一释放
+            }
+            Self::Pool(pool) => {
+                let mut p = pool.borrow_mut();
+                let item_size = p.item_size;
+                // 重置偏移并放回空闲链表复用
+                p.free_list.push(AllocBlock {
+                    data: block.data.clone(),
+                    offset: 0,
+                    len: item_size,
+                });
             }
             Self::Custom(impl_) => impl_.free(block),
         }
@@ -382,6 +441,19 @@ impl AllocatorImpl {
                 self.free(block);
                 Ok(new_block)
             }
+            Self::Pool(pool) => {
+                let p = pool.borrow_mut();
+                if n > p.item_size {
+                    return Err(AllocErr::InvalidSize);
+                }
+                let item_size = p.item_size;
+                // 相同大小直接返回原块
+                Ok(AllocBlock {
+                    data: block.data.clone(),
+                    offset: 0,
+                    len: item_size,
+                })
+            }
             Self::Custom(impl_) => impl_.realloc(block, n),
         }
     }
@@ -392,6 +464,15 @@ impl AllocatorImpl {
             Self::Page => {}
             Self::Arena(arena) => {
                 arena.borrow_mut().deinit();
+            }
+            Self::Pool(pool) => {
+                let mut p = pool.borrow_mut();
+                // 归还空闲链表所有块到后备分配器
+                let blocks: Vec<AllocBlock> = p.free_list.drain(..).collect();
+                for block in &blocks {
+                    p.backing.free(block);
+                }
+                p.backing.deinit();
             }
             Self::Custom(impl_) => impl_.deinit(),
         }
@@ -521,6 +602,14 @@ impl Value {
                         "allocator(Arena(bytes={}, blocks={}))",
                         d.total,
                         d.blocks.len()
+                    )
+                }
+                AllocatorImpl::Pool(p) => {
+                    let d = p.borrow();
+                    format!(
+                        "allocator(Pool(item_size={}, free={}))",
+                        d.item_size,
+                        d.free_list.len()
                     )
                 }
                 AllocatorImpl::Custom(_) => "allocator(custom)".to_string(),

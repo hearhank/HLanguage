@@ -1045,6 +1045,10 @@ impl Interp {
         let io = self.io_value();
         self.bind("io", io.clone());
         self.bind("alloc", Value::Alloc);
+        self.bind(
+            "page_allocator",
+            Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page))),
+        );
         let has_main = self.funcs.contains_key("main");
         if !has_main {
             self.in_main = false;

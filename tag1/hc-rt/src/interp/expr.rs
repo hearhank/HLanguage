@@ -23,7 +23,7 @@ impl Interp {
             Expr::Ident(name, span) => {
                 // 隐式环境注入
                 match name.as_str() {
-                    "alloc" => {
+                    "alloc" | "page_allocator" => {
                         // E1（ADR-0013）：受限脚本模式——分配不可用（无运行时环境）
                         if self.script_mode {
                             return Err(RtError::msg(
@@ -1178,6 +1178,27 @@ impl Interp {
                     if bname == "Arena" && field == "init" {
                         return Ok(Value::Arena(Rc::new(RefCell::new(ArenaState::new()))));
                     }
+                    // Pool.init(backing, item_size) 内建：固定大小对象池（Phase 3）
+                    if bname == "Pool" && field == "init" {
+                        if args.len() < 2 {
+                            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                        }
+                        let backing = self.eval(&args[0])?;
+                        let backing = self.deref_value(backing);
+                        let backing_impl = self.value_to_allocator_impl(&backing, span)?;
+                        let size_v = self.eval(&args[1])?;
+                        let size_v = self.deref_value(size_v);
+                        let item_size = match size_v {
+                            Value::Int(i) if i > 0 => i as usize,
+                            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                        };
+                        return Ok(Value::Allocator(Rc::new(RefCell::new(
+                            AllocatorImpl::Pool(Rc::new(RefCell::new(PoolState::new(
+                                backing_impl,
+                                item_size,
+                            )))),
+                        ))));
+                    }
                     // 组 E E3：Io.threaded(alloc) / Io.evented(alloc) 运行时构造
                     // （协作式单线程；evented = 单线程事件循环风味，携带 runtime 字段）
                     if bname == "Io" && (field == "threaded" || field == "evented") {
@@ -1736,7 +1757,7 @@ impl Interp {
         }
         if matches!(
             name,
-            "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "ExitType"
+            "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "Pool" | "ExitType"
         ) {
             return true;
         }
@@ -1750,5 +1771,15 @@ impl Interp {
             }
         }
         false
+    }
+
+    /// 从 Value 提取 AllocatorImpl（用于 Pool.init 等需要分配器引用的场景）
+    pub(crate) fn value_to_allocator_impl(&self, v: &Value, span: &Span) -> Result<AllocatorImpl> {
+        match v {
+            Value::Allocator(a) => Ok(a.borrow().clone()),
+            Value::Alloc => Ok(AllocatorImpl::Page),
+            Value::Arena(a) => Ok(AllocatorImpl::Arena(a.clone())),
+            _ => Err(RtError::new("TypeError", Some(span.clone()))),
+        }
     }
 }

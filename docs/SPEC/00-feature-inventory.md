@@ -314,7 +314,7 @@
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | `Allocator` 接口 | 分配器抽象接口（`alloc`/`realloc`/`free`） | ✅ |
-| `page_allocator` | 全局无状态分配器（每 `alloc` 创建独立 Vec） | 🟡 Phase 3 |
+| `page_allocator` | 全局无状态分配器（每 `alloc` 创建独立 Vec） | ✅ |
 | `Arena` | bump 分配器，接收后备分配器 `Arena.init(backing)` | ✅ |
 | `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ⏳ Phase 3 |
 | 全局回退 | 默认全局分配器（`alloc` 环境变量） | ✅ |
@@ -323,7 +323,7 @@
 | `Value::Bytes` | 原始内存块值类型 | 🟡 Phase 1 |
 | `AllocBlock` | Rust 侧分配器返回的内存块（data + offset + len） | 🟡 Phase 1 |
 | `AllocErr` | 分配失败错误（OutOfMemory/InvalidSize） | 🟡 Phase 1 |
-| `with_arena(fn)` | 创建临时 Arena，调用函数后自动释放（**已弃用，Phase 3 移除**） | 🟡 Phase 3 移除 |
+| `with_arena(fn)` | 创建临时 Arena，调用函数后自动释放（**Phase 3 已移除**，使用 `Arena.init(alloc)` 替代） | ✅ |
 | 自定义分配器（H 侧） | 用户实现 `Allocator` 接口的自定义分配器 | ⏳ 1.x |
 
 ### 7.2 collections 集合
@@ -441,8 +441,8 @@
 | `[test]` 标记 | 声明级测试标记 | ✅ |
 | `[test("name")]` | 带显示名的测试函数 | ✅ |
 | `[test(async)]` | 测试模式属性解析 + 异步 runner（evented IO + Future 执行） | ✅ |
-| `[test(thread)]` | 测试模式属性解析（D1 解析器层完成，runner 层待实现） | 🟡 |
-| `[test(timeout=N)]` | 测试超时属性解析 + 运行时超时检测 | ✅ |
+| `[test(thread)]` | 测试模式属性解析 + OS 线程 runner（独立 Interp 实例 + recv_timeout 硬超时） | ✅ |
+| `[test(timeout=N)]` | 测试超时属性解析 + 运行时超时检测（含 async/thread 模式） | ✅ |
 | 断言五件套 | `expect` / `expect_eq` / `expect_neq` / `expect_error` / `expect_eq_slices` | ✅ |
 | 输出统计 | `[PASS]` / `[FAIL]` / `[SKIP]` + 汇总 | ✅ |
 | 失败非零退出 | 测试失败非零退出码 | ✅ |
@@ -588,7 +588,7 @@
 | `cargo test --workspace` | 796 项全绿 | 2026-08-23 |
 | 解释模式示例回归 | 147 通过 + 0 失败 + 1 跳过（全绿） | 2026-08-23 |
 | 原生模式交叉验证 | 57 项 mismatch（未实现原生内建/方法） | 2026-08-23 |
-| 一致性测试 tree-walking ↔ IR | 90 测试全绿 | 2026-08-23 |
+| 一致性测试 tree-walking ↔ IR | 100+ 测试全绿（含 D2 Table/Vec/Map/Deque/String/D1 test modes） | 2026-08-23 |
 | 四模式容器测试（37/76/77/78） | 全部转绿 | 2026-08-23 |
 
 ---
