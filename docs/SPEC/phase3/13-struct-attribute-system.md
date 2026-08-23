@@ -55,13 +55,21 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 5.3 运行时方法分派 | 45min | 调用正确的扩展方法 |
 | 5.4 测试 + 边界检查 | 30min | 私有字段不可访问 |
 
-### 任务 6: Struct 化 test 特性（P3，~1h）
+### 任务 6: Struct 化 test 特性 ✅（2026-08-24 完成）
 
-| 功能点 | 预估 | 验证方法 |
-|--------|------|---------|
-| 6.1 `[test{name="x", mode=async, timeout=5}]` 语法 | 30min | 解析正确 |
-| 6.2 兼容旧 `[test("x")]` / `[test(async)]` 语法 | 15min | 旧语法继续工作 |
-| 6.3 测试 | 15min | 新旧语法均通过 |
+| 功能点 | 状态 | 文件 |
+|--------|------|------|
+| 6.1 `[test{name="x", mode=async, timeout=5}]` 语法 | ✅ | `parser/decl.rs` |
+| 6.2 `[align{value=8}]` 语法 | ✅ | `parser/decl.rs` |
+| 6.3 兼容旧 `[test("x")]` / `[test(async)]` 语法 | ✅ | 保持 |
+| 6.4 测试验证 | ✅ | `hc-rt/tests/semantics.rs` |
+
+## 完成总结
+
+所有 Phase 1-4 功能已实现并测试通过。
+未实现（推迟到 1.x）：
+- 扩展方法 `[Extension(Type)]`（P3）
+- 第四阶段自举（Phase 4 Bootstrapping）
 
 ## 执行顺序
 

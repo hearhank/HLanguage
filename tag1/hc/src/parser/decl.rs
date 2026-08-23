@@ -378,6 +378,15 @@ impl Parser {
         let start = self.span();
         self.expect(&TokenKind::LBracket, "`[`")?;
         let name = self.expect_ident()?;
+
+        // 支持 struct 字面量语法：`[name{field=value, ...}]`
+        if self.at(&TokenKind::LBrace) {
+            let tr = self.parse_trait_struct_literal(&name, start)?;
+            self.expect(&TokenKind::RBracket, "`]`")?;
+            return Ok(Some(tr));
+        }
+
+        // 旧语法：`[name]` 或 `[name(...)]`
         let tr = match self.trait_registry.lookup_handler(&name) {
             Some(handler) => handler(self)?,
             None => {
@@ -390,6 +399,117 @@ impl Parser {
         };
         self.expect(&TokenKind::RBracket, "`]`")?;
         Ok(Some(tr))
+    }
+
+    /// 解析 struct 字面量语法特性：`[name{field=value, ...}]`
+    /// 将 struct 字面量转换为对应的 `Trait` 枚举值
+    fn parse_trait_struct_literal(
+        &mut self,
+        name: &str,
+        _start: Span,
+    ) -> Result<Trait, Diagnostic> {
+        self.expect(&TokenKind::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            let fname = self.expect_ident()?;
+            self.expect(&TokenKind::Eq, "`=` in struct field")?;
+            // 值可以是标识符、关键字（async/thread）或表达式
+            let fval = if self.at(&TokenKind::KwAsync) {
+                self.advance();
+                Expr::Ident("async".to_string(), self.span())
+            } else if self.is_ident("thread") {
+                let s = self.expect_ident()?;
+                Expr::Ident(s, self.span())
+            } else {
+                self.parse_expr()?
+            };
+            fields.push((fname, fval));
+            if self.at(&TokenKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "`}`")?;
+
+        // 按名称分发到对应特性类型
+        match name {
+            "test" => self.build_test_from_struct(fields),
+            "align" => self.build_align_from_struct(fields),
+            _ => {
+                let known = self.trait_registry.known_names().join(", ");
+                Err(Diagnostic::error(
+                    _start,
+                    format!("unknown trait attribute `[{name}]`; known traits: {known}"),
+                ))
+            }
+        }
+    }
+
+    /// 从 struct 字面量构建 `[test{...}]` 特性
+    fn build_test_from_struct(&self, fields: Vec<(String, Expr)>) -> Result<Trait, Diagnostic> {
+        let mut name = None;
+        let mut mode = TestMode::Serial;
+        let mut timeout = None;
+        for (fname, fval) in &fields {
+            match fname.as_str() {
+                "name" => {
+                    if let Expr::StrLit { value, .. } = fval {
+                        name = Some(value.clone());
+                    } else {
+                        return Err(self.error_at("test.name must be a string literal"));
+                    }
+                }
+                "mode" => match fval {
+                    Expr::Ident(s, _) if s == "async" => mode = TestMode::Async,
+                    Expr::Ident(s, _) if s == "thread" => mode = TestMode::Thread,
+                    _ => return Err(self.error_at("test.mode must be `async` or `thread`")),
+                },
+                "timeout" => {
+                    if let Expr::IntLit { text, .. } = fval {
+                        let n = text
+                            .trim_end_matches(|c: char| c.is_alphabetic())
+                            .replace('_', "")
+                            .parse::<u64>()
+                            .map_err(|_| {
+                                self.error_at(format!("invalid timeout value `{text}`"))
+                            })?;
+                        timeout = Some(n);
+                    } else {
+                        return Err(self.error_at("test.timeout must be an integer"));
+                    }
+                }
+                _ => {
+                    return Err(self.error_at(format!("unknown field `{fname}` in test attribute")));
+                }
+            }
+        }
+        Ok(Trait::Test {
+            name,
+            mode,
+            timeout,
+        })
+    }
+
+    /// 从 struct 字面量构建 `[align{value=N}]` 特性
+    fn build_align_from_struct(&self, fields: Vec<(String, Expr)>) -> Result<Trait, Diagnostic> {
+        if fields.len() != 1 {
+            return Err(self.error_at("align requires exactly one field `value`"));
+        }
+        let (fname, fval) = &fields[0];
+        if fname != "value" {
+            return Err(self.error_at("align field must be `value`"));
+        }
+        if let Expr::IntLit { text, .. } = fval {
+            let n = text
+                .trim_end_matches(|c: char| c.is_alphabetic())
+                .replace('_', "")
+                .parse::<u32>()
+                .map_err(|_| self.error_at(format!("invalid alignment value `{text}`")))?;
+            Ok(Trait::Align(n))
+        } else {
+            Err(self.error_at("align.value must be an integer (1, 2, 4, or 8)"))
+        }
     }
 
     pub(crate) fn parse_global(&mut self, start: Span, is_pub: bool) -> Result<Decl, Diagnostic> {

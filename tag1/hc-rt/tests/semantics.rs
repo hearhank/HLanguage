@@ -238,6 +238,32 @@ fn struct_defaults_mixed() {
     );
 }
 
+#[test]
+fn struct_attr_syntax_test_basic() {
+    // 结构体字面量语法：`[test{name="x"}]` 等价于 `[test("x")]`
+    run_ok("[test{name=\"test_name\"}] fn t() !void {\n    try expect_eq(1, 1);\n}\n");
+}
+
+#[test]
+fn struct_attr_syntax_test_mode_async() {
+    // 结构体字面量语法：`[test{mode=async}]` 等价于 `[test(async)]`
+    run_ok("[test{mode=async}] fn t() !void {\n    try expect_eq(1, 1);\n}\n");
+}
+
+#[test]
+fn struct_attr_syntax_test_timeout() {
+    // 结构体字面量语法：`[test{timeout=5}]` 等价于 `[test(timeout=5)]`
+    run_ok("[test{timeout=5}] fn t() !void {\n    try expect_eq(1, 1);\n}\n");
+}
+
+#[test]
+fn struct_attr_syntax_align() {
+    // 结构体字面量语法：`[align{value=8}]` 等价于 `[align(8)]`
+    run_ok(
+        "[align{value=8}] struct Aligned { x: i32 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(Aligned), 8);\n}\n",
+    );
+}
+
 // ---------- M2.2 表达式级类型检查验收 ----------
 
 #[test]
