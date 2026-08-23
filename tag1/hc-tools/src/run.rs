@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use hc::ast::{Decl, Program};
 use hc::diag;
 use hc_rt::Interp;
 
@@ -377,13 +378,19 @@ pub(crate) fn run_file_hs(path: &Path, prog_args: &[String]) -> ExitCode {
         }
     };
     // 直接解析，无 script 展开、无 comptime
-    let program = match hc::parse_source(&source) {
+    let mut program = match hc::parse_source(&source) {
         Ok(p) => p,
         Err(diags) => {
             eprintln!("{}", hc::diag::render(&diags, &source));
             return ExitCode::FAILURE;
         }
     };
+    // B6-2：解析 Decl::Include 文件引用（import "path"）
+    let parent_dir = path.parent().unwrap_or(Path::new("."));
+    if let Err(msg) = resolve_hs_includes(&mut program, parent_dir) {
+        eprintln!("{msg}");
+        return ExitCode::FAILURE;
+    }
     let mut interp = Interp::new(&source);
     interp.args = prog_args.to_vec();
     if let Err(e) = interp.load(&program) {
@@ -405,6 +412,42 @@ pub(crate) fn run_file_hs(path: &Path, prog_args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// 解析 .hs 脚本中的 Decl::Include 文件引用（`import "path/to/file.hc"`）。
+/// 文件路径解析顺序：当前文件所在目录 → SDK 目录 → 项目目录。
+fn resolve_hs_includes(program: &mut Program, parent_dir: &Path) -> Result<(), String> {
+    let mut resolved = Vec::new();
+    for decl in &program.decls {
+        if let Decl::Include { path, .. } = decl {
+            // 尝试按路径解析：相对当前文件目录
+            let file_path = parent_dir.join(path);
+            if !file_path.exists() {
+                return Err(format!(
+                    "文件引用未找到: {}（搜索路径: {:?}）",
+                    path, parent_dir
+                ));
+            }
+            let src = std::fs::read_to_string(&file_path)
+                .map_err(|e| format!("读取文件引用 {} 失败: {}", file_path.display(), e))?;
+            let included = hc::parse_source(&src).map_err(|d| {
+                format!(
+                    "文件引用语法错误 ({}): {}",
+                    path,
+                    hc::diag::render(&d, &src)
+                )
+            })?;
+            // 递归解析被引用文件中的 include
+            let inc_dir = file_path.parent().unwrap_or(Path::new("."));
+            let mut inc_prog = included;
+            resolve_hs_includes(&mut inc_prog, inc_dir)?;
+            resolved.extend(inc_prog.decls);
+        }
+    }
+    // 移除 include 声明，将被引用文件的声明插入到前面
+    program.decls.retain(|d| !matches!(d, Decl::Include { .. }));
+    program.decls.splice(0..0, resolved);
+    Ok(())
 }
 
 /// C2（ADR-0016）：`hc run [--dangle=on|off|auto]`——设置悬垂检查模式后运行。

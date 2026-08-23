@@ -124,6 +124,15 @@ pub enum Decl {
     /// E1.2（组 D D2）：`comptime { ... }` 块——编译期求值（装载期受限 Interp，
     /// 结果丢弃、失败 = 编译错误）。仅编译期存在，不产生运行时代码、不替换源码。
     Comptime { body: Block, span: Span },
+    /// `.hs` 脚本文件引用：`import "path/to/file.hc"`（B6-2：脚本用文件引用而非命名空间）。
+    /// 文件路径解析顺序：SDK 目录 → 当前项目目录。
+    Include {
+        /// 文件路径（相对或绝对；字符串字面量）
+        path: String,
+        /// 别名（可选，省略时用文件名）
+        alias: Option<String>,
+        span: Span,
+    },
 }
 
 impl Decl {
@@ -141,7 +150,8 @@ impl Decl {
             Decl::Using { .. }
             | Decl::Import { .. }
             | Decl::Script { .. }
-            | Decl::Comptime { .. } => false,
+            | Decl::Comptime { .. }
+            | Decl::Include { .. } => false,
         }
     }
 }

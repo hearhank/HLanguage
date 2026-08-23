@@ -160,7 +160,27 @@ impl Parser {
                     );
                 }
                 self.advance();
-                // 路径：`pkg.mod` / `H.std`（可含多段）；符号选择 `.{` 前止步
+                // 文件引用：`import "path/to/file.hc"`（B6-2：.hs 脚本用文件路径而非命名空间）
+                if matches!(self.peek(), TokenKind::Str(_)) {
+                    let path = match self.advance().kind {
+                        TokenKind::Str(s) => s,
+                        _ => unreachable!(),
+                    };
+                    let alias = if self.is_ident("as") {
+                        self.advance();
+                        Some(self.expect_ident()?)
+                    } else {
+                        None
+                    };
+                    self.expect(&TokenKind::Semi, "`;` after import")?;
+                    let end = self.span();
+                    return Ok(Decl::Include {
+                        path,
+                        alias,
+                        span: start.merge(&end),
+                    });
+                }
+                // 命名空间路径：`pkg.mod` / `H.std`（可含多段）；符号选择 `.{` 前止步
                 let path = self.parse_import_path()?;
                 // 符号选择：`.{sym, sym as alias}`（`.{` 后非标识符——parse_path 已消费到 `.`）
                 let select = if self.at(&TokenKind::Dot) && self.peek_n(1) == &TokenKind::LBrace {

@@ -254,6 +254,9 @@ impl Interp {
                     }
                 }
             }
+            Decl::Include { .. } => {
+                // B6-2：文件引用由 run_file_hs 在解析前处理
+            }
             Decl::Namespace { decls, .. } => {
                 for inner in decls {
                     self.collect_using(inner);
@@ -316,6 +319,9 @@ impl Interp {
                         self.import_whole_module(&target_prefix, &bound);
                     }
                 }
+            }
+            Decl::Include { .. } => {
+                // B6-2：文件引用由 run_file_hs 在解析前处理
             }
             Decl::Namespace { decls, .. } => {
                 for inner in decls {
@@ -736,8 +742,8 @@ impl Interp {
                 // tag1：using 无操作（模块扁平化；跨包解析归 M1.4/M7.2）
                 let _ = path;
             }
-            Decl::Script { .. } => {
-                // E1：第三块实现；tag1 不执行
+            Decl::Include { .. } | Decl::Script { .. } => {
+                // B6-2：.hs 脚本文件引用；loader 内不执行，由 run_file_hs 解析
             }
             Decl::Comptime { .. } => {
                 // E1.2 组 D D2：comptime 块装载期求值（comptimegen）后跳过——仅编译期存在

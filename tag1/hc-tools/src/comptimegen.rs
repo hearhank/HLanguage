@@ -40,7 +40,12 @@ fn find_comptime_blocks(program: &Program) -> Vec<ComptimeSite<'_>> {
 
 fn collect_in_decl<'a>(d: &'a Decl, out: &mut Vec<ComptimeSite<'a>>) {
     match d {
-        Decl::Comptime { body, span } => out.push(ComptimeSite { body, span: span.clone() }),
+        Decl::Comptime { body, span } => out.push(ComptimeSite {
+            body,
+            span: span.clone(),
+        }),
+        Decl::Include { .. } => {}
+        Decl::Script { .. } => {}
         Decl::Namespace { decls, .. } => {
             for inner in decls {
                 collect_in_decl(inner, out);
@@ -54,12 +59,12 @@ fn collect_in_decl<'a>(d: &'a Decl, out: &mut Vec<ComptimeSite<'a>>) {
 fn eval_comptime(source: &str, program: &Program, site: &ComptimeSite) -> Result<(), String> {
     let mut interp = Interp::new(source);
     interp.set_script_mode(true);
-    interp.load(program).map_err(|e| {
-        format!("comptime 块装载失败: {}", e.render(source))
-    })?;
-    let v = interp.exec_fn_body(site.body, &[]).map_err(|e| {
-        format!("comptime 块求值失败: {}", e.render(source))
-    })?;
+    interp
+        .load(program)
+        .map_err(|e| format!("comptime 块装载失败: {}", e.render(source)))?;
+    let v = interp
+        .exec_fn_body(site.body, &[])
+        .map_err(|e| format!("comptime 块求值失败: {}", e.render(source)))?;
     match v {
         // `return error.X` = 块显式失败 → 编译错误（沿 06-09：comptime 块可返回错误）
         Value::Err { name, .. } => {

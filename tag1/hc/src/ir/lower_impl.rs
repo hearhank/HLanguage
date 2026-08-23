@@ -452,7 +452,8 @@ pub(crate) fn lower_decl(
         | Decl::Using { .. }
         | Decl::Import { .. }
         | Decl::Script { .. }
-        | Decl::Comptime { .. } => {}
+        | Decl::Comptime { .. }
+        | Decl::Include { .. } => {}
     }
     Ok(())
 }

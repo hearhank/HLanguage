@@ -485,6 +485,8 @@
 |------|------|------|
 | `hc run <file>` | 脚本模式（tree-walking 解释器，全语言） | ✅ |
 | `hc run <file.hs>` | `.hs` 脚本文件直接执行（B6-2：无 script 展开、无 comptime） | ✅ |
+| `.hs` 文件引用 | `import "path/to/file.hc"` 文件路径引用（B6-2：补充命名空间导入） | ✅ |
+| `Decl::Include` 解析 | 解析器支持 `import "path"` 语法（AST 新变体） | ✅ |
 | `hc run --bench <file>` | 分阶段计时输出（B6-1） | ✅ |
 | `hc run <dir>` | 目录包模式（入口 = main.hc 或首个 .hc） | ✅ |
 | `hc run --ir <file>` | IR 参考解释器 | ✅ |

@@ -622,6 +622,13 @@ fn dump_decl(decl: &hc::ast::Decl, depth: usize) {
         hc::ast::Decl::Script { .. } => {
             println!("{indent}Script");
         }
+        hc::ast::Decl::Include { path, alias, .. } => {
+            print!("{indent}Include|path={path:?}");
+            if let Some(a) = alias {
+                print!("|alias={a}");
+            }
+            println!();
+        }
         hc::ast::Decl::Comptime { .. } => {
             println!("{indent}Comptime");
         }

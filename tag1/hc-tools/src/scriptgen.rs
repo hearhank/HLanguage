@@ -131,6 +131,7 @@ fn find_in_decl<'a>(d: &'a Decl) -> Option<ScriptSite<'a>> {
             close_end: *close_end,
         }),
         Decl::Namespace { decls, .. } => decls.iter().find_map(find_in_decl),
+        Decl::Include { .. } => None,
         _ => None,
     }
 }
