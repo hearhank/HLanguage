@@ -487,6 +487,10 @@ impl BodyEmitter {
         // Phase 7：隐式环境静态方法形态——root 标识符（io/alloc 等）未解析为局部
         // 变量时，`io.print(...)` / `alloc.init(ABC)` 以点分静态名出现，与 CallMethod
         // 同语义（io 为隐式 Io 实例 / alloc 为隐式 Allocator）。
+        if name == "io.exit" {
+            self.call_io_exit(args, temp);
+            return;
+        }
         if is_io_print_name(name) {
             self.call_print(args, temp, slot_consts, strings);
             return;
@@ -1111,6 +1115,31 @@ impl BodyEmitter {
             }
         }
         // io.print 返回 Void
+        self.emit(format!(
+            "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+        ));
+    }
+
+    /// io.exit(code)：调用 libc exit(code) 终止进程（noreturn，续块死代码可被 LLVM 消除）。
+    pub(crate) fn call_io_exit(&mut self, args: &[usize], temp: usize) {
+        let l = self.fb();
+        self.term(format!("br label %{l}"));
+        let mut exit_block = format!("{l}:\n");
+        if let Some(&code_slot) = args.first() {
+            let v = self.r();
+            let d = self.r();
+            let c = self.r();
+            exit_block.push_str(&format!("  {v} = load %Value, %Value* %sp.{code_slot}\n"));
+            exit_block.push_str(&format!("  {d} = extractvalue %Value {v}, 1\n"));
+            exit_block.push_str(&format!("  {c} = trunc i128 {d} to i32\n"));
+            exit_block.push_str(&format!("  call void @exit(i32 {c})\n"));
+        } else {
+            exit_block.push_str("  call void @exit(i32 0)\n");
+        }
+        exit_block.push_str("  unreachable\n");
+        self.blocks.push(exit_block);
+        self.cur = format!("{l}.cont:\n");
+        self.terminated = false;
         self.emit(format!(
             "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
         ));
