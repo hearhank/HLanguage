@@ -60,6 +60,7 @@ cargo run -p hc-tools -- build examples/hello.hc
 
 ```
 hc run <file.hc>           运行脚本模式（解释执行）
+hc run <file.hs>           运行 `.hs` 脚本文件（B6-2：直接解析，无 script 展开、无 comptime）
 hc run <file.hbc>          运行字节码 VM（M3.2，装载 HBC2；全语言，同 IR）
 hc run --ir <file.hc>      用 IR 参考解释器运行（全语言，interp == IR）
 hc test [--mode=interpret|compile] [file.hc|dir]

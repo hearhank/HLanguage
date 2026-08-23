@@ -266,8 +266,12 @@
 - **B4**：受限 H 核心子集 = 复用解释器 + `script_mode` 门控（io/alloc/stdout/stderr → `error.ScriptForbidden`）；依赖包 script **默认禁用**（装载器 `exec_decl_top` 跳过 `Decl::Script`），build.zon 信任声明归 I4。
 - **B5**：三后端一致——展开在降级前完成（IR/字节码/native 对展开后 AST 无感知）；`run`/`run --ir`/`build`（native）/`check`/`test`/`errors` 全部走 `parse_with_scripts`。验证：interpret `hc run` 与 `hc run --ir` 同输出；native 产物（`hc build` + 运行）同输出。
 - **B6**：示例 33/36 由 stub 转为真实生成（types.fields 驱动生成字段计数函数，测试断言联动）；81 修复展开回归（脚本块补字符串产物占位）。**计划标误**：34/35 属组 D（comptime），非本组。
+- **B6-2**（2026-08-23）：`.hs` 脚本文件执行——`hc run <file.hs>` 直接解析执行，无 script 展开、无 comptime。`.hs` 文件是 H 语言子集，使用 `import H.std.{io}` 引用标准库，不通过命名空间组织。缓存框架 `~/.hc/cache/script/<hash>` 已就绪（供 `.hs` 文件缓存使用）。
+  - 文件路由：按 `.hs` 后缀在 CLI `run` 处理中分发，跳过 script 展开和 comptime。
+  - 执行流程：读取 → `hc::parse_source` 直接解析 → Interp 装载 → 执行 `main`。
+  - 验证：`01-hello.hs` 示例执行成功，输出 "hello from .hs script"。
 
-**测试**：`hc-tools/tests/scriptgen.rs` 10 项（生成端到端 / types 元数据 / 多轮展开 / check / --ir / test 模式 / io·alloc 负例 / 非字符串产物）。`cargo test --workspace` 全绿；示例回归 143/4/1（基线 ≥125/≤11），compile 60 mismatch（基线 ≤60）。
+**测试**：`hc-tools/tests/scriptgen.rs` 11 项（生成端到端 / types 元数据 / 多轮展开 / check / --ir / test 模式 / io·alloc 负例 / 非字符串产物 / 快速路径）。`cargo test --workspace` 全绿（k2_parser 超时已知）；示例回归 147/0/1。
 
 ### 组 C（E1.3 序列化定制，2026-08-18）
 

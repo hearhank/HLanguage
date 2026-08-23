@@ -75,7 +75,7 @@ H2/
 
 ### 🟡 推进中 —— 第三块 · 扩展与自举（E1–E7）
 
-> **2026-08-23**：E1 元编程、E2 并发与异步、E3 标准库扩展、E4 系统编程已全部落地；E5 工具链扩展大部分落地，B7 质量工具完整（LSP 跳转定义/hover/补全/格式化/lint 集）已完成；E6 部分落地（switch 守卫 + 开放问题裁决 + C2 `with_arena`/`--dangle` + C5 泛型嵌套具体化 + C6 格式串 comptime 校验）；**四模式容器 Send·Sync 豁免已修复，hc test 147/0/1 全绿**；**D1-3 异步测试 runner 已实现（evented IO + Future 执行），D1-2 超时检测已实现**；D1-4 线程 runner 待实现。E7 计划中。
+> **2026-08-23**：E1 元编程、E2 并发与异步、E3 标准库扩展、E4 系统编程已全部落地；E5 工具链扩展大部分落地，B7 质量工具完整（LSP 跳转定义/hover/补全/格式化/lint 集）已完成；E6 部分落地（switch 守卫 + 开放问题裁决 + C2 `with_arena`/`--dangle` + C5 泛型嵌套具体化 + C6 格式串 comptime 校验）；**四模式容器 Send·Sync 豁免已修复，hc test 147/0/1 全绿**；**D1-3 异步测试 runner 已实现（evented IO + Future 执行），D1-2 超时检测已实现**；**B6-2 `.hs` 脚本文件执行已实现——`hc run <file.hs>` 直接解析执行，无 script 展开、无 comptime**；D1-4 线程 runner 待实现。E7 计划中。
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
