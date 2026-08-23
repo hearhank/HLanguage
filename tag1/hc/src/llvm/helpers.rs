@@ -232,6 +232,12 @@ pub(crate) fn emit_str_helpers(out: &mut String) {
     out.push('\n');
     out.push_str(HC_STR_SPLIT);
     out.push('\n');
+    out.push_str(HC_STR_TO_UPPER);
+    out.push('\n');
+    out.push_str(HC_STR_TO_LOWER);
+    out.push('\n');
+    out.push_str(HC_STR_REPLACE);
+    out.push('\n');
 }
 
 pub(crate) fn emit_assert_helpers(out: &mut String) {

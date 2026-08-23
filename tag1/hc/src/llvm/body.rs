@@ -1500,6 +1500,29 @@ impl BodyEmitter {
                 ));
                 self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
+            "to_upper" => {
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_str_to_upper(%Value {dv})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "to_lower" => {
+                let res = self.r();
+                self.emit(format!("{res} = call %Value @hc_str_to_lower(%Value {dv})"));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "replace" => {
+                if args.len() < 2 {
+                    self.abort_feature("nomethod");
+                    return;
+                }
+                let from = load_arg(self, args[0]);
+                let to = load_arg(self, args[1]);
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_str_replace(%Value {dv}, %Value {from}, %Value {to})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
             _ => {
                 self.abort_feature("nomethod");
             }

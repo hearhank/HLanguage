@@ -2873,3 +2873,164 @@ last:
   ret %Value %result
 }
 "#;
+
+pub(crate) const HC_STR_TO_UPPER: &str = r#"define %Value @hc_str_to_upper(%Value %self) {
+entry:
+  %sd = extractvalue %Value %self, 1
+  %sp = inttoptr i128 %sd to i8*
+  %len = call i64 @strlen(i8* %sp)
+  %bufsiz = add i64 %len, 1
+  %buf = call noalias i8* @malloc(i64 %bufsiz)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %sp, i64 %len, i1 false)
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %next_iter ]
+  %done = icmp eq i64 %i, %len
+  br i1 %done, label %finish, label %body
+body:
+  %ch = getelementptr i8, i8* %buf, i64 %i
+  %c = load i8, i8* %ch
+  %is_lower_a = icmp uge i8 %c, 97
+  %is_lower_b = icmp ule i8 %c, 122
+  %is_lower = and i1 %is_lower_a, %is_lower_b
+  br i1 %is_lower, label %convert, label %next_iter
+convert:
+  %upper = sub i8 %c, 32
+  store i8 %upper, i8* %ch
+  br label %next_iter
+next_iter:
+  %next = add i64 %i, 1
+  br label %loop
+finish:
+  %end = getelementptr i8, i8* %buf, i64 %len
+  store i8 0, i8* %end
+  %ptr = ptrtoint i8* %buf to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v1 = insertvalue %Value %v0, i128 %ptr, 1
+  ret %Value %v1
+}
+"#;
+
+pub(crate) const HC_STR_TO_LOWER: &str = r#"define %Value @hc_str_to_lower(%Value %self) {
+entry:
+  %sd = extractvalue %Value %self, 1
+  %sp = inttoptr i128 %sd to i8*
+  %len = call i64 @strlen(i8* %sp)
+  %bufsiz = add i64 %len, 1
+  %buf = call noalias i8* @malloc(i64 %bufsiz)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %sp, i64 %len, i1 false)
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %next_iter ]
+  %done = icmp eq i64 %i, %len
+  br i1 %done, label %finish, label %body
+body:
+  %ch = getelementptr i8, i8* %buf, i64 %i
+  %c = load i8, i8* %ch
+  %is_upper_a = icmp uge i8 %c, 65
+  %is_upper_b = icmp ule i8 %c, 90
+  %is_upper = and i1 %is_upper_a, %is_upper_b
+  br i1 %is_upper, label %convert, label %next_iter
+convert:
+  %lower = add i8 %c, 32
+  store i8 %lower, i8* %ch
+  br label %next_iter
+next_iter:
+  %next = add i64 %i, 1
+  br label %loop
+finish:
+  %end = getelementptr i8, i8* %buf, i64 %len
+  store i8 0, i8* %end
+  %ptr = ptrtoint i8* %buf to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v1 = insertvalue %Value %v0, i128 %ptr, 1
+  ret %Value %v1
+}
+"#;
+
+pub(crate) const HC_STR_REPLACE: &str = r#"define %Value @hc_str_replace(%Value %self, %Value %from, %Value %to) {
+entry:
+  %sd = extractvalue %Value %self, 1
+  %sp = inttoptr i128 %sd to i8*
+  %slen = call i64 @strlen(i8* %sp)
+  %fd = extractvalue %Value %from, 1
+  %fp = inttoptr i128 %fd to i8*
+  %flen = call i64 @strlen(i8* %fp)
+  %td = extractvalue %Value %to, 1
+  %tp = inttoptr i128 %td to i8*
+  %tlen = call i64 @strlen(i8* %tp)
+  %flen_zero = icmp eq i64 %flen, 0
+  br i1 %flen_zero, label %copy_self, label %count_loop
+copy_self:
+  %bufsiz0 = add i64 %slen, 1
+  %buf0 = call noalias i8* @malloc(i64 %bufsiz0)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf0, i8* %sp, i64 %slen, i1 false)
+  %end0 = getelementptr i8, i8* %buf0, i64 %slen
+  store i8 0, i8* %end0
+  %ptr0 = ptrtoint i8* %buf0 to i128
+  %v00 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v10 = insertvalue %Value %v00, i128 %ptr0, 1
+  ret %Value %v10
+count_loop:
+  %pos = phi i64 [ 0, %entry ], [ %next_cpos, %count_match ], [ %next_apos, %advance ]
+  %count = phi i64 [ 0, %entry ], [ %next_ccount, %count_match ], [ %count, %advance ]
+  %remaining = sub i64 %slen, %pos
+  %can_match = icmp sge i64 %remaining, %flen
+  br i1 %can_match, label %try_match, label %alloc_out
+count_match:
+  %next_cpos = add i64 %pos, %flen
+  %next_ccount = add i64 %count, 1
+  br label %count_loop
+try_match:
+  %try_ptr = getelementptr i8, i8* %sp, i64 %pos
+  %cmp = call i32 @memcmp(i8* %try_ptr, i8* %fp, i64 %flen)
+  %eq = icmp eq i32 %cmp, 0
+  br i1 %eq, label %count_match, label %advance
+advance:
+  %next_apos = add i64 %pos, 1
+  br label %count_loop
+alloc_out:
+  %tlen_minus = sub i64 %tlen, %flen
+  %count_times = mul i64 %count, %tlen_minus
+  %out_len = add i64 %slen, %count_times
+  %out_bufsiz = add i64 %out_len, 1
+  %out_buf = call noalias i8* @malloc(i64 %out_bufsiz)
+  br label %build_loop
+build_loop:
+  %src_pos = phi i64 [ 0, %alloc_out ], [ %next_src_pos, %build_adv ], [ %next_src_pos2, %build_match ]
+  %dst_pos = phi i64 [ 0, %alloc_out ], [ %next_dst_pos, %build_adv ], [ %next_dst_pos2, %build_match ]
+  %src_remaining = sub i64 %slen, %src_pos
+  %can_bmatch = icmp sge i64 %src_remaining, %flen
+  br i1 %can_bmatch, label %try_bmatch, label %copy_rest
+build_adv:
+  %b_dst_ptr = getelementptr i8, i8* %out_buf, i64 %dst_pos
+  %b_src_ptr = getelementptr i8, i8* %sp, i64 %src_pos
+  %b_byte = load i8, i8* %b_src_ptr
+  store i8 %b_byte, i8* %b_dst_ptr
+  %next_src_pos = add i64 %src_pos, 1
+  %next_dst_pos = add i64 %dst_pos, 1
+  br label %build_loop
+try_bmatch:
+  %b_try_ptr = getelementptr i8, i8* %sp, i64 %src_pos
+  %b_cmp = call i32 @memcmp(i8* %b_try_ptr, i8* %fp, i64 %flen)
+  %b_eq = icmp eq i32 %b_cmp, 0
+  br i1 %b_eq, label %build_match, label %build_adv
+build_match:
+  %dst_ptr = getelementptr i8, i8* %out_buf, i64 %dst_pos
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst_ptr, i8* %tp, i64 %tlen, i1 false)
+  %next_src_pos2 = add i64 %src_pos, %flen
+  %next_dst_pos2 = add i64 %dst_pos, %tlen
+  br label %build_loop
+copy_rest:
+  %rest_len = sub i64 %slen, %src_pos
+  %rest_dst = getelementptr i8, i8* %out_buf, i64 %dst_pos
+  %rest_src = getelementptr i8, i8* %sp, i64 %src_pos
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %rest_dst, i8* %rest_src, i64 %rest_len, i1 false)
+  %final_end = getelementptr i8, i8* %out_buf, i64 %out_len
+  store i8 0, i8* %final_end
+  %final_ptr = ptrtoint i8* %out_buf to i128
+  %fv0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %fv1 = insertvalue %Value %fv0, i128 %final_ptr, 1
+  ret %Value %fv1
+}
+"#;

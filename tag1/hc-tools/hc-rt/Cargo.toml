@@ -1,0 +1,9 @@
+[package]
+name = "hc-rt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "H language runtime (value model + tree-walking interpreter)"
+
+[dependencies]
+hc = { path = "../hc" }
