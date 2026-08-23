@@ -2703,3 +2703,36 @@ fn a6_bitmap_consistent() {
 "#,
     );
 }
+
+#[test]
+/// A6 标准库数据结构：RingBuf 环形缓冲——interp == IR 双模式一致。
+fn a6_ringbuf_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var rb = try io.ringbuf.init(5);
+    try expect_eq(rb.len(), 0);
+    try expect_eq(rb.capacity(), 5);
+    try expect_eq(rb.is_empty(), true);
+    try expect_eq(rb.is_full(), false);
+    try expect_eq(rb.push(42), true);
+    try expect_eq(rb.push(99), true);
+    try expect_eq(rb.len(), 2);
+    try expect_eq(rb.pop(), 42);
+    try expect_eq(rb.pop(), 99);
+    try expect_eq(rb.is_empty(), true);
+    try expect_eq(rb.pop(), null);
+    try expect_eq(rb.push(1), true);
+    try expect_eq(rb.push(2), true);
+    try expect_eq(rb.is_full(), false);
+    try expect_eq(rb.push(3), true);
+    try expect_eq(rb.push(4), true);
+    try expect_eq(rb.push(5), true);
+    try expect_eq(rb.is_full(), true);
+    try expect_eq(rb.push(6), false);
+    rb.clear();
+    try expect_eq(rb.len(), 0);
+}
+"#,
+    );
+}

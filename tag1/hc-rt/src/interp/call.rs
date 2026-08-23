@@ -1594,6 +1594,14 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_bitmap_method(m, &v, args, span)
             }
+            // A6：标准库数据结构——RingBuf 环形缓冲命名空间
+            (Value::Class(c), m) if c.borrow().name == "RingBufNs" => {
+                self.call_ringbuf_ns_method(m, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "RingBuf" => {
+                let v = Value::Class(c.clone());
+                self.call_ringbuf_method(m, &v, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();

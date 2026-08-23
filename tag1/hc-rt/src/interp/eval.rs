@@ -228,6 +228,8 @@ impl Interp {
         f.insert("rng".into(), Value::class("RngNs", HashMap::new()));
         // A6：标准库数据结构——Bitmap（位图）命名空间
         f.insert("bitmap".into(), Value::class("BitmapNs", HashMap::new()));
+        // A6：标准库数据结构——RingBuf（环形缓冲）命名空间
+        f.insert("ringbuf".into(), Value::class("RingBufNs", HashMap::new()));
         Value::class("Io", f)
     }
 

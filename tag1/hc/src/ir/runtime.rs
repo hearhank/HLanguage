@@ -1187,6 +1187,15 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         "bitmap".into(),
         ctx.alloc(Cell::Value(IrValue::Class(bitmap))),
     );
+    // A6：标准库数据结构——RingBuf 环形缓冲命名空间
+    let ringbuf = ctx.alloc(Cell::Class {
+        name: "RingBufNs".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert(
+        "ringbuf".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(ringbuf))),
+    );
     IrValue::Class(ctx.alloc(Cell::Class {
         name: "Io".into(),
         fields,

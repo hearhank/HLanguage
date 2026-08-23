@@ -1329,6 +1329,152 @@ impl Interp {
         }
     }
 
+    // ---------- A6：RingBuf 环形缓冲 ----------
+
+    /// io.ringbuf.init(cap) !RingBuf——创建容量 cap 的 RingBuf。
+    pub(crate) fn call_ringbuf_ns_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "init" => {
+                let cap = self.eval_int_arg(args, 0, span)?;
+                if cap < 0 {
+                    return Ok(Some(self.err_val("InvalidArgument")));
+                }
+                let cap = cap as usize;
+                let mut fields = HashMap::new();
+                fields.insert("buf".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert("head".into(), Value::Int(0));
+                fields.insert("len".into(), Value::Int(0));
+                fields.insert("cap".into(), Value::Int(cap as i128));
+                Ok(Some(Value::class("RingBuf", fields)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// RingBuf 实例方法：push/pop/len/capacity/is_full/is_empty/clear/peek。
+    pub(crate) fn call_ringbuf_method(
+        &mut self,
+        method: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let class_data = match self.deref_value(v.clone()) {
+            Value::Class(c) => c,
+            _ => return Ok(Some(self.err_val("TypeError"))),
+        };
+
+        // 提取字段值（避免在同一个 match arm 中同时 borrow 和 borrow_mut）
+        let get_i = |name: &str| -> Option<i128> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Int(n) => Some(*n),
+                _ => None,
+            }
+        };
+        let get_arr = |name: &str| -> Option<Rc<RefCell<Vec<Rc<RefCell<Value>>>>>> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Arr(a) => Some(a.clone()),
+                _ => None,
+            }
+        };
+
+        match method {
+            "push" => {
+                let val = self.eval(&args[0])?;
+                let cap = get_i("cap").unwrap_or(0) as usize;
+                let cur_len = get_i("len").unwrap_or(0) as usize;
+                if cur_len >= cap {
+                    return Ok(Some(Value::Bool(false)));
+                }
+                let head = get_i("head").unwrap_or(0) as usize;
+                let idx = (head + cur_len) % cap;
+                if let Some(buf) = get_arr("buf") {
+                    let mut b = buf.borrow_mut();
+                    if idx < b.len() {
+                        b[idx] = Rc::new(RefCell::new(val));
+                    } else {
+                        b.push(Rc::new(RefCell::new(val)));
+                    }
+                }
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int((cur_len + 1) as i128));
+                Ok(Some(Value::Bool(true)))
+            }
+            "pop" => {
+                let cur_len = get_i("len").unwrap_or(0) as usize;
+                if cur_len == 0 {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                let head = get_i("head").unwrap_or(0) as usize;
+                let cap = get_i("cap").unwrap_or(0) as usize;
+                let val = if let Some(buf) = get_arr("buf") {
+                    let b = buf.borrow();
+                    b.get(head)
+                        .map(|c| c.borrow().clone())
+                        .unwrap_or(Value::Void)
+                } else {
+                    Value::Void
+                };
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("head".into(), Value::Int(((head + 1) % cap) as i128));
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int((cur_len - 1) as i128));
+                Ok(Some(val))
+            }
+            "len" => Ok(Some(get_i("len").map(Value::Int).unwrap_or(Value::Int(0)))),
+            "capacity" => Ok(Some(get_i("cap").map(Value::Int).unwrap_or(Value::Int(0)))),
+            "is_full" => {
+                let cur_len = get_i("len").unwrap_or(0) as usize;
+                let cap = get_i("cap").unwrap_or(0) as usize;
+                Ok(Some(Value::Bool(cur_len >= cap)))
+            }
+            "is_empty" => {
+                let cur_len = get_i("len").unwrap_or(0);
+                Ok(Some(Value::Bool(cur_len == 0)))
+            }
+            "clear" => {
+                let mut f = class_data.borrow_mut();
+                f.fields.insert("head".into(), Value::Int(0));
+                f.fields.insert("len".into(), Value::Int(0));
+                Ok(Some(Value::Void))
+            }
+            "peek" => {
+                let idx = self.eval_int_arg(args, 0, span)?;
+                if idx < 0 {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                let cur_len = get_i("len").unwrap_or(0) as usize;
+                if (idx as usize) >= cur_len {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                let head = get_i("head").unwrap_or(0) as usize;
+                let cap = get_i("cap").unwrap_or(0) as usize;
+                let pos = (head + idx as usize) % cap;
+                let val = if let Some(buf) = get_arr("buf") {
+                    let b = buf.borrow();
+                    b.get(pos)
+                        .map(|c| c.borrow().clone())
+                        .unwrap_or(Value::Void)
+                } else {
+                    Value::Void
+                };
+                Ok(Some(val))
+            }
+            _ => Ok(None),
+        }
+    }
+
     // ---------- G5（E3.3 text）正则文本处理 ----------
 
     /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制

@@ -984,6 +984,179 @@ pub(crate) fn call_bitmap_method_ir(
     }
 }
 
+/// io.ringbuf.init(cap) !RingBuf——创建 RingBuf。
+pub(crate) fn call_ringbuf_ns_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "init" => {
+            let cap = int_arg_ir(ctx, args, 0)?;
+            if cap < 0 {
+                return Ok(Some(err_val(module, "InvalidArgument")));
+            }
+            let cap = cap as usize;
+            let mut fields = HashMap::new();
+            fields.insert("buf".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("head".into(), ctx.alloc(Cell::Value(IrValue::Int(0))));
+            fields.insert("len".into(), ctx.alloc(Cell::Value(IrValue::Int(0))));
+            fields.insert(
+                "cap".into(),
+                ctx.alloc(Cell::Value(IrValue::Int(cap as i128))),
+            );
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "RingBuf".into(),
+                fields,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// RingBuf 实例方法：push/pop/len/capacity/is_full/is_empty/clear/peek。
+pub(crate) fn call_ringbuf_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    method: &str,
+    self_v: &IrValue,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    // 提取字段 cell 索引
+    let class_cell = match self_v {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "expected RingBuf")),
+    };
+    let get_field = |ctx: &Ctx, name: &str| -> Option<usize> {
+        match &ctx.cells[class_cell] {
+            Cell::Class { fields, .. } => fields.get(name).copied(),
+            _ => None,
+        }
+    };
+    let get_int = |ctx: &Ctx, name: &str| -> Option<i128> {
+        let cell = get_field(ctx, name)?;
+        match &ctx.cells[cell] {
+            Cell::Value(IrValue::Int(n)) => Some(*n),
+            _ => None,
+        }
+    };
+    let set_int = |ctx: &mut Ctx, name: &str, val: i128| {
+        if let Some(cell) = get_field(ctx, name) {
+            ctx.cells[cell] = Cell::Value(IrValue::Int(val));
+        }
+    };
+
+    match method {
+        "push" => {
+            let val = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "push"))?;
+            let cap = get_int(ctx, "cap").unwrap_or(0) as usize;
+            let cur_len = get_int(ctx, "len").unwrap_or(0) as usize;
+            if cur_len >= cap {
+                return Ok(Some(IrValue::Bool(false)));
+            }
+            let head = get_int(ctx, "head").unwrap_or(0) as usize;
+            let idx = (head + cur_len) % cap;
+            // 向 buf 数组 idx 位置写入 val
+            if let Some(buf_cell) = get_field(ctx, "buf") {
+                let elems = match &ctx.cells[buf_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                if idx < elems.len() {
+                    ctx.cells[elems[idx]] = Cell::Value(val.clone());
+                } else {
+                    // 扩展数组
+                    let new_elem = ctx.alloc(Cell::Value(val.clone()));
+                    let mut new_elems = elems;
+                    new_elems.push(new_elem);
+                    ctx.cells[buf_cell] = Cell::Elems(new_elems);
+                }
+            }
+            set_int(ctx, "len", (cur_len + 1) as i128);
+            Ok(Some(IrValue::Bool(true)))
+        }
+        "pop" => {
+            let cur_len = get_int(ctx, "len").unwrap_or(0) as usize;
+            if cur_len == 0 {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            let head = get_int(ctx, "head").unwrap_or(0) as usize;
+            let cap = get_int(ctx, "cap").unwrap_or(0) as usize;
+            let val = if let Some(buf_cell) = get_field(ctx, "buf") {
+                match &ctx.cells[buf_cell] {
+                    Cell::Elems(elems) => {
+                        if head < elems.len() {
+                            ctx.cells[elems[head]].clone()
+                        } else {
+                            Cell::Value(IrValue::Void)
+                        }
+                    }
+                    _ => Cell::Value(IrValue::Void),
+                }
+            } else {
+                Cell::Value(IrValue::Void)
+            };
+            set_int(ctx, "head", ((head + 1) % cap) as i128);
+            set_int(ctx, "len", (cur_len - 1) as i128);
+            match val {
+                Cell::Value(v) => Ok(Some(v)),
+                _ => Ok(Some(IrValue::Void)),
+            }
+        }
+        "len" => Ok(Some(IrValue::Int(get_int(ctx, "len").unwrap_or(0)))),
+        "capacity" => Ok(Some(IrValue::Int(get_int(ctx, "cap").unwrap_or(0)))),
+        "is_full" => {
+            let cur_len = get_int(ctx, "len").unwrap_or(0) as usize;
+            let cap = get_int(ctx, "cap").unwrap_or(0) as usize;
+            Ok(Some(IrValue::Bool(cur_len >= cap)))
+        }
+        "is_empty" => {
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            Ok(Some(IrValue::Bool(cur_len == 0)))
+        }
+        "clear" => {
+            set_int(ctx, "head", 0);
+            set_int(ctx, "len", 0);
+            Ok(Some(IrValue::Void))
+        }
+        "peek" => {
+            let idx = int_arg_ir(ctx, args, 0)?;
+            if idx < 0 {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            let cur_len = get_int(ctx, "len").unwrap_or(0) as usize;
+            if (idx as usize) >= cur_len {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            let head = get_int(ctx, "head").unwrap_or(0) as usize;
+            let cap = get_int(ctx, "cap").unwrap_or(0) as usize;
+            let pos = (head + idx as usize) % cap;
+            let val = if let Some(buf_cell) = get_field(ctx, "buf") {
+                match &ctx.cells[buf_cell] {
+                    Cell::Elems(elems) => {
+                        if pos < elems.len() {
+                            match &ctx.cells[elems[pos]] {
+                                Cell::Value(v) => v.clone(),
+                                _ => IrValue::Void,
+                            }
+                        } else {
+                            IrValue::Void
+                        }
+                    }
+                    _ => IrValue::Void,
+                }
+            } else {
+                IrValue::Void
+            };
+            Ok(Some(val))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- G5（E3.3 text）正则文本处理 ----
 
 /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制
@@ -1809,6 +1982,13 @@ pub(crate) fn call_builtin_method(
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "Bitmap" => {
             call_bitmap_method_ir(ctx, module, m, &IrValue::Class(*c), args)
+        }
+        // A6：标准库数据结构——RingBuf 环形缓冲
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "RingBufNs" => {
+            call_ringbuf_ns_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "RingBuf" => {
+            call_ringbuf_method_ir(ctx, module, m, &IrValue::Class(*c), args)
         }
         // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
         (IrValue::Class(_), "to_bytes") => Err(IrError::msg(
