@@ -143,6 +143,11 @@ pub enum TypeKind {
         methods: Vec<Method>,
         traits: Vec<Trait>,
     },
+    /// Struct：连续内存值类型，字段必须为标量或定长标量数组
+    Struct {
+        fields: Vec<FieldDecl>,
+        traits: Vec<Trait>,
+    },
     Enum {
         variants: Vec<EnumVariant>,
     },
@@ -241,6 +246,7 @@ pub fn check_with_extern_deps(
         anytype_bodies: HashMap::new(),
         anytype_ret_cache: HashMap::new(),
         anytype_resolving: HashSet::new(),
+        extension_of: None,
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -305,6 +311,8 @@ struct Checker {
     anytype_ret_cache: HashMap<(String, String), SType>,
     /// 组 D D4：anytype 具体化解析中守卫（自递归 anytype 函数终止 → 回落 Infer）
     anytype_resolving: HashSet<(String, String)>,
+    /// Q15：当前正在检查的扩展方法的目标类型名（None = 普通函数或类方法）
+    extension_of: Option<String>,
     diags: Vec<Diagnostic>,
 }
 

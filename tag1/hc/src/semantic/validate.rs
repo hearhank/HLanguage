@@ -21,10 +21,25 @@ impl Checker {
             })
             .collect();
         for n in names {
-            let fields = match &self.types[&n].kind {
-                TypeKind::Class { fields, .. } => fields.clone(),
+            let (fields, traits) = match &self.types[&n].kind {
+                TypeKind::Class { fields, traits, .. } => (fields.clone(), traits.clone()),
+                TypeKind::Struct { fields, traits, .. } => (fields.clone(), traits.clone()),
                 _ => continue,
             };
+            // [align(N)] 值校验：必须是 2 的幂，范围 1..=128
+            for t in &traits {
+                if let Trait::Align(a) = t {
+                    let a = *a;
+                    if a == 0 || !a.is_power_of_two() || a > 128 {
+                        self.diags.push(Diagnostic::error(
+                            Span::new(0, 0, 0, 0),
+                            format!(
+                                "invalid alignment `{a}` for struct `{n}`; alignment must be a power of 2 in range 1..=128"
+                            ),
+                        ));
+                    }
+                }
+            }
             for f in &fields {
                 if !self.type_is_value(&f.ty) {
                     self.diags.push(Diagnostic::error(

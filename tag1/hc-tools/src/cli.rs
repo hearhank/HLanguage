@@ -616,6 +616,23 @@ fn dump_decl(decl: &hc::ast::Decl, depth: usize) {
             }
             println!();
         }
+        hc::ast::Decl::Struct {
+            name, fields, pub_, ..
+        } => {
+            print!("{indent}Struct|name={name}");
+            if *pub_ {
+                print!("|pub=true");
+            }
+            println!();
+            for f in fields {
+                println!(
+                    "{}  Field|name={}|ty={:?}",
+                    indent,
+                    f.name,
+                    hc::ast::fmt_type_debug(&f.ty)
+                );
+            }
+        }
         hc::ast::Decl::Comptime { .. } => {
             println!("{indent}Comptime");
         }

@@ -76,7 +76,7 @@ fn hexval(b: u8) i32 {
     return -1;
 }
 
-// 关键字表（45 项；struct 并入 KwClass）
+// 关键字表（46 项）
 fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "var") return "KwVar";
     if (name == "const") return "KwConst";
@@ -93,7 +93,7 @@ fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "defer") return "KwDefer";
     if (name == "errdefer") return "KwErrdefer";
     if (name == "class") return "KwClass";
-    if (name == "struct") return "KwClass";
+    if (name == "struct") return "KwStruct";
     if (name == "enum") return "KwEnum";
     if (name == "union") return "KwUnion";
     if (name == "tree") return "KwTree";

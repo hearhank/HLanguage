@@ -193,6 +193,95 @@ const build = Build{
     parse_source(src).expect("parse array trailing comma");
 }
 
+// ---------- Struct 类型验收 ----------
+
+#[test]
+fn struct_decl_and_literal() {
+    // struct 声明 + 字面量初始化 + 字段访问
+    check_clean(
+        "struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 10, y = 3.14 }; return p.x; }\n",
+    );
+}
+
+#[test]
+fn struct_field_access() {
+    // struct 字段读取
+    check_clean(
+        "struct Vec3 { x: f32, y: f32, z: f32 }\n\
+         fn dot(a: *Vec3, b: *Vec3) f32 {\n\
+             return a.x * b.x + a.y * b.y + a.z * b.z;\n\
+         }\n",
+    );
+}
+
+#[test]
+fn struct_missing_field_error() {
+    // struct 字面量缺字段 → 错误
+    check_has_error(
+        "struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 10 }; return p.x; }\n",
+        "missing field",
+    );
+}
+
+#[test]
+fn struct_unknown_field_error() {
+    // struct 字面量未知字段 → 错误
+    check_has_error(
+        "struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 10, y = 3.14, z = 1 }; return p.x; }\n",
+        "unknown field",
+    );
+}
+
+#[test]
+fn struct_array_field() {
+    // struct 定长数组字段
+    check_clean(
+        "struct Matrix { data: [4]f32 }\n\
+         fn f() f32 { var m = Matrix{ data = [1.0, 0.0, 0.0, 1.0] }; return m.data[0]; }\n",
+    );
+}
+
+#[test]
+fn struct_pub_field_access() {
+    // struct 公有字段可正常访问
+    check_clean(
+        "struct Point { pub x: i32, y: f32 }\n\
+         fn f(p: *Point) i32 { return p.x; }\n",
+    );
+}
+
+#[test]
+fn struct_align_valid() {
+    // [align(N)] 合法值：2 的幂
+    check_clean(
+        "[align(8)] struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 1, y = 2.0 }; return p.x; }\n",
+    );
+}
+
+#[test]
+fn struct_align_invalid() {
+    // [align(3)] 不是 2 的幂 → 错误
+    check_has_error(
+        "[align(3)] struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { return 0; }\n",
+        "invalid alignment",
+    );
+}
+
+#[test]
+fn struct_align_zero() {
+    // [align(0)] 无效 → 错误
+    check_has_error(
+        "[align(0)] struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { return 0; }\n",
+        "invalid alignment",
+    );
+}
+
 // ---------- M2.6 错误码表验收 ----------
 
 use hc::error_code_table;

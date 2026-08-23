@@ -1737,6 +1737,146 @@ fn main() i32 {
     assert_eq!(run(src, "main", &[]).unwrap(), IrValue::Int(0));
 }
 
+// ---------- Q8：扩展方法（Extension Method）----------
+
+#[test]
+fn extension_method_on_class() {
+    // [Extension(Type)] 扩展方法通过 CallMethod 运行时分派
+    let src = r#"
+class Point {
+    x: i32,
+    y: i32,
+}
+
+[Extension(Point)]
+fn magnitude(self: *Self) i32 {
+    return self.x + self.y;
+}
+
+fn f() i32 {
+    var p = Point{ x = 3, y = 4 };
+    return p.magnitude();
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(7));
+}
+
+#[test]
+fn extension_method_on_class_with_extra_args() {
+    // 扩展方法带额外参数
+    let src = r#"
+class Point {
+    x: i32,
+    y: i32,
+}
+
+[Extension(Point)]
+fn add(self: *Self, dx: i32, dy: i32) i32 {
+    return self.x + dx + self.y + dy;
+}
+
+fn f() i32 {
+    var p = Point{ x = 3, y = 4 };
+    return p.add(10, 20);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(37));
+}
+
+#[test]
+fn extension_method_on_struct_ir() {
+    // 扩展方法在 struct 上运行
+    let src = r#"
+struct Point { x: i32, y: i32 }
+
+[Extension(Point)]
+fn magnitude(self: *Self) i32 {
+    return self.x + self.y;
+}
+
+fn f() i32 {
+    var p = Point{ x = 3, y = 4 };
+    return p.magnitude();
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(7));
+}
+
+#[test]
+fn extension_method_on_struct_with_extra_args_ir() {
+    let src = r#"
+struct Point { x: i32, y: i32 }
+
+[Extension(Point)]
+fn add(self: *Self, dx: i32, dy: i32) i32 {
+    return self.x + dx + self.y + dy;
+}
+
+fn f() i32 {
+    var p = Point{ x = 3, y = 4 };
+    return p.add(10, 20);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(37));
+}
+
+#[test]
+fn alloc_init_on_struct_ir() {
+    // alloc.init 在 struct 上分配堆实例
+    let src = r#"
+struct Point { x: i32, y: i32 }
+fn f() i32 {
+    var p = alloc.init(Point{ x = 10, y = 20 });
+    return p.x + p.y;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(30));
+}
+
+#[test]
+fn alloc_init_default_on_struct_ir() {
+    // alloc.init(StructName) 默认值构造
+    let src = r#"
+struct Point { x: i32, y: i32 }
+fn f() i32 {
+    var p = alloc.init(Point);
+    return p.x + p.y;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(0));
+}
+
+// ---------- Struct 类型 IR 验收 ----------
+
+#[test]
+fn struct_literal_and_field_ir() {
+    let src = r#"
+struct Point { x: i32, y: i32 }
+fn f() i32 {
+    var p = Point{ x = 3, y = 4 };
+    return p.x + p.y;
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(7));
+}
+
+#[test]
+fn struct_field_access_through_pointer_ir() {
+    let src = r#"
+struct Point { x: i32, y: i32 }
+fn dot(a: *Point) i32 {
+    return a.x + a.y;
+}
+fn f() i32 {
+    var p = Point{ x = 5, y = 6 };
+    return dot(&p);
+}
+"#;
+    assert_eq!(run(src, "f", &[]).unwrap(), IrValue::Int(11));
+}
+
+// ---------- 组 G4a：线程生命周期（协作式延迟执行） ----------
+
 #[test]
 fn bound_ref_capture_join_ir() {
     // `&局部` 捕获 + join（Q18 绑定）：spawn→join 之间无写入（Q19 冻结窗口闭合）

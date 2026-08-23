@@ -287,6 +287,7 @@ impl<'a> Fmt<'a> {
                 self.emit_word(text);
             }
             TokenKind::KwClass
+            | TokenKind::KwStruct
             | TokenKind::KwEnum
             | TokenKind::KwUnion
             | TokenKind::KwTree

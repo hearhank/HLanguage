@@ -118,10 +118,8 @@ impl Checker {
                     ));
                 }
                 let info = TypeInfo {
-                    kind: TypeKind::Class {
+                    kind: TypeKind::Struct {
                         fields: fields.clone(),
-                        ifaces: vec![],
-                        methods: vec![],
                         traits: traits.clone(),
                     },
                     continuous: true,

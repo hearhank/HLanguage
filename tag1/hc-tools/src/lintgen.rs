@@ -265,6 +265,11 @@ fn collect_refs_in_decl(decl: &Decl, refs: &mut Vec<String>) {
             }
         }
         Decl::Enum { .. } => {}
+        Decl::Struct { fields, .. } => {
+            for f in fields {
+                collect_refs_in_type(&f.ty, refs);
+            }
+        }
         Decl::Union { fields, .. } => {
             for f in fields {
                 collect_refs_in_type(&f.ty, refs);
@@ -703,6 +708,11 @@ fn check_type_simplifiable(
             }
         }
         Decl::Enum { .. } | Decl::Interface { .. } => {}
+        Decl::Struct { fields, .. } => {
+            for f in fields {
+                check_type_simplifiable_in_type(&f.ty, source, disabled, fix, rule, diags);
+            }
+        }
         Decl::Union { fields, .. } => {
             for f in fields {
                 check_type_simplifiable_in_type(&f.ty, source, disabled, fix, rule, diags);
@@ -986,6 +996,7 @@ fn check_abbr_in_decl(
     let names = match decl {
         Decl::Fn { name, .. } => vec![name.clone()],
         Decl::Class { name, .. } => vec![name.clone()],
+        Decl::Struct { name, .. } => vec![name.clone()],
         Decl::Enum { name, .. } => vec![name.clone()],
         Decl::Union { name, .. } => vec![name.clone()],
         Decl::Interface { name, .. } => vec![name.clone()],
@@ -1022,6 +1033,7 @@ fn decl_span(decl: &Decl) -> Span {
     match decl {
         Decl::Fn { span, .. } => span.clone(),
         Decl::Class { span, .. } => span.clone(),
+        Decl::Struct { span, .. } => span.clone(),
         Decl::Enum { span, .. } => span.clone(),
         Decl::Union { span, .. } => span.clone(),
         Decl::Interface { span, .. } => span.clone(),

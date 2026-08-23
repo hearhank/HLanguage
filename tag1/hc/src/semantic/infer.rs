@@ -178,6 +178,14 @@ impl Checker {
                                 return Some(self.ty_of(&fd.ty));
                             }
                         }
+                        // Struct：字段类型
+                        if let Some(TypeKind::Struct { fields, .. }) =
+                            self.types.get(n).map(|i| &i.kind)
+                        {
+                            if let Some(fd) = fields.iter().find(|f| f.name == *field) {
+                                return Some(self.ty_of(&fd.ty));
+                            }
+                        }
                         // K1 union：字段类型（读取经字节重解释）
                         if let Some(TypeKind::Union { fields, .. }) =
                             self.types.get(n).map(|i| &i.kind)
@@ -842,6 +850,52 @@ impl Checker {
                             format!("type `{n}` has no field or method `{field}`"),
                         ));
                     }
+                    // Q15：扩展方法不能访问私有字段
+                    if let Some(ext_ty) = &self.extension_of {
+                        if n == ext_ty && has_field {
+                            let is_pub = fields
+                                .iter()
+                                .find(|f| f.name == *field)
+                                .map_or(false, |f| f.pub_);
+                            if !is_pub {
+                                self.diags.push(Diagnostic::error(
+                                    span.clone(),
+                                    format!(
+                                        "extension method `{}` cannot access private field `{}` of type `{n}`",
+                                        ext_ty, field
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+                // Struct：字段存在性校验（纯数据，无方法）
+                if let Some(TypeKind::Struct { fields, .. }) = self.types.get(n).map(|i| &i.kind) {
+                    let has_field = fields.iter().any(|f| f.name == *field);
+                    if !has_field {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("struct `{n}` has no field `{field}`"),
+                        ));
+                    }
+                    // Q15：扩展方法不能访问私有字段
+                    if let Some(ext_ty) = &self.extension_of {
+                        if n == ext_ty && has_field {
+                            let is_pub = fields
+                                .iter()
+                                .find(|f| f.name == *field)
+                                .map_or(false, |f| f.pub_);
+                            if !is_pub {
+                                self.diags.push(Diagnostic::error(
+                                    span.clone(),
+                                    format!(
+                                        "extension method `{}` cannot access private field `{}` of type `{n}`",
+                                        ext_ty, field
+                                    ),
+                                ));
+                            }
+                        }
+                    }
                 }
                 // K1 union：字段存在性校验（无方法）
                 if let Some(TypeKind::Union { fields, .. }) = self.types.get(n).map(|i| &i.kind) {
@@ -925,6 +979,13 @@ impl Checker {
             }) => Some(variants.clone()),
             _ => None,
         };
+        let struct_fields: Option<Vec<FieldDecl>> = match self.types.get(ty) {
+            Some(TypeInfo {
+                kind: TypeKind::Struct { fields, .. },
+                ..
+            }) => Some(fields.clone()),
+            _ => None,
+        };
         let union_fields: Option<Vec<FieldDecl>> = match self.types.get(ty) {
             Some(TypeInfo {
                 kind: TypeKind::Union { fields },
@@ -933,6 +994,43 @@ impl Checker {
             _ => None,
         };
         if let Some(fdecls) = class_fields {
+            for (name, expr) in fields {
+                match fdecls.iter().find(|f| f.name == *name) {
+                    Some(fd) => {
+                        let exp = self.ty_of(&fd.ty);
+                        let act = self.expr_ty(expr, scopes, Some(&exp));
+                        self.check_assignable(&Some(exp), &act, &expr.span(), "field");
+                    }
+                    None => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("unknown field `{name}` in literal of type `{ty}`"),
+                        ));
+                    }
+                }
+            }
+            // 必填字段（连续类型字面量构造要求全字段）
+            let provided: std::collections::HashSet<&str> =
+                fields.iter().map(|(n, _)| n.as_str()).collect();
+            let missing: Vec<&str> = fdecls
+                .iter()
+                .filter(|f| !provided.contains(f.name.as_str()))
+                .map(|f| f.name.as_str())
+                .collect();
+            if !missing.is_empty() {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!(
+                        "missing field(s) {} in literal of type `{ty}`",
+                        missing
+                            .iter()
+                            .map(|m| format!("`{m}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        } else if let Some(fdecls) = struct_fields {
             for (name, expr) in fields {
                 match fdecls.iter().find(|f| f.name == *name) {
                     Some(fd) => {
@@ -2317,6 +2415,13 @@ impl Checker {
                     Type::Named(in_, _) => in_.as_str() == iface_name,
                     _ => false,
                 }),
+                Some(TypeInfo {
+                    kind: TypeKind::Struct { .. },
+                    ..
+                }) => {
+                    // 结构体不支持接口，任何约束都失败
+                    false
+                }
                 _ => true, // 内建类型/未知：放行
             },
             _ => true,
@@ -2519,7 +2624,17 @@ impl Checker {
                             }) = self.types.get(tname)
                             {
                                 if *continuous {
-                                    return None; // 连续类型：字面量构造/值语义
+                                    return None; // 连续类型（struct）不要求构造时填全字段
+                                }
+                                return Some(fields.iter().map(|f| f.name.clone()).collect());
+                            }
+                            if let Some(TypeInfo {
+                                kind: TypeKind::Struct { fields, .. },
+                                continuous,
+                            }) = self.types.get(tname)
+                            {
+                                if *continuous {
+                                    return None; // 连续类型不要求构造时填全字段
                                 }
                                 return Some(fields.iter().map(|f| f.name.clone()).collect());
                             }

@@ -23,6 +23,7 @@ impl Checker {
                 span,
                 params,
                 is_async,
+                extension_of,
                 ..
             } => {
                 let _ = (name, is_test, span);
@@ -56,12 +57,17 @@ impl Checker {
                         },
                     );
                 }
+                // Q15：扩展方法体内不能访问私有字段——保存当前扩展目标并设置
+                let prev_ext = self.extension_of.clone();
+                self.extension_of = extension_of.clone();
                 // M2.3：未标注返回类型 → 从 return 表达式收集（多路径统一推断）
                 self.collect_infer_ret = ret_ty.is_none();
                 self.infer_ret = None;
                 self.infer_ret_conflict = false;
                 self.check_block(body, &mut scopes, constraint, ret_ty);
                 self.collect_infer_ret = false;
+                // 恢复之前的扩展目标
+                self.extension_of = prev_ext;
             }
             Decl::Class {
                 name,
@@ -709,6 +715,21 @@ impl Checker {
                 // 递归检查该类的字段
                 if let Some(TypeInfo {
                     kind: TypeKind::Class { fields, .. },
+                    ..
+                }) = self.types.get(n)
+                {
+                    path.push(n.clone());
+                    for f in fields {
+                        let ft = self.ty_of(&f.ty);
+                        if let Some(cycle) = self.detect_type_cycle(root, path, &ft) {
+                            return Some(cycle);
+                        }
+                    }
+                    path.pop();
+                }
+                // Struct 同样需要循环检测
+                if let Some(TypeInfo {
+                    kind: TypeKind::Struct { fields, .. },
                     ..
                 }) = self.types.get(n)
                 {

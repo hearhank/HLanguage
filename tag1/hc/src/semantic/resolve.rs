@@ -158,6 +158,11 @@ impl Checker {
                         return Some(self.ty_of(&fd.ty));
                     }
                 }
+                if let Some(TypeKind::Struct { fields, .. }) = self.types.get(cn).map(|i| &i.kind) {
+                    if let Some(fd) = fields.iter().find(|f| f.name == *field) {
+                        return Some(self.ty_of(&fd.ty));
+                    }
+                }
                 if let Some(TypeKind::Union { fields, .. }) = self.types.get(cn).map(|i| &i.kind) {
                     if let Some(fd) = fields.iter().find(|f| f.name == *field) {
                         return Some(self.ty_of(&fd.ty));

@@ -344,6 +344,7 @@ pub(crate) fn lower_decl(
             ret,
             exported,
             is_extern,
+            extension_of,
             ..
         } => {
             // E1.2 组 D：类型函数（返回 `type`）= comptime-only，跳过体降级
@@ -392,7 +393,15 @@ pub(crate) fn lower_decl(
                 import_syms,
                 import_mods,
             )?;
-            register_func(module, name, func);
+            // 登记扁平名（直接调用用）
+            let idx = module.funcs.len();
+            module.funcs.push(func);
+            module.func_index.entry(name.clone()).or_default().push(idx);
+            // Q8：扩展方法 —— 同时登记为 {TypeName}.{method} 供 CallMethod 运行时分派
+            if let Some(ext_ty) = extension_of {
+                let qname = format!("{ext_ty}.{name}");
+                module.func_index.entry(qname).or_default().push(idx);
+            }
         }
         Decl::Namespace { name, decls, .. } => {
             // namespace 内函数：扁平名 + 限定名双注册（与运行时/语义一致）；

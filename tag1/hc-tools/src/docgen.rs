@@ -209,6 +209,7 @@ fn decl_span(d: &Decl) -> &Span {
         | Decl::Namespace { span, .. }
         | Decl::Using { span, .. }
         | Decl::Import { span, .. }
+        | Decl::Struct { span, .. }
         | Decl::Comptime { span, .. }
         | Decl::Include { span, .. } => span,
     }
@@ -248,6 +249,7 @@ fn decl_anchor(d: &Decl) -> String {
         }
         Decl::Const { name, .. } => format!("const {name}"),
         Decl::Global { name, .. } => format!("global {name}"),
+        Decl::Struct { name, .. } => format!("struct {name}"),
         Decl::Import { .. } | Decl::Using { .. } | Decl::Comptime { .. } | Decl::Include { .. } => {
             String::new()
         }
@@ -349,6 +351,35 @@ fn render_decl(d: &Decl, src: &str, runs: &mut Vec<DocRun>, out: &mut String, le
                 out.push_str(&format!("\n{doc}\n"));
             }
             out.push('\n');
+        }
+        Decl::Struct {
+            name,
+            traits,
+            fields,
+            pub_,
+            ..
+        } => {
+            let mut sig = String::new();
+            for t in traits {
+                sig.push_str(&format!("{t:?} "));
+            }
+            if *pub_ {
+                sig.push_str("pub ");
+            }
+            sig.push_str(&format!("struct {name}"));
+            sig.push_str(" { ");
+            sig.push_str(
+                &fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.name, render_type(&f.ty)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            sig.push_str(" }");
+            out.push_str(&format!("{h} `{}`\n```hc\n{sig}\n```\n", decl_anchor(d)));
+            if let Some(doc) = doc {
+                out.push_str(&format!("\n{doc}\n"));
+            }
         }
         Decl::Class {
             name,
