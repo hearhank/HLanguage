@@ -637,7 +637,7 @@ impl BodyEmitter {
         args: &[usize],
         temp: usize,
         slot_consts: &HashMap<usize, IrConst>,
-        _strings: &[String],
+        strings: &[String],
         _errors: &ErrorCodeTable,
     ) {
         // ---------- 断言族（现有 5 helper） ----------
@@ -765,6 +765,47 @@ impl BodyEmitter {
             self.emit(format!("store volatile %Value {v}, %Value* {pp}"));
             return;
         }
+        // Q-S3：@atomicLoad(T, p, order)——原子读（协作式单线程，透明 = 普通 load）
+        if name == "@atomicLoad" {
+            let Some(&pslot) = args.get(1) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let p = self.r();
+            self.emit(format!("{p} = load %Value, %Value* %sp.{pslot}"));
+            let pd = self.r();
+            self.emit(format!("{pd} = extractvalue %Value {p}, 1"));
+            let pp = self.r();
+            self.emit(format!("{pp} = inttoptr i128 {pd} to %Value*"));
+            let pv = self.r();
+            self.emit(format!("{pv} = load %Value, %Value* {pp}"));
+            self.emit(format!("store %Value {pv}, %Value* %sp.{temp}"));
+            return;
+        }
+        // Q-S3：@atomicStore(T, p, v, order)——原子写（协作式单线程，透明 = 普通 store）
+        if name == "@atomicStore" {
+            let Some(&pslot) = args.get(1) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let Some(&vslot) = args.get(2) else {
+                self.abort_feature("builtin");
+                return;
+            };
+            let p = self.r();
+            self.emit(format!("{p} = load %Value, %Value* %sp.{pslot}"));
+            let v = self.r();
+            self.emit(format!("{v} = load %Value, %Value* %sp.{vslot}"));
+            let pd = self.r();
+            self.emit(format!("{pd} = extractvalue %Value {p}, 1"));
+            let pp = self.r();
+            self.emit(format!("{pp} = inttoptr i128 {pd} to %Value*"));
+            self.emit(format!("store %Value {v}, %Value* {pp}"));
+            self.emit(format!(
+                "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+            ));
+            return;
+        }
         // K4：@ptrFromInt(addr)——整数载荷 → T_PTR 标记（虚拟指针）；@intFromPtr(p)——指针
         // 载荷 → T_INT 标记。tag1 指针载荷 = i128 ptrtoint 地址，两内建 = 载荷搬运
         // （extractvalue i128 载荷 → 以目标 tag 重建 %Value）。
@@ -799,6 +840,31 @@ impl BodyEmitter {
                 _ => "hc_mul_overflow",
             };
             self.emit_binop_helper(helper, args, temp);
+            return;
+        }
+        // ---------- @panic——运行时中止（带消息） ----------
+        if name == "@panic" {
+            let l = self.fb();
+            let msg = if let Some(IrConst::Str(s)) = args.first().and_then(|a| slot_consts.get(a)) {
+                s.clone()
+            } else {
+                "panic".to_string()
+            };
+            let (si, sn) = str_idx(strings, &msg);
+            self.term("br label %".to_string() + &l);
+            self.blocks.push(
+                l.clone() + ":\n" +
+                &format!("  %g{l} = getelementptr inbounds [{sn} x i8], ptr @.str.{si}, i64 0, i64 0\n") +
+                &format!("  call void @hc_abort(i8* %g{l})\n") +
+                "  unreachable\n"
+            );
+            self.cur = l + ".cont:\n";
+            self.terminated = false;
+            return;
+        }
+        // ---------- @compileError——编译期错误（不应到达 codegen） ----------
+        if name == "@compileError" {
+            self.abort_feature("builtin");
             return;
         }
         // ---------- 数值/字节内建 ----------
