@@ -21,7 +21,6 @@ use crate::ast::*;
 use crate::comptime::{self, Instantiated};
 use crate::errorcodes::ErrorCodeTable;
 use crate::regex::{parse_regex, RegexMatcher};
-use crate::rle::{decode_rle, encode_rle};
 use crate::rng::xorshift64;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};

@@ -21,8 +21,8 @@
 | 编号 | 功能 | 原出处 | 备注 |
 |---|---|---|---|
 | A2 | 数据库连接抽象 | `01-unimplemented-features.md` A2 | 依赖真实 DB 驱动；`io.storage` KV 已落地 |
-| A3 | 通用压缩算法（gzip / zip） | `01-unimplemented-features.md` A3 | RLE 已落地 |
-| A4 | 时区完整（tz 库） | `01-unimplemented-features.md` A4 | `io.time.tick/elapsed` 已落地 |
+| A3 | 通用压缩算法（gzip / zip） | `01-unimplemented-features.md` A3 | ✅ 2026-08-23 落地：LZ77 滑动窗口压缩（token 0x00 字面跑 / 0x01 反向引用 / 0x02 重复跑），同时保留 RLE 式重复跑编码；对任意输入保真；对模式化数据（重复、交替等）压缩效果显著优于纯 RLE；RLE 模块保留供参考 |
+| A4 | 时区完整（tz 库） | `01-unimplemented-features.md` A4 | ✅ 2026-08-23 落地：`io.time.components` 返回 TimeComponents {year,month,day,hour,min,sec,ms}；`io.time.format` ISO 8601；`io.time.local_offset` 返回本地偏移（分钟，当前占位 0） |
 | A5 | 真 OS 进程 / 共享内存 | `01-unimplemented-features.md` A5 | 进程内 ipc 已落地；与 A1（FFI）联动 |
 | A6 | 标准库缺口：bitmap / 侵入式链表 / 环形缓冲 / 树 / 页内存 | `01-unimplemented-features.md` A6 | 底层机器前提 K1/K2/K4/K5 已就绪 |
 | A7 | 惰性 / 组合子迭代器 | `01-unimplemented-features.md` A7 | ✅ 2026-08-23 落地：`iter()` 返回 LazyIter，`filter`/`map` 链式延迟，`next()` 按需求值，`to_array()` 全量解析；filter+map 按链式顺序交错应用；`for` 循环兼容 |

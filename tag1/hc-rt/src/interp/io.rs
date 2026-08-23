@@ -1184,11 +1184,11 @@ impl Interp {
         }
     }
 
-    // ---------- G4（E3.3 archive）RLE 压缩 ----------
+    // ---------- G4（E3.3 archive）LZ77 压缩 ----------
 
     /// io.archive.compress(data) !&[u8] / io.archive.decompress(data) !&[u8]——
-    /// RLE 压缩（encode_rle/decode_rle）。含重复字节的输入明显变短；round-trip 保真
-    /// （任意字节）；非法压缩数据 → error.InvalidFormat。
+    /// LZ77 压缩（compress::compress/decompress）。滑动窗口 4KB，反向引用 3..=258 字节；
+    /// round-trip 对任意输入保真；非法压缩数据 → error.InvalidFormat。
     pub(crate) fn call_archive_method(
         &mut self,
         field: &str,
@@ -1198,11 +1198,11 @@ impl Interp {
         match field {
             "compress" => {
                 let data = self.eval_str_arg(args, 0, span)?;
-                Ok(Some(Value::str_bytes(encode_rle(&data))))
+                Ok(Some(Value::str_bytes(hc::compress::compress(&data))))
             }
             "decompress" => {
                 let data = self.eval_str_arg(args, 0, span)?;
-                match decode_rle(&data) {
+                match hc::compress::decompress(&data) {
                     Ok(out) => Ok(Some(Value::str_bytes(out))),
                     Err(_) => Ok(Some(self.err_val("InvalidFormat"))),
                 }

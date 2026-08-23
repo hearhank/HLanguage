@@ -806,10 +806,10 @@ pub(crate) fn call_store_method_ir(
     }
 }
 
-// ---- G4（E3.3 archive）RLE 压缩 ----
+// ---- G4（E3.3 archive）LZ77 压缩 ----
 
 /// io.archive.compress(data) !&[u8] / io.archive.decompress(data) !&[u8]——
-/// RLE 压缩（encode_rle/decode_rle 共享层）。非法压缩数据 → error.InvalidFormat。
+/// LZ77 压缩（compress::compress/decompress 共享层）。非法压缩数据 → error.InvalidFormat。
 pub(crate) fn call_archive_method_ir(
     ctx: &mut Ctx,
     module: &IrModule,
@@ -819,11 +819,11 @@ pub(crate) fn call_archive_method_ir(
     match field {
         "compress" => {
             let data = str_arg_ir(ctx, args, 0)?;
-            Ok(Some(str_bytes_val(encode_rle(&data))))
+            Ok(Some(str_bytes_val(crate::compress::compress(&data))))
         }
         "decompress" => {
             let data = str_arg_ir(ctx, args, 0)?;
-            match decode_rle(&data) {
+            match crate::compress::decompress(&data) {
                 Ok(out) => Ok(Some(str_bytes_val(out))),
                 Err(_) => Ok(Some(err_val(module, "InvalidFormat"))),
             }

@@ -282,9 +282,8 @@ pub(crate) struct KvStore {
 }
 
 // G4/G5 纯函数共享层（ADR-0004 语义唯一源）：正则引擎 / RLE / xorshift64 移入 hc crate
-// （hc::regex / hc::rle / hc::rng），interp 与 IR 后端共用同一实现，消除重复。
+// （hc::regex / hc::rng），interp 与 IR 后端共用同一实现，消除重复。
 use hc::regex::{parse_regex, RegexMatcher};
-use hc::rle::{decode_rle, encode_rle};
 use hc::rng::xorshift64;
 
 pub struct Interp {
