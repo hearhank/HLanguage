@@ -1205,6 +1205,15 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         "pagemem".into(),
         ctx.alloc(Cell::Value(IrValue::Class(pagemem))),
     );
+    // A6：标准库数据结构——IntrList 侵入式链表命名空间
+    let intrlist = ctx.alloc(Cell::Class {
+        name: "IntrListNs".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert(
+        "intrlist".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(intrlist))),
+    );
     IrValue::Class(ctx.alloc(Cell::Class {
         name: "Io".into(),
         fields,

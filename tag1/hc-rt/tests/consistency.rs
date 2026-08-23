@@ -2766,3 +2766,69 @@ fn a6_pagemem_consistent() {
 "#,
     );
 }
+
+#[test]
+/// A6 标准库数据结构：IntrList 侵入式链表——interp == IR 双模式一致。
+fn a6_intrlist_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var list = try io.intrlist.init();
+    try expect_eq(list.len(), 0);
+    try expect_eq(list.is_empty(), true);
+    try expect_eq(list.pop_front(), null);
+    try expect_eq(list.pop_back(), null);
+
+    // push_front + pop_front
+    var a = list.push_front(10);
+    var b = list.push_front(20);
+    var c = list.push_front(30);
+    try expect_eq(list.len(), 3);
+    try expect_eq(list.pop_front(), 30);
+    try expect_eq(list.pop_front(), 20);
+    try expect_eq(list.pop_front(), 10);
+    try expect_eq(list.is_empty(), true);
+
+    // push_back + pop_back
+    var d = list.push_back(100);
+    var e = list.push_back(200);
+    try expect_eq(list.pop_back(), 200);
+    try expect_eq(list.pop_back(), 100);
+    try expect_eq(list.is_empty(), true);
+
+    // push_front + pop_back (cross)
+    list.push_front(1);
+    list.push_front(2);
+    list.push_front(3);
+    try expect_eq(list.pop_back(), 1);
+    try expect_eq(list.pop_back(), 2);
+    try expect_eq(list.pop_back(), 3);
+
+    // remove middle
+    var x = list.push_back(10);
+    var y = list.push_back(20);
+    var z = list.push_back(30);
+    try expect_eq(list.remove(y), 20);
+    try expect_eq(list.len(), 2);
+    try expect_eq(list.pop_front(), 10);
+    try expect_eq(list.pop_front(), 30);
+
+    // clear
+    list.push_back(1);
+    list.push_back(2);
+    list.clear();
+    try expect_eq(list.is_empty(), true);
+    try expect_eq(list.pop_front(), null);
+
+    // node reuse
+    var na = list.push_back(42);
+    var nb = list.push_back(99);
+    try expect_eq(list.remove(na), 42);
+    try expect_eq(list.remove(nb), 99);
+    try expect_eq(list.len(), 0);
+    var nc = list.push_back(77);
+    try expect_eq(list.pop_front(), 77);
+}
+"#,
+    );
+}

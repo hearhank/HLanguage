@@ -232,6 +232,11 @@ impl Interp {
         f.insert("ringbuf".into(), Value::class("RingBufNs", HashMap::new()));
         // A6：标准库数据结构——PageMem（页内存池）命名空间
         f.insert("pagemem".into(), Value::class("PageMemNs", HashMap::new()));
+        // A6：标准库数据结构——IntrList（侵入式链表）命名空间
+        f.insert(
+            "intrlist".into(),
+            Value::class("IntrListNs", HashMap::new()),
+        );
         Value::class("Io", f)
     }
 

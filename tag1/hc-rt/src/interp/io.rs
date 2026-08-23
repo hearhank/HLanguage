@@ -1581,6 +1581,438 @@ impl Interp {
         }
     }
 
+    // ---------- A6：IntrList 侵入式链表 ----------
+
+    /// io.intrlist.init() !IntrList——创建空链表。
+    pub(crate) fn call_intrlist_ns_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "init" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let mut fields = HashMap::new();
+                fields.insert("prev".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert("next".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert("vals".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert("head".into(), Value::Int(-1));
+                fields.insert("tail".into(), Value::Int(-1));
+                fields.insert("len".into(), Value::Int(0));
+                fields.insert("free".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                Ok(Some(Value::class("IntrList", fields)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// IntrList 实例方法：push_front/pop_front/push_back/pop_back/remove/len/is_empty/clear。
+    pub(crate) fn call_intrlist_method(
+        &mut self,
+        method: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let class_data = match self.deref_value(v.clone()) {
+            Value::Class(c) => c,
+            _ => return Ok(Some(self.err_val("TypeError"))),
+        };
+
+        let get_i = |name: &str| -> Option<i128> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Int(n) => Some(*n),
+                _ => None,
+            }
+        };
+        let get_arr = |name: &str| -> Option<Rc<RefCell<Vec<Rc<RefCell<Value>>>>>> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Arr(a) => Some(a.clone()),
+                _ => None,
+            }
+        };
+
+        match method {
+            "push_front" => {
+                let val = self.eval(&args[0])?;
+                // 分配节点索引
+                let idx = if let Some(free) = get_arr("free") {
+                    let mut f = free.borrow_mut();
+                    f.pop().map(|cell| match *cell.borrow() {
+                        Value::Int(n) => n as usize,
+                        _ => unreachable!(),
+                    })
+                } else {
+                    None
+                };
+                let idx = idx.unwrap_or_else(|| {
+                    // 新分配：扩展所有数组
+                    let n = if let Some(prev) = get_arr("prev") {
+                        prev.borrow().len()
+                    } else {
+                        0
+                    };
+                    n
+                });
+                let head = get_i("head").unwrap_or(-1) as isize;
+                // 设置 prev[idx] = -1, next[idx] = old_head, vals[idx] = val
+                if let Some(prev) = get_arr("prev") {
+                    let mut p = prev.borrow_mut();
+                    if idx >= p.len() {
+                        p.push(Rc::new(RefCell::new(Value::Int(-1))));
+                    } else {
+                        p[idx] = Rc::new(RefCell::new(Value::Int(-1)));
+                    }
+                }
+                if let Some(next) = get_arr("next") {
+                    let mut n = next.borrow_mut();
+                    if idx >= n.len() {
+                        n.push(Rc::new(RefCell::new(Value::Int(head as i128))));
+                    } else {
+                        n[idx] = Rc::new(RefCell::new(Value::Int(head as i128)));
+                    }
+                }
+                if let Some(vals) = get_arr("vals") {
+                    let mut v_arr = vals.borrow_mut();
+                    if idx >= v_arr.len() {
+                        v_arr.push(Rc::new(RefCell::new(val)));
+                    } else {
+                        v_arr[idx] = Rc::new(RefCell::new(val));
+                    }
+                }
+                // 如果 old_head 存在，设置 prev[old_head] = idx
+                if head >= 0 {
+                    if let Some(prev) = get_arr("prev") {
+                        let p = prev.borrow_mut();
+                        if let Some(cell) = p.get(head as usize) {
+                            *cell.borrow_mut() = Value::Int(idx as i128);
+                        }
+                    }
+                } else {
+                    // 空链表，tail = idx
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("tail".into(), Value::Int(idx as i128));
+                }
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("head".into(), Value::Int(idx as i128));
+                let cur_len = get_i("len").unwrap_or(0);
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int(cur_len + 1));
+                Ok(Some(Value::Int(idx as i128)))
+            }
+            "pop_front" => {
+                let head = get_i("head").unwrap_or(-1);
+                if head < 0 {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                let head = head as usize;
+                // 读取值
+                let val = if let Some(vals) = get_arr("vals") {
+                    let v = vals.borrow();
+                    v.get(head)
+                        .map(|c| c.borrow().clone())
+                        .unwrap_or(Value::Void)
+                } else {
+                    Value::Void
+                };
+                // 获取 next 索引
+                let next_idx = if let Some(next) = get_arr("next") {
+                    let n = next.borrow();
+                    n.get(head)
+                        .map(|c| match *c.borrow() {
+                            Value::Int(v) => v,
+                            _ => -1,
+                        })
+                        .unwrap_or(-1)
+                } else {
+                    -1
+                };
+                // 释放 head 索引
+                if let Some(free) = get_arr("free") {
+                    free.borrow_mut()
+                        .push(Rc::new(RefCell::new(Value::Int(head as i128))));
+                }
+                // 更新 head
+                if next_idx >= 0 {
+                    if let Some(prev) = get_arr("prev") {
+                        let p = prev.borrow_mut();
+                        if let Some(cell) = p.get(next_idx as usize) {
+                            *cell.borrow_mut() = Value::Int(-1);
+                        }
+                    }
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("head".into(), Value::Int(next_idx));
+                } else {
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("head".into(), Value::Int(-1));
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("tail".into(), Value::Int(-1));
+                }
+                let cur_len = get_i("len").unwrap_or(0);
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int(cur_len - 1));
+                Ok(Some(val))
+            }
+            "push_back" => {
+                let val = self.eval(&args[0])?;
+                // 分配节点索引
+                let idx = if let Some(free) = get_arr("free") {
+                    let mut f = free.borrow_mut();
+                    f.pop().map(|cell| match *cell.borrow() {
+                        Value::Int(n) => n as usize,
+                        _ => unreachable!(),
+                    })
+                } else {
+                    None
+                };
+                let idx = idx.unwrap_or_else(|| {
+                    if let Some(prev) = get_arr("prev") {
+                        prev.borrow().len()
+                    } else {
+                        0
+                    }
+                });
+                let tail = get_i("tail").unwrap_or(-1) as isize;
+                // 设置 prev[idx] = old_tail, next[idx] = -1, vals[idx] = val
+                if let Some(prev) = get_arr("prev") {
+                    let mut p = prev.borrow_mut();
+                    if idx >= p.len() {
+                        p.push(Rc::new(RefCell::new(Value::Int(tail as i128))));
+                    } else {
+                        p[idx] = Rc::new(RefCell::new(Value::Int(tail as i128)));
+                    }
+                }
+                if let Some(next) = get_arr("next") {
+                    let mut n = next.borrow_mut();
+                    if idx >= n.len() {
+                        n.push(Rc::new(RefCell::new(Value::Int(-1))));
+                    } else {
+                        n[idx] = Rc::new(RefCell::new(Value::Int(-1)));
+                    }
+                }
+                if let Some(vals) = get_arr("vals") {
+                    let mut v_arr = vals.borrow_mut();
+                    if idx >= v_arr.len() {
+                        v_arr.push(Rc::new(RefCell::new(val)));
+                    } else {
+                        v_arr[idx] = Rc::new(RefCell::new(val));
+                    }
+                }
+                // 如果 old_tail 存在，设置 next[old_tail] = idx
+                if tail >= 0 {
+                    if let Some(next) = get_arr("next") {
+                        let n = next.borrow_mut();
+                        if let Some(cell) = n.get(tail as usize) {
+                            *cell.borrow_mut() = Value::Int(idx as i128);
+                        }
+                    }
+                } else {
+                    // 空链表，head = idx
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("head".into(), Value::Int(idx as i128));
+                }
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("tail".into(), Value::Int(idx as i128));
+                let cur_len = get_i("len").unwrap_or(0);
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int(cur_len + 1));
+                Ok(Some(Value::Int(idx as i128)))
+            }
+            "pop_back" => {
+                let tail = get_i("tail").unwrap_or(-1);
+                if tail < 0 {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                let tail = tail as usize;
+                // 读取值
+                let val = if let Some(vals) = get_arr("vals") {
+                    let v = vals.borrow();
+                    v.get(tail)
+                        .map(|c| c.borrow().clone())
+                        .unwrap_or(Value::Void)
+                } else {
+                    Value::Void
+                };
+                // 获取 prev 索引
+                let prev_idx = if let Some(prev) = get_arr("prev") {
+                    let p = prev.borrow();
+                    p.get(tail)
+                        .map(|c| match *c.borrow() {
+                            Value::Int(v) => v,
+                            _ => -1,
+                        })
+                        .unwrap_or(-1)
+                } else {
+                    -1
+                };
+                // 释放 tail 索引
+                if let Some(free) = get_arr("free") {
+                    free.borrow_mut()
+                        .push(Rc::new(RefCell::new(Value::Int(tail as i128))));
+                }
+                // 更新 tail
+                if prev_idx >= 0 {
+                    if let Some(next) = get_arr("next") {
+                        let n = next.borrow_mut();
+                        if let Some(cell) = n.get(prev_idx as usize) {
+                            *cell.borrow_mut() = Value::Int(-1);
+                        }
+                    }
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("tail".into(), Value::Int(prev_idx));
+                } else {
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("head".into(), Value::Int(-1));
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("tail".into(), Value::Int(-1));
+                }
+                let cur_len = get_i("len").unwrap_or(0);
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int(cur_len - 1));
+                Ok(Some(val))
+            }
+            "remove" => {
+                let idx = self.eval_int_arg(args, 0, span)?;
+                if idx < 0 {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                let idx = idx as usize;
+                // 检查节点是否存在（通过 vals 是否有值且节点未被移除）
+                let node_exists = if let Some(vals) = get_arr("vals") {
+                    let v = vals.borrow();
+                    v.get(idx).is_some()
+                } else {
+                    false
+                };
+                if !node_exists {
+                    return Ok(Some(Value::Opt(None)));
+                }
+                // 读取 prev 和 next
+                let prev_idx = if let Some(prev) = get_arr("prev") {
+                    let p = prev.borrow();
+                    p.get(idx)
+                        .map(|c| match *c.borrow() {
+                            Value::Int(v) => v,
+                            _ => -1,
+                        })
+                        .unwrap_or(-1)
+                } else {
+                    -1
+                };
+                let next_idx = if let Some(next) = get_arr("next") {
+                    let n = next.borrow();
+                    n.get(idx)
+                        .map(|c| match *c.borrow() {
+                            Value::Int(v) => v,
+                            _ => -1,
+                        })
+                        .unwrap_or(-1)
+                } else {
+                    -1
+                };
+                // 读取值
+                let val = if let Some(vals) = get_arr("vals") {
+                    let v = vals.borrow();
+                    v.get(idx)
+                        .map(|c| c.borrow().clone())
+                        .unwrap_or(Value::Void)
+                } else {
+                    Value::Void
+                };
+                // 更新前后节点的链接
+                if prev_idx >= 0 {
+                    if let Some(next) = get_arr("next") {
+                        let n = next.borrow_mut();
+                        if let Some(cell) = n.get(prev_idx as usize) {
+                            *cell.borrow_mut() = Value::Int(next_idx);
+                        }
+                    }
+                } else {
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("head".into(), Value::Int(next_idx));
+                }
+                if next_idx >= 0 {
+                    if let Some(prev) = get_arr("prev") {
+                        let p = prev.borrow_mut();
+                        if let Some(cell) = p.get(next_idx as usize) {
+                            *cell.borrow_mut() = Value::Int(prev_idx);
+                        }
+                    }
+                } else {
+                    class_data
+                        .borrow_mut()
+                        .fields
+                        .insert("tail".into(), Value::Int(prev_idx));
+                }
+                // 释放索引
+                if let Some(free) = get_arr("free") {
+                    free.borrow_mut()
+                        .push(Rc::new(RefCell::new(Value::Int(idx as i128))));
+                }
+                let cur_len = get_i("len").unwrap_or(0);
+                class_data
+                    .borrow_mut()
+                    .fields
+                    .insert("len".into(), Value::Int(cur_len - 1));
+                Ok(Some(val))
+            }
+            "len" => Ok(Some(get_i("len").map(Value::Int).unwrap_or(Value::Int(0)))),
+            "is_empty" => {
+                let cur_len = get_i("len").unwrap_or(0);
+                Ok(Some(Value::Bool(cur_len == 0)))
+            }
+            "clear" => {
+                let mut f = class_data.borrow_mut();
+                f.fields
+                    .insert("prev".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                f.fields
+                    .insert("next".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                f.fields
+                    .insert("vals".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                f.fields.insert("head".into(), Value::Int(-1));
+                f.fields.insert("tail".into(), Value::Int(-1));
+                f.fields.insert("len".into(), Value::Int(0));
+                f.fields
+                    .insert("free".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
     // ---------- G5（E3.3 text）正则文本处理 ----------
 
     /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制

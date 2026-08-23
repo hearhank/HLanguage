@@ -1280,6 +1280,563 @@ pub(crate) fn call_pagemem_method_ir(
     }
 }
 
+// ---- A6：标准库数据结构——IntrList 侵入式链表 ----
+
+/// io.intrlist.init() !IntrList——创建空链表。
+pub(crate) fn call_intrlist_ns_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "init" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "init"));
+            }
+            let mut fields = HashMap::new();
+            fields.insert("prev".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("next".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("vals".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("head".into(), ctx.alloc(Cell::Value(IrValue::Int(-1))));
+            fields.insert("tail".into(), ctx.alloc(Cell::Value(IrValue::Int(-1))));
+            fields.insert("len".into(), ctx.alloc(Cell::Value(IrValue::Int(0))));
+            fields.insert("free".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "IntrList".into(),
+                fields,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// IntrList 实例方法：push_front/pop_front/push_back/pop_back/remove/len/is_empty/clear。
+pub(crate) fn call_intrlist_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    method: &str,
+    self_v: &IrValue,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let class_cell = match self_v {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "expected IntrList")),
+    };
+    let get_field = |ctx: &Ctx, name: &str| -> Option<usize> {
+        match &ctx.cells[class_cell] {
+            Cell::Class { fields, .. } => fields.get(name).copied(),
+            _ => None,
+        }
+    };
+    let get_int = |ctx: &Ctx, name: &str| -> Option<i128> {
+        let cell = get_field(ctx, name)?;
+        match &ctx.cells[cell] {
+            Cell::Value(IrValue::Int(n)) => Some(*n),
+            _ => None,
+        }
+    };
+    let set_int = |ctx: &mut Ctx, name: &str, val: i128| {
+        if let Some(cell) = get_field(ctx, name) {
+            ctx.cells[cell] = Cell::Value(IrValue::Int(val));
+        }
+    };
+
+    match method {
+        "push_front" => {
+            let val = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "push_front"))?;
+            // 分配节点索引
+            let idx = if let Some(free_cell) = get_field(ctx, "free") {
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                if let Some(last) = elems.last() {
+                    let val = match &ctx.cells[*last] {
+                        Cell::Value(v) => v.clone(),
+                        _ => IrValue::Int(0),
+                    };
+                    let mut new_elems = elems;
+                    new_elems.pop();
+                    ctx.cells[free_cell] = Cell::Elems(new_elems);
+                    match val {
+                        IrValue::Int(n) => Some(n as usize),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let idx = idx.unwrap_or_else(|| {
+                if let Some(prev_cell) = get_field(ctx, "prev") {
+                    match &ctx.cells[prev_cell] {
+                        Cell::Elems(e) => e.len(),
+                        _ => 0,
+                    }
+                } else {
+                    0
+                }
+            });
+            let head = get_int(ctx, "head").unwrap_or(-1) as isize;
+
+            // 设置 prev[idx] = -1
+            if let Some(prev_cell) = get_field(ctx, "prev") {
+                let elems = match &ctx.cells[prev_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(-1)));
+                let mut new_elems = elems;
+                if idx < new_elems.len() {
+                    new_elems[idx] = new_elem;
+                } else {
+                    new_elems.push(new_elem);
+                }
+                ctx.cells[prev_cell] = Cell::Elems(new_elems);
+            }
+            // 设置 next[idx] = old_head
+            if let Some(next_cell) = get_field(ctx, "next") {
+                let elems = match &ctx.cells[next_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(head as i128)));
+                let mut new_elems = elems;
+                if idx < new_elems.len() {
+                    new_elems[idx] = new_elem;
+                } else {
+                    new_elems.push(new_elem);
+                }
+                ctx.cells[next_cell] = Cell::Elems(new_elems);
+            }
+            // 设置 vals[idx] = val
+            if let Some(vals_cell) = get_field(ctx, "vals") {
+                let elems = match &ctx.cells[vals_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(val.clone()));
+                let mut new_elems = elems;
+                if idx < new_elems.len() {
+                    new_elems[idx] = new_elem;
+                } else {
+                    new_elems.push(new_elem);
+                }
+                ctx.cells[vals_cell] = Cell::Elems(new_elems);
+            }
+            // 如果 old_head 存在，设置 prev[old_head] = idx
+            if head >= 0 {
+                if let Some(prev_cell) = get_field(ctx, "prev") {
+                    let elems = match &ctx.cells[prev_cell] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => Vec::new(),
+                    };
+                    if let Some(&elem_cell) = elems.get(head as usize) {
+                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(idx as i128));
+                    }
+                }
+            } else {
+                set_int(ctx, "tail", idx as i128);
+            }
+            set_int(ctx, "head", idx as i128);
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            set_int(ctx, "len", cur_len + 1);
+            Ok(Some(IrValue::Int(idx as i128)))
+        }
+        "pop_front" => {
+            let head = get_int(ctx, "head").unwrap_or(-1);
+            if head < 0 {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            let head = head as usize;
+            // 读取值
+            let val = if let Some(vals_cell) = get_field(ctx, "vals") {
+                match &ctx.cells[vals_cell] {
+                    Cell::Elems(elems) => {
+                        if head < elems.len() {
+                            match &ctx.cells[elems[head]] {
+                                Cell::Value(v) => v.clone(),
+                                _ => IrValue::Void,
+                            }
+                        } else {
+                            IrValue::Void
+                        }
+                    }
+                    _ => IrValue::Void,
+                }
+            } else {
+                IrValue::Void
+            };
+            // 获取 next 索引
+            let next_idx = if let Some(next_cell) = get_field(ctx, "next") {
+                match &ctx.cells[next_cell] {
+                    Cell::Elems(elems) => {
+                        if head < elems.len() {
+                            match &ctx.cells[elems[head]] {
+                                Cell::Value(IrValue::Int(v)) => *v,
+                                _ => -1,
+                            }
+                        } else {
+                            -1
+                        }
+                    }
+                    _ => -1,
+                }
+            } else {
+                -1
+            };
+            // 释放 head 索引
+            if let Some(free_cell) = get_field(ctx, "free") {
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(head as i128)));
+                let mut new_elems = elems;
+                new_elems.push(new_elem);
+                ctx.cells[free_cell] = Cell::Elems(new_elems);
+            }
+            // 更新 head
+            if next_idx >= 0 {
+                if let Some(prev_cell) = get_field(ctx, "prev") {
+                    let elems = match &ctx.cells[prev_cell] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => Vec::new(),
+                    };
+                    if let Some(&elem_cell) = elems.get(next_idx as usize) {
+                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(-1));
+                    }
+                }
+                set_int(ctx, "head", next_idx);
+            } else {
+                set_int(ctx, "head", -1);
+                set_int(ctx, "tail", -1);
+            }
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            set_int(ctx, "len", cur_len - 1);
+            Ok(Some(val))
+        }
+        "push_back" => {
+            let val = args
+                .get(0)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "push_back"))?;
+            // 分配节点索引
+            let idx = if let Some(free_cell) = get_field(ctx, "free") {
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                if let Some(last) = elems.last() {
+                    let val = match &ctx.cells[*last] {
+                        Cell::Value(v) => v.clone(),
+                        _ => IrValue::Int(0),
+                    };
+                    let mut new_elems = elems;
+                    new_elems.pop();
+                    ctx.cells[free_cell] = Cell::Elems(new_elems);
+                    match val {
+                        IrValue::Int(n) => Some(n as usize),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let idx = idx.unwrap_or_else(|| {
+                if let Some(prev_cell) = get_field(ctx, "prev") {
+                    match &ctx.cells[prev_cell] {
+                        Cell::Elems(e) => e.len(),
+                        _ => 0,
+                    }
+                } else {
+                    0
+                }
+            });
+            let tail = get_int(ctx, "tail").unwrap_or(-1) as isize;
+
+            // 设置 prev[idx] = old_tail
+            if let Some(prev_cell) = get_field(ctx, "prev") {
+                let elems = match &ctx.cells[prev_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(tail as i128)));
+                let mut new_elems = elems;
+                if idx < new_elems.len() {
+                    new_elems[idx] = new_elem;
+                } else {
+                    new_elems.push(new_elem);
+                }
+                ctx.cells[prev_cell] = Cell::Elems(new_elems);
+            }
+            // 设置 next[idx] = -1
+            if let Some(next_cell) = get_field(ctx, "next") {
+                let elems = match &ctx.cells[next_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(-1)));
+                let mut new_elems = elems;
+                if idx < new_elems.len() {
+                    new_elems[idx] = new_elem;
+                } else {
+                    new_elems.push(new_elem);
+                }
+                ctx.cells[next_cell] = Cell::Elems(new_elems);
+            }
+            // 设置 vals[idx] = val
+            if let Some(vals_cell) = get_field(ctx, "vals") {
+                let elems = match &ctx.cells[vals_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(val.clone()));
+                let mut new_elems = elems;
+                if idx < new_elems.len() {
+                    new_elems[idx] = new_elem;
+                } else {
+                    new_elems.push(new_elem);
+                }
+                ctx.cells[vals_cell] = Cell::Elems(new_elems);
+            }
+            // 如果 old_tail 存在，设置 next[old_tail] = idx
+            if tail >= 0 {
+                if let Some(next_cell) = get_field(ctx, "next") {
+                    let elems = match &ctx.cells[next_cell] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => Vec::new(),
+                    };
+                    if let Some(&elem_cell) = elems.get(tail as usize) {
+                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(idx as i128));
+                    }
+                }
+            } else {
+                set_int(ctx, "head", idx as i128);
+            }
+            set_int(ctx, "tail", idx as i128);
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            set_int(ctx, "len", cur_len + 1);
+            Ok(Some(IrValue::Int(idx as i128)))
+        }
+        "pop_back" => {
+            let tail = get_int(ctx, "tail").unwrap_or(-1);
+            if tail < 0 {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            let tail = tail as usize;
+            // 读取值
+            let val = if let Some(vals_cell) = get_field(ctx, "vals") {
+                match &ctx.cells[vals_cell] {
+                    Cell::Elems(elems) => {
+                        if tail < elems.len() {
+                            match &ctx.cells[elems[tail]] {
+                                Cell::Value(v) => v.clone(),
+                                _ => IrValue::Void,
+                            }
+                        } else {
+                            IrValue::Void
+                        }
+                    }
+                    _ => IrValue::Void,
+                }
+            } else {
+                IrValue::Void
+            };
+            // 获取 prev 索引
+            let prev_idx = if let Some(prev_cell) = get_field(ctx, "prev") {
+                match &ctx.cells[prev_cell] {
+                    Cell::Elems(elems) => {
+                        if tail < elems.len() {
+                            match &ctx.cells[elems[tail]] {
+                                Cell::Value(IrValue::Int(v)) => *v,
+                                _ => -1,
+                            }
+                        } else {
+                            -1
+                        }
+                    }
+                    _ => -1,
+                }
+            } else {
+                -1
+            };
+            // 释放 tail 索引
+            if let Some(free_cell) = get_field(ctx, "free") {
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(tail as i128)));
+                let mut new_elems = elems;
+                new_elems.push(new_elem);
+                ctx.cells[free_cell] = Cell::Elems(new_elems);
+            }
+            // 更新 tail
+            if prev_idx >= 0 {
+                if let Some(next_cell) = get_field(ctx, "next") {
+                    let elems = match &ctx.cells[next_cell] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => Vec::new(),
+                    };
+                    if let Some(&elem_cell) = elems.get(prev_idx as usize) {
+                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(-1));
+                    }
+                }
+                set_int(ctx, "tail", prev_idx);
+            } else {
+                set_int(ctx, "head", -1);
+                set_int(ctx, "tail", -1);
+            }
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            set_int(ctx, "len", cur_len - 1);
+            Ok(Some(val))
+        }
+        "remove" => {
+            let idx = int_arg_ir(ctx, args, 0)?;
+            if idx < 0 {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            let idx = idx as usize;
+            // 检查节点是否存在
+            let node_exists = if let Some(vals_cell) = get_field(ctx, "vals") {
+                match &ctx.cells[vals_cell] {
+                    Cell::Elems(elems) => idx < elems.len(),
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if !node_exists {
+                return Ok(Some(IrValue::Opt(None)));
+            }
+            // 读取 prev 和 next
+            let prev_idx = if let Some(prev_cell) = get_field(ctx, "prev") {
+                match &ctx.cells[prev_cell] {
+                    Cell::Elems(elems) => {
+                        if idx < elems.len() {
+                            match &ctx.cells[elems[idx]] {
+                                Cell::Value(IrValue::Int(v)) => *v,
+                                _ => -1,
+                            }
+                        } else {
+                            -1
+                        }
+                    }
+                    _ => -1,
+                }
+            } else {
+                -1
+            };
+            let next_idx = if let Some(next_cell) = get_field(ctx, "next") {
+                match &ctx.cells[next_cell] {
+                    Cell::Elems(elems) => {
+                        if idx < elems.len() {
+                            match &ctx.cells[elems[idx]] {
+                                Cell::Value(IrValue::Int(v)) => *v,
+                                _ => -1,
+                            }
+                        } else {
+                            -1
+                        }
+                    }
+                    _ => -1,
+                }
+            } else {
+                -1
+            };
+            // 读取值
+            let val = if let Some(vals_cell) = get_field(ctx, "vals") {
+                match &ctx.cells[vals_cell] {
+                    Cell::Elems(elems) => {
+                        if idx < elems.len() {
+                            match &ctx.cells[elems[idx]] {
+                                Cell::Value(v) => v.clone(),
+                                _ => IrValue::Void,
+                            }
+                        } else {
+                            IrValue::Void
+                        }
+                    }
+                    _ => IrValue::Void,
+                }
+            } else {
+                IrValue::Void
+            };
+            // 更新前后节点的链接
+            if prev_idx >= 0 {
+                if let Some(next_cell) = get_field(ctx, "next") {
+                    let elems = match &ctx.cells[next_cell] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => Vec::new(),
+                    };
+                    if let Some(&elem_cell) = elems.get(prev_idx as usize) {
+                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(next_idx));
+                    }
+                }
+            } else {
+                set_int(ctx, "head", next_idx);
+            }
+            if next_idx >= 0 {
+                if let Some(prev_cell) = get_field(ctx, "prev") {
+                    let elems = match &ctx.cells[prev_cell] {
+                        Cell::Elems(e) => e.clone(),
+                        _ => Vec::new(),
+                    };
+                    if let Some(&elem_cell) = elems.get(next_idx as usize) {
+                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(prev_idx));
+                    }
+                }
+            } else {
+                set_int(ctx, "tail", prev_idx);
+            }
+            // 释放索引
+            if let Some(free_cell) = get_field(ctx, "free") {
+                let elems = match &ctx.cells[free_cell] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => Vec::new(),
+                };
+                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(idx as i128)));
+                let mut new_elems = elems;
+                new_elems.push(new_elem);
+                ctx.cells[free_cell] = Cell::Elems(new_elems);
+            }
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            set_int(ctx, "len", cur_len - 1);
+            Ok(Some(val))
+        }
+        "len" => Ok(Some(IrValue::Int(get_int(ctx, "len").unwrap_or(0)))),
+        "is_empty" => {
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            Ok(Some(IrValue::Bool(cur_len == 0)))
+        }
+        "clear" => {
+            if let Some(prev_cell) = get_field(ctx, "prev") {
+                ctx.cells[prev_cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(next_cell) = get_field(ctx, "next") {
+                ctx.cells[next_cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(vals_cell) = get_field(ctx, "vals") {
+                ctx.cells[vals_cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(free_cell) = get_field(ctx, "free") {
+                ctx.cells[free_cell] = Cell::Elems(Vec::new());
+            }
+            set_int(ctx, "head", -1);
+            set_int(ctx, "tail", -1);
+            set_int(ctx, "len", 0);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- G5（E3.3 text）正则文本处理 ----
 
 /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制
@@ -2119,6 +2676,13 @@ pub(crate) fn call_builtin_method(
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "PageMem" => {
             call_pagemem_method_ir(ctx, module, m, &IrValue::Class(*c), args)
+        }
+        // A6：标准库数据结构——IntrList 侵入式链表
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "IntrListNs" => {
+            call_intrlist_ns_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "IntrList" => {
+            call_intrlist_method_ir(ctx, module, m, &IrValue::Class(*c), args)
         }
         // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
         (IrValue::Class(_), "to_bytes") => Err(IrError::msg(

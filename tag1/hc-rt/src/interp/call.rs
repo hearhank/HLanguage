@@ -1610,6 +1610,14 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_pagemem_method(m, &v, args, span)
             }
+            // A6：标准库数据结构——IntrList 侵入式链表命名空间
+            (Value::Class(c), m) if c.borrow().name == "IntrListNs" => {
+                self.call_intrlist_ns_method(m, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "IntrList" => {
+                let v = Value::Class(c.clone());
+                self.call_intrlist_method(m, &v, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();
