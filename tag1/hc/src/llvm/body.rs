@@ -1463,6 +1463,43 @@ impl BodyEmitter {
                 // Str is already a byte slice; return self
                 self.emit(format!("store %Value {dv}, %Value* %sp.{temp}"));
             }
+            "substring" => {
+                if args.len() < 2 {
+                    self.abort_feature("nomethod");
+                    return;
+                }
+                let lo = load_arg(self, args[0]);
+                let hi = load_arg(self, args[1]);
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_str_substring(%Value {dv}, %Value {lo}, %Value {hi})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "find" => {
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let needle = load_arg(self, a0);
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_str_find(%Value {dv}, %Value {needle})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "split" => {
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let sep = load_arg(self, a0);
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_str_split(%Value {dv}, %Value {sep})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
             _ => {
                 self.abort_feature("nomethod");
             }

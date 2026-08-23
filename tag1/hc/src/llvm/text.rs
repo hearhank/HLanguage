@@ -2741,3 +2741,135 @@ entry:
   ret %Value %v1
 }
 "#;
+
+pub(crate) const HC_STR_SUBSTRING: &str = r#"define %Value @hc_str_substring(%Value %self, %Value %lo, %Value %hi) {
+entry:
+  %sd = extractvalue %Value %self, 1
+  %sp = inttoptr i128 %sd to i8*
+  %lod = extractvalue %Value %lo, 1
+  %lo_i = trunc i128 %lod to i64
+  %hid = extractvalue %Value %hi, 1
+  %hi_i = trunc i128 %hid to i64
+  %len = sub i64 %hi_i, %lo_i
+  %len_neg = icmp slt i64 %len, 0
+  br i1 %len_neg, label %empty, label %alloc
+empty:
+  ret %Value { i32 5, i128 0 }
+alloc:
+  %bufsiz = add i64 %len, 1
+  %buf = call noalias i8* @malloc(i64 %bufsiz)
+  %src = getelementptr i8, i8* %sp, i64 %lo_i
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %src, i64 %len, i1 false)
+  %end = getelementptr i8, i8* %buf, i64 %len
+  store i8 0, i8* %end
+  %ptr = ptrtoint i8* %buf to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v1 = insertvalue %Value %v0, i128 %ptr, 1
+  ret %Value %v1
+}
+"#;
+
+pub(crate) const HC_STR_FIND: &str = r#"define %Value @hc_str_find(%Value %self, %Value %needle) {
+entry:
+  %sd = extractvalue %Value %self, 1
+  %sp = inttoptr i128 %sd to i8*
+  %nd = extractvalue %Value %needle, 1
+  %np = inttoptr i128 %nd to i8*
+  %slen = call i64 @strlen(i8* %sp)
+  %nlen = call i64 @strlen(i8* %np)
+  %nlen_zero = icmp eq i64 %nlen, 0
+  br i1 %nlen_zero, label %found_zero, label %scan
+found_zero:
+  ret %Value { i32 2, i128 0 }
+scan:
+  %slen_minus = sub i64 %slen, %nlen
+  %scan_limit = add i64 %slen_minus, 1
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %scan ], [ %next, %next_iter ]
+  %in_range = icmp ult i64 %i, %scan_limit
+  br i1 %in_range, label %check, label %notfound
+check:
+  %chk = getelementptr i8, i8* %sp, i64 %i
+  %cmp = call i32 @memcmp(i8* %chk, i8* %np, i64 %nlen)
+  %eq = icmp eq i32 %cmp, 0
+  br i1 %eq, label %found, label %next_iter
+next_iter:
+  %next = add i64 %i, 1
+  br label %loop
+found:
+  %pos_i = zext i64 %i to i128
+  %fv0 = insertvalue %Value { i32 0, i128 0 }, i32 2, 0
+  %fv1 = insertvalue %Value %fv0, i128 %pos_i, 1
+  ret %Value %fv1
+notfound:
+  ret %Value { i32 1, i128 0 }
+}
+"#;
+
+pub(crate) const HC_STR_SPLIT: &str = r#"define %Value @hc_str_split(%Value %self, %Value %sep) {
+entry:
+  %sd = extractvalue %Value %self, 1
+  %sp = inttoptr i128 %sd to i8*
+  %slen = call i64 @strlen(i8* %sp)
+  %sepd = extractvalue %Value %sep, 1
+  %sepp = inttoptr i128 %sepd to i8*
+  %seplen = call i64 @strlen(i8* %sepp)
+  %result = call %Value @hc_make_arr(i64 0)
+  %seplen_zero = icmp eq i64 %seplen, 0
+  br i1 %seplen_zero, label %onepiece, label %scan
+onepiece:
+  call void @hc_append(%Value %result, %Value %self)
+  ret %Value %result
+scan:
+  br label %outer
+outer:
+  %pos = phi i64 [ 0, %scan ], [ %next_pos, %found_sep ]
+  %remaining = sub i64 %slen, %pos
+  %has_remaining = icmp sgt i64 %remaining, 0
+  br i1 %has_remaining, label %inner, label %last
+inner:
+  %i = phi i64 [ 0, %outer ], [ %i_next, %no_match ]
+  %i_remaining = sub i64 %remaining, %i
+  %can_match = icmp sge i64 %i_remaining, %seplen
+  br i1 %can_match, label %try_match, label %emit_piece
+try_match:
+  %try_at = add i64 %pos, %i
+  %try_ptr = getelementptr i8, i8* %sp, i64 %try_at
+  %cmp = call i32 @memcmp(i8* %try_ptr, i8* %sepp, i64 %seplen)
+  %eq = icmp eq i32 %cmp, 0
+  br i1 %eq, label %found_sep, label %no_match
+no_match:
+  %i_next = add i64 %i, 1
+  br label %inner
+found_sep:
+  %seg_len = sub i64 %try_at, %pos
+  %seg_bufsiz = add i64 %seg_len, 1
+  %seg_buf = call noalias i8* @malloc(i64 %seg_bufsiz)
+  %seg_src = getelementptr i8, i8* %sp, i64 %pos
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %seg_buf, i8* %seg_src, i64 %seg_len, i1 false)
+  %seg_end = getelementptr i8, i8* %seg_buf, i64 %seg_len
+  store i8 0, i8* %seg_end
+  %seg_ptr = ptrtoint i8* %seg_buf to i128
+  %seg_v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %seg_v1 = insertvalue %Value %seg_v0, i128 %seg_ptr, 1
+  call void @hc_append(%Value %result, %Value %seg_v1)
+  %next_pos = add i64 %try_at, %seplen
+  br label %outer
+emit_piece:
+  %seg2_len = sub i64 %slen, %pos
+  %seg2_bufsiz = add i64 %seg2_len, 1
+  %seg2_buf = call noalias i8* @malloc(i64 %seg2_bufsiz)
+  %seg2_src = getelementptr i8, i8* %sp, i64 %pos
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %seg2_buf, i8* %seg2_src, i64 %seg2_len, i1 false)
+  %seg2_end = getelementptr i8, i8* %seg2_buf, i64 %seg2_len
+  store i8 0, i8* %seg2_end
+  %seg2_ptr = ptrtoint i8* %seg2_buf to i128
+  %seg2_v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %seg2_v1 = insertvalue %Value %seg2_v0, i128 %seg2_ptr, 1
+  call void @hc_append(%Value %result, %Value %seg2_v1)
+  ret %Value %result
+last:
+  ret %Value %result
+}
+"#;
