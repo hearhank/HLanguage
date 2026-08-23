@@ -316,13 +316,13 @@
 | `Allocator` 接口 | 分配器抽象接口（`alloc`/`realloc`/`free`） | ✅ |
 | `page_allocator` | 全局无状态分配器（每 `alloc` 创建独立 Vec） | ✅ |
 | `Arena` | bump 分配器，接收后备分配器 `Arena.init(backing)` | ✅ |
-| `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ⏳ Phase 3 |
+| `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ✅ |
 | 全局回退 | 默认全局分配器（`alloc` 环境变量） | ✅ |
-| `AllocatorImpl` 枚举 | Rust 侧分配器枚举（Page/Arena/Custom） | 🟡 Phase 1 |
-| `Value::Allocator` | 统一分配器值，替代 `Value::Alloc`/`Value::Arena` | 🟡 Phase 1 |
-| `Value::Bytes` | 原始内存块值类型 | 🟡 Phase 1 |
-| `AllocBlock` | Rust 侧分配器返回的内存块（data + offset + len） | 🟡 Phase 1 |
-| `AllocErr` | 分配失败错误（OutOfMemory/InvalidSize） | 🟡 Phase 1 |
+| `AllocatorImpl` 枚举 | Rust 侧分配器枚举（Page/Arena/Pool/Custom） | ✅ |
+| `Value::Allocator` | 统一分配器值，替代 `Value::Alloc`/`Value::Arena` | ✅ |
+| `Value::Bytes` | 原始内存块值类型 | ✅ |
+| `AllocBlock` | Rust 侧分配器返回的内存块（data + offset + len） | ✅ |
+| `AllocErr` | 分配失败错误（OutOfMemory/InvalidSize） | ✅ |
 | `with_arena(fn)` | 创建临时 Arena，调用函数后自动释放（**Phase 3 已移除**，使用 `Arena.init(alloc)` 替代） | ✅ |
 | 自定义分配器（H 侧） | 用户实现 `Allocator` 接口的自定义分配器 | ⏳ 1.x |
 
@@ -334,7 +334,7 @@
 | `Map` | 哈希表 | ✅ |
 | `Deque` | 双端队列 | ✅ |
 | `Table` | 多索引二维表（`t[i, j]` 语法） | ✅ |
-| `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ⏳ Phase 3 |
+| `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ✅ |
 | `sort` | 数组/切片排序（含比较器闭包） | ✅ |
 | `binary_search` | 二分查找 | ✅ |
 | `sqrt` | 平方根 | ✅ |

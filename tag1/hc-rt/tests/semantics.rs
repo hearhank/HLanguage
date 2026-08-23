@@ -582,3 +582,45 @@ fn m43_compile_error_rejected() {
         "compileError",
     );
 }
+
+// ---------- Pool(T) 分配器测试（Phase 3） ----------
+
+#[test]
+/// Pool.init 创建 + alloc/free 基本操作
+fn pool_init_alloc_free() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 16);\n    var data = pool.alloc(16);\n    pool.free(data);\n}\n",
+    );
+}
+
+#[test]
+/// Pool.alloc() 无参——使用 item_size
+fn pool_alloc_no_args() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 8);\n    var data = pool.alloc();\n    pool.free(data);\n}\n",
+    );
+}
+
+#[test]
+/// Pool alloc → free → alloc 复用空闲块
+fn pool_alloc_free_reuse() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 16);\n    var a = pool.alloc(16);\n    pool.free(a);\n    var b = pool.alloc(16);\n    pool.free(b);\n}\n",
+    );
+}
+
+#[test]
+/// Pool 多次 alloc + free 循环
+fn pool_multiple_alloc_free() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 8);\n    var a = pool.alloc(8);\n    var b = pool.alloc(8);\n    var c = pool.alloc(8);\n    pool.free(a);\n    pool.free(b);\n    pool.free(c);\n    var r = pool.alloc(8);\n    pool.free(r);\n}\n",
+    );
+}
+
+#[test]
+/// Pool.deinit 释放所有资源
+fn pool_deinit() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 16);\n    var a = pool.alloc(16);\n    var b = pool.alloc(16);\n    pool.free(a);\n    pool.free(b);\n    pool.deinit();\n}\n",
+    );
+}
