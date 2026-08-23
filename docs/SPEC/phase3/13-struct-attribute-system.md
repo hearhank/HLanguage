@@ -56,12 +56,11 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 2. 字段级 `[Align(n)]` | ✅ | 布局计算支持字段级对齐 |
 | 3. 特性解析改用字典查找 | ✅ | `parse_trait()` 通过 `TraitRegistry` 字典查找 |
 | 4. `IAttribute` 接口基础设施 | ✅ | `AttributeKind` 区分系统/用户特性 |
-| 5. 扩展方法（部分） | 🔶 | 解析 + AST + 加载器支持，运行时方法分派待实现 |
+| 5. 扩展方法 | ✅ | `[Extension(Type)] fn method(...)` 语法 + 运行时方法分派 |
 | 6. Struct 化 test 特性 | ✅ | 支持 `[test{name="x", mode=async}]` 和 `[align{value=8}]` 语法 |
 
 ### 未实现（推迟到 1.x）
 
-- 扩展方法运行时方法分派（P3）
 - 第四阶段自举（Phase 4 Bootstrapping）
 
 ## 执行顺序

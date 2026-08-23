@@ -264,6 +264,14 @@ fn struct_attr_syntax_align() {
     );
 }
 
+#[test]
+fn extension_method_struct() {
+    // 扩展方法：`[Extension(Point)] fn get_x(self) f64`
+    run_ok(
+        "struct Point { x: f64, y: f64 }\n[Extension(Point)] fn get_x(self: Point) f64 {\n    return self.x;\n}\n[test] fn t() !void {\n    var p = Point{ x = 3.0, y = 4.0 };\n    try expect_eq(p.get_x(), 3.0);\n}\n",
+    );
+}
+
 // ---------- M2.2 表达式级类型检查验收 ----------
 
 #[test]
