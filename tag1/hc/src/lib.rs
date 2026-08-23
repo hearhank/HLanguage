@@ -10,6 +10,7 @@ pub mod bytecode;
 pub mod compress;
 pub mod comptime;
 pub mod diag;
+pub mod ds_bitmap;
 pub mod errorcodes;
 pub mod ir;
 pub mod lexer;

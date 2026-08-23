@@ -1211,6 +1211,124 @@ impl Interp {
         }
     }
 
+    // ---------- A6：标准库数据结构——Bitmap 位图 ----------
+
+    /// io.bitmap.init(nbits) !Bitmap——创建 nbits 位的 Bitmap（全部清零）。
+    pub(crate) fn call_bitmap_ns_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "init" => {
+                let nbits = self.eval_int_arg(args, 0, span)?;
+                if nbits < 0 {
+                    return Ok(Some(self.err_val("InvalidArgument")));
+                }
+                let nwords = (nbits as usize).div_ceil(64);
+                let items: Vec<Rc<RefCell<Value>>> = (0..nwords)
+                    .map(|_| Rc::new(RefCell::new(Value::Int(0))))
+                    .collect();
+                let words = Value::Arr(Rc::new(RefCell::new(items)));
+                let mut fields = HashMap::new();
+                fields.insert("words".into(), words);
+                Ok(Some(Value::class("Bitmap", fields)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Bitmap 实例方法：set/get/clear/count/len。
+    pub(crate) fn call_bitmap_method(
+        &mut self,
+        method: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let words_val = match self.deref_value(v.clone()) {
+            Value::Class(c) => match c.borrow().fields.get("words") {
+                Some(val) => val.clone(),
+                None => return Ok(Some(self.err_val("NoField"))),
+            },
+            _ => return Ok(Some(self.err_val("TypeError"))),
+        };
+        let words_arr = match &words_val {
+            Value::Arr(arr) => arr.clone(),
+            _ => return Ok(Some(self.err_val("TypeError"))),
+        };
+
+        match method {
+            "set" => {
+                let idx = self.eval_int_arg(args, 0, span)?;
+                if idx < 0 {
+                    return Ok(Some(self.err_val("InvalidArgument")));
+                }
+                let word_idx = (idx as usize) >> 6;
+                let bit = 1u64 << ((idx as usize) & 63);
+                let arr = words_arr.borrow_mut();
+                if let Some(cell) = arr.get(word_idx) {
+                    let val = match *cell.borrow() {
+                        Value::Int(v) => v as u64,
+                        _ => 0,
+                    };
+                    *cell.borrow_mut() = Value::Int((val | bit) as i128);
+                }
+                Ok(Some(Value::Void))
+            }
+            "get" => {
+                let idx = self.eval_int_arg(args, 0, span)?;
+                if idx < 0 {
+                    return Ok(Some(Value::Bool(false)));
+                }
+                let word_idx = (idx as usize) >> 6;
+                let bit = 1u64 << ((idx as usize) & 63);
+                let arr = words_arr.borrow();
+                let result = arr
+                    .get(word_idx)
+                    .map_or(false, |cell| match *cell.borrow() {
+                        Value::Int(v) => (v as u64) & bit != 0,
+                        _ => false,
+                    });
+                Ok(Some(Value::Bool(result)))
+            }
+            "clear" => {
+                let idx = self.eval_int_arg(args, 0, span)?;
+                if idx < 0 {
+                    return Ok(Some(self.err_val("InvalidArgument")));
+                }
+                let word_idx = (idx as usize) >> 6;
+                let bit = 1u64 << ((idx as usize) & 63);
+                let arr = words_arr.borrow_mut();
+                if let Some(cell) = arr.get(word_idx) {
+                    let val = match *cell.borrow() {
+                        Value::Int(v) => v as u64,
+                        _ => 0,
+                    };
+                    *cell.borrow_mut() = Value::Int((val & !bit) as i128);
+                }
+                Ok(Some(Value::Void))
+            }
+            "count" => {
+                let arr = words_arr.borrow();
+                let total: u64 = arr
+                    .iter()
+                    .map(|cell| match *cell.borrow() {
+                        Value::Int(v) => (v as u64).count_ones() as u64,
+                        _ => 0,
+                    })
+                    .sum();
+                Ok(Some(Value::Int(total as i128)))
+            }
+            "len" => {
+                let nwords = words_arr.borrow().len();
+                Ok(Some(Value::Int((nwords * 64) as i128)))
+            }
+            _ => Ok(None),
+        }
+    }
+
     // ---------- G5（E3.3 text）正则文本处理 ----------
 
     /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制

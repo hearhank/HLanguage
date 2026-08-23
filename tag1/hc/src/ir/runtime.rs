@@ -1178,6 +1178,15 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         fields: HashMap::new(),
     });
     fields.insert("rng".into(), ctx.alloc(Cell::Value(IrValue::Class(rng))));
+    // A6：标准库数据结构——Bitmap 位图命名空间
+    let bitmap = ctx.alloc(Cell::Class {
+        name: "BitmapNs".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert(
+        "bitmap".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(bitmap))),
+    );
     IrValue::Class(ctx.alloc(Cell::Class {
         name: "Io".into(),
         fields,

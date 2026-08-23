@@ -226,6 +226,8 @@ impl Interp {
         // 的用户类 Rng（内建方法先于用户方法分派，同名会被拦截）。
         f.insert("text".into(), Value::class("Text", HashMap::new()));
         f.insert("rng".into(), Value::class("RngNs", HashMap::new()));
+        // A6：标准库数据结构——Bitmap（位图）命名空间
+        f.insert("bitmap".into(), Value::class("BitmapNs", HashMap::new()));
         Value::class("Io", f)
     }
 

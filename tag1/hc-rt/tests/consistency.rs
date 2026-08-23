@@ -2674,3 +2674,32 @@ fn d1_serial_timeout_test() {
 "#,
     );
 }
+
+#[test]
+/// A6 标准库数据结构：Bitmap 位图——interp == IR 双模式一致。
+fn a6_bitmap_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var bm = try io.bitmap.init(200);
+    try expect_eq(bm.len(), 256);
+    try expect_eq(bm.get(0), false);
+    try expect_eq(bm.count(), 0);
+    bm.set(42);
+    try expect_eq(bm.get(42), true);
+    try expect_eq(bm.get(41), false);
+    try expect_eq(bm.count(), 1);
+    bm.set(0);
+    bm.set(63);
+    bm.set(100);
+    try expect_eq(bm.count(), 4);
+    bm.clear(42);
+    try expect_eq(bm.get(42), false);
+    try expect_eq(bm.count(), 3);
+    bm.set(200);
+    try expect_eq(bm.get(200), true);
+    try expect_eq(bm.len(), 256);
+}
+"#,
+    );
+}

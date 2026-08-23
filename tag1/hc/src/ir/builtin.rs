@@ -832,6 +832,158 @@ pub(crate) fn call_archive_method_ir(
     }
 }
 
+// ---- A6：标准库数据结构——Bitmap 位图 ----
+
+/// io.bitmap.init(nbits) !Bitmap——创建 Bitmap。
+pub(crate) fn call_bitmap_ns_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "init" => {
+            let nbits = int_arg_ir(ctx, args, 0)?;
+            if nbits < 0 {
+                return Ok(Some(err_val(module, "InvalidArgument")));
+            }
+            let nwords = (nbits as usize).div_ceil(64);
+            let items: Vec<IrValue> = (0..nwords).map(|_| IrValue::Int(0)).collect();
+            let arr = make_arr(ctx, items);
+            let arr_cell = match arr {
+                IrValue::Arr(c) => c,
+                _ => unreachable!(),
+            };
+            let mut fields = HashMap::new();
+            fields.insert("words".into(), arr_cell);
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "Bitmap".into(),
+                fields,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Bitmap 实例方法：set/get/clear/count/len。
+pub(crate) fn call_bitmap_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    method: &str,
+    self_v: &IrValue,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    // 提取 words 数组中指定 word_idx 对应的元素 cell 索引
+    let words_elem_idx = |ctx: &Ctx, v: &IrValue, word_idx: usize| -> R<usize> {
+        let class_cell = match v {
+            IrValue::Class(c) => *c,
+            _ => return Err(IrError::msg("TypeError", "expected Bitmap")),
+        };
+        let words_cell = match &ctx.cells[class_cell] {
+            Cell::Class { fields, .. } => *fields
+                .get("words")
+                .ok_or_else(|| IrError::msg("NoField", "no words"))?,
+            _ => return Err(IrError::msg("TypeError", "expected Bitmap")),
+        };
+        let elems = match &ctx.cells[words_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => return Err(IrError::msg("TypeError", "expected array")),
+        };
+        elems
+            .get(word_idx)
+            .copied()
+            .ok_or_else(|| IrError::msg("IndexError", "bitmap index out of bounds"))
+    };
+
+    match method {
+        "set" => {
+            let idx = int_arg_ir(ctx, args, 0)?;
+            if idx < 0 {
+                return Ok(Some(err_val(module, "InvalidArgument")));
+            }
+            let word_idx = (idx as usize) >> 6;
+            let bit = 1u64 << ((idx as usize) & 63);
+            let elem_cell = words_elem_idx(ctx, self_v, word_idx)?;
+            let val = match &ctx.cells[elem_cell] {
+                Cell::Value(IrValue::Int(v)) => *v as u64,
+                _ => 0,
+            };
+            ctx.cells[elem_cell] = Cell::Value(IrValue::Int((val | bit) as i128));
+            Ok(Some(IrValue::Void))
+        }
+        "get" => {
+            let idx = int_arg_ir(ctx, args, 0)?;
+            if idx < 0 {
+                return Ok(Some(IrValue::Bool(false)));
+            }
+            let word_idx = (idx as usize) >> 6;
+            let bit = 1u64 << ((idx as usize) & 63);
+            let elem_cell = words_elem_idx(ctx, self_v, word_idx)?;
+            let result = match &ctx.cells[elem_cell] {
+                Cell::Value(IrValue::Int(v)) => (*v as u64) & bit != 0,
+                _ => false,
+            };
+            Ok(Some(IrValue::Bool(result)))
+        }
+        "clear" => {
+            let idx = int_arg_ir(ctx, args, 0)?;
+            if idx < 0 {
+                return Ok(Some(err_val(module, "InvalidArgument")));
+            }
+            let word_idx = (idx as usize) >> 6;
+            let bit = 1u64 << ((idx as usize) & 63);
+            let elem_cell = words_elem_idx(ctx, self_v, word_idx)?;
+            let val = match &ctx.cells[elem_cell] {
+                Cell::Value(IrValue::Int(v)) => *v as u64,
+                _ => 0,
+            };
+            ctx.cells[elem_cell] = Cell::Value(IrValue::Int((val & !bit) as i128));
+            Ok(Some(IrValue::Void))
+        }
+        "count" => {
+            let class_cell = match self_v {
+                IrValue::Class(c) => *c,
+                _ => return Err(IrError::msg("TypeError", "expected Bitmap")),
+            };
+            let words_cell = match &ctx.cells[class_cell] {
+                Cell::Class { fields, .. } => *fields
+                    .get("words")
+                    .ok_or_else(|| IrError::msg("NoField", "no words"))?,
+                _ => return Err(IrError::msg("TypeError", "expected Bitmap")),
+            };
+            let total: u64 = match &ctx.cells[words_cell] {
+                Cell::Elems(elems) => elems
+                    .iter()
+                    .map(|ec| match &ctx.cells[*ec] {
+                        Cell::Value(IrValue::Int(v)) => (*v as u64).count_ones() as u64,
+                        _ => 0,
+                    })
+                    .sum(),
+                _ => 0,
+            };
+            Ok(Some(IrValue::Int(total as i128)))
+        }
+        "len" => {
+            let class_cell = match self_v {
+                IrValue::Class(c) => *c,
+                _ => return Err(IrError::msg("TypeError", "expected Bitmap")),
+            };
+            let words_cell = match &ctx.cells[class_cell] {
+                Cell::Class { fields, .. } => *fields
+                    .get("words")
+                    .ok_or_else(|| IrError::msg("NoField", "no words"))?,
+                _ => return Err(IrError::msg("TypeError", "expected Bitmap")),
+            };
+            let nwords = match &ctx.cells[words_cell] {
+                Cell::Elems(elems) => elems.len(),
+                _ => 0,
+            };
+            Ok(Some(IrValue::Int((nwords * 64) as i128)))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- G5（E3.3 text）正则文本处理 ----
 
 /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制
@@ -1650,6 +1802,13 @@ pub(crate) fn call_builtin_method(
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "RngNs" => {
             call_rng_method_ir(ctx, m, args)
+        }
+        // A6：标准库数据结构——Bitmap 位图
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "BitmapNs" => {
+            call_bitmap_ns_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "Bitmap" => {
+            call_bitmap_method_ir(ctx, module, m, &IrValue::Class(*c), args)
         }
         // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
         (IrValue::Class(_), "to_bytes") => Err(IrError::msg(

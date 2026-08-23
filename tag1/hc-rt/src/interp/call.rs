@@ -1586,6 +1586,14 @@ impl Interp {
             (Value::Class(c), m) if c.borrow().name == "RngNs" => {
                 self.call_rng_method(m, args, span)
             }
+            // A6：标准库数据结构——Bitmap 位图命名空间
+            (Value::Class(c), m) if c.borrow().name == "BitmapNs" => {
+                self.call_bitmap_ns_method(m, args, span)
+            }
+            (Value::Class(c), m) if c.borrow().name == "Bitmap" => {
+                let v = Value::Class(c.clone());
+                self.call_bitmap_method(m, &v, args, span)
+            }
             // io.stdin()：从标准输入读一行（无缓冲换行去除）
             (Value::Class(c), "stdin") if c.borrow().name == "Io" => {
                 let mut line = String::new();
