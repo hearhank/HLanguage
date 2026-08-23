@@ -11,6 +11,7 @@ pub mod compress;
 pub mod comptime;
 pub mod diag;
 pub mod ds_bitmap;
+pub mod ds_intrlist;
 pub mod ds_pagemem;
 pub mod ds_ringbuf;
 pub mod errorcodes;
