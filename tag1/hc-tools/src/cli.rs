@@ -14,8 +14,8 @@ use crate::lintgen;
 use crate::package::package_entry;
 use crate::project::{init_project, pkg_add, pkg_publish};
 use crate::run::{
-    load_manifest_deps_into, load_siblings_into, program_args, run_file, run_file_bytecode,
-    run_file_dangle, run_file_dangle_bench, run_file_ir,
+    load_manifest_deps_into, load_siblings_into, program_args, run_file_bytecode,
+    run_file_dangle_bench, run_file_hs, run_file_ir,
 };
 use crate::scriptgen;
 use crate::test::{test_dir, test_dir_dangle};
@@ -176,6 +176,13 @@ pub(crate) fn run_cli() -> ExitCode {
             } else if is_hbc2(Path::new(path)) {
                 let prog_args = program_args(&args[rest_start..], path);
                 run_file_bytecode(Path::new(path), &prog_args)
+            } else if path.ends_with(".hs") {
+                // B6-2（E5.6）：`.hs` 脚本文件——直接执行，无 script 展开、无编译模式
+                if bench {
+                    eprintln!("warning: --bench 对 .hs 文件无效");
+                }
+                let prog_args = program_args(&args[rest_start..], path);
+                run_file_hs(Path::new(path), &prog_args)
             } else if Path::new(path).is_dir() {
                 // C1：`hc run <目录>`——包加载：入口 `main.hc` 或首个 `.hc`，
                 // 兄弟文件 + build.zon 依赖由 run_file 复用装载

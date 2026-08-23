@@ -8,6 +8,9 @@
 //! 展开在装载期完成，IR/字节码/native 对展开后的 AST 无感知（ADR-0013 决策 3、
 //! 组 B5 三后端零改动）。
 
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+
 use hc::ast::{Block, Decl, Program};
 use hc::diag;
 use hc_rt::{Interp, Value};
@@ -39,13 +42,62 @@ pub fn expand_scripts(source: &str) -> Result<String, String> {
 
 /// 装载路径统一入口：script 展开 → comptime 块求值 → 解析。
 /// 返回（展开后源码, 展开后程序）。展开/comptime 求值失败返回已渲染诊断文本（调用方直接打印）。
+///
+/// 注：内联 `script { }` 块不缓存（依赖 `types` 上下文，非纯函数）。
 pub fn parse_with_scripts(source: &str) -> Result<(String, hc::Program), String> {
+    // 快速路径：无 script 块时不展开
+    if !source.contains("script") {
+        let program = hc::parse_source(source).map_err(|d| diag::render(&d, source))?;
+        crate::comptimegen::eval_comptime_blocks(source, &program)?;
+        return Ok((source.to_string(), program));
+    }
     let expanded = expand_scripts(source)?;
     let program = hc::parse_source(&expanded).map_err(|d| diag::render(&d, &expanded))?;
     // E1.2（组 D D2）：comptime 块装载期求值——script 展开后（可见生成类型）、
     // 语义检查前；失败 = 编译错误。IR/字节码/native 对 comptime 块无感知（后端跳过）。
     crate::comptimegen::eval_comptime_blocks(&expanded, &program)?;
     Ok((expanded, program))
+}
+
+/// 计算源码缓存键（hash 十六进制串）
+/// 用于 `.hs` 文件缓存（见 `run_hs_file`）。
+#[allow(dead_code)]
+pub(crate) fn source_cache_key(source: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// 脚本缓存目录：`~/.hc/cache/script/`
+#[allow(dead_code)]
+pub(crate) fn cache_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    let mut dir = PathBuf::from(home);
+    dir.push(".hc");
+    dir.push("cache");
+    dir.push("script");
+    dir
+}
+
+/// 尝试读取缓存；返回 None 表示缓存缺失或不可读
+#[allow(dead_code)]
+pub(crate) fn try_read_cache(path: &PathBuf) -> Option<String> {
+    if path.exists() {
+        std::fs::read_to_string(path).ok()
+    } else {
+        None
+    }
+}
+
+/// 写入缓存（忽略失败——缓存非关键路径）
+#[allow(dead_code)]
+pub(crate) fn write_cache(path: &PathBuf, content: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, content);
 }
 
 /// 待展开的 script 块站点（源码文本区间锚）
@@ -88,18 +140,12 @@ fn find_in_decl<'a>(d: &'a Decl) -> Option<ScriptSite<'a>> {
 fn eval_script(source: &str, program: &Program, site: &ScriptSite) -> Result<String, String> {
     let mut interp = Interp::new(source);
     interp.set_script_mode(true);
-    interp.load(program).map_err(|e| {
-        format!(
-            "script 块装载失败: {}",
-            e.render(source)
-        )
-    })?;
-    let v = interp.exec_fn_body(site.body, &[]).map_err(|e| {
-        format!(
-            "script 块求值失败: {}",
-            e.render(source)
-        )
-    })?;
+    interp
+        .load(program)
+        .map_err(|e| format!("script 块装载失败: {}", e.render(source)))?;
+    let v = interp
+        .exec_fn_body(site.body, &[])
+        .map_err(|e| format!("script 块求值失败: {}", e.render(source)))?;
     match v {
         Value::Str(s) => Ok(String::from_utf8_lossy(&s.borrow()).into_owned()),
         other => Err(format!(

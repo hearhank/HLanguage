@@ -362,6 +362,51 @@ pub(crate) fn load_deps_into(
     Ok(())
 }
 
+/// B6-2（E5.6）：`.hs` 脚本文件执行入口。
+///
+/// 流程：读取 → 直接解析（无 script 展开、无 comptime）→ 装载 → 执行 `main`。
+/// `.hs` 文件是 H 语言子集，使用 `import H.std.{io}` 引用标准库，
+/// 不通过命名空间组织，而是基于文件引用（`import "path"` 暂未实现）。
+/// 脚本模式允许 IO（与 `script { }` 内联块不同）。
+pub(crate) fn run_file_hs(path: &Path, prog_args: &[String]) -> ExitCode {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: 读取 {} 失败: {}", path.display(), e);
+            return ExitCode::FAILURE;
+        }
+    };
+    // 直接解析，无 script 展开、无 comptime
+    let program = match hc::parse_source(&source) {
+        Ok(p) => p,
+        Err(diags) => {
+            eprintln!("{}", hc::diag::render(&diags, &source));
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut interp = Interp::new(&source);
+    interp.args = prog_args.to_vec();
+    if let Err(e) = interp.load(&program) {
+        eprintln!("{}", e.render(&source));
+        return ExitCode::FAILURE;
+    }
+    match interp.run_main() {
+        Ok(()) => {
+            report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
+            match interp.exit_code {
+                Some(0) => ExitCode::SUCCESS,
+                Some(c) => ExitCode::from(c),
+                None => ExitCode::SUCCESS,
+            }
+        }
+        Err(e) => {
+            report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
+            eprintln!("{}", e.render(&source));
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// C2（ADR-0016）：`hc run [--dangle=on|off|auto]`——设置悬垂检查模式后运行。
 pub(crate) fn run_file_dangle(path: &Path, prog_args: &[String], dangle: DangleMode) -> ExitCode {
     run_file_dangle_bench(path, prog_args, dangle, false)
