@@ -182,10 +182,186 @@ impl BodyEmitter {
     }
 
     pub(crate) fn bin(&mut self, op: IrBinOp, temp: usize, a: usize, b: usize) {
+        // 从类型槽表推断类型，可为 null
+        let ty = self.type_slot_map.get(&a).cloned();
+        let is_int = ty.as_ref().map_or(false, |t| {
+            matches!(
+                t.as_str(),
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "bool"
+            )
+        });
+        let is_float = ty.as_ref().map_or(false, |t| {
+            matches!(t.as_str(), "f16" | "f32" | "f64" | "f128")
+        });
+        let is_unsigned = ty.as_ref().map_or(false, |t| t.starts_with('u'));
+
         let va = self.r();
         self.emit(format!("{va} = load %Value, %Value* %sp.{a}"));
         let vb = self.r();
         self.emit(format!("{vb} = load %Value, %Value* %sp.{b}"));
+
+        // 标量类型内联路径：对已知类型跳过 %Value helper 直接发射 LLVM 指令
+        if is_int || is_float {
+            let da = self.r();
+            self.emit(format!("{da} = extractvalue %Value {va}, 1"));
+            let db = self.r();
+            self.emit(format!("{db} = extractvalue %Value {vb}, 1"));
+            match op {
+                IrBinOp::Add
+                | IrBinOp::Sub
+                | IrBinOp::Mul
+                | IrBinOp::Div
+                | IrBinOp::Mod
+                | IrBinOp::BitAnd
+                | IrBinOp::BitOr
+                | IrBinOp::BitXor
+                | IrBinOp::Shl
+                | IrBinOp::Shr => {
+                    if is_int {
+                        let iop = match op {
+                            IrBinOp::Add => "add",
+                            IrBinOp::Sub => "sub",
+                            IrBinOp::Mul => "mul",
+                            IrBinOp::Div => {
+                                if is_unsigned {
+                                    "udiv"
+                                } else {
+                                    "sdiv"
+                                }
+                            }
+                            IrBinOp::Mod => {
+                                if is_unsigned {
+                                    "urem"
+                                } else {
+                                    "srem"
+                                }
+                            }
+                            IrBinOp::BitAnd => "and",
+                            IrBinOp::BitOr => "or",
+                            IrBinOp::BitXor => "xor",
+                            IrBinOp::Shl => "shl",
+                            IrBinOp::Shr => {
+                                if is_unsigned {
+                                    "lshr"
+                                } else {
+                                    "ashr"
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                        let r = self.r();
+                        self.emit(format!("{r} = {iop} i128 {da}, {db}"));
+                        self.build_store(temp, T_INT, r);
+                    } else {
+                        // Float: bitcast i128 to double, op, bitcast back
+                        let fa = self.r();
+                        self.emit(format!("{fa} = bitcast i128 {da} to double"));
+                        let fb = self.r();
+                        self.emit(format!("{fb} = bitcast i128 {db} to double"));
+                        let fop = match op {
+                            IrBinOp::Add => "fadd",
+                            IrBinOp::Sub => "fsub",
+                            IrBinOp::Mul => "fmul",
+                            IrBinOp::Div => "fdiv",
+                            IrBinOp::Mod => "frem",
+                            _ => unreachable!(),
+                        };
+                        let r = self.r();
+                        self.emit(format!("{r} = {fop} double {fa}, {fb}"));
+                        let bits = self.r();
+                        self.emit(format!("{bits} = bitcast double {r} to i64"));
+                        let z = self.r();
+                        self.emit(format!("{z} = zext i64 {bits} to i128"));
+                        self.build_store(temp, T_FLOAT, z);
+                    }
+                }
+                IrBinOp::EucMod => {
+                    // EucMod（欧几里得模）：srem + 负修正，暂用 helper
+                    let res = self.r();
+                    self.emit(format!(
+                        "{res} = call %Value @hc_eucmod(%Value {va}, %Value {vb})"
+                    ));
+                    self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+                }
+                IrBinOp::Eq
+                | IrBinOp::Ne
+                | IrBinOp::Lt
+                | IrBinOp::Le
+                | IrBinOp::Gt
+                | IrBinOp::Ge => {
+                    if is_int {
+                        let icmp_op = match op {
+                            IrBinOp::Eq => "icmp eq",
+                            IrBinOp::Ne => "icmp ne",
+                            IrBinOp::Lt => {
+                                if is_unsigned {
+                                    "icmp ult"
+                                } else {
+                                    "icmp slt"
+                                }
+                            }
+                            IrBinOp::Le => {
+                                if is_unsigned {
+                                    "icmp ule"
+                                } else {
+                                    "icmp sle"
+                                }
+                            }
+                            IrBinOp::Gt => {
+                                if is_unsigned {
+                                    "icmp ugt"
+                                } else {
+                                    "icmp sgt"
+                                }
+                            }
+                            IrBinOp::Ge => {
+                                if is_unsigned {
+                                    "icmp uge"
+                                } else {
+                                    "icmp sge"
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                        let c = self.r();
+                        self.emit(format!("{c} = {icmp_op} i128 {da}, {db}"));
+                        self.emit_bool_store(temp, &c);
+                    } else {
+                        // Float comparison
+                        let fa = self.r();
+                        self.emit(format!("{fa} = bitcast i128 {da} to double"));
+                        let fb = self.r();
+                        self.emit(format!("{fb} = bitcast i128 {db} to double"));
+                        let fcmp_op = match op {
+                            IrBinOp::Eq => "fcmp oeq",
+                            IrBinOp::Ne => "fcmp one",
+                            IrBinOp::Lt => "fcmp olt",
+                            IrBinOp::Le => "fcmp ole",
+                            IrBinOp::Gt => "fcmp ogt",
+                            IrBinOp::Ge => "fcmp oge",
+                            _ => unreachable!(),
+                        };
+                        let c = self.r();
+                        self.emit(format!("{c} = {fcmp_op} double {fa}, {fb}"));
+                        self.emit_bool_store(temp, &c);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 未知类型路径：回退到现有 helper 调用
         match op {
             IrBinOp::Add
             | IrBinOp::Sub
