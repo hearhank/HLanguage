@@ -91,6 +91,12 @@ fn run_directory_prefers_main_hc_else_first_hc() {
         std::process::id().wrapping_mul(31) % 100000
     ));
     std::fs::create_dir_all(&dir).unwrap();
+    // Q13：目录 run 需要 build.zon
+    std::fs::write(
+        dir.join("build.zon"),
+        "const build = Build{{ name = \"test\", version = \"0.1.0\", kind = Kind.exe, files = [], deps = [], }};\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.join("a.hc"),
         "import H.std.{io};\nfn main() !void { io.print(\"first-hc\\n\"); }\n",
@@ -123,8 +129,8 @@ fn run_directory_without_hc_errors() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(!out.status.success(), "空目录应失败");
     assert!(
-        stderr.contains("无 .hc 文件"),
-        "应提示无 .hc 文件: {stderr}"
+        stderr.contains("缺少 build.zon"),
+        "应提示缺少 build.zon: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -451,10 +457,13 @@ fn init_creates_runnable_scaffold() {
     assert!(out.status.success(), "hc init 应成功: {stdout}{stderr}");
     let proj = dir.join("demo");
     assert!(proj.join("build.zon").exists(), "应生成 build.zon");
-    assert!(proj.join("main.hc").exists(), "应生成 main.hc");
+    assert!(
+        proj.join("src").join("main.hc").exists(),
+        "应生成 src/main.hc"
+    );
     let zon = std::fs::read_to_string(proj.join("build.zon")).expect("读 build.zon");
     assert!(zon.contains("name = \"demo\""), "清单应含项目名: {zon}");
-    let main = std::fs::read_to_string(proj.join("main.hc")).expect("读 main.hc");
+    let main = std::fs::read_to_string(proj.join("src").join("main.hc")).expect("读 src/main.hc");
     assert!(main.contains("fn main() !void"), "应含标准入口: {main}");
 
     // 脚手架运行绿（目录 = 包，入口 main.hc）

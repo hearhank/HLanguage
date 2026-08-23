@@ -105,6 +105,7 @@ pub(crate) fn init_project(name: &str) -> ExitCode {
          \x20   minor = 1,\n\
          \x20   patch = 0,\n\
          \x20   build = 0,\n\
+         \x20   time = 0,\n\
          }};\n"
     );
     if let Err(e) = std::fs::write(dir.join("build.zon"), &zon) {

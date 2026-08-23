@@ -184,9 +184,16 @@ pub(crate) fn run_cli() -> ExitCode {
                 let prog_args = program_args(&args[rest_start..], path);
                 run_file_hs(Path::new(path), &prog_args)
             } else if Path::new(path).is_dir() {
-                // C1：`hc run <目录>`——包加载：入口 `main.hc` 或首个 `.hc`，
-                // 兄弟文件 + build.zon 依赖由 run_file 复用装载
-                match package_entry(Path::new(path)) {
+                // Q13：`hc run <dir>` 验证——目录必须含 build.zon + main.hc
+                let dir = Path::new(path);
+                if !dir.join("build.zon").exists() {
+                    eprintln!(
+                        "error: 目录 {} 缺少 build.zon（项目清单；`hc run <dir>` 需项目目录）",
+                        dir.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
+                match package_entry(dir) {
                     Ok(entry) => {
                         let entry_s = entry.to_string_lossy().into_owned();
                         let prog_args = program_args(&args[rest_start..], &entry_s);

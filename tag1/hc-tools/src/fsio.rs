@@ -128,6 +128,10 @@ pub(crate) fn collect_hc_files(dir: &Path, out: &mut Vec<PathBuf>) {
             }
             collect_hc_files(&path, out);
         } else if path.extension().map_or(false, |e| e == "hc") {
+            // 跳过 version.hc（版本信息数据文件，非可编译源码）
+            if path.file_name().map_or(false, |n| n == "version.hc") {
+                continue;
+            }
             out.push(path);
         }
     }

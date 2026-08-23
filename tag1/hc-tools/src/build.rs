@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use hc::ast::{Decl, Expr};
+
 use crate::buildzon;
 use crate::cli::{err_color, paint};
 use crate::fsio::{link_exe, source_to_bytecode, write_bytecode_artifact, zig_cc_available};
@@ -154,25 +156,170 @@ fn build_lib(
 
 /// `hc build [--dll] <path>`：M3.3 原生编译（emit-.ll + `zig cc` → 可执行文件）。
 /// `zig cc` 缺失时回退字节码镜像 .hbc + 平台启动器（M3.2 前过渡形态）。
+/// Q13：`hc build <dir>` 验证——目录必须含 build.zon + main.hc。
 /// C3：`Kind::lib` → 静态归档（build_lib）；`Kind::exe` 带本地依赖 → 链接库形态。
 /// C4：`--dll` → `Kind::lib` 产 dll（`zig cc -shared`，自包含 helper）；`Kind::exe`
 /// 依赖库按 dll 构建并**链接 dll**（OS 运行时加载；dll 复制到 exe 目录供加载器定位）。
-pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
-    // 目录参数：取目录内 main.hc（否则首个 .hc）作为入口
-    let entry_path = if path.is_dir() {
-        let files = dir_hc_files(path);
-        let main = files
-            .iter()
-            .find(|f| f.file_stem().map_or(false, |s| s == "main"));
-        match main.or_else(|| files.first()) {
-            Some(f) => f.clone(),
-            None => {
-                eprintln!("error: 目录 {} 无 .hc 文件", path.display());
-                return ExitCode::FAILURE;
+/// Q13：`hc build <dir>` 验证——目录必须含 build.zon + main.hc。
+/// 对 `hc build <file>` 单文件路径，`entry_path` 直接为该文件。
+fn resolve_build_entry(path: &Path) -> Result<PathBuf, ExitCode> {
+    if path.is_dir() {
+        // Q13：目录参数必须含 build.zon + main.hc
+        if !path.join("build.zon").exists() {
+            eprintln!(
+                "error: 目录 {} 缺少 build.zon（项目清单；`hc build <dir>` 需项目目录）",
+                path.display()
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        match package_entry(path) {
+            Ok(entry) => Ok(entry),
+            Err(msg) => {
+                eprintln!("error: {msg}");
+                Err(ExitCode::FAILURE)
             }
         }
     } else {
-        path.to_path_buf()
+        Ok(path.to_path_buf())
+    }
+}
+
+/// Auto-increment build number in version.hc after successful build.
+/// Returns the new build number, or 0 if no version.hc exists.
+fn update_version_hc(dir: &Path) -> Result<u64, String> {
+    let vpath = dir.join("version.hc");
+    if !vpath.exists() {
+        return Ok(0);
+    }
+    let content =
+        std::fs::read_to_string(&vpath).map_err(|e| format!("读取 version.hc 失败: {e}"))?;
+
+    // 用 H parser 解析以提取当前 build 号
+    let program = hc::parse_source(&content).map_err(|diags| {
+        diags
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+
+    let mut old_build = 0u64;
+    let mut old_time = 0u64;
+    let mut has_time = false;
+    let mut found = false;
+    for decl in &program.decls {
+        if let Decl::Const { name, init, .. } = decl {
+            if name == "version" {
+                if let Expr::NamedLit { ty, fields, .. } = init {
+                    if ty == "Version" {
+                        for (key, val) in fields {
+                            if key == "build" {
+                                if let Expr::IntLit { text, .. } = val {
+                                    old_build = text.parse::<u64>().unwrap_or(0);
+                                    found = true;
+                                }
+                            }
+                            if key == "time" {
+                                has_time = true;
+                                if let Expr::IntLit { text, .. } = val {
+                                    old_time = text.parse::<u64>().unwrap_or(0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found {
+        return Ok(0);
+    }
+
+    let new_build = old_build + 1;
+    let new_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // 逐行处理以安全替换
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let mut build_replaced = false;
+    let mut _time_replaced = false;
+
+    for i in 0..lines.len() {
+        let trimmed = lines[i].trim().to_string();
+        if trimmed.starts_with("build = ") && trimmed.ends_with(',') {
+            let num_part = trimmed
+                .strip_prefix("build = ")
+                .unwrap_or("")
+                .strip_suffix(',')
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if let Ok(n) = num_part.parse::<u64>() {
+                if n == old_build {
+                    let indent =
+                        lines[i][..lines[i].len() - lines[i].trim_start().len()].to_string();
+                    lines[i] = format!("{}build = {},", indent, new_build);
+                    build_replaced = true;
+                }
+            }
+        }
+        if has_time && trimmed.starts_with("time = ") && trimmed.ends_with(',') {
+            let num_part = trimmed
+                .strip_prefix("time = ")
+                .unwrap_or("")
+                .strip_suffix(',')
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if let Ok(n) = num_part.parse::<u64>() {
+                if n == old_time {
+                    let indent =
+                        lines[i][..lines[i].len() - lines[i].trim_start().len()].to_string();
+                    lines[i] = format!("{}time = {},", indent, new_time);
+                    _time_replaced = true;
+                }
+            }
+        }
+    }
+
+    // 无 time 字段时在 build 行后插入
+    if !has_time && build_replaced {
+        for i in 0..lines.len() {
+            let trimmed = lines[i].trim();
+            if trimmed.starts_with("build = ") && trimmed.ends_with(',') {
+                let indent = &lines[i][..lines[i].len() - lines[i].trim_start().len()];
+                lines.insert(i + 1, format!("{}time = {},", indent, new_time));
+                break;
+            }
+        }
+    }
+
+    let new_content = lines.join("\n");
+    std::fs::write(&vpath, &new_content).map_err(|e| format!("写入 version.hc 失败: {e}"))?;
+
+    println!(
+        "  version.hc: build {} → {}  (time updated)",
+        old_build, new_build
+    );
+    Ok(new_build)
+}
+
+/// 更新 version.hc 的包装函数：build 成功时调用，失败仅打印警告不阻断构建。
+fn try_update_version_hc(dir: &Path) {
+    match update_version_hc(dir) {
+        Ok(n) if n > 0 => {} // 已打印信息
+        Ok(_) => {}          // 无 version.hc
+        Err(msg) => eprintln!("[warn] version.hc 更新失败: {msg}"),
+    }
+}
+
+pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
+    // Q13：目录参数必须含 build.zon + main.hc
+    let entry_path = match resolve_build_entry(path) {
+        Ok(p) => p,
+        Err(c) => return c,
     };
 
     let (source, entry, siblings) = match package_programs(&entry_path) {
@@ -215,6 +362,7 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
         return match build_lib(dir, &manifest.as_ref().unwrap().name, dll) {
             Ok((a_path, _)) => {
                 println!("库产物: {}", a_path.display());
+                try_update_version_hc(dir);
                 ExitCode::SUCCESS
             }
             Err(c) => c,
@@ -322,6 +470,7 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
         // 编译成功：清理中间 .ll，保留可执行文件
         let _ = std::fs::remove_file(&ll_path);
         println!("原生产物: {}", exe_path.display());
+        try_update_version_hc(dir);
         return ExitCode::SUCCESS;
     }
 
@@ -373,5 +522,6 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
     println!("  字节码    : {}", hbc_path.display());
     println!("  启动器    : {}", launcher.display());
     println!("运行方式：{}", launcher.display());
+    try_update_version_hc(dir);
     ExitCode::SUCCESS
 }
