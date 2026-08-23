@@ -259,20 +259,99 @@ impl Parser {
                 })
             }
             "test" => {
-                // [test("名称")]：单参 = 测试显示名（可省，省略时显示函数名）
+                // [test("名称")] / [test(async)] / [test(thread)] / [test(timeout=5)]
+                // 支持逗号分隔组合：`[test("name", async, timeout=5)]`
                 let mut name = None;
+                let mut mode = TestMode::Serial;
+                let mut timeout = None;
                 if self.at(&TokenKind::LParen) {
                     self.advance();
-                    if let TokenKind::Str(first) = self.peek().clone() {
-                        self.advance();
-                        name = Some(first);
+                    // 解析第一个参数（可省）
+                    if !self.at(&TokenKind::RParen) {
+                        // 可能是字符串名、关键字(async/thread)或 timeout=值
+                        let tok = self.peek().clone();
+                        match tok {
+                            TokenKind::Str(s) => {
+                                self.advance();
+                                name = Some(s);
+                            }
+                            TokenKind::KwAsync => {
+                                self.advance();
+                                mode = TestMode::Async;
+                            }
+                            TokenKind::Ident(id) if id == "thread" => {
+                                self.advance();
+                                mode = TestMode::Thread;
+                            }
+                            TokenKind::Ident(id) if id == "timeout" => {
+                                self.advance();
+                                self.expect(&TokenKind::Eq, "`=` after timeout")?;
+                                if let TokenKind::Int(n) = self.peek().clone() {
+                                    self.advance();
+                                    timeout = Some(
+                                        n.trim_end_matches(|c: char| c.is_alphabetic())
+                                            .replace('_', "")
+                                            .parse::<u64>()
+                                            .map_err(|_| {
+                                                self.error_at(format!(
+                                                    "invalid timeout value `{n}`"
+                                                ))
+                                            })?,
+                                    );
+                                } else {
+                                    return Err(self.error_at("expected integer timeout value"));
+                                }
+                            }
+                            _ => {
+                                return Err(self.error_at("expected test name, mode, or timeout"));
+                            }
+                        }
+                        // 后续逗号分隔参数
+                        while self.at(&TokenKind::Comma) {
+                            self.advance();
+                            let tok = self.peek().clone();
+                            match tok {
+                                TokenKind::KwAsync => {
+                                    self.advance();
+                                    mode = TestMode::Async;
+                                }
+                                TokenKind::Ident(id) if id == "thread" => {
+                                    self.advance();
+                                    mode = TestMode::Thread;
+                                }
+                                TokenKind::Ident(id) if id == "timeout" => {
+                                    self.advance();
+                                    self.expect(&TokenKind::Eq, "`=` after timeout")?;
+                                    if let TokenKind::Int(n) = self.peek().clone() {
+                                        self.advance();
+                                        timeout = Some(
+                                            n.trim_end_matches(|c: char| c.is_alphabetic())
+                                                .replace('_', "")
+                                                .parse::<u64>()
+                                                .map_err(|_| {
+                                                    self.error_at(format!(
+                                                        "invalid timeout value `{n}`"
+                                                    ))
+                                                })?,
+                                        );
+                                    } else {
+                                        return Err(self.error_at("expected integer timeout value"));
+                                    }
+                                }
+                                _ => {
+                                    return Err(
+                                        self.error_at("expected async, thread, or timeout=N")
+                                    );
+                                }
+                            }
+                        }
                     }
                     self.expect(&TokenKind::RParen, "`)`")?;
                 }
                 Trait::Test {
                     name,
-                    mode: TestMode::Serial,
-                    timeout: None,
+                    mode,
+                    timeout,
                 }
             }
             _ => {
