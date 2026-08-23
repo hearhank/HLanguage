@@ -12,7 +12,8 @@
 use std::collections::HashMap;
 
 use crate::ast::Trait;
-use crate::token::Span;
+use crate::diag::Diagnostic;
+use crate::parser::Parser;
 
 /// 特性参数定义
 #[derive(Debug, Clone)]
@@ -38,7 +39,10 @@ pub struct TraitInfo {
     pub description: &'static str,
 }
 
-/// 特性注册表：字典式查找特性名称 → 元数据
+/// 特性处理器：从解析器解析特性参数并构造 `Trait` 值
+pub type TraitHandlerFn = fn(&mut Parser) -> Result<Trait, Diagnostic>;
+
+/// 特性注册表：字典式查找特性名称 → 元数据 + 处理器
 ///
 /// 初始化时自动注册所有系统特性。
 /// 可通过 `register` 方法扩展用户特性（暂不支持）。
@@ -46,6 +50,8 @@ pub struct TraitInfo {
 pub struct TraitRegistry {
     /// 名称 → 元数据
     traits: HashMap<&'static str, TraitInfo>,
+    /// 名称 → 处理器函数
+    handlers: HashMap<&'static str, TraitHandlerFn>,
 }
 
 impl TraitRegistry {
@@ -53,6 +59,7 @@ impl TraitRegistry {
     pub fn new() -> Self {
         let mut reg = Self {
             traits: HashMap::new(),
+            handlers: HashMap::new(),
         };
         reg.register_system_traits();
         reg
@@ -107,9 +114,19 @@ impl TraitRegistry {
         self.traits.insert(info.name, info);
     }
 
+    /// 注册一个特性处理器
+    pub fn register_handler(&mut self, name: &'static str, handler: TraitHandlerFn) {
+        self.handlers.insert(name, handler);
+    }
+
     /// 按名称查找特性
     pub fn lookup(&self, name: &str) -> Option<&TraitInfo> {
         self.traits.get(name)
+    }
+
+    /// 按名称查找特性处理器
+    pub fn lookup_handler(&self, name: &str) -> Option<&TraitHandlerFn> {
+        self.handlers.get(name)
     }
 
     /// 检查特性名称是否已注册
@@ -151,5 +168,20 @@ mod tests {
         assert_eq!(align.params.len(), 1);
         let pad = reg.lookup("pad").expect("pad should be registered");
         assert_eq!(pad.params.len(), 0);
+    }
+
+    #[test]
+    fn test_handler_registration_and_lookup() {
+        let mut reg = TraitRegistry::new();
+        // 注册一个测试处理器
+        fn test_handler(
+            _p: &mut crate::parser::Parser,
+        ) -> Result<crate::ast::Trait, crate::diag::Diagnostic> {
+            Ok(crate::ast::Trait::Pad)
+        }
+        reg.register_handler("custom", test_handler);
+        assert!(reg.lookup_handler("custom").is_some());
+        assert!(reg.lookup_handler("unknown").is_none());
+        assert!(reg.lookup_handler("pad").is_none()); // pad 有 info 但无 handler
     }
 }

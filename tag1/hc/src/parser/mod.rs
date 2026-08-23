@@ -13,6 +13,9 @@ mod util;
 use crate::ast::*;
 use crate::diag::Diagnostic;
 use crate::token::{Span, Token, TokenKind};
+use crate::trait_registry::TraitRegistry;
+
+use decl::register_system_trait_handlers;
 
 pub type ParseResult<T> = Result<T, Vec<Diagnostic>>;
 
@@ -23,15 +26,20 @@ pub struct Parser {
     /// 当前函数返回 `type`（类型函数，组 D）：其体部 `return [n]T;` 的 `[` 按
     /// 数组类型值表达式解析（`Expr::ArrayType`），而非数组字面量。
     in_type_fn: bool,
+    /// 特性注册表（Q24）：字典式查找特性名称 → 处理器
+    trait_registry: TraitRegistry,
 }
 
 impl Parser {
     pub fn new(_source: &str, tokens: Vec<Token>) -> Self {
+        let mut trait_registry = TraitRegistry::new();
+        register_system_trait_handlers(&mut trait_registry);
         Self {
             tokens,
             pos: 0,
             diags: Vec::new(),
             in_type_fn: false,
+            trait_registry,
         }
     }
 

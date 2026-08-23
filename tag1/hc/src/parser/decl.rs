@@ -4,6 +4,123 @@ use super::*;
 use crate::ast::*;
 use crate::diag::Diagnostic;
 use crate::token::TokenKind;
+use crate::trait_registry::TraitRegistry;
+
+// ---------- 特性处理器函数（Q24：字典式查找注册） ----------
+
+fn parse_pad_trait(_p: &mut Parser) -> Result<Trait, Diagnostic> {
+    Ok(Trait::Pad)
+}
+
+fn parse_module_trait(_p: &mut Parser) -> Result<Trait, Diagnostic> {
+    Ok(Trait::Module)
+}
+
+fn parse_align_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
+    p.expect(&TokenKind::LParen, "`(` after align")?;
+    let n = match p.peek().clone() {
+        TokenKind::Int(ref s) => {
+            let val = s
+                .trim_end_matches(|c: char| c.is_alphabetic())
+                .replace('_', "")
+                .parse::<u32>()
+                .map_err(|_| p.error_at(format!("invalid alignment value `{s}")))?;
+            p.advance();
+            val
+        }
+        _ => return Err(p.error_at("expected integer alignment value (1, 2, 4, or 8)")),
+    };
+    p.expect(&TokenKind::RParen, "`)")?;
+    Ok(Trait::Align(n))
+}
+
+fn parse_test_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
+    let mut name = None;
+    let mut mode = TestMode::Serial;
+    let mut timeout = None;
+    if p.at(&TokenKind::LParen) {
+        p.advance();
+        if !p.at(&TokenKind::RParen) {
+            let tok = p.peek().clone();
+            match tok {
+                TokenKind::Str(s) => {
+                    p.advance();
+                    name = Some(s);
+                }
+                TokenKind::KwAsync => {
+                    p.advance();
+                    mode = TestMode::Async;
+                }
+                TokenKind::Ident(id) if id == "thread" => {
+                    p.advance();
+                    mode = TestMode::Thread;
+                }
+                TokenKind::Ident(id) if id == "timeout" => {
+                    p.advance();
+                    p.expect(&TokenKind::Eq, "`=` after timeout")?;
+                    if let TokenKind::Int(n) = p.peek().clone() {
+                        p.advance();
+                        timeout = Some(
+                            n.trim_end_matches(|c: char| c.is_alphabetic())
+                                .replace('_', "")
+                                .parse::<u64>()
+                                .map_err(|_| p.error_at(format!("invalid timeout value `{n}`")))?,
+                        );
+                    } else {
+                        return Err(p.error_at("expected integer timeout value"));
+                    }
+                }
+                _ => return Err(p.error_at("expected test name, mode, or timeout")),
+            }
+            while p.at(&TokenKind::Comma) {
+                p.advance();
+                let tok = p.peek().clone();
+                match tok {
+                    TokenKind::KwAsync => {
+                        p.advance();
+                        mode = TestMode::Async;
+                    }
+                    TokenKind::Ident(id) if id == "thread" => {
+                        p.advance();
+                        mode = TestMode::Thread;
+                    }
+                    TokenKind::Ident(id) if id == "timeout" => {
+                        p.advance();
+                        p.expect(&TokenKind::Eq, "`=` after timeout")?;
+                        if let TokenKind::Int(n) = p.peek().clone() {
+                            p.advance();
+                            timeout = Some(
+                                n.trim_end_matches(|c: char| c.is_alphabetic())
+                                    .replace('_', "")
+                                    .parse::<u64>()
+                                    .map_err(|_| {
+                                        p.error_at(format!("invalid timeout value `{n}`"))
+                                    })?,
+                            );
+                        } else {
+                            return Err(p.error_at("expected integer timeout value"));
+                        }
+                    }
+                    _ => return Err(p.error_at("expected async, thread, or timeout=N")),
+                }
+            }
+        }
+        p.expect(&TokenKind::RParen, "`)")?;
+    }
+    Ok(Trait::Test {
+        name,
+        mode,
+        timeout,
+    })
+}
+
+/// 注册系统特性处理器到注册表
+pub(crate) fn register_system_trait_handlers(reg: &mut TraitRegistry) {
+    reg.register_handler("pad", parse_pad_trait);
+    reg.register_handler("module", parse_module_trait);
+    reg.register_handler("align", parse_align_trait);
+    reg.register_handler("test", parse_test_trait);
+}
 
 impl Parser {
     pub(crate) fn parse_decl(&mut self) -> Result<Decl, Diagnostic> {
@@ -261,129 +378,10 @@ impl Parser {
         let start = self.span();
         self.expect(&TokenKind::LBracket, "`[`")?;
         let name = self.expect_ident()?;
-        let tr = match name.as_str() {
-            "pad" => Trait::Pad,
-            "module" => Trait::Module,
-            "align" => {
-                self.expect(&TokenKind::LParen, "`(` after align")?;
-                let n = match self.peek().clone() {
-                    TokenKind::Int(ref s) => {
-                        let val = s
-                            .trim_end_matches(|c: char| c.is_alphabetic())
-                            .replace('_', "")
-                            .parse::<u32>()
-                            .map_err(|_| self.error_at(format!("invalid alignment value `{s}")))?;
-                        self.advance();
-                        val
-                    }
-                    _ => {
-                        return Err(
-                            self.error_at("expected integer alignment value (1, 2, 4, or 8)")
-                        )
-                    }
-                };
-                self.expect(&TokenKind::RParen, "`)")?;
-                Trait::Align(n)
-            }
-            "test" => {
-                // [test("名称")] / [test(async)] / [test(thread)] / [test(timeout=5)]
-                // 支持逗号分隔组合：`[test("name", async, timeout=5)]`
-                let mut name = None;
-                let mut mode = TestMode::Serial;
-                let mut timeout = None;
-                if self.at(&TokenKind::LParen) {
-                    self.advance();
-                    // 解析第一个参数（可省）
-                    if !self.at(&TokenKind::RParen) {
-                        // 可能是字符串名、关键字(async/thread)或 timeout=值
-                        let tok = self.peek().clone();
-                        match tok {
-                            TokenKind::Str(s) => {
-                                self.advance();
-                                name = Some(s);
-                            }
-                            TokenKind::KwAsync => {
-                                self.advance();
-                                mode = TestMode::Async;
-                            }
-                            TokenKind::Ident(id) if id == "thread" => {
-                                self.advance();
-                                mode = TestMode::Thread;
-                            }
-                            TokenKind::Ident(id) if id == "timeout" => {
-                                self.advance();
-                                self.expect(&TokenKind::Eq, "`=` after timeout")?;
-                                if let TokenKind::Int(n) = self.peek().clone() {
-                                    self.advance();
-                                    timeout = Some(
-                                        n.trim_end_matches(|c: char| c.is_alphabetic())
-                                            .replace('_', "")
-                                            .parse::<u64>()
-                                            .map_err(|_| {
-                                                self.error_at(format!(
-                                                    "invalid timeout value `{n}`"
-                                                ))
-                                            })?,
-                                    );
-                                } else {
-                                    return Err(self.error_at("expected integer timeout value"));
-                                }
-                            }
-                            _ => {
-                                return Err(self.error_at("expected test name, mode, or timeout"));
-                            }
-                        }
-                        // 后续逗号分隔参数
-                        while self.at(&TokenKind::Comma) {
-                            self.advance();
-                            let tok = self.peek().clone();
-                            match tok {
-                                TokenKind::KwAsync => {
-                                    self.advance();
-                                    mode = TestMode::Async;
-                                }
-                                TokenKind::Ident(id) if id == "thread" => {
-                                    self.advance();
-                                    mode = TestMode::Thread;
-                                }
-                                TokenKind::Ident(id) if id == "timeout" => {
-                                    self.advance();
-                                    self.expect(&TokenKind::Eq, "`=` after timeout")?;
-                                    if let TokenKind::Int(n) = self.peek().clone() {
-                                        self.advance();
-                                        timeout = Some(
-                                            n.trim_end_matches(|c: char| c.is_alphabetic())
-                                                .replace('_', "")
-                                                .parse::<u64>()
-                                                .map_err(|_| {
-                                                    self.error_at(format!(
-                                                        "invalid timeout value `{n}`"
-                                                    ))
-                                                })?,
-                                        );
-                                    } else {
-                                        return Err(self.error_at("expected integer timeout value"));
-                                    }
-                                }
-                                _ => {
-                                    return Err(
-                                        self.error_at("expected async, thread, or timeout=N")
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    self.expect(&TokenKind::RParen, "`)`")?;
-                }
-                Trait::Test {
-                    name,
-                    mode,
-                    timeout,
-                }
-            }
-            _ => {
-                let reg = crate::trait_registry::TraitRegistry::new();
-                let known = reg.known_names().join(", ");
+        let tr = match self.trait_registry.lookup_handler(&name) {
+            Some(handler) => handler(self)?,
+            None => {
+                let known = self.trait_registry.known_names().join(", ");
                 return Err(Diagnostic::error(
                     start,
                     format!("unknown trait attribute `[{name}]`; known traits: {known}"),

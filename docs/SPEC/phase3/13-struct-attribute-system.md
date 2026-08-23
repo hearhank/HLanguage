@@ -28,14 +28,14 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 2.2 `continuous_align()` 优先使用字段级对齐 | ✅ | `hc-rt/src/interp/layout.rs` |
 | 2.3 测试验证 | ✅ | `hc-rt/tests/semantics.rs` |
 
-### 任务 3: 特性解析改用字典查找（P1，~1h）
+### 任务 3: 特性解析改用字典查找 ✅（2026-08-24 完成）
 
-| 功能点 | 预估 | 验证方法 |
-|--------|------|---------|
-| 3.1 `TraitRegistry` 添加 `TraitBuilder` 回调注册 | 20min | 注册表可返回 `Trait` 枚举值 |
-| 3.2 `parse_trait()` 改用字典查找构建 | 20min | 解析 `[pad]` `[align(8)]` `[test]` 行为不变 |
-| 3.3 添加注册表测试 | 15min | 注册/查找/未知特性报错 |
-| 3.4 清理旧硬编码分支 | 10min | 编译通过，测试不变 |
+| 功能点 | 状态 | 文件 |
+|--------|------|------|
+| 3.1 `TraitRegistry` 添加 `TraitHandlerFn` 注册 | ✅ | `trait_registry.rs` |
+| 3.2 `parse_trait()` 改用字典查找构建 | ✅ | `parser/decl.rs` |
+| 3.3 注册表测试 | ✅ | `trait_registry.rs` |
+| 3.4 清理旧硬编码分支 | ✅ | `parser/decl.rs` |
 
 ### 任务 4: `IAttribute` 接口（P2，~1h）
 
