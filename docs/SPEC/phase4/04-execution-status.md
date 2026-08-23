@@ -35,7 +35,11 @@
 
 | 子任务 | 预估 | 状态 |
 |--------|------|------|
-| 1a 分析 mismatch | 20min | 🔴 |
-| 1b String 原生内建 | 40min | 🔴 |
-| 1c 序列化原生内建 | 40min | 🔴 |
-| 1d 验证+更新基线 | 20min | 🔴 |
+| 1a 分析 mismatch | 20min | ✅ |
+| 1b @ 内建缺失 | 40min | ✅ 已提交 cd45c82 |
+| 1c 自由内建缺失（sort/binary_search/spawn/解析器） | 40min | 🔄 |
+| 1d 集合方法（push_front/pop_front/back/get/put/remove） | 40min | 🔴 |
+| 1e 字符串方法（concat/split/find/substring/replace） | 40min | 🔴 |
+| 1f IO 命名空间方法（exit/stdin/args/env/time/rng） | 40min | 🔴 |
+| 1g 数据结构方法（RingBuf/PageMem/IntrList/TreeMap） | 50min | 🔴 |
+| 1h 验证+更新基线 | 20min | 🔴 |

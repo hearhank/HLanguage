@@ -1136,7 +1136,16 @@ impl BodyEmitter {
         // 方法分派（io.print / `{Type}.{method}`）。
         let is_coll_method = matches!(
             method,
-            "append" | "push_back" | "append_u64" | "extend" | "init" | "len"
+            "append"
+                | "push_back"
+                | "append_u64"
+                | "extend"
+                | "init"
+                | "len"
+                | "front"
+                | "back"
+                | "get"
+                | "put"
         );
 
         // 编译期候选拥有者：内建 Io.print + 用户 `{Type}.{method}`（canon 键点分前缀）
@@ -1303,6 +1312,91 @@ impl BodyEmitter {
                 };
                 let v = load_arg(self, a0);
                 self.emit(format!("call void @hc_extend(%Value {dv}, %Value {v})"));
+                self.emit(format!(
+                    "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
+                ));
+            }
+            "front" => {
+                // 返回首元素 arr[0]（空数组 → hc_index 报 OOB 硬错误）
+                let z = self.r();
+                self.emit(format!(
+                    "{z} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_INT}, 0"
+                ));
+                let idx = self.r();
+                self.emit(format!("{idx} = insertvalue %Value {z}, i128 0, 1"));
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_index(%Value {dv}, %Value {idx})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "back" => {
+                // 返回末元素 arr[len-1]（空数组 → 返回 null）
+                let d = self.r();
+                self.emit(format!("{d} = extractvalue %Value {dv}, 1"));
+                let op = self.r();
+                self.emit(format!("{op} = inttoptr i128 {d} to %ArrObj*"));
+                let ao = self.r();
+                self.emit(format!("{ao} = load %ArrObj, %ArrObj* {op}"));
+                let al = self.r();
+                self.emit(format!("{al} = extractvalue %ArrObj {ao}, 0"));
+                let l_empty = self.fb();
+                let l_ok = self.fb();
+                let l_cont = self.fb();
+                let is_empty = self.r();
+                self.emit(format!("{is_empty} = icmp eq i64 {al}, 0"));
+                self.term(format!("br i1 {is_empty}, label %{l_empty}, label %{l_ok}"));
+                self.cur = format!("{l_empty}:\n");
+                self.terminated = false;
+                self.emit(format!(
+                    "store %Value {{ i32 1, i128 0 }}, %Value* %sp.{temp}"
+                ));
+                self.term(format!("br label %{l_cont}"));
+                self.cur = format!("{l_ok}:\n");
+                self.terminated = false;
+                let last = self.r();
+                self.emit(format!("{last} = add i64 {al}, -1"));
+                let iz = self.r();
+                self.emit(format!(
+                    "{iz} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_INT}, 0"
+                ));
+                let idx = self.r();
+                self.emit(format!("{idx} = zext i64 {last} to i128"));
+                let iv = self.r();
+                self.emit(format!("{iv} = insertvalue %Value {iz}, i128 {idx}, 1"));
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_index(%Value {dv}, %Value {iv})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+                self.term(format!("br label %{l_cont}"));
+                self.cur = format!("{l_cont}:\n");
+                self.terminated = false;
+            }
+            "get" => {
+                // 按索引取值 arr[i]
+                let Some(&a0) = args.first() else {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let idx = load_arg(self, a0);
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_index(%Value {dv}, %Value {idx})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            }
+            "put" => {
+                // 按索引写值 arr[i] = v
+                if args.len() < 2 {
+                    self.abort_feature("nomethod");
+                    return;
+                };
+                let idx = load_arg(self, args[0]);
+                let val = load_arg(self, args[1]);
+                self.emit(format!(
+                    "call void @hc_store_index(%Value {dv}, %Value {idx}, %Value {val})"
+                ));
                 self.emit(format!(
                     "store %Value {{ i32 0, i128 0 }}, %Value* %sp.{temp}"
                 ));
