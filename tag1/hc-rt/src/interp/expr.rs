@@ -32,11 +32,11 @@ impl Interp {
                             ));
                         }
                         // Q8：alloc 先查作用域（线程子任务可绑定每线程 alloc 实例），
-                        // 否则回退全局哨兵（根作用域已绑定 Value::Alloc，行为不变）
+                        // 否则回退全局 Page 分配器（Phase 1：AllocatorImpl::Page）
                         if let Some(cell) = self.lookup(name) {
                             return Ok(cell.borrow().clone());
                         }
-                        return Ok(Value::Alloc);
+                        return Ok(Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page))));
                     }
                     "io" => {
                         if self.script_mode {

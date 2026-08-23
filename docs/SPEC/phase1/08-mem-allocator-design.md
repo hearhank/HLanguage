@@ -182,4 +182,111 @@ tag1（第一块 M4 + 第二块 M5.1）已实现 alloc/arena 内建的 Value 模
 
 ---
 
-**关联**：[ADR-0003 内存模型](0003-memory-model.md)｜[ADR-0005 所有权语法](0005-ownership-syntax.md)｜[04-stdlib-scope.md](04-stdlib-scope.md)｜[07-bootstrap-plan.md](07-bootstrap-plan.md)｜[06-04-functions.md](06-04-functions.md)（构造/内建）｜示例：`02-idioms/49-arena-pool.hc`、`01-syntax/04-memory/27-ownership.hc`、`01-syntax/04-memory/29-globals.hc`
+## 12. Zig 式可扩展分配器（ADR-0021 定案落地）
+
+> 2026-08-23 定案。详见 [ADR-0021 分配器接口扩展设计](../../adr/0021-allocator-interface.md)。
+
+### 12.1 设计目标
+
+将分配器系统从「内建枚举」迁移到「接口 + 枚举调度」模式，实现 Zig 式的可扩展性：
+
+- 所有分配器后端（Arena、Page、Pool、Stack 等）实现统一的 `Allocator` 接口
+- 用户后续可自定义分配器（H 侧实现接口）
+- 新增分配器后端不需要修改 `Value` 枚举
+
+### 12.2 核心变更
+
+| 当前 | 迁移后 |
+|------|--------|
+| `Value::Alloc`（无状态哨兵） | `Value::Allocator(AllocatorImpl::Page)` |
+| `Value::Arena(ArenaState)`（硬编码） | `Value::Allocator(AllocatorImpl::Arena(ArenaState))` |
+| `with_arena(fn)` 内建函数 | **移除**，改用 `H.std.heap.Arena.init(backing)` |
+| `alloc` 环境变量 = `Value::Alloc` | `alloc` 环境变量 = `Value::Allocator(Page)` |
+| 无 `Value::Bytes` | 新增 `Value::Bytes(Rc<RefCell<Vec<u8>>>)` 表示原始内存块 |
+
+### 12.3 `AllocatorImpl` 枚举（Rust 侧）
+
+```rust
+pub enum AllocatorImpl {
+    Page,                                    // 无状态全局分配器
+    Arena(ArenaState),                       // bump 分配器（现有 ArenaState 复用）
+    Custom(Box<dyn AllocatorTrait>),         // 自定义分配器（后续开放 H 侧）
+}
+```
+
+方法集：`alloc(n)`, `realloc(block, n)`, `free(block)`, `deinit()`。其中 `deinit` 是枚举方法（非 trait 方法），通过 match 分发。
+
+### 12.4 `AllocatorTrait`（自定义分配器接口）
+
+```rust
+pub trait AllocatorTrait {
+    fn alloc(&mut self, n: usize) -> Result<AllocBlock, AllocErr>;
+    fn free(&mut self, block: &AllocBlock);
+    fn realloc(&mut self, block: &AllocBlock, n: usize) -> Result<AllocBlock, AllocErr>;
+    fn deinit(&mut self) {}  // 默认空实现
+}
+
+pub struct AllocBlock {
+    pub data: Rc<RefCell<Vec<u8>>>,
+    pub offset: usize,
+    pub len: usize,
+}
+
+pub enum AllocErr {
+    OutOfMemory,
+    InvalidSize,
+}
+```
+
+### 12.5 标准库 `H.std.heap`（首发分配器）
+
+| 类型 | 说明 | 构造 |
+|------|------|------|
+| `page_allocator` | 全局无状态分配器（每个 `alloc` 创建独立 Vec） | 预定义实例 |
+| `Arena` | bump 分配器，接收后备分配器 | `Arena.init(backing_allocator)` |
+| `Pool(T)` | 固定大小对象池，空闲链表复用 | `Pool.init(backing_allocator, item_size)` |
+
+H 侧 `Allocator` 接口定义：
+```hc
+interface Allocator {
+    fn alloc(self, n: u64) -> []u8;
+    fn free(self, block: []u8);
+    fn realloc(self, block: []u8, n: u64) -> []u8;
+}
+```
+
+### 12.6 分阶段迁移
+
+| 阶段 | 内容 | 测试 |
+|------|------|------|
+| **Phase 1** | 添加 `Value::Allocator` + `Value::Bytes`。`alloc` 环境变量改为 `AllocatorImpl::Page`。`AllocatorImpl` 实现 alloc/free/realloc/deinit。保留旧的 `Value::Alloc` / `Value::Arena` 兼容 | 现有测试全通过 |
+| **Phase 2** | 迁移 `box(v, alloc)`、`Vec(T).init(alloc)`、`Map(K,V).init(alloc)`、`spawn()` 内部分配器。`Value::Alloc` / `Value::Arena` 标记 deprecated | 组件级测试 |
+| **Phase 3** | 移除 `with_arena`。移除 `Value::Alloc` / `Value::Arena`。添加标准库 `H.std.heap`。清理旧代码 | 全量测试 |
+
+### 12.7 用法示例
+
+```hc
+import H.std.heap.{Arena, page_allocator, Pool}
+
+// 使用 page_allocator
+var buf = page_allocator.alloc(256);
+// ...
+page_allocator.free(buf);
+
+// 使用 Arena（bump 分配器，统一回收）
+var arena = Arena.init(page_allocator);
+var b1 = arena.alloc(64);
+var b2 = arena.alloc(128);
+// 使用 b1, b2...
+arena.deinit();  // 一次性释放所有内存
+
+// 使用 Pool（固定大小对象池）
+var pool = Pool.init(page_allocator, @sizeOf(MyNode));
+var node = pool.alloc();
+// ...
+pool.free(node);
+```
+
+---
+
+**关联**：[ADR-0021 分配器接口扩展设计](../../adr/0021-allocator-interface.md)｜[ADR-0003 内存模型](0003-memory-model.md)｜[ADR-0005 所有权语法](0005-ownership-syntax.md)｜[04-stdlib-scope.md](04-stdlib-scope.md)｜[07-bootstrap-plan.md](07-bootstrap-plan.md)｜[06-04-functions.md](06-04-functions.md)（构造/内建）｜示例：`02-idioms/49-arena-pool.hc`、`01-syntax/04-memory/27-ownership.hc`、`01-syntax/04-memory/29-globals.hc`

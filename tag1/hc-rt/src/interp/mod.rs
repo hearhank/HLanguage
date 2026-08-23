@@ -14,8 +14,8 @@ use hc::comptime::{self, Instantiated};
 use hc::token::Span;
 
 use crate::value::{
-    ArenaAllocErr, ArenaState, BoxedData, ClassData, ClosureData, LeakRecord, MapData, Value,
-    VecData,
+    AllocErr, AllocatorImpl, ArenaAllocErr, ArenaState, BoxedData, ClassData, ClosureData,
+    LeakRecord, MapData, Value, VecData,
 };
 
 // ---------- 子模块 ----------

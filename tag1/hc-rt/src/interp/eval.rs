@@ -303,15 +303,27 @@ impl Interp {
                         "bool" => Ok(Value::Bool(false)),
                         "void" => Ok(Value::Void),
                         "String" | "&[u8]" => Ok(Value::str("")),
-                        "Vec" | "Deque" => Ok(Value::vec(vec![], Value::Alloc)),
-                        "Map" => Ok(Value::map(HashMap::new(), Value::Alloc)),
+                        "Vec" | "Deque" => Ok(Value::vec(
+                            vec![],
+                            Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page))),
+                        )),
+                        "Map" => Ok(Value::map(
+                            HashMap::new(),
+                            Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page))),
+                        )),
                         _ => {
                             // Vec(T) / Map 集合类型
                             if n == "Vec" {
-                                return Ok(Value::vec(vec![], Value::Alloc));
+                                return Ok(Value::vec(
+                                    vec![],
+                                    Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page))),
+                                ));
                             }
                             if n == "Map" {
-                                return Ok(Value::map(HashMap::new(), Value::Alloc));
+                                return Ok(Value::map(
+                                    HashMap::new(),
+                                    Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page))),
+                                ));
                             }
                             // 命名类型：class / enum 空实例
                             match self.types.get(n) {

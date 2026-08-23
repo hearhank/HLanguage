@@ -152,7 +152,7 @@
 ### 4.1 值模型
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 值类型 | Int / Float / Bool / Str / Arr / Slice / Class / Enum / Opt / Err / Ptr / Boxed / Vec / Map / Fn / Closure / Alloc / Arena / Void / Dangling | ✅ |
+| 值类型 | Int / Float / Bool / Str / Arr / Slice / Class / Enum / Opt / Err / Ptr / Boxed / Vec / Map / Fn / Closure / Allocator / Bytes / Alloc / Arena / Void / Dangling | ✅（Allocator/Bytes ⏳ Phase 1；Alloc/Arena 🟡 Phase 3 移除） |
 | 值比较 | 相等比较（`value_eq`）+ 排序（`value_lt`） | ✅ |
 | 类型名 | 运行时类型名查询 | ✅ |
 | 显示 | 值格式化输出 | ✅ |
@@ -313,11 +313,18 @@
 ### 7.1 mem 内存分配
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| `Allocator` | 分配器抽象接口 | ✅ |
-| `Arena` | Arena 分配器 | ✅ |
-| 全局回退 | 默认全局分配器 | ✅ |
-| `arena.init(T)` | typed 构造：bump 分配 + 字段默认值填充 | ✅ |
-| `mem.with_arena(fn)` | 创建临时 Arena，调用函数后自动释放 | ✅ |
+| `Allocator` 接口 | 分配器抽象接口（`alloc`/`realloc`/`free`） | ✅ |
+| `page_allocator` | 全局无状态分配器（每 `alloc` 创建独立 Vec） | 🟡 Phase 3 |
+| `Arena` | bump 分配器，接收后备分配器 `Arena.init(backing)` | ✅ |
+| `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ⏳ Phase 3 |
+| 全局回退 | 默认全局分配器（`alloc` 环境变量） | ✅ |
+| `AllocatorImpl` 枚举 | Rust 侧分配器枚举（Page/Arena/Custom） | 🟡 Phase 1 |
+| `Value::Allocator` | 统一分配器值，替代 `Value::Alloc`/`Value::Arena` | 🟡 Phase 1 |
+| `Value::Bytes` | 原始内存块值类型 | 🟡 Phase 1 |
+| `AllocBlock` | Rust 侧分配器返回的内存块（data + offset + len） | 🟡 Phase 1 |
+| `AllocErr` | 分配失败错误（OutOfMemory/InvalidSize） | 🟡 Phase 1 |
+| `with_arena(fn)` | 创建临时 Arena，调用函数后自动释放（**已弃用，Phase 3 移除**） | 🟡 Phase 3 移除 |
+| 自定义分配器（H 侧） | 用户实现 `Allocator` 接口的自定义分配器 | ⏳ 1.x |
 
 ### 7.2 collections 集合
 | 功能 | 描述 | 状态 |
@@ -327,6 +334,7 @@
 | `Map` | 哈希表 | ✅ |
 | `Deque` | 双端队列 | ✅ |
 | `Table` | 多索引二维表（`t[i, j]` 语法） | ✅ |
+| `Pool(T)` | 固定大小对象池，空闲链表 + 后备分配器 | ⏳ Phase 3 |
 | `sort` | 数组/切片排序（含比较器闭包） | ✅ |
 | `binary_search` | 二分查找 | ✅ |
 | `sqrt` | 平方根 | ✅ |
@@ -628,3 +636,4 @@
 | `docs/SPEC/phase3/01-unimplemented-features.md` | 未实现功能清单（第三阶段 backlog） |
 | `docs/SPEC/phase3/02-syntax-rules.md` | 通用语法规则 |
 | `docs/SPEC/phase3/11-lsp-implementation.md` | LSP 工具实施计划 |
+| `docs/adr/0021-allocator-interface.md` | Zig 式可扩展分配器接口设计（22 子项全推荐） |

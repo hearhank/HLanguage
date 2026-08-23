@@ -58,10 +58,14 @@ pub enum Value {
     Fn(String),
     /// 闭包（捕获环境 = 共享槽快照；tag1：捕获整个当前作用域链）
     Closure(ClosureData),
-    /// 分配器句柄（tag1：无状态哨兵）
+    /// 分配器句柄（tag1：无状态哨兵；Phase 1 向后兼容，Phase 3 移除）
     Alloc,
-    /// Arena 分配器句柄（G1：真实 bump + 块链表；deinit 批量归还 backing）
+    /// Arena 分配器句柄（G1：真实 bump + 块链表；deinit 批量归还 backing；Phase 1 向后兼容，Phase 3 移除）
     Arena(Rc<RefCell<ArenaState>>),
+    /// 统一分配器接口值（Phase 1 新增，替代 Value::Alloc / Value::Arena）
+    Allocator(Rc<RefCell<AllocatorImpl>>),
+    /// 原始内存块（Phase 1 新增；分配器返回的原始内存，与 Str 区分）
+    Bytes(Rc<RefCell<Vec<u8>>>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -210,6 +214,190 @@ impl ArenaState {
     }
 }
 
+/// 分配器返回的内存块
+#[derive(Debug, Clone)]
+pub struct AllocBlock {
+    pub data: Rc<RefCell<Vec<u8>>>,
+    pub offset: usize,
+    pub len: usize,
+}
+
+/// 分配失败错误
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocErr {
+    OutOfMemory,
+    InvalidSize,
+}
+
+/// 自定义分配器接口（Rust 侧实现，供 Custom 变体使用）
+pub trait AllocatorTrait {
+    fn alloc(&mut self, n: usize) -> Result<AllocBlock, AllocErr>;
+    fn free(&mut self, block: &AllocBlock);
+    fn realloc(&mut self, block: &AllocBlock, n: usize) -> Result<AllocBlock, AllocErr> {
+        // 默认实现：alloc + copy + free（对不支持 realloc 的后端兜底）
+        let new_block = self.alloc(n)?;
+        let copy_len = block.len.min(n);
+        copy_alloc_block(block, &new_block, copy_len);
+        self.free(block);
+        Ok(new_block)
+    }
+    fn deinit(&mut self) {}
+    /// 克隆自身（用于 AllocatorImpl::Clone）
+    fn clone_box(&self) -> Box<dyn AllocatorTrait>;
+}
+
+/// 复制源数据到目标 AllocBlock（realloc 辅助，避免同时借用两个 RefCell）
+fn copy_alloc_block(src: &AllocBlock, dst: &AllocBlock, len: usize) {
+    let src_data = {
+        let s = src.data.borrow();
+        s[src.offset..src.offset + len].to_vec()
+    };
+    let mut d = dst.data.borrow_mut();
+    d[dst.offset..dst.offset + len].copy_from_slice(&src_data);
+}
+
+/// 分配器实现枚举（Phase 1：统一分配器接口，三变体）
+pub enum AllocatorImpl {
+    /// 无状态全局分配器（每 alloc 创建独立 Vec）
+    Page,
+    /// Arena bump 分配器（复用现有 ArenaState）
+    Arena(Rc<RefCell<ArenaState>>),
+    /// 自定义分配器（Rust 侧实现，后续开放 H 侧）
+    Custom(Box<dyn AllocatorTrait>),
+}
+
+impl std::fmt::Debug for AllocatorImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Page => write!(f, "PageAllocator"),
+            Self::Arena(a) => {
+                let d = a.borrow();
+                write!(
+                    f,
+                    "ArenaAllocator(bytes={}, blocks={})",
+                    d.total,
+                    d.blocks.len()
+                )
+            }
+            Self::Custom(_) => write!(f, "CustomAllocator(...)"),
+        }
+    }
+}
+
+impl Clone for AllocatorImpl {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Page => Self::Page,
+            Self::Arena(a) => Self::Arena(a.clone()),
+            Self::Custom(c) => Self::Custom(c.clone_box()),
+        }
+    }
+}
+
+impl AllocatorImpl {
+    /// 分配 n 字节零初始化内存
+    pub fn alloc(&mut self, n: usize) -> Result<AllocBlock, AllocErr> {
+        match self {
+            Self::Page => {
+                if n == 0 {
+                    return Ok(AllocBlock {
+                        data: Rc::new(RefCell::new(Vec::new())),
+                        offset: 0,
+                        len: 0,
+                    });
+                }
+                let mut v = Vec::new();
+                v.try_reserve_exact(n).map_err(|_| AllocErr::OutOfMemory)?;
+                v.resize(n, 0u8);
+                Ok(AllocBlock {
+                    data: Rc::new(RefCell::new(v)),
+                    offset: 0,
+                    len: n,
+                })
+            }
+            Self::Arena(arena) => {
+                let mut a = arena.borrow_mut();
+                let (data, offset) = a.bump(n).map_err(|e| match e {
+                    ArenaAllocErr::Deinit => AllocErr::InvalidSize,
+                    ArenaAllocErr::Oom => AllocErr::OutOfMemory,
+                })?;
+                Ok(AllocBlock {
+                    data,
+                    offset,
+                    len: n,
+                })
+            }
+            Self::Custom(impl_) => impl_.alloc(n),
+        }
+    }
+
+    /// 释放内存块
+    pub fn free(&mut self, block: &AllocBlock) {
+        match self {
+            Self::Page => {
+                // Page 分配器：Rc 引用归零时自动释放，此处空操作
+            }
+            Self::Arena(_) => {
+                // Arena：不逐对象 free，deinit 统一释放
+            }
+            Self::Custom(impl_) => impl_.free(block),
+        }
+    }
+
+    /// 调整内存块大小
+    pub fn realloc(&mut self, block: &AllocBlock, n: usize) -> Result<AllocBlock, AllocErr> {
+        match self {
+            Self::Page => {
+                if n == 0 {
+                    return Ok(AllocBlock {
+                        data: Rc::new(RefCell::new(Vec::new())),
+                        offset: 0,
+                        len: 0,
+                    });
+                }
+                let mut v = block.data.borrow_mut();
+                let old_len = v.len();
+                if n <= old_len {
+                    v.truncate(n);
+                    return Ok(AllocBlock {
+                        data: block.data.clone(),
+                        offset: 0,
+                        len: n,
+                    });
+                }
+                v.try_reserve_exact(n - old_len)
+                    .map_err(|_| AllocErr::OutOfMemory)?;
+                v.resize(n, 0u8);
+                Ok(AllocBlock {
+                    data: block.data.clone(),
+                    offset: 0,
+                    len: n,
+                })
+            }
+            Self::Arena(_) => {
+                // Arena 不支持 realloc，走 alloc + copy + free
+                let new_block = self.alloc(n)?;
+                let copy_len = block.len.min(n);
+                copy_alloc_block(block, &new_block, copy_len);
+                self.free(block);
+                Ok(new_block)
+            }
+            Self::Custom(impl_) => impl_.realloc(block, n),
+        }
+    }
+
+    /// 释放分配器持有的资源
+    pub fn deinit(&mut self) {
+        match self {
+            Self::Page => {}
+            Self::Arena(arena) => {
+                arena.borrow_mut().deinit();
+            }
+            Self::Custom(impl_) => impl_.deinit(),
+        }
+    }
+}
+
 impl Value {
     pub fn int(v: i128) -> Value {
         Value::Int(v)
@@ -325,6 +513,22 @@ impl Value {
                 let d = a.borrow();
                 format!("Arena(bytes={}, blocks={})", d.total, d.blocks.len())
             }
+            Value::Allocator(a) => match &*a.borrow() {
+                AllocatorImpl::Page => "allocator(page)".to_string(),
+                AllocatorImpl::Arena(ar) => {
+                    let d = ar.borrow();
+                    format!(
+                        "allocator(Arena(bytes={}, blocks={}))",
+                        d.total,
+                        d.blocks.len()
+                    )
+                }
+                AllocatorImpl::Custom(_) => "allocator(custom)".to_string(),
+            },
+            Value::Bytes(b) => {
+                let d = b.borrow();
+                format!("Bytes({} bytes)", d.len())
+            }
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -412,6 +616,8 @@ impl Value {
             },
             (Value::Err { code: a, .. }, Value::Err { code: b, .. }) => a == b,
             (Value::Arena(a), Value::Arena(b)) => Rc::ptr_eq(a, b),
+            (Value::Allocator(a), Value::Allocator(b)) => Rc::ptr_eq(a, b),
+            (Value::Bytes(a), Value::Bytes(b)) => *a.borrow() == *b.borrow(),
             (Value::Ptr(a), Value::Ptr(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), b) => a.borrow().value_eq(b),
             (a, Value::Ptr(b)) => a.value_eq(&b.borrow()),
@@ -464,6 +670,8 @@ impl Value {
             (Value::Str(a), Value::Str(b)) => Some(*a.borrow() < *b.borrow()),
             (Value::Bool(a), Value::Bool(b)) => Some(a < b),
             (Value::Ptr(a), Value::Ptr(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
+            (Value::Allocator(a), Value::Allocator(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
+            (Value::Bytes(a), Value::Bytes(b)) => Some(*a.borrow() < *b.borrow()),
             _ => None,
         }
     }
@@ -480,6 +688,8 @@ impl Value {
             Value::Vec(_) => true,
             Value::Map(_) => true,
             Value::Str(s) => !s.borrow().is_empty(),
+            Value::Bytes(b) => !b.borrow().is_empty(),
+            Value::Allocator(_) => true,
             _ => true,
         }
     }
@@ -504,6 +714,8 @@ impl Value {
             Value::Closure(_) => "closure".into(),
             Value::Alloc => "alloc".into(),
             Value::Arena(_) => "Arena".into(),
+            Value::Allocator(_) => "allocator".into(),
+            Value::Bytes(_) => "Bytes".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }

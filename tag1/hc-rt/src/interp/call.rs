@@ -20,7 +20,7 @@ impl Interp {
                     let a = self.eval(&args[1])?;
                     self.deref_value(a)
                 } else {
-                    Value::Alloc
+                    Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Page)))
                 };
                 let vtbl = v.type_name();
                 Ok(Some(Value::Boxed(Rc::new(RefCell::new(BoxedData {
@@ -689,7 +689,9 @@ impl Interp {
                     arg_vals.push(self.eval(a)?);
                 }
                 // Q8：每线程独立 alloc 实例（全新 Arena；子任务执行时绑定为 alloc）
-                let alloc_v = Value::Arena(Rc::new(RefCell::new(ArenaState::new())));
+                let alloc_v = Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Arena(
+                    Rc::new(RefCell::new(ArenaState::new())),
+                ))));
                 let mut f = HashMap::new();
                 f.insert("fn".to_string(), callee);
                 f.insert("args".to_string(), Value::arr(arg_vals));
@@ -702,6 +704,7 @@ impl Interp {
             }
             // C2（ADR-0016）：`with_arena(fn)`——创建临时 Arena，调用函数，
             // 函数结束后自动释放 Arena（无论成功或失败）。
+            // Phase 1：使用 AllocatorImpl::Arena 包装
             "with_arena" => {
                 if args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -712,8 +715,10 @@ impl Interp {
                     Value::Fn(_) | Value::Closure(_) => {}
                     _ => return Err(RtError::new("NotCallable", Some(span.clone()))),
                 }
-                // 创建临时 Arena
-                let arena_v = Value::Arena(Rc::new(RefCell::new(ArenaState::new())));
+                // 创建临时 Arena（通过 AllocatorImpl）
+                let arena_v = Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Arena(
+                    Rc::new(RefCell::new(ArenaState::new())),
+                ))));
                 let arg_vals = vec![arena_v.clone()];
                 // 调用函数
                 let result = match &callee {
@@ -725,7 +730,7 @@ impl Interp {
                     _ => unreachable!(),
                 };
                 // 释放 Arena（无论成功或失败）
-                if let Value::Arena(a) = &arena_v {
+                if let Value::Allocator(a) = &arena_v {
                     a.borrow_mut().deinit();
                 }
                 match result {
@@ -1326,6 +1331,114 @@ impl Interp {
             (Value::Alloc, "deinit") => Ok(Some(Value::Void)),
             // Arena 方法（G1：bump + 块链表 + deinit 批量归还 + 统计）
             (Value::Arena(a), m) => self.call_arena_method(a.clone(), m, args, span),
+            // Allocator 方法（Phase 1：统一分配器接口，替代 Value::Alloc / Value::Arena）
+            (Value::Allocator(a), "alloc") => {
+                let n = self.eval(&args[0])?;
+                let n = self.deref_value(n);
+                if let Value::Int(i) = n {
+                    if i < 0 {
+                        return Err(RtError::new("TypeError", Some(span.clone())));
+                    }
+                    if i as u128 > usize::MAX as u128 {
+                        return Ok(Some(self.err_val("OutOfMemory")));
+                    }
+                    let n = i as usize;
+                    match a.borrow_mut().alloc(n) {
+                        Ok(block) => {
+                            let data = {
+                                let b = block.data.borrow();
+                                b[block.offset..block.offset + block.len].to_vec()
+                            };
+                            let rc = Rc::new(RefCell::new(data));
+                            // G5/§8.3 Debug 泄漏检测：登记分配
+                            self.alloc_tracker.borrow_mut().push(LeakRecord {
+                                size: rc.borrow().len(),
+                                line: span.line as u32,
+                                weak: Rc::downgrade(&rc),
+                            });
+                            Ok(Some(Value::Bytes(rc)))
+                        }
+                        Err(AllocErr::OutOfMemory) => Ok(Some(self.err_val("OutOfMemory"))),
+                        Err(AllocErr::InvalidSize) => {
+                            Err(RtError::new("TypeError", Some(span.clone())))
+                        }
+                    }
+                } else {
+                    Err(RtError::new("TypeError", Some(span.clone())))
+                }
+            }
+            (Value::Allocator(a), "bytes") => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let total = match &*a.borrow() {
+                    AllocatorImpl::Arena(arena) => arena.borrow().total as i128,
+                    _ => 0,
+                };
+                Ok(Some(Value::int(total)))
+            }
+            (Value::Allocator(_), "leaks") => {
+                let n = self
+                    .alloc_tracker
+                    .borrow()
+                    .iter()
+                    .filter(|r| r.weak.upgrade().is_some())
+                    .count();
+                Ok(Some(Value::int(n as i128)))
+            }
+            (Value::Allocator(_), "leak_report") => {
+                let mut out = Vec::new();
+                for r in self.alloc_tracker.borrow().iter() {
+                    if r.weak.upgrade().is_some() {
+                        out.extend_from_slice(
+                            format!("leak: line {}: {} bytes\n", r.line, r.size).as_bytes(),
+                        );
+                    }
+                }
+                Ok(Some(Value::str_bytes(out)))
+            }
+            (Value::Allocator(a), "deinit") => {
+                a.borrow_mut().deinit();
+                Ok(Some(Value::Void))
+            }
+            (Value::Allocator(a), "init") => {
+                // allocator.init(T) / allocator.init(T{...})
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if let Expr::Ident(tname, _) = &args[0] {
+                    if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
+                        let mut f = HashMap::new();
+                        let ftypes: Vec<(String, Type)> = fields
+                            .iter()
+                            .map(|fd| (fd.name.clone(), fd.ty.clone()))
+                            .collect();
+                        for (fname, fty) in &ftypes {
+                            f.insert(fname.clone(), self.default_value(Some(fty))?);
+                        }
+                        return Ok(Some(Value::class(tname, f)));
+                    }
+                    if self.types.contains_key(tname) {
+                        return Ok(Some(Value::Enum {
+                            name: tname.clone(),
+                            variant: "__none__".into(),
+                            payload: None,
+                        }));
+                    }
+                }
+                let v = self.eval(&args[0])?;
+                Ok(Some(v))
+            }
+            (Value::Allocator(a), "blocks") => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let n = match &*a.borrow() {
+                    AllocatorImpl::Arena(arena) => arena.borrow().blocks.len() as i128,
+                    _ => 0,
+                };
+                Ok(Some(Value::int(n)))
+            }
             // Io 方法
             (Value::Class(c), "print") if c.borrow().name == "Io" => {
                 self.call_io_print(args, span)?;
