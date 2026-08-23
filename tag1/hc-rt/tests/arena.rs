@@ -146,11 +146,10 @@ class Node {
 
 #[test]
 fn arena_init_continuous_size() {
-    // 连续 class：arena.init 按布局总大小 bump（与 @sizeOf 同源）
+    // 连续 class（struct）：arena.init 按布局总大小 bump（与 @sizeOf 同源）
     run_ok(
         r#"
-[continuous]
-class Point {
+struct Point {
     x: i32,
     y: i32,
 }

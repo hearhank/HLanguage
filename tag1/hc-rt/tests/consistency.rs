@@ -1359,8 +1359,7 @@ fn continuous_class_value_semantics_consistency() {
     // （非连续类为引用类型，语义层禁止按值赋值——`copy(&x)` 显式深拷贝；非本测试范围。）
     assert_all_pass(
         r#"
-[continuous]
-class Point {
+struct Point {
     x: f32,
     y: f32,
 }

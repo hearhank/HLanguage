@@ -30,8 +30,8 @@ impl Checker {
                     self.diags.push(Diagnostic::error(
                         f.span.clone(),
                         format!(
-                            "`[continuous]` type `{n}` has non-value field `{}` of type `{}`; \
-                             continuous types require all-value fields (use a heap class instead)",
+                            "struct `{n}` has non-value field `{}` of type `{}`; \
+                             struct fields must be value types (scalar, fixed array, or nested struct)",
                             f.name,
                             self.ty_display(&f.ty)
                         ),

@@ -77,13 +77,13 @@ fn main(io: Io) !void {
 fn continuous_assignment_allowed() {
     // [continuous] 值类型：赋值即复制（允许）
     run_ok(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        "struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p1 = Point{ x = 1.0, y = 2.0 };
     var p2 = p1;
     p2.x = 99.0;
     try expect_eq(p1.x, 1.0);
+}",
 }\n",
     );
 }
@@ -179,11 +179,11 @@ fn make() Order {
 fn definite_assignment_ignores_continuous() {
     // [continuous] 值类型走字面量构造，无需字段跟踪
     run_ok(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        "struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0, y = 2.0 };
     try expect_eq(p.x, 1.0);
+}",
 }\n",
     );
 }
@@ -217,10 +217,10 @@ fn m22_return_ok() {
 fn m22_named_lit_unknown_field() {
     // NamedLit 构造：未知字段
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        "struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0, z = 2.0 };
+}",
 }\n",
         "unknown field",
     );
@@ -230,10 +230,10 @@ class Point { x: f32, y: f32 }
 fn m22_named_lit_missing_field() {
     // NamedLit 构造：必填字段缺失
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        "struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0 };
+}",
 }\n",
         "missing field",
     );
@@ -243,10 +243,10 @@ class Point { x: f32, y: f32 }
 fn m22_named_lit_field_type_mismatch() {
     // NamedLit 构造：字段类型不匹配
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        "struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = \"s\", y = 2.0 };
+}",
 }\n",
         "type mismatch in field",
     );
@@ -256,11 +256,11 @@ class Point { x: f32, y: f32 }
 fn m22_field_access_unknown() {
     // 字段访问：不存在字段
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        "struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0, y = 2.0 };
     io.print(\"{}\n\", p.z);
+}",
 }\n",
         "has no field",
     );
@@ -293,8 +293,7 @@ fn m22_table_double_index_ok() {
 fn m22_continuous_rejects_ref_field() {
     // 存储形态验证：[continuous] 含引用字段 → 编译错误
     run_compile_error(
-        "[continuous]
-class Bad { s: String }
+        "struct Bad { s: String }
 [test] fn t() !void {}\n",
         "non-value field",
     );
@@ -336,8 +335,7 @@ fn m22_binary_ok() {
 fn m22_condition_requires_bool() {
     // 条件表达式检查
     run_compile_error(
-        "[continuous]
-class Foo { a: i32 }
+        "struct Foo { a: i32 }
 [test] fn t() !void {
     var f = Foo{ a = 1 };
     if (f) { }
@@ -389,8 +387,7 @@ fn m22_where_constraint_satisfied() {
 fn m22_where_constraint_violated() {
     // 泛型 where 约束违反：Point 不实现 INumber → 编译错误
     run_compile_error(
-        "[continuous]
-class Point { x: f32 }
+        "struct Point { x: f32 }
 fn sum(items: &[T]) T where T: INumber {
     return items[0];
 }
@@ -524,7 +521,7 @@ fn m25_dangling_release_bare_read() {
 fn m43_sizeof_scalars_and_continuous() {
     // @sizeOf：标量宽度 + 连续类型（与 to_bytes 布局一致）
     run_ok(
-        "[continuous]\nclass Point { x: f32, y: f64 }\n[test] fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
+        "struct Point { x: f32, y: f64 }\n[test] fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
     );
 }
 
@@ -532,7 +529,7 @@ fn m43_sizeof_scalars_and_continuous() {
 fn m43_alignof_and_offsetof() {
     // @alignOf / @offsetOf：自然对齐 + 字段偏移（含填充）
     run_ok(
-        "[continuous]\nclass Point { x: f32, y: f64 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
+        "struct Point { x: f32, y: f64 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
     );
 }
 

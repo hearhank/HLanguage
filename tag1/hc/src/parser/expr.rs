@@ -505,7 +505,7 @@ impl Parser {
             // struct { ... } 类型字面量（H1：struct/class 合并；E1.2 组 D type-as-value）。
             // 字段为 `name: Type`（类型标注——保留，构成 `Expr::StructType` 类型值）或
             // `name = expr`（值——tag1 仅解析不执行，NamedLit 占位）。
-            TokenKind::KwClass => {
+            TokenKind::KwClass | TokenKind::KwStruct => {
                 self.advance();
                 self.expect(&TokenKind::LBrace, "`{` after struct literal")?;
                 let mut type_fields: Vec<(String, Type)> = Vec::new();

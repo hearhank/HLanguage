@@ -295,6 +295,7 @@ pub fn instantiate(
                     name: fname.clone(),
                     ty: subst(fty, &bindings),
                     pub_: false,
+                    traits: vec![],
                     span: span.clone(),
                 })
                 .collect();

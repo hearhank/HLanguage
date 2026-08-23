@@ -63,6 +63,7 @@ impl Parser {
                     name: fname,
                     ty: fty,
                     pub_: member_pub,
+                    traits: vec![],
                     span: fstart,
                 });
                 if self.at(&TokenKind::Comma) {
@@ -80,6 +81,65 @@ impl Parser {
             traits,
             fields,
             methods,
+            pub_: is_pub,
+            span: start.merge(&end),
+        })
+    }
+
+    pub(crate) fn parse_struct(
+        &mut self,
+        start: Span,
+        traits: Vec<Trait>,
+        is_pub: bool,
+    ) -> Result<Decl, Diagnostic> {
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace, "`{` to open struct body")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            // 字段级 [Align(n)] 特性
+            let mut field_traits = Vec::new();
+            while self.at(&TokenKind::LBracket) {
+                if let Some(t) = self.parse_trait()? {
+                    field_traits.push(t);
+                }
+            }
+            // 字段可见性
+            let member_pub = if self.at(&TokenKind::KwPub) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            let fstart = self.span();
+            let fname = self.expect_ident()?;
+            self.expect(&TokenKind::Colon, "`:` after field name")?;
+            let fty = self.parse_type()?;
+            // 字段默认值
+            let default = if self.at(&TokenKind::Eq) {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            fields.push(FieldDecl {
+                name: fname,
+                ty: fty,
+                pub_: member_pub,
+                span: fstart,
+                traits: field_traits,
+            });
+            if self.at(&TokenKind::Comma) {
+                self.advance();
+            } else if !self.at(&TokenKind::RBrace) {
+                return Err(self.error_at("expected `,` or `}` after struct field"));
+            }
+        }
+        self.expect(&TokenKind::RBrace, "`}` to close struct body")?;
+        let end = self.span();
+        Ok(Decl::Struct {
+            name,
+            traits,
+            fields,
             pub_: is_pub,
             span: start.merge(&end),
         })
@@ -161,6 +221,7 @@ impl Parser {
                 name: fname,
                 ty: fty,
                 pub_: member_pub,
+                traits: vec![],
                 span: fstart,
             });
             if self.at(&TokenKind::Comma) {

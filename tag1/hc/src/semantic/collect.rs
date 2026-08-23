@@ -71,7 +71,6 @@ impl Checker {
                         ),
                     ));
                 }
-                let continuous = traits.iter().any(|t| matches!(t, Trait::Continuous));
                 let info = TypeInfo {
                     kind: TypeKind::Class {
                         fields: fields.clone(),
@@ -79,7 +78,7 @@ impl Checker {
                         methods: methods.clone(),
                         traits: traits.clone(),
                     },
-                    continuous,
+                    continuous: false,
                 };
                 if skip_flat {
                     if !prefix.is_empty() {
@@ -98,6 +97,44 @@ impl Checker {
                     if !prefix.is_empty() {
                         self.register_sig(&format!("{prefix}{name}.{}", m.name), m);
                     }
+                }
+            }
+            Decl::Struct {
+                name,
+                traits,
+                fields,
+                span,
+                ..
+            } => {
+                // 命名规范：类型名 PascalCase（首字母大写）
+                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "struct `{name}` 命名必须首字母大写（PascalCase，如 `{}{}`）",
+                            name[..1].to_uppercase(),
+                            &name[1..]
+                        ),
+                    ));
+                }
+                let info = TypeInfo {
+                    kind: TypeKind::Class {
+                        fields: fields.clone(),
+                        ifaces: vec![],
+                        methods: vec![],
+                        traits: traits.clone(),
+                    },
+                    continuous: true,
+                };
+                if skip_flat {
+                    if !prefix.is_empty() {
+                        self.types.insert(format!("{prefix}{name}"), info);
+                    }
+                } else if prefix.is_empty() {
+                    self.types.insert(name.clone(), info);
+                } else {
+                    self.types.insert(format!("{prefix}{name}"), info.clone());
+                    self.types.insert(name.clone(), info);
                 }
             }
             Decl::Enum {

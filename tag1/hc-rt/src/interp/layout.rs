@@ -20,11 +20,16 @@ impl Interp {
         &self,
         ty: &str,
     ) -> Option<(Vec<(String, usize, usize)>, usize)> {
-        let (fdecls, traits) = match self.types.get(ty) {
-            Some(TypeDef::Class { fields, traits, .. }) => (fields, traits),
+        let (fdecls, traits, is_struct) = match self.types.get(ty) {
+            Some(TypeDef::Class {
+                fields,
+                traits,
+                is_struct,
+                ..
+            }) => (fields, traits, *is_struct),
             _ => return None,
         };
-        if !traits.iter().any(|t| matches!(t, Trait::Continuous)) {
+        if !is_struct {
             return None;
         }
         let packed = traits.iter().any(|t| matches!(t, Trait::Pad));
@@ -52,7 +57,7 @@ impl Interp {
         let tail_align = if packed {
             1
         } else if let Some(Trait::Align(a)) = traits.iter().find(|t| matches!(t, Trait::Align(_))) {
-            Self::scalar_size(a)
+            *a as usize
         } else {
             max_align
         };
@@ -75,18 +80,23 @@ impl Interp {
 
     /// 连续 class 的对齐值：pad → 1；align(T) → T 对齐值；否则最大字段对齐
     pub(crate) fn continuous_align(&self, ty: &str) -> Option<usize> {
-        let (fdecls, traits) = match self.types.get(ty) {
-            Some(TypeDef::Class { fields, traits, .. }) => (fields, traits),
+        let (fdecls, traits, is_struct) = match self.types.get(ty) {
+            Some(TypeDef::Class {
+                fields,
+                traits,
+                is_struct,
+                ..
+            }) => (fields, traits, *is_struct),
             _ => return None,
         };
-        if !traits.iter().any(|t| matches!(t, Trait::Continuous)) {
+        if !is_struct {
             return None;
         }
         if traits.iter().any(|t| matches!(t, Trait::Pad)) {
             return Some(1);
         }
         if let Some(Trait::Align(a)) = traits.iter().find(|t| matches!(t, Trait::Align(_))) {
-            return Some(Self::scalar_size(a));
+            return Some(*a as usize);
         }
         let mut max_a = 1usize;
         for fd in fdecls {
@@ -100,8 +110,7 @@ impl Interp {
     pub(crate) fn is_nested_continuous(&self, n: &str) -> bool {
         matches!(
             self.types.get(n),
-            Some(TypeDef::Class { traits, .. })
-                if traits.iter().any(|t| matches!(t, Trait::Continuous))
+            Some(TypeDef::Class { is_struct, .. }) if *is_struct
         )
     }
 
@@ -180,9 +189,7 @@ impl Interp {
             // 引用类型（String/集合/Table/堆上 class/指针/切片）= 指针宽
             "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
             _ => match self.types.get(ty) {
-                Some(TypeDef::Class { traits, .. })
-                    if traits.iter().any(|t| matches!(t, Trait::Continuous)) =>
-                {
+                Some(TypeDef::Class { is_struct, .. }) if *is_struct => {
                     self.continuous_layout(ty).map(|(_, size)| size)
                 }
                 Some(TypeDef::Class { .. }) => Some(8), // 堆上 = 指针

@@ -520,6 +520,7 @@ impl Interp {
                     traits: traits.clone(),
                     fields: fields.clone(),
                     methods: methods.clone(),
+                    is_struct: false,
                 };
                 if !skip_flat {
                     self.types.insert(name.clone(), type_def.clone());
@@ -567,6 +568,31 @@ impl Interp {
                                 span: m.span.clone(),
                             });
                     }
+                }
+            }
+            Decl::Struct {
+                name,
+                traits,
+                fields,
+                ..
+            } => {
+                let qname = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                let type_def = TypeDef::Class {
+                    ifaces: vec![],
+                    traits: traits.clone(),
+                    fields: fields.clone(),
+                    methods: vec![],
+                    is_struct: true,
+                };
+                if !skip_flat {
+                    self.types.insert(name.clone(), type_def.clone());
+                }
+                if !prefix.is_empty() {
+                    self.types.insert(qname.clone(), type_def);
                 }
             }
             Decl::Enum { name, variants, .. } => {

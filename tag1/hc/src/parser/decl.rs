@@ -65,6 +65,15 @@ impl Parser {
                 self.advance();
                 self.finish_fn_decl(start, &traits, is_pub, false, is_export)
             }
+            TokenKind::KwStruct => {
+                if is_export {
+                    return Err(
+                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
+                    );
+                }
+                self.advance();
+                self.parse_struct(start, traits, is_pub)
+            }
             TokenKind::KwClass | TokenKind::KwTree => {
                 if is_export {
                     return Err(
@@ -253,18 +262,28 @@ impl Parser {
         self.expect(&TokenKind::LBracket, "`[`")?;
         let name = self.expect_ident()?;
         let tr = match name.as_str() {
-            "continuous" => Trait::Continuous,
             "pad" => Trait::Pad,
             "module" => Trait::Module,
             "align" => {
                 self.expect(&TokenKind::LParen, "`(` after align")?;
-                let t = self.parse_type()?;
-                self.expect(&TokenKind::RParen, "`)`")?;
-                // 存储类型名（供布局计算 scalar_size 使用），非 Debug 字符串
-                Trait::Align(match &t {
-                    Type::Named(n, _) => n.clone(),
-                    other => format!("{:?}", other),
-                })
+                let n = match self.peek().clone() {
+                    TokenKind::Int(ref s) => {
+                        let val = s
+                            .trim_end_matches(|c: char| c.is_alphabetic())
+                            .replace('_', "")
+                            .parse::<u32>()
+                            .map_err(|_| self.error_at(format!("invalid alignment value `{s}")))?;
+                        self.advance();
+                        val
+                    }
+                    _ => {
+                        return Err(
+                            self.error_at("expected integer alignment value (1, 2, 4, or 8)")
+                        )
+                    }
+                };
+                self.expect(&TokenKind::RParen, "`)")?;
+                Trait::Align(n)
             }
             "test" => {
                 // [test("名称")] / [test(async)] / [test(thread)] / [test(timeout=5)]

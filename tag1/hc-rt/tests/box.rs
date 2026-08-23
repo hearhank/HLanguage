@@ -63,12 +63,12 @@ fn box_interface_dispatch() {
     // 装箱 class → *I 胖指针：s.area() 鸭子类型分派到具体实现（Rect/Circle）
     run_ok(
         "interface IShape { fn area(self: *Self) f32; }\n\
-         [continuous] class Rect: IShape {\n\
+         class Rect: IShape {\n\
              w: f32,\n\
              h: f32,\n\
              fn area(self: *Self) f32 { return self.w * self.h; }\n\
          }\n\
-         [continuous] class Circle: IShape {\n\
+         class Circle: IShape {\n\
              r: f32,\n\
              fn area(self: *Self) f32 { return pi * self.r * self.r; }\n\
          }\n\

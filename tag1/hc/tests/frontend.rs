@@ -114,14 +114,14 @@ fn f(n: i32) i32 {
 #[test]
 fn parse_class_enum_interface() {
     let src = r#"
-[continuous]
-class Point { x: f32, y: f32, fn dist(a: *Point, b: *Point) f32 { return 0; } }
+struct Point { x: f32, y: f32 }
+fn dist(a: *Point, b: *Point) f32 { return 0; }
 enum Kind { player, enemy }
 interface IShape { fn area(self: *Self) f32; }
 class Rect: IShape { w: f32, h: f32, fn area(self: *Self) f32 { return self.w * self.h; } }
 "#;
     let program = parse_source(src).expect("parse types");
-    assert_eq!(program.decls.len(), 4);
+    assert_eq!(program.decls.len(), 5);
 }
 
 #[test]
@@ -578,7 +578,7 @@ fn k5_export_non_fn_rejected() {
 fn m14_extern_symbols_enable_crossfile_check() {
     // 外部（兄弟文件）namespace 符号并入语义检查——限定类型字段校验生效
     let ext =
-        parse_source("namespace Orders {\n    pub struct Line { item: String, price: f64 }\n}\n")
+        parse_source("namespace Orders {\n    pub class Line { item: String, price: f64 }\n}\n")
             .expect("parse ext");
     let main = parse_source(
         "using Orders;\n[test] fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
@@ -598,7 +598,7 @@ fn m14_extern_symbols_enable_crossfile_check() {
 fn m14_using_imports_type() {
     // using 导入类型：`Line` 不限定直接引用（扁平名）
     let ext =
-        parse_source("namespace Orders { pub struct Line { item: String } }\n").expect("parse ext");
+        parse_source("namespace Orders { pub class Line { item: String } }").expect("parse ext");
     let main = parse_source(
         "using Orders;\n[test] fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
     )

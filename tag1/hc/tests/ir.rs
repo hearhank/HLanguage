@@ -1208,8 +1208,7 @@ fn continuous_class_copy_on_var_decl() {
     // - 未标注 + 标识符初始化：`var p2 = p1` → 运行时门按实际类名判定
     // 两模式（tree-walk/IR）均复制独立副本：改 p2 不影响 p1。
     let src = r#"
-[continuous]
-class Point {
+struct Point {
     x: f32,
     y: f32,
 }
@@ -1407,12 +1406,12 @@ fn box_interface_dispatch_ir() {
     // 装箱 class → *I 胖指针：s.area() 鸭子类型分派到具体实现（Rect/Circle）
     let src = r#"
 interface IShape { fn area(self: *Self) f32; }
-[continuous] class Rect: IShape {
+class Rect: IShape {
     w: f32,
     h: f32,
     fn area(self: *Self) f32 { return self.w * self.h; }
 }
-[continuous] class Circle: IShape {
+class Circle: IShape {
     r: f32,
     fn area(self: *Self) f32 { return pi * self.r * self.r; }
 }

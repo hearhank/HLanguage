@@ -64,6 +64,13 @@ pub enum Decl {
         pub_: bool,
         span: Span,
     },
+    Struct {
+        name: String,
+        traits: Vec<Trait>,
+        fields: Vec<FieldDecl>,
+        pub_: bool,
+        span: Span,
+    },
     Enum {
         name: String,
         variants: Vec<EnumVariant>,
@@ -137,6 +144,7 @@ impl Decl {
             | Decl::Const { pub_, .. }
             | Decl::Fn { pub_, .. }
             | Decl::Class { pub_, .. }
+            | Decl::Struct { pub_, .. }
             | Decl::Enum { pub_, .. }
             | Decl::Union { pub_, .. }
             | Decl::Interface { pub_, .. }
@@ -158,9 +166,8 @@ pub enum TestMode {
 }
 
 pub enum Trait {
-    Continuous,
     Pad,
-    Align(String),
+    Align(u32),
     Test {
         name: Option<String>,
         /// D1 测试模式：`[test]` = Serial（默认）、`[test(async)]` = Async、`[test(thread)]` = Thread
@@ -176,9 +183,8 @@ pub enum Trait {
 impl std::fmt::Debug for Trait {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Trait::Continuous => write!(f, "[continuous]"),
             Trait::Pad => write!(f, "[pad]"),
-            Trait::Align(s) => write!(f, "[align({s})]"),
+            Trait::Align(n) => write!(f, "[align({n})]"),
             Trait::Module => write!(f, "[module]"),
             Trait::Test {
                 name,
@@ -205,9 +211,8 @@ impl std::fmt::Debug for Trait {
 impl Clone for Trait {
     fn clone(&self) -> Self {
         match self {
-            Trait::Continuous => Trait::Continuous,
             Trait::Pad => Trait::Pad,
-            Trait::Align(s) => Trait::Align(s.clone()),
+            Trait::Align(n) => Trait::Align(*n),
             Trait::Module => Trait::Module,
             Trait::Test {
                 name,
@@ -236,6 +241,8 @@ pub struct FieldDecl {
     pub ty: Type,
     /// 跨包导出（Q3：属性默认私有，`pub` 显式导出）
     pub pub_: bool,
+    /// 字段级特性（如 `[Align(n)]`）
+    pub traits: Vec<Trait>,
     pub span: Span,
 }
 

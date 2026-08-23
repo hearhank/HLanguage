@@ -472,8 +472,7 @@ fn main(io: Io) !void {
     fn continuous_class_copy_emits_deep_copy_gate() {
         // P11d：连续类 var 声明 → DeepCopy 指令 → `hc_deep_copy_cont` 运行时门 +
         // 递归 `hc_deep_copy` helper；连续类名进字符串表供 strcmp 链匹配。
-        let ll = gen(r#"[continuous]
-class Point {
+        let ll = gen(r#"struct Point {
     x: f32,
     y: f32,
 }

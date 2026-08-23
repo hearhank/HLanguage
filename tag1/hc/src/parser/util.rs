@@ -75,6 +75,7 @@ impl Parser {
                 self.peek(),
                 TokenKind::KwFn
                     | TokenKind::KwClass
+                    | TokenKind::KwStruct
                     | TokenKind::KwEnum
                     | TokenKind::KwUnion
                     | TokenKind::KwInterface

@@ -208,6 +208,7 @@ pub(crate) fn collect_fn_names(decls: &[Decl], names: &mut HashSet<String>, path
                     }
                 }
             }
+            Decl::Struct { .. } => {}
             _ => {}
         }
     }
@@ -452,6 +453,7 @@ pub(crate) fn lower_decl(
             }
         }
         Decl::Enum { .. }
+        | Decl::Struct { .. }
         | Decl::Union { .. }
         | Decl::Interface { .. }
         | Decl::Using { .. }
@@ -2517,7 +2519,6 @@ impl<'a> LowerCtx<'a> {
                     Ok(()) => {
                         if let Decl::Class {
                             name: cn,
-                            traits,
                             fields,
                             methods,
                             ..
@@ -2529,7 +2530,7 @@ impl<'a> LowerCtx<'a> {
                                     .map(|f| (f.name.clone(), f.ty.clone()))
                                     .collect(),
                                 methods: methods.iter().map(|m| m.name.clone()).collect(),
-                                continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
+                                continuous: false,
                             };
                             self.types.classes.insert(cn.clone(), ci);
                         }
@@ -2567,10 +2568,13 @@ impl<'a> LowerCtx<'a> {
     /// E1.2 组 D D3：把具体化 Class 声明的字段类型深度规范化——嵌套类型函数应用
     /// （`Pair<i32>`）替换为具体化键（`Pair<@i32>`）；自/互递归经守卫终止。
     pub(crate) fn normalize_decl_fields(&mut self, decl: &mut Decl) -> Result<(), String> {
-        if let Decl::Class { fields, .. } = decl {
-            for fd in fields.iter_mut() {
-                fd.ty = self.resolve_nested_types(&fd.ty)?;
+        match decl {
+            Decl::Class { fields, .. } | Decl::Struct { fields, .. } => {
+                for fd in fields.iter_mut() {
+                    fd.ty = self.resolve_nested_types(&fd.ty)?;
+                }
             }
+            _ => {}
         }
         Ok(())
     }

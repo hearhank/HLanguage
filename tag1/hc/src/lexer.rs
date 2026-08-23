@@ -137,7 +137,7 @@ impl<'a> Lexer<'a> {
             "defer" => TokenKind::KwDefer,
             "errdefer" => TokenKind::KwErrdefer,
             "class" => TokenKind::KwClass,
-            "struct" => TokenKind::KwClass, // struct/class 合并为一型（H1：特性标注 [continuous] 区分存储形态）
+            "struct" => TokenKind::KwStruct,
             "enum" => TokenKind::KwEnum,
             "union" => TokenKind::KwUnion, // K1（ADR-0014）：无标签 union——字段内存重叠、无判别标签
             "tree" => TokenKind::KwTree,

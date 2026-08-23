@@ -23,7 +23,24 @@ pub(crate) fn collect_types(decls: &[Decl], tt: &mut TypeTable, path: &[String])
                         .map(|f| (f.name.clone(), f.ty.clone()))
                         .collect(),
                     methods: methods.iter().map(|m| m.name.clone()).collect(),
-                    continuous: traits.iter().any(|t| matches!(t, Trait::Continuous)),
+                    continuous: false,
+                };
+                tt.classes.insert(name.clone(), ci);
+                if !path.is_empty() {
+                    let mut q = path.join(".");
+                    q.push('.');
+                    q.push_str(name);
+                    tt.classes.insert(q, tt.classes[name].clone());
+                }
+            }
+            Decl::Struct { name, fields, .. } => {
+                let ci = ClassInfo {
+                    fields: fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect(),
+                    methods: vec![],
+                    continuous: true,
                 };
                 tt.classes.insert(name.clone(), ci);
                 if !path.is_empty() {

@@ -22,8 +22,8 @@ fn pad_packed_layout() {
     // [pad]：紧凑布局，字段间无填充，alignOf = 1，sizeOf = 字段宽度和
     run_ok(
         r#"
-[continuous] [pad]
-class Packed {
+[pad]
+struct Packed {
     a: i8,
     b: i32,
 }
@@ -48,8 +48,8 @@ fn align_type_level_alignment() {
     // [align(u64)]：类型级对齐 8，尾部圆整到 8；alignOf = 8
     run_ok(
         r#"
-[continuous] [align(u64)]
-class Aligned {
+[align(8)]
+struct Aligned {
     a: i8,
 }
 [test] fn t() !void {
@@ -70,13 +70,11 @@ fn nested_continuous_roundtrip() {
     // 嵌套连续类型：字段对齐 = 自身 alignOf，round-trip 还原嵌套字段
     run_ok(
         r#"
-[continuous]
-class Inner {
+struct Inner {
     x: i32,
     y: i32,
 }
-[continuous]
-class Outer {
+struct Outer {
     a: i8,
     b: Inner,
 }
