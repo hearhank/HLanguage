@@ -31,13 +31,17 @@ pub(crate) fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
         Err(c) => return c,
     };
     // E1（ADR-0013）：装载期 script 展开——interp 与程序均基于展开后源码
-    let (source, program) = match scriptgen::parse_with_scripts(&source) {
+    let (source, mut program) = match scriptgen::parse_with_scripts(&source) {
         Ok(t) => t,
         Err(msg) => {
             eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
+    // M1-1：文件级命名空间自动推断
+    let project_root = scriptgen::find_project_root(path);
+    let ns_name = scriptgen::compute_namespace_name(path, project_root.as_deref());
+    scriptgen::infer_namespace(&mut program, &ns_name);
     let mut interp = Interp::new(&source);
     // A3：程序 args（[程序名] + 文件后参数）；io.args() 已取消
     interp.args = prog_args.to_vec();
@@ -201,6 +205,11 @@ pub(crate) fn run_file_bytecode(path: &Path, prog_args: &[String]) -> ExitCode {
 
 /// 登记目标文件的同包兄弟声明（跳过其 test/main；解析失败的兄弟仅告警不阻断）
 pub(crate) fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> {
+    // 仅在项目上下文（存在 build.zon）时加载兄弟文件；单文件脚本不加载，
+    // 避免同名类型冲突（如 stage1/parser.hc 与 stage1/lexer.hc 都定义 Lexer 类）
+    if scriptgen::find_project_root(path).is_none() {
+        return Ok(());
+    }
     let sibs = sibling_files(path);
     if sibs.is_empty() {
         return Ok(());
@@ -209,7 +218,13 @@ pub(crate) fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(),
     for s in &sibs {
         match std::fs::read_to_string(s) {
             Ok(src) => match scriptgen::parse_with_scripts(&src) {
-                Ok((_, p)) => programs.push(p),
+                Ok((_, mut p)) => {
+                    // M1-1：兄弟文件命名空间自动推断
+                    let project_root = scriptgen::find_project_root(s);
+                    let ns_name = scriptgen::compute_namespace_name(s, project_root.as_deref());
+                    scriptgen::infer_namespace(&mut p, &ns_name);
+                    programs.push(p);
+                }
                 Err(msg) => {
                     eprintln!("[warn] 兄弟文件解析失败 {}:\n{}", s.display(), msg);
                 }
@@ -232,22 +247,32 @@ pub(crate) fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(),
     })
 }
 
-/// 读取目标文件所在目录的 build.zon（如有）并递归装载本地依赖
+/// 读取目标文件所在目录（或父目录）的 build.zon 并递归装载本地依赖。
+/// 搜索父目录以支持入口文件在子目录中（如 src/main.hc）的项目结构。
 pub(crate) fn load_manifest_deps_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let manifest = match buildzon::load_from_dir(dir) {
-        Ok(Some(m)) => m,
-        Ok(None) => return Ok(()),
-        Err(e) => {
-            eprintln!("[warn] build.zon 解析失败: {e}");
-            return Ok(());
+    let mut dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let (manifest, manifest_dir) = loop {
+        match buildzon::load_from_dir(&dir) {
+            Ok(Some(m)) => break (m, dir.clone()),
+            Ok(None) => {
+                if !dir.pop() {
+                    return Ok(()); // 未找到 build.zon → 无依赖
+                }
+            }
+            Err(e) => {
+                eprintln!("[warn] build.zon 解析失败: {e}");
+                return Ok(());
+            }
         }
     };
     let mut visited = HashSet::new();
-    if let Ok(canon) = std::fs::canonicalize(dir) {
+    if let Ok(canon) = std::fs::canonicalize(&manifest_dir) {
         visited.insert(canon);
     }
-    load_deps_into(interp, dir, &manifest, &mut visited)
+    load_deps_into(interp, &manifest_dir, &manifest, &mut visited)
 }
 
 /// M7.2：递归装载依赖包（build.zon `deps` 中带 `path` 的本地依赖 + 注册中心依赖）；
@@ -365,18 +390,18 @@ pub(crate) fn load_deps_into(
 
 /// B6-2（E5.6）：`.hs` 脚本文件执行入口。
 ///
-/// 流程：读取 → 直接解析（无 script 展开、无 comptime）→ 装载 → 执行 `main`。
+/// 流程：读取（缓存命中时跳过文件 IO）→ 直接解析（无 script 展开、无 comptime）
+/// → 装载 → 执行 `main`。
 /// `.hs` 文件是 H 语言子集，使用 `import H.std.{io}` 引用标准库，
 /// 不通过命名空间组织，而是基于文件引用（`import "path"` 暂未实现）。
 /// 脚本模式允许 IO（与 `script { }` 内联块不同）。
 pub(crate) fn run_file_hs(path: &Path, prog_args: &[String]) -> ExitCode {
-    let source = match std::fs::read_to_string(path) {
+    // B6-2：检查 .hs 缓存（基于文件路径 + mtime），缓存命中时跳过文件读取
+    let source = match get_hs_cached_source(path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: 读取 {} 失败: {}", path.display(), e);
-            return ExitCode::FAILURE;
-        }
+        Err(c) => return c,
     };
+
     // 直接解析，无 script 展开、无 comptime
     let mut program = match hc::parse_source(&source) {
         Ok(p) => p,
@@ -387,7 +412,8 @@ pub(crate) fn run_file_hs(path: &Path, prog_args: &[String]) -> ExitCode {
     };
     // B6-2：解析 Decl::Include 文件引用（import "path"）
     let parent_dir = path.parent().unwrap_or(Path::new("."));
-    if let Err(msg) = resolve_hs_includes(&mut program, parent_dir) {
+    let project_root = parent_dir;
+    if let Err(msg) = resolve_hs_includes(&mut program, parent_dir, project_root) {
         eprintln!("{msg}");
         return ExitCode::FAILURE;
     }
@@ -414,20 +440,57 @@ pub(crate) fn run_file_hs(path: &Path, prog_args: &[String]) -> ExitCode {
     }
 }
 
-/// 解析 .hs 脚本中的 Decl::Include 文件引用（`import "path/to/file.hc"`）。
+/// B6-2：读取 `.hs` 脚本源码，优先使用缓存（文件 IO 节约）
+fn get_hs_cached_source(path: &Path) -> Result<String, ExitCode> {
+    let cache_key = scriptgen::hs_cache_key(path);
+    if let Some(key) = cache_key {
+        let cache_path = scriptgen::hs_cache_dir().join(&key);
+        if let Some(cached) = scriptgen::try_read_cache(&cache_path) {
+            return Ok(cached);
+        }
+        // 缓存未命中：读取文件并写入缓存
+        match std::fs::read_to_string(path) {
+            Ok(s) => {
+                scriptgen::write_cache(&cache_path, &s);
+                Ok(s)
+            }
+            Err(e) => {
+                eprintln!("error: 读取 {} 失败: {}", path.display(), e);
+                Err(ExitCode::FAILURE)
+            }
+        }
+    } else {
+        // 无法计算缓存键（如文件元数据不可读）：直接读取
+        match std::fs::read_to_string(path) {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                eprintln!("error: 读取 {} 失败: {}", path.display(), e);
+                Err(ExitCode::FAILURE)
+            }
+        }
+    }
+}
+
+/// 解析 .hs 脚本中的 Decl::Include 文件引用（`import "path/to/file.hs"`）。
 /// 文件路径解析顺序：当前文件所在目录 → SDK 目录 → 项目目录。
-fn resolve_hs_includes(program: &mut Program, parent_dir: &Path) -> Result<(), String> {
+/// 引用非 `.hs` 文件 → 返回错误。
+fn resolve_hs_includes(
+    program: &mut Program,
+    parent_dir: &Path,
+    project_root: &Path,
+) -> Result<(), String> {
     let mut resolved = Vec::new();
     for decl in &program.decls {
         if let Decl::Include { path, .. } = decl {
-            // 尝试按路径解析：相对当前文件目录
-            let file_path = parent_dir.join(path);
-            if !file_path.exists() {
+            // 验证后缀为 .hs
+            if !path.ends_with(".hs") && !path.ends_with(".HC") {
                 return Err(format!(
-                    "文件引用未找到: {}（搜索路径: {:?}）",
-                    path, parent_dir
+                    "脚本文件引用只能引用 .hs 文件: {}（引用 .hc 文件需编译后使用）",
+                    path
                 ));
             }
+            // 搜索路径：① 当前文件目录 → ② SDK 目录 → ③ 项目目录
+            let file_path = resolve_hs_path(path, parent_dir, project_root)?;
             let src = std::fs::read_to_string(&file_path)
                 .map_err(|e| format!("读取文件引用 {} 失败: {}", file_path.display(), e))?;
             let included = hc::parse_source(&src).map_err(|d| {
@@ -440,7 +503,7 @@ fn resolve_hs_includes(program: &mut Program, parent_dir: &Path) -> Result<(), S
             // 递归解析被引用文件中的 include
             let inc_dir = file_path.parent().unwrap_or(Path::new("."));
             let mut inc_prog = included;
-            resolve_hs_includes(&mut inc_prog, inc_dir)?;
+            resolve_hs_includes(&mut inc_prog, inc_dir, project_root)?;
             resolved.extend(inc_prog.decls);
         }
     }
@@ -448,6 +511,54 @@ fn resolve_hs_includes(program: &mut Program, parent_dir: &Path) -> Result<(), S
     program.decls.retain(|d| !matches!(d, Decl::Include { .. }));
     program.decls.splice(0..0, resolved);
     Ok(())
+}
+
+/// 按搜索路径解析 .hs 文件引用路径
+fn resolve_hs_path(path: &str, parent_dir: &Path, project_root: &Path) -> Result<PathBuf, String> {
+    // ① 当前文件所在目录
+    let candidates = [
+        parent_dir.join(path),
+        parent_dir.join(format!("{}.hs", path.trim_end_matches(".hs"))), // 防止重复后缀
+    ];
+    for c in &candidates {
+        if c.exists() && c.is_file() {
+            return Ok(c.clone());
+        }
+    }
+    // 如果 path 本身不带 .hs 后缀，尝试附加
+    if !path.ends_with(".hs") {
+        let with_ext = parent_dir.join(format!("{}.hs", path));
+        if with_ext.exists() && with_ext.is_file() {
+            return Ok(with_ext);
+        }
+    }
+    // ② SDK 目录
+    let sdk = scriptgen::sdk_dir();
+    let sdk_path = sdk.join(path);
+    if sdk_path.exists() && sdk_path.is_file() {
+        return Ok(sdk_path);
+    }
+    if !path.ends_with(".hs") {
+        let sdk_with_ext = sdk.join(format!("{}.hs", path));
+        if sdk_with_ext.exists() && sdk_with_ext.is_file() {
+            return Ok(sdk_with_ext);
+        }
+    }
+    // ③ 项目目录
+    let proj_path = project_root.join(path);
+    if proj_path.exists() && proj_path.is_file() {
+        return Ok(proj_path);
+    }
+    if !path.ends_with(".hs") {
+        let proj_with_ext = project_root.join(format!("{}.hs", path));
+        if proj_with_ext.exists() && proj_with_ext.is_file() {
+            return Ok(proj_with_ext);
+        }
+    }
+    Err(format!(
+        "文件引用未找到: {}（搜索路径: 当前目录 → SDK → 项目目录）",
+        path
+    ))
 }
 
 /// C2（ADR-0016）：`hc run [--dangle=on|off|auto]`——设置悬垂检查模式后运行。
@@ -468,13 +579,17 @@ pub(crate) fn run_file_dangle_bench(
         Err(c) => return c,
     };
     let t1 = if bench { Some(Instant::now()) } else { None };
-    let (source, program) = match crate::scriptgen::parse_with_scripts(&source) {
+    let (source, mut program) = match crate::scriptgen::parse_with_scripts(&source) {
         Ok(t) => t,
         Err(msg) => {
             eprintln!("{msg}");
             return ExitCode::FAILURE;
         }
     };
+    // M1-1：文件级命名空间自动推断
+    let project_root = crate::scriptgen::find_project_root(path);
+    let ns_name = crate::scriptgen::compute_namespace_name(path, project_root.as_deref());
+    crate::scriptgen::infer_namespace(&mut program, &ns_name);
     let t2 = if bench { Some(Instant::now()) } else { None };
     let mut interp = Interp::new(&source);
     interp.set_debug_dangling(dangle.is_on());

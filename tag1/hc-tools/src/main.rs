@@ -21,6 +21,7 @@ mod project;
 mod run;
 mod scriptgen;
 mod test;
+mod versiongen;
 
 use std::process::ExitCode;
 

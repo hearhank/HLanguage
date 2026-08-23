@@ -52,9 +52,9 @@ const T_ENUM: i32 = 11;
 const T_END: i32 = 12;
 // ---- Phase 3 迭代器（tag 13 直接内联在 `hc_iter_make` 的 IR 文本中） ----
 // ---- Phase 4 函数引用 / 闭包（tag 14/15；原生 ABI 工作留待 Phase 7，当前经 hc_abort 拒绝） ----
-#[allow(dead_code)] // Phase 7 原生 ABI 落地时启用
+// Phase 8 原生 ABI 落地启用
 const T_FN: i32 = 14;
-#[allow(dead_code)] // Phase 7 原生 ABI 落地时启用
+// Phase 8 原生 ABI 落地启用
 const T_CLOSURE: i32 = 15;
 
 /// 生成完整 `.ll` 模块文本（导言 + 每个 `IrFunc` + `main` 包装）。
@@ -122,26 +122,49 @@ pub fn codegen_lib(
         .map(|(name, idxs)| (name.clone(), idxs.clone()))
         .collect();
     let gidx = globals_index(module);
+    let closure_caps = closure_caps_map(module);
     let mut out = String::new();
     let mut ext_decls: Vec<(String, usize)> = Vec::new();
+    let pfx = &format!("{pkg}.");
     emit_preamble(&mut out, &strings, &module.continuous, true);
     for (idx, f) in module.funcs.iter().enumerate() {
         emit_func(
             &mut out,
             f,
             idx,
+            None,
             &strings,
             errors,
             &canon,
             &module.funcs,
+            &module.closures,
             &gidx,
-            &format!("{pkg}."),
+            pfx,
+            &HashMap::new(),
+            &mut ext_decls,
+        );
+    }
+    // 发射闭包函数
+    for (idx, f) in module.closures.iter().enumerate() {
+        let n_caps = closure_caps.get(&idx).copied().unwrap_or(0);
+        emit_func(
+            &mut out,
+            f,
+            idx,
+            Some(n_caps),
+            &strings,
+            errors,
+            &canon,
+            &module.closures,
+            &module.closures,
+            &gidx,
+            pfx,
             &HashMap::new(),
             &mut ext_decls,
         );
     }
     emit_ext_decls(&mut out, &ext_decls);
-    emit_export_thunks(&mut out, module, &format!("{pkg}."));
+    emit_export_thunks(&mut out, module, pfx);
     if dll_mode {
         out
     } else {
@@ -163,6 +186,7 @@ fn codegen_inner(
         .map(|(name, idxs)| (name.clone(), idxs.clone()))
         .collect();
     let gidx = globals_index(module);
+    let closure_caps = closure_caps_map(module);
     let mut out = String::new();
     let mut ext_decls: Vec<(String, usize)> = Vec::new();
     emit_preamble(&mut out, &strings, &module.continuous, helpers);
@@ -174,10 +198,31 @@ fn codegen_inner(
             &mut out,
             f,
             idx,
+            None,
             &strings,
             errors,
             &canon,
             &module.funcs,
+            &module.closures,
+            &gidx,
+            prefix,
+            links,
+            &mut ext_decls,
+        );
+    }
+    // 发射闭包函数
+    for (idx, f) in module.closures.iter().enumerate() {
+        let n_caps = closure_caps.get(&idx).copied().unwrap_or(0);
+        emit_func(
+            &mut out,
+            f,
+            idx,
+            Some(n_caps),
+            &strings,
+            errors,
+            &canon,
+            &module.closures,
+            &module.closures,
             &gidx,
             prefix,
             links,
@@ -202,6 +247,7 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
         .map(|(name, idxs)| (name.clone(), idxs.clone()))
         .collect();
     let gidx = globals_index(module);
+    let closure_caps = closure_caps_map(module);
     let mut out = String::new();
     let mut ext_decls: Vec<(String, usize)> = Vec::new();
     emit_preamble(&mut out, &strings, &module.continuous, true);
@@ -211,10 +257,31 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
             &mut out,
             f,
             idx,
+            None,
             &strings,
             errors,
             &canon,
             &module.funcs,
+            &module.closures,
+            &gidx,
+            "",
+            &HashMap::new(),
+            &mut ext_decls,
+        );
+    }
+    // 发射闭包函数
+    for (idx, f) in module.closures.iter().enumerate() {
+        let n_caps = closure_caps.get(&idx).copied().unwrap_or(0);
+        emit_func(
+            &mut out,
+            f,
+            idx,
+            Some(n_caps),
+            &strings,
+            errors,
+            &canon,
+            &module.closures,
+            &module.closures,
             &gidx,
             "",
             &HashMap::new(),
@@ -225,6 +292,20 @@ pub fn codegen_tests(module: &IrModule, errors: &ErrorCodeTable) -> String {
     emit_export_thunks(&mut out, module, "");
     emit_test_runner(&mut out, module, errors);
     out
+}
+
+/// 构建闭包索引 → 捕获数量映射（从 MakeClosure 指令的 captures.len() 收集）。
+/// 扫描所有常规函数和闭包函数中的 MakeClosure 指令。
+fn closure_caps_map(module: &IrModule) -> HashMap<usize, usize> {
+    let mut m = HashMap::new();
+    for f in module.funcs.iter().chain(module.closures.iter()) {
+        for inst in &f.body {
+            if let IrInst::MakeClosure { func, captures, .. } = inst {
+                m.entry(*func).or_insert_with(|| captures.len());
+            }
+        }
+    }
+    m
 }
 
 /// 全局名 → `@.h_globals` 槽位（声明序，与 IR `IrModule::globals` 对齐）。
@@ -257,7 +338,7 @@ fn emit_globals(out: &mut String, module: &IrModule) {
 fn collect_strings(module: &IrModule) -> Vec<String> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut out: Vec<String> = Vec::new();
-    for f in &module.funcs {
+    for f in module.funcs.iter().chain(module.closures.iter()) {
         let slot_consts = build_slot_consts(f);
         for inst in &f.body {
             match inst {

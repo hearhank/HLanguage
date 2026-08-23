@@ -7,7 +7,7 @@
 //! 归组 D3/D4——本切片仅「求值 + 错误机制」。
 //!
 //! 求值在装载期完成（script 展开后、语义检查前），IR/字节码/native 对 comptime 块无感知
-//! （各后端跳过 `Decl::Comptime`，镜像 `Decl::Script`）。
+//! （各后端跳过 `Decl::Comptime`）。
 
 use hc::ast::{Block, Decl, Program};
 use hc::diag::{self, Diagnostic};
@@ -45,7 +45,6 @@ fn collect_in_decl<'a>(d: &'a Decl, out: &mut Vec<ComptimeSite<'a>>) {
             span: span.clone(),
         }),
         Decl::Include { .. } => {}
-        Decl::Script { .. } => {}
         Decl::Namespace { decls, .. } => {
             for inner in decls {
                 collect_in_decl(inner, out);

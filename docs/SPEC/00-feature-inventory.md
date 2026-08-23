@@ -9,7 +9,7 @@
 ### 1.1 词法分析（Lexer）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using / import / pub / export / owned / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
+| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using / import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
 | 字面量 | 整数（进制前缀+后缀）、浮点、字符串（含转义）、原生字符串 `"""..."""`、字符 | ✅ |
 | 运算符/标点 | 完整运算符集（算术/比较/逻辑/位/赋值/范围/`||` 错误集联合） | ✅ |
 | 注释 | 行注释 `//` + 块注释 `/* */` | ✅ |
@@ -19,7 +19,7 @@
 ### 1.2 语法分析（Parser + AST）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using/import/script/comptime | ✅ |
+| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
 | 语句解析 | 表达式/变量声明/if/while/for/switch（含守卫）/return/break/continue/defer/errdefer/块 | ✅ |
 | 表达式解析 | 完整优先级：字面量/标识符/一元/二元/调用/索引/字段/取址/解引用/if/switch/闭包/构造 | ✅ |
 | 类型解析 | 命名类型/指针/切片/可选/错误联合/元组/数组/推断类型 | ✅ |
@@ -222,16 +222,19 @@
 
 ## 五、元编程（E1）
 
-### 5.1 Script 块（ADR-0013）
+### 5.1 脚本系统（12-script-redesign.md，2026-08-23 定案）
+
+脚本功能重新设计：`.hs` 文件为唯一脚本文件格式，`.hc` 中的 `script { }` 块已移除。
+
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 声明解析 | `script { }` 声明级解析 | ✅ |
-| 装载期展开 | 编译前执行脚本并生成代码字符串 | ✅ |
-| 文本区间替换 | 产物字符串替换 `script` 块，重解析循环 | ✅ |
-| 受限环境 | io/alloc/argv/网络不可用，`types` 元数据可见 | ✅ |
-| 最大轮数守卫 | 防自引用无限循环 | ✅ |
-| 三后端零改动 | IR/字节码/native 对展开后 AST 无感知 | ✅ |
-| 序列化定制 | `types.fields` 驱动校验与 to_json 样板生成 | ✅ |
+| `.hs` 文件解析 | `.hs` 后缀脚本文件直接解析执行 | ✅ |
+| 文件引用 `import "path"` | 脚本文件通过 `import "path"` 引用其他 `.hs` 文件 | ✅ |
+| 三路径搜索 | ① 当前文件目录 → ② SDK 目录 → ③ 项目目录 | ✅ |
+| 引用验证 | `.hs` 只能引用 `.hs` 文件，引用 `.hc` 报错 | ✅ |
+| 标准库访问 | 保留 `import H.std.{io}` 标准库访问 | ✅ |
+| 脚本缓存 (B6-2) | `~/.hc/cache/hs/<hash>` 基于文件路径 + mtime 缓存 | ✅ |
+| Comptime 保留 | `comptime { }` 块在 `.hc` 中保留，与脚本功能独立 | ✅ |
 
 ### 5.2 Comptime（ADR-0012）
 | 功能 | 描述 | 状态 |

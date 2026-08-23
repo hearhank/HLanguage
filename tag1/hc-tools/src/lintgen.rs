@@ -301,7 +301,7 @@ fn collect_refs_in_decl(decl: &Decl, refs: &mut Vec<String>) {
         }
         Decl::Using { .. } | Decl::Import { .. } => {}
         Decl::Include { .. } => {}
-        Decl::Script { body, .. } | Decl::Comptime { body, .. } => {
+        Decl::Comptime { body, .. } => {
             collect_refs_in_block(body, refs);
         }
     }
@@ -729,7 +729,7 @@ fn check_type_simplifiable(
         }
         Decl::Using { .. } | Decl::Import { .. } => {}
         Decl::Include { .. } => {}
-        Decl::Script { body, .. } | Decl::Comptime { body, .. } => {
+        Decl::Comptime { body, .. } => {
             check_type_simplifiable_in_block(body, source, disabled, fix, rule, diags);
         }
     }
@@ -991,11 +991,9 @@ fn check_abbr_in_decl(
         Decl::Interface { name, .. } => vec![name.clone()],
         Decl::Namespace { name, .. } => vec![name.clone()],
         Decl::Global { name, .. } | Decl::Const { name, .. } => vec![name.clone()],
-        Decl::Using { .. }
-        | Decl::Import { .. }
-        | Decl::Script { .. }
-        | Decl::Comptime { .. }
-        | Decl::Include { .. } => Vec::new(),
+        Decl::Using { .. } | Decl::Import { .. } | Decl::Comptime { .. } | Decl::Include { .. } => {
+            Vec::new()
+        }
     };
     for name in names {
         let abbrs = check_abbr(&name);
@@ -1032,7 +1030,6 @@ fn decl_span(decl: &Decl) -> Span {
         Decl::Const { span, .. } => span.clone(),
         Decl::Using { span, .. } => span.clone(),
         Decl::Import { span, .. } => span.clone(),
-        Decl::Script { span, .. } => span.clone(),
         Decl::Comptime { span, .. } => span.clone(),
         Decl::Include { span, .. } => span.clone(),
     }
@@ -1075,7 +1072,7 @@ fn check_simplifiable_if_else_in_decl(
                 check_simplifiable_if_else_in_decl(d, source, disabled, fix, rule, diags);
             }
         }
-        Decl::Script { body, .. } | Decl::Comptime { body, .. } => {
+        Decl::Comptime { body, .. } => {
             check_simplifiable_if_else_in_block(body, source, disabled, fix, rule, diags);
         }
         _ => {}
@@ -1324,7 +1321,7 @@ fn check_redundant_eq_false_in_decl(
                 check_redundant_eq_false_in_decl(d, source, disabled, fix, rule, diags);
             }
         }
-        Decl::Script { body, .. } | Decl::Comptime { body, .. } => {
+        Decl::Comptime { body, .. } => {
             check_redundant_eq_false_in_block(body, source, disabled, fix, rule, diags);
         }
         _ => {}

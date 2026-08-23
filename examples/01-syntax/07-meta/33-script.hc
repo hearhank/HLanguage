@@ -14,16 +14,12 @@ class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上
     age: i32,
 }
 
-// 数据定义 → 生成「字段清单函数」（就地替换本块；产物 = 代码字符串）
-script {
-    var count = 0;
-    var out = "";
-    for (types.fields("Person")) |f| {
-        count = count + 1;
-        out = out.concat("// field ").concat(f[0]).concat(": ").concat(f[1]).concat("\n");
-    }
-    out.concat("fn person_field_count() i32 { return ").concat(String.from(count)).concat("; }");
-}
+// script { } 块已移除（2026-08-23 定案，见 docs/SPEC/phase3/12-script-redesign.md）。
+// 原脚本通过 types.fields("Person") 元数据生成 person_field_count()，
+// 现直接硬编码为等价函数。
+// field name: String
+// field age: i32
+fn person_field_count() i32 { return 2; }
 
 fn main() !void {
     var p = alloc.init(Person{name = String.from("alice", alloc), age = 30});   // 带参构造（C1'）

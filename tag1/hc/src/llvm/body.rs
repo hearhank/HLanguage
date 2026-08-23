@@ -1082,6 +1082,7 @@ impl BodyEmitter {
         errors: &ErrorCodeTable,
         canon: &HashMap<String, Vec<usize>>,
         funcs: &[IrFunc],
+        closures: &[IrFunc],
         gidx: &HashMap<String, usize>,
         slot_consts: &HashMap<usize, IrConst>,
     ) {
@@ -1528,14 +1529,170 @@ impl BodyEmitter {
                 errors,
                 slot_consts,
             ),
-            // Phase 4 原生后端临时取舍：闭包/函数引用/间接调用需原生 ABI 改造（Phase 8），
-            // 当前响亮拒绝（error.NotCallable），禁止静默误编译。
-            // 方法调用已由 Phase 7 内建/用户类分派覆盖；闭包仍在 Phase 8。
-            // G4b（定案 A）：组 G 线程 spawn 的 callee 即以 FnRef 传递 → 原生线程程序
-            // 在此响亮拒绝（error.NotCallable），属原生子集边界（非静默后端私语义）。
-            IrInst::MakeClosure { .. } => self.abort_feature("notcallable"),
-            IrInst::FnRef { .. } => self.abort_feature("notcallable"),
-            IrInst::CallIndirect { .. } => self.abort_feature("notcallable"),
+            // ---- Phase 8 原生 ABI：闭包/函数引用/间接调用 ----
+            IrInst::MakeClosure {
+                temp,
+                func,
+                captures,
+                is_move: _,
+                is_mut: _,
+            } => {
+                let n_caps = captures.len();
+                let env_size = n_caps * 16; // 16 bytes per %Value
+                                            // 分配 env 结构
+                let env_ptr = self.r();
+                self.emit(format!("{env_ptr} = call i8* @malloc(i64 {env_size})"));
+                let env_vals = self.r();
+                self.emit(format!("{env_vals} = bitcast i8* {env_ptr} to %Value*"));
+                // 逐个拷贝捕获变量到 env 结构
+                for (i, (_, slot)) in captures.iter().enumerate() {
+                    let v = self.r();
+                    self.emit(format!("{v} = load %Value, %Value* %sp.{slot}"));
+                    let cp = self.r();
+                    self.emit(format!(
+                        "{cp} = getelementptr inbounds %Value, %Value* {env_vals}, i64 {i}"
+                    ));
+                    self.emit(format!("store %Value {v}, %Value* {cp}"));
+                }
+                // 分配胖闭包结构 { i8* fn_ptr, i8* env_ptr } = 16 bytes
+                let fc_ptr = self.r();
+                self.emit(format!("{fc_ptr} = call i8* @malloc(i64 16)"));
+                let fc_fn = self.r();
+                self.emit(format!("{fc_fn} = bitcast i8* {fc_ptr} to i8**"));
+                // 获取闭包函数指针
+                if let Some(cf) = closures.get(*func) {
+                    let n_params = cf.params.len();
+                    let param_types = (0..n_params)
+                        .map(|_| "%Value")
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let fn_type = format!("%Value ({param_types})");
+                    let fn_i8 = self.r();
+                    let fn_name = format!("{}hc_closure{func}", self.prefix);
+                    self.emit(format!(
+                        "{fn_i8} = bitcast {fn_type}* @\"{fn_name}\" to i8*"
+                    ));
+                    self.emit(format!("store i8* {fn_i8}, i8** {fc_fn}"));
+                } else {
+                    self.abort_feature("notcallable");
+                    return;
+                }
+                // 存储 env 指针到胖闭包结构
+                let fc_env = self.r();
+                self.emit(format!(
+                    "{fc_env} = getelementptr inbounds i8*, i8** {fc_fn}, i64 1"
+                ));
+                self.emit(format!("store i8* {env_ptr}, i8** {fc_env}"));
+                // 存储胖闭包指针到 T_CLOSURE 值
+                let fc_int = self.r();
+                self.emit(format!("{fc_int} = ptrtoint i8* {fc_ptr} to i128"));
+                self.build_store(*temp, T_CLOSURE, fc_int);
+            }
+            IrInst::FnRef { temp, name } => {
+                let Some(candidates) = canon.get(name) else {
+                    // 函数未找到：运行时错误
+                    let res = self.r();
+                    self.emit(format!("{res} = call %Value @hc_no_function()"));
+                    self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+                    return;
+                };
+                let target = candidates[0];
+                let n_params = funcs[target].params.len();
+                let param_types = (0..n_params)
+                    .map(|_| "%Value")
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let fn_type = format!("%Value ({param_types})");
+                let fn_ptr = self.r();
+                let fn_name = format!("{}hc_fn{target}", self.prefix);
+                self.emit(format!(
+                    "{fn_ptr} = ptrtoint {fn_type}* @\"{fn_name}\" to i128"
+                ));
+                self.build_store(*temp, T_FN, fn_ptr);
+            }
+            IrInst::CallIndirect { temp, callee, args } => {
+                let callee_v = self.r();
+                self.emit(format!("{callee_v} = load %Value, %Value* %sp.{callee}"));
+                let tag = self.r();
+                self.emit(format!("{tag} = extractvalue %Value {callee_v}, 0"));
+                let is_fn = self.r();
+                self.emit(format!("{is_fn} = icmp eq i32 {tag}, {T_FN}"));
+                let fn_label = self.fb();
+                let done_label = self.fb();
+                let fb = self.fb();
+                self.term(format!("br i1 {is_fn}, label %L{fn_label}, label %{fb}"));
+                // T_FN 路径：提取函数指针，inttoptr，调用
+                self.cur = format!("L{fn_label}:\n");
+                self.terminated = false;
+                let payload = self.r();
+                self.emit(format!("{payload} = extractvalue %Value {callee_v}, 1"));
+                let n = args.len();
+                let param_types = (0..n).map(|_| "%Value").collect::<Vec<_>>().join(", ");
+                let fn_type = format!("%Value ({param_types})");
+                let fn_ptr = self.r();
+                self.emit(format!("{fn_ptr} = inttoptr i128 {payload} to {fn_type}*"));
+                let arglist = args
+                    .iter()
+                    .map(|a| format!("%Value %sp.{a}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let fn_r = self.r();
+                self.emit(format!("{fn_r} = call {fn_type} {fn_ptr}({arglist})"));
+                self.emit(format!("store %Value {fn_r}, %Value* %sp.{temp}"));
+                self.term(format!("br label %L{done_label}"));
+                // T_CLOSURE 路径：提取胖闭包，加载 fn/env，调用
+                self.cur = format!("{fb}:\n");
+                self.terminated = false;
+                let cl_payload = self.r();
+                self.emit(format!("{cl_payload} = extractvalue %Value {callee_v}, 1"));
+                let fc_i8 = self.r();
+                self.emit(format!("{fc_i8} = inttoptr i128 {cl_payload} to i8*"));
+                let fc_fn_p = self.r();
+                self.emit(format!("{fc_fn_p} = bitcast i8* {fc_i8} to i8**"));
+                let fn_i8 = self.r();
+                self.emit(format!("{fn_i8} = load i8*, i8** {fc_fn_p}"));
+                let fc_env_p = self.r();
+                self.emit(format!(
+                    "{fc_env_p} = getelementptr inbounds i8*, i8** {fc_fn_p}, i64 1"
+                ));
+                let env_i8 = self.r();
+                self.emit(format!("{env_i8} = load i8*, i8** {fc_env_p}"));
+                // 构造 env %Value（T_PTR tag）
+                let env_int = self.r();
+                self.emit(format!("{env_int} = ptrtoint i8* {env_i8} to i128"));
+                let env_v0 = self.r();
+                self.emit(format!(
+                    "{env_v0} = insertvalue %Value {{ i32 0, i128 0 }}, i32 {T_PTR}, 0"
+                ));
+                let env_v1 = self.r();
+                self.emit(format!(
+                    "{env_v1} = insertvalue %Value {env_v0}, i128 {env_int}, 1"
+                ));
+                // 转换 fn 到正确函数类型（1 + N 显式参数）
+                let n_cl = args.len() + 1;
+                let param_types_cl = (0..n_cl).map(|_| "%Value").collect::<Vec<_>>().join(", ");
+                let fn_type_cl = format!("%Value ({param_types_cl})");
+                let fn_ptr_cl = self.r();
+                self.emit(format!(
+                    "{fn_ptr_cl} = bitcast i8* {fn_i8} to {fn_type_cl}*"
+                ));
+                let arglist_cl = format!(
+                    "%Value {env_v1}, {}",
+                    args.iter()
+                        .map(|a| format!("%Value %sp.{a}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let cl_r = self.r();
+                self.emit(format!(
+                    "{cl_r} = call {fn_type_cl} {fn_ptr_cl}({arglist_cl})"
+                ));
+                self.emit(format!("store %Value {cl_r}, %Value* %sp.{temp}"));
+                self.term(format!("br label %L{done_label}"));
+                // 完成
+                self.cur = format!("L{done_label}:\n");
+                self.terminated = false;
+            }
             IrInst::Return { temp } => self.ret(*temp),
             IrInst::ReturnVoid => self.ret_void(),
             // Phase 5 全局单元：`@.h_globals` 数组寻址读写（声明序槽位）

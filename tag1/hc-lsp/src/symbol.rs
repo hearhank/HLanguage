@@ -346,7 +346,6 @@ fn decl_start(decl: &Decl) -> usize {
         | Decl::Const { span, .. } => span.start,
         Decl::Import { span, .. } => span.start,
         Decl::Using { span, .. } => span.start,
-        Decl::Script { span, .. } => span.start,
         Decl::Comptime { span, .. } => span.start,
         _ => 0,
     }

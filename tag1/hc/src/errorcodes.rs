@@ -163,7 +163,7 @@ fn collect_decl(d: &Decl, table: &mut ErrorCodeTable) {
                 collect_decl(inner, table);
             }
         }
-        Decl::Include { .. } | Decl::Script { .. } => {
+        Decl::Include { .. } => {
             // script 块 = 第三块 E1（tag1 不执行）——不收集
             // B6-2：.hs 文件引用——不收集
         }

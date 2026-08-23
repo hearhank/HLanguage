@@ -224,23 +224,11 @@ impl Parser {
                 })
             }
             TokenKind::KwScript => {
-                if is_export {
-                    return Err(
-                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
-                    );
-                }
-                // E1（ADR-0013）：script 块——解析为声明级占位，装载期求值替换。
-                // `close_end` = 块闭合 `}` 之后字节偏移：`parse_block` 消费 `}` 后 pos 指向
-                // 其后 token（EOF 恒为末 token 哨兵），故 `tokens[pos-1]` 即 `}` 本身。
-                self.advance();
-                let body = self.parse_block()?;
-                let close_end = self.tokens[self.pos - 1].span.end;
-                let end = self.span();
-                Ok(Decl::Script {
-                    body,
-                    close_end,
-                    span: start.merge(&end),
-                })
+                // 2026-08-23：`script { }` 块已从 `.hc` 中移除。
+                // 脚本功能迁移到 `.hs` 文件，见 `docs/SPEC/phase3/12-script-redesign.md`。
+                return Err(self.error_at(
+                    "`script { }` 块已移除。请使用 `.hs` 脚本文件替代 (docs/SPEC/phase3/12-script-redesign.md)"
+                ));
             }
             TokenKind::KwComptime => {
                 // E1.2（组 D D2）：comptime 块——声明级占位，装载期受限 Interp 求值

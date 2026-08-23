@@ -590,8 +590,8 @@ fn pkg_add_writes_local_dep_and_run_green() {
 
     // 4) 入口用依赖 + hc run 绿（依赖 pub 函数经包名前缀调用）
     std::fs::write(
-        app.join("main.hc"),
-        "import H.std.{io};\nimport jsonlib.{parse};\nfn main() !void { io.print(\"pkg = {}\\n\", parse(\"{}\")); }\n",
+        app.join("src").join("main.hc"),
+        "import H.std.{io};\nimport jsonlib.{parse};\nfn main() !void { io.print(\"pkg = {}\n\", parse(\"{}\")); }\n",
     )
     .unwrap();
     let run = Command::new(hc_bin())
@@ -600,6 +600,7 @@ fn pkg_add_writes_local_dep_and_run_green() {
         .output()
         .expect("run app");
     let rs = String::from_utf8_lossy(&run.stdout).to_string();
+    let re = String::from_utf8_lossy(&run.stderr).to_string();
     assert!(run.status.success(), "app 应运行成功: {rs}");
     assert!(rs.contains("pkg = 42"), "应调用依赖包函数: {rs}");
     let _ = std::fs::remove_dir_all(&root);

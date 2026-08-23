@@ -527,9 +527,9 @@ fn f() i32 {
 
     #[test]
     fn g4b_thread_spawn_aborts_notcallable() {
-        // G4b 定案 A：原生保持响亮拒绝线程。spawn 的 callee 以 FnRef 传递 → 原生 ABI
-        // 无函数值表示（Phase 8），codegen 发射 @hc_abort_notcallable 运行时中止
-        // （error.NotCallable）——不静默误编译，属原生子集边界。
+        // C7（Phase 8）：FnRef 已实现为 ptrtoint，不再 abort。
+        // spawn 内建在原生侧仍 abort（CallBuiltin "spawn" 未实现），
+        // 但 FnRef 路径已通。
         let ll = gen(r#"
 fn add(a: i32, b: i32) i32 { return a + b; }
 fn main() {
@@ -537,11 +537,11 @@ fn main() {
     var r = th.join();
 }
 "#);
-        assert!(ll.contains("define void @hc_abort_notcallable"), "{ll}");
-        assert!(ll.contains("call void @hc_abort_notcallable"), "{ll}");
-        // 禁止静默：spawn 内建也不得落入 NotBuiltin 之前被跳过——FnRef 中止先于
-        // CallBuiltin spawn 执行（运行时首先命中 notcallable 中止块）。
-        assert!(ll.contains("c\"error.NotCallable: function refs/closures/threads (spawn) not yet in native mode (Phase 8)\\00\""), "{ll}");
+        // C7：FnRef 现在发射 ptrtoint（函数指针）而非 abort
+        assert!(ll.contains("ptrtoint"), "{ll}");
+        assert!(ll.contains("hc_fn0"), "{ll}");
+        // spawn 内建在原生侧仍经 abort_feature("builtin") 拒绝
+        assert!(ll.contains("hc_abort_builtin"), "{ll}");
     }
 
     // ---- A1（ADR-0020）：extern fn — LLVM declare 发射 ----

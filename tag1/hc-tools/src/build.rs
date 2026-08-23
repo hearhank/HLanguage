@@ -328,6 +328,8 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
     };
     let stem = entry_path.file_stem().unwrap_or_default().to_string_lossy();
     let dir = entry_path.parent().unwrap_or_else(|| Path::new("."));
+    // M4-1：项目根目录（version.hc 所在位置）——传入的 path 为目录时就是项目根
+    let project_root = if path.is_dir() { path } else { dir };
 
     // M7.2：build.zon 包清单（C3：kind 分流——lib → 静态归档；exe → 链接依赖库）
     let manifest = match buildzon::load_from_dir(dir) {
@@ -362,7 +364,7 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
         return match build_lib(dir, &manifest.as_ref().unwrap().name, dll) {
             Ok((a_path, _)) => {
                 println!("库产物: {}", a_path.display());
-                try_update_version_hc(dir);
+                try_update_version_hc(project_root);
                 ExitCode::SUCCESS
             }
             Err(c) => c,
@@ -470,7 +472,7 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
         // 编译成功：清理中间 .ll，保留可执行文件
         let _ = std::fs::remove_file(&ll_path);
         println!("原生产物: {}", exe_path.display());
-        try_update_version_hc(dir);
+        try_update_version_hc(project_root);
         return ExitCode::SUCCESS;
     }
 
@@ -522,6 +524,6 @@ pub(crate) fn build_file(path: &Path, dll: bool) -> ExitCode {
     println!("  字节码    : {}", hbc_path.display());
     println!("  启动器    : {}", launcher.display());
     println!("运行方式：{}", launcher.display());
-    try_update_version_hc(dir);
+    try_update_version_hc(project_root);
     ExitCode::SUCCESS
 }

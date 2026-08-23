@@ -451,7 +451,6 @@ pub(crate) fn lower_decl(
         | Decl::Interface { .. }
         | Decl::Using { .. }
         | Decl::Import { .. }
-        | Decl::Script { .. }
         | Decl::Comptime { .. }
         | Decl::Include { .. } => {}
     }

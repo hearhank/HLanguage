@@ -209,7 +209,6 @@ fn decl_span(d: &Decl) -> &Span {
         | Decl::Namespace { span, .. }
         | Decl::Using { span, .. }
         | Decl::Import { span, .. }
-        | Decl::Script { span, .. }
         | Decl::Comptime { span, .. }
         | Decl::Include { span, .. } => span,
     }
@@ -249,11 +248,9 @@ fn decl_anchor(d: &Decl) -> String {
         }
         Decl::Const { name, .. } => format!("const {name}"),
         Decl::Global { name, .. } => format!("global {name}"),
-        Decl::Import { .. }
-        | Decl::Using { .. }
-        | Decl::Script { .. }
-        | Decl::Comptime { .. }
-        | Decl::Include { .. } => String::new(),
+        Decl::Import { .. } | Decl::Using { .. } | Decl::Comptime { .. } | Decl::Include { .. } => {
+            String::new()
+        }
     }
 }
 
@@ -297,11 +294,6 @@ fn render_decl(d: &Decl, src: &str, runs: &mut Vec<DocRun>, out: &mut String, le
     match d {
         Decl::Import { .. } | Decl::Using { .. } => return, // 导入集中列出，不在此渲染
         Decl::Include { .. } => return,                     // 文件引用不在此渲染
-        Decl::Script { .. } => {
-            if let Some(doc) = doc {
-                out.push_str(&format!("{h} `script`\n\n{doc}\n\n"));
-            }
-        }
         Decl::Comptime { .. } => {
             if let Some(doc) = doc {
                 out.push_str(&format!("{h} `comptime`\n\n{doc}\n\n"));

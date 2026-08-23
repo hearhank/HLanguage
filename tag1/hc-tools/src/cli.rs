@@ -157,12 +157,14 @@ pub(crate) fn run_cli() -> ExitCode {
         "run" => {
             let bench = args.get(2).map_or(false, |a| a == "--bench");
             let path_offset = if bench { 1 } else { 0 };
-            let Some(path) = args.get(2 + path_offset) else {
-                eprintln!("error: `hc run` requires a file path");
-                return ExitCode::from(2);
+            let path = args.get(2 + path_offset).map(|s| s.as_str()).unwrap_or(".");
+            // C2（ADR-0016）：从剩余参数提取 --dangle 标志；安全处理 args 不足的情况
+            let dangle_start = 3 + path_offset;
+            let (dangle_mode, rest_start) = if args.len() > dangle_start {
+                extract_dangle(&args, dangle_start)
+            } else {
+                (DangleMode::Auto, args.len())
             };
-            // C2（ADR-0016）：从剩余参数提取 --dangle 标志
-            let (dangle_mode, rest_start) = extract_dangle(&args, 3 + path_offset);
             // 显式模式标志：`hc run --ir <file>` 走 IR 参考解释器；
             // `.hbc`（HBC2 字节码）走字节码 VM；否则默认 tree-walking
             if path == "--ir" {
@@ -193,6 +195,8 @@ pub(crate) fn run_cli() -> ExitCode {
                     );
                     return ExitCode::FAILURE;
                 }
+                // M4-1：编译时版本号自增（version.hc 存在时更新 build 和 time）
+                crate::versiongen::bump_version(dir);
                 match package_entry(dir) {
                     Ok(entry) => {
                         let entry_s = entry.to_string_lossy().into_owned();
@@ -209,29 +213,10 @@ pub(crate) fn run_cli() -> ExitCode {
                 run_file_dangle_bench(Path::new(path), &prog_args, dangle_mode, bench)
             }
         }
-        // 调试：打印 script 块展开后的源码（组 C 开发辅助）
+        // 调试：打印 script 块展开后的源码（已移除——script 块已迁移到 .hs 文件）
         "dump-scripts" => {
-            let Some(path) = args.get(2) else {
-                eprintln!("error: `hc dump-scripts` requires a file path");
-                return ExitCode::from(2);
-            };
-            let source = match std::fs::read_to_string(path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: 读取 {path} 失败: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            match scriptgen::expand_scripts(&source) {
-                Ok(expanded) => {
-                    println!("{expanded}");
-                    ExitCode::SUCCESS
-                }
-                Err(msg) => {
-                    eprintln!("{msg}");
-                    ExitCode::FAILURE
-                }
-            }
+            eprintln!("error: `dump-scripts` 已移除（script 块已从 .hc 中移除，见 docs/SPEC/phase3/12-script-redesign.md）");
+            ExitCode::FAILURE
         }
         "test" => {
             // 解析可选 --mode=interpret|compile（默认 interpret）与目标路径
@@ -299,11 +284,9 @@ pub(crate) fn run_cli() -> ExitCode {
                     target = Some(a);
                 }
             }
-            let Some(path) = target else {
-                eprintln!("error: `hc build [--dll]` requires a file path");
-                return ExitCode::from(2);
-            };
-            build_file(Path::new(path), dll)
+            let path = target.map(|s| s.as_str()).unwrap_or(".");
+            let build_path = Path::new(path);
+            build_file(build_path, dll)
         }
         "init" => {
             // H1：`hc init <name>`——创建新项目骨架（build.zon + main.hc）
@@ -625,9 +608,6 @@ fn dump_decl(decl: &hc::ast::Decl, depth: usize) {
                 print!("|select={:?}", s);
             }
             println!();
-        }
-        hc::ast::Decl::Script { .. } => {
-            println!("{indent}Script");
         }
         hc::ast::Decl::Include { path, alias, .. } => {
             print!("{indent}Include|path={path:?}");
@@ -1150,7 +1130,11 @@ fn errors_file(path: &Path) -> ExitCode {
 fn check_file(path: &Path) -> Result<(), ExitCode> {
     let source = read_source(path)?;
     match scriptgen::parse_with_scripts(&source) {
-        Ok((source, program)) => {
+        Ok((source, mut program)) => {
+            // M1-1：文件级命名空间自动推断
+            let project_root = scriptgen::find_project_root(path);
+            let ns_name = scriptgen::compute_namespace_name(path, project_root.as_deref());
+            scriptgen::infer_namespace(&mut program, &ns_name);
             let mut interp = Interp::new(&source);
             // M1.4：同包兄弟文件先登记符号（解析失败仅告警）
             if let Err(code) = load_siblings_into(&mut interp, path) {

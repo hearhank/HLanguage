@@ -17,33 +17,35 @@ enum OrderStatus {
     cancelled,
 }
 
-// 脚本生成：序列化/反序列化/校验样板（Q23：types 元数据输入，就地替换本块）——**E1 定制通道（第三块，最小集不实现）**
-//   最小功能集：Order 为 [continuous]，内建 to_bytes/from_bytes 直映射已可用；脚本作定制通道演示
-script {
-    var fields = types.fields("Order");
-    // 遍历 fields 拼接生成（示意）：
-    //   fn order_to_bytes(o: *Order) owned Vec<u8> { ... }
-    //   fn order_from_bytes(data: &[u8]) !Order { ... }
-    //   fn order_validate(o: *Order) !void { ... }
-    // E1（ADR-0013）：产物必须为字符串；定制通道生成物在组 C（E1.3）展开，此处以注释占位
-    "// script-generated: order_to_bytes/from_bytes/validate（组 C 展开）";
+// script { } 块已移除（2026-08-23 定案，见 docs/SPEC/phase3/12-script-redesign.md）。
+// 原脚本通过 types.fields("Order") 元数据生成序列化/反序列化/校验函数，
+// 现直接硬编码为桩函数供演示。
+
+fn order_to_bytes(ord: *Order) owned Vec<u8> {
+    return Vec<u8>{};
 }
+
+fn order_from_bytes(data: &[u8]) !Order {
+    return error.NotImplemented;
+}
+
+fn order_validate(ord: *Order) !void {}
 
 fn handle_order<T>(io: *T, conn: *TcpConn) !void where T: Io {
     // 传输：接收长度前缀帧
     var data = try io.net.read_frame(&conn, alloc);
 
     // 定义：反序列化
-    var mut order = try order_from_bytes(data);
+    var mut ord = try order_from_bytes(data);
 
     // 修改：校验 + 变换
-    try order_validate(&order);
-    if (order.status == OrderStatus.pending) {
-        order.status = OrderStatus.confirmed;
+    try order_validate(&ord);
+    if (ord.status == OrderStatus.pending) {
+        ord.status = OrderStatus.confirmed;
     }
 
     // 传输：序列化回写
-    var resp = order_to_bytes(&order);
+    var resp = order_to_bytes(&ord);
     try io.net.write_frame(&conn, resp);
 
     // 保存：落盘

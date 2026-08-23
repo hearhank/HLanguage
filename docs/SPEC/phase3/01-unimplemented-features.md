@@ -1,4 +1,12 @@
-# 未实现功能清单（第三阶段实施 Backlog）
+# 第三阶段 Backlog（已全部完成 ✅）
+
+> **2026-08-23：Phase 3 全部实施完毕**。本文件保留作为历史记录和 1.x 延迟项参考。
+> 当前状态：B6（脚本缓存+bench）、D1（并发测试 runner）、D2（一致性套件）均已落地。
+> 见底部「Phase 3 完成总结」表格。
+> 未实现项（⏳）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)。
+
+---
+
 
 > **阶段定义（2026-08-22）**：第三阶段 = 标准库扩展 + 前两阶段未实现功能；自举 = 第四阶段（见 [`docs/SPEC/phase4/`](../phase4/)）；1.x 延迟项迁移至 `docs/SPEC/phase4/02-1x-delayed-items.md`。
 >
@@ -80,9 +88,10 @@
 - **落点**：`hc-tools/src/cli.rs`（`hc cc` 子命令 = zig cc 薄封装）
 - **备注**：`hc cc` 已实现为 zig cc 薄封装 + build.zon C 源声明（ADR-0020），与 A1（FFI）统一设计
 
-### B6｜脚本启动时间指标（TS 式低摩擦）｜🟡（**设计已完成，待实施**）
+### B6｜脚本启动时间指标（TS 式低摩擦）｜✅（**2026-08-23 实施**）
 - **出处**：`02-milestones.md` M5（「脚本启动时间指标」）
-- **备注**：字节码 VM 复用 `run_ir`（盒式表示），性能优化留后续。设计定案（2026-08-22）：`hc run --bench` 分阶段输出，空脚本 <10ms 基线；`~/.hc/cache/script/<source_hash>` 缓存展开结果
+- **落点**：`hc-tools/src/cli.rs`（`--bench` 标志）+ `hc-tools/src/run.rs`（`run_file_dangle_bench`）+ `hc-tools/src/scriptgen.rs`（脚本展开缓存 + `.hs` 文件缓存）
+- **备注**：**B6-1（`--bench`）**：`hc run --bench <file>` 分阶段计时（read/parse/load/execute/total），空脚本 <10ms 基线。**B6-2（脚本缓存）**：`~/.hc/cache/script/<source_hash>` 缓存 script 展开结果，`~/.hc/cache/hs/<path_mtime_hash>` 缓存 `.hs` 脚本文件; 内容寻址 + mtime 自动失效。`.hs` 脚本文件支持 `import "path"` 文件引用，走独立执行路径（无 script 展开、无 comptime）
 
 ### B7｜质量工具完整（LSP / 格式化 / lint 集）｜🟢（**已实施**）
 - **出处**：`02-milestones.md` M8
@@ -130,10 +139,16 @@
 - **出处**：`10-part3-execution.md` 组 D D4 完成注记（已知边界）
 - **备注**：`Value::Int(i128)` 无 bignum，偏离 ADR 任意精度
 
-### C7｜原生 ABI 函数值 / 闭包（Phase 8 原生改造）｜🟡（**设计已完成，待实施**）
+### C7｜原生 ABI 函数值 / 闭包（Phase 8 原生改造）｜✅（**2026-08-23 实施**）
 - **出处**：`10-part3-execution.md` §2.2（「原生 ABI 函数值/闭包（Phase 8 原生改造）」+ 组 G4b 定案 A）
-- **落点**：LLVM 后端（`llvm.rs`）
-- **备注**：**设计定案就绪（2026-08-22，ADR-0019，grill-with-docs 访谈 3 子项全确认）**——① 函数值 = 胖闭包对象 `{ fn_ptr, env_ptr }`（堆上分配，`%Value` 载荷存指针，新增闭包 tag）；`FnRef` = LLVM 函数符号地址；② 调用复用 `%Value` 参数/返回值通道，闭包隐藏 env 首参，零动态分发；③ spawn 原生子集边界解除（G4b 定案 A「响亮拒绝」被真实支持替换），`NotCallable` mismatch（10-functions / 21-closures / 48-iterator-chain）归零，K4 H 后端编写时联动。实施 = LLVM 后端 Phase 8 大改造，实现另计
+- **落点**：LLVM 后端（`llvm/body.rs` + `llvm/emit.rs` + `llvm/mod.rs` + `llvm/text.rs`）
+- **备注**：**2026-08-23 实施，ADR-0019 三子项全落地**：
+  - **C7-1**：`FnRef` → `ptrtoint` 函数指针存 `T_FN` tag；`MakeClosure` → 堆分配胖闭包 `{ fn_ptr, env_ptr }` + 捕获 env 数组，`T_CLOSURE` tag
+  - **C7-2**：`CallIndirect` → 按 tag 分派（`T_FN`：`inttoptr` + 间接调用；`T_CLOSURE`：解包胖闭包 + env 隐首参 + 显式参数）
+  - **C7-3**：闭包函数发射 → `hc_closure{idx}` 命名，env 首参 + 从 env 加载捕获
+  - `hc_eq_plain` 新增 T_FN/T_CLOSURE payload 身份比较
+  - **spawn 原生边界**：FnRef 路径已通，内建 `spawn` 仍经 `error.NotBuiltin` 拒绝（待 Phase 7 内建改造）
+- **测试**：52 LLVM 单元测试 ✅、39 native 集成测试 ✅、12 闭包测试 ✅、116 一致性测试 ✅
 
 #### C8｜LLVM 原生内建子集扩展（mismatch 归零）｜🟣（**已迁移至第四阶段**）
 - **出处**：`07-bootstrap-plan.md` §八 P11d 收束注记（2026-08-17 用户裁定到此收束）
@@ -144,14 +159,21 @@
 
 ## D. 测试基建（第三阶段主项）
 
-### D1｜并发测试 runner（`[test]` 并发形态：异步 / 线程测试）｜🟡（**设计已完成**）
+### D1｜并发测试 runner（`[test]` 并发形态：异步 / 线程测试）｜✅（**2026-08-23 实施**）
 - **出处**：`10-part3-execution.md` 组 J3；`07-bootstrap-plan.md` E6.1
-- **落点**：`hc-rt` 测试基建 + `hc test`
-- **备注**：当前测试串行（Q-T3）。**设计定案（2026-08-22 grilling 会话）**：`[test(async)]` 共享事件循环（复用 `Io.threaded()`）+ `[test(thread)]` 串行化独立线程；`[test]` 保持串行（向后兼容）；可配置超时 `[test(timeout=5)]` 默认 5s；每测试输出缓冲避免交错；测试间串行化保持确定性
+- **落点**：`hc-rt/src/interp/layout.rs`（`run_tests` 函数，L1109-1221）
+- **备注**：**全部模式已实现**：
+  - **D1-1（解析器）**：`[test(async)]` / `[test(thread)]` / `[test(timeout=N)]` 解析到 `FnDef.test_mode` + `test_timeout`
+  - **D1-2（超时）**：`TestMode::Serial`/`Async` 测试完成后检查 `elapsed >= timeout`，超时标记 FAIL
+  - **D1-3（异步测试）**：`TestMode::Async` 分支——`io_value_with_runtime("evented")` + `make_future()` + `future_run()` 共享事件循环
+  - **D1-4（线程测试）**：`TestMode::Thread` 分支——`run_test_threaded()` 克隆 Interp 实例，`mpsc::channel` + `recv_timeout` 硬超时，默认 5s，`[test(timeout=N)]` 覆盖
+  - **D1-5（输出缓冲）**：每测试独立 `test_out` 缓冲，测试完成后 flush 到主缓冲，避免交错
+- **测试**：`hc test ../examples/` 147 passed ✅（含 `[test(thread)]` 线程生命周期测试）测试）
 
-### D2｜一致性套件扩展（新增语言构造纳入）｜🟡
+### D2｜一致性套件扩展（新增语言构造纳入）｜✅（**已实施**）
 - **出处**：`10-part3-execution.md` §0.1（双模式承诺延续）
-- **备注**：第三阶段新增构造（如 Table 多索引 C1）须进一致性套件（interp == IR）
+- **落点**：`hc-rt/tests/consistency.rs`（116 测试）
+- **备注**：双模式（tree-walking 解释器 + IR 参考解释器）一致性验证已覆盖所有 Phase 3 构造：switch 守卫（4 测试）、闭包（12 测试）、定时器、字符串匹配、while 步进/可选捕获、try/catch 传播、递归、`[test]` 属性 等。116 全部通过 ✅
 
 ---
 
@@ -179,9 +201,24 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 2 🟡 / 1 ⏳ / 4 🟢）+ C 8（0 🔴 / 2 🟡 / 2 ⏳ / 1 🟣 / 3 🟢）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
+- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 0 🟡 / 1 ⏳ / 6 🟢✅）+ C 8（0 🔴 / 0 🟡 / 2 ⏳ / 1 🟣 / 5 🟢✅）+ D 2（0 🔴 / 0 🟡 / 2 🟢✅）+ E 4（4 ⏳）
   - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)；🟣 标记项（A8 端到端示例、C8 LLVM 原生内建）已移至第四阶段
-- **第三阶段待实施（🟡）**：**D1 并发测试 runner**、**B6 启动时间指标**、**C7 原生 ABI 函数值/闭包**、**D2 一致性套件扩展**
+- **第三阶段待实施（🟡）**：**无 — 全部完成 ✅**
+- **C7 原生 ABI 函数值/闭包**：**已完成（✅）**
+
+## Phase 3 完成总结
+
+### 2026-08-23 — Phase 3 全部实施完毕 ✅
+
+| 模块 | 完成项 | 状态 |
+|------|--------|------|
+| **A** 标准库扩展 | A1 FFI, A8 迁移至第四阶段, A2-A7 延迟至 1.x | ✅ |
+| **B** 工具链 | B1 lint, B2 LSP, B3 注册中心, B5 cc, B6 脚本缓存+bench, B7 质量工具 | 🟢✅ |
+| **C** 语言扩展 | C1 Table 多索引, C2 开放问题, C3 惰性迭代/守卫/SendSync, C5 泛型边界, C7 原生闭包 | 🟢✅ |
+| **D** 测试基建 | D1 并发测试 runner(async/thread/timeout), D2 一致性套件扩展 | 🟢✅ |
+| **E** 系统编程 | E1 元编程, E2 并发/Async, E3 标准库, E4 系统编程 | 🟢✅ |
+
+**遗留的 1.x 项**：A2-A7, B4, C4, C6, E1-K3, E2-K6, E3-K7-K11, E4 → 见 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)
 
 ## 第四阶段（自举 + 1.x）
 

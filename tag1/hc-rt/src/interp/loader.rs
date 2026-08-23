@@ -545,6 +545,28 @@ impl Interp {
                         is_extern: false,
                         span: m.span.clone(),
                     });
+                    // M1-1：扁平类型名也注册方法（命名空间包裹后，类型字面量 `Lexer{}` 使用扁平名
+                    // 创建 Value::Class，type_name() 返回扁平名；方法查找 `Lexer.run` 需命中）
+                    if !skip_flat && !prefix.is_empty() {
+                        let flat_fname = format!("{name}.{}", m.name);
+                        self.funcs
+                            .entry(flat_fname.clone())
+                            .or_default()
+                            .push(FnDef {
+                                name: flat_fname,
+                                params: m.params.clone(),
+                                ret: m.ret.clone(),
+                                body: m.body.clone(),
+                                is_test: false,
+                                test_name: None,
+                                test_mode: TestMode::Serial,
+                                test_timeout: None,
+                                method_of: Some(name.clone()),
+                                is_async: false,
+                                is_extern: false,
+                                span: m.span.clone(),
+                            });
+                    }
                 }
             }
             Decl::Enum { name, variants, .. } => {
@@ -742,7 +764,7 @@ impl Interp {
                 // tag1：using 无操作（模块扁平化；跨包解析归 M1.4/M7.2）
                 let _ = path;
             }
-            Decl::Include { .. } | Decl::Script { .. } => {
+            Decl::Include { .. } => {
                 // B6-2：.hs 脚本文件引用；loader 内不执行，由 run_file_hs 解析
             }
             Decl::Comptime { .. } => {

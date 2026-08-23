@@ -165,37 +165,28 @@ fn comptime_io_forbidden() {
 
 #[test]
 fn comptime_sees_script_generated_types() {
-    // 顺序：script 展开后求值——comptime 块可见 script 生成的 class
+    // 顺序：comptime 块可见前面定义的 class（script 已移除，改用手动定义）
     let dir = temp_dir("script");
     let file = write(
         &dir,
         "script.hc",
         "import H.std.{io};\n\
-         class Point { x: i32 }\n\
-         script {\n\
-         \x20   var fields = types.fields(\"Point\");\n\
-         \x20   var out = \"class Gen { \";\n\
-         \x20   for (fields) |f| {\n\
-         \x20       out = out.concat(\"gen_\").concat(f[0]).concat(\": \")\n\
-         \x20           .concat(f[1]).concat(\", \");\n\
-         \x20   }\n\
-         \x20   out.concat(\"}\");\n\
-         }\n\
+         class Point { x: i32, y: i32 }\n\
          comptime {\n\
-         \x20   if (types.fields(\"Gen\").len() < 1) { return error.NoGen; }\n\
+         \x20   if (types.fields(\"Point\").len() < 1) { return error.NoGen; }\n\
          }\n\
          fn main() !void {\n\
-         \x20   io.print(\"script+comptime ok\\n\");\n\
+         \x20   io.print(\"comptime+types ok\\n\");\n\
          }\n",
     );
     let out = run_hc(&[Path::new("run"), &file]);
     let s = stdout(&out);
     assert!(
         out.status.success(),
-        "comptime 应见 script 生成类型: {}",
+        "comptime 应见 types 信息: {}",
         combined(&out)
     );
-    assert!(s.contains("script+comptime ok"), "main 应正常执行: {s}");
+    assert!(s.contains("comptime+types ok"), "main 应正常执行: {s}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

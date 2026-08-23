@@ -1108,10 +1108,16 @@ impl Interp {
     /// 运行全部测试；返回 (passed, failed, skipped)
     pub fn run_tests(&mut self) -> (usize, usize, usize) {
         let mut tests: Vec<FnDef> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for fns in self.funcs.values() {
             for f in fns {
                 if f.is_test {
-                    tests.push(f.clone());
+                    // 去重：相同 (name, span.start, span.end) 只计一次
+                    // 避免命名空间包裹后扁平名+限定名双登记导致重复运行
+                    let key = (f.name.clone(), f.span.start, f.span.end);
+                    if seen.insert(key) {
+                        tests.push(f.clone());
+                    }
                 }
             }
         }

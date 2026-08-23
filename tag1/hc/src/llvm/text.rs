@@ -249,13 +249,26 @@ entry:
   %r6 = or i1 %r5, %nn_res
   %r7 = or i1 %r6, %vv_res
   %r8 = or i1 %r7, %ee_res
+  ; Phase 8 函数引用/闭包：payload 身份比较
+  %a_fn = icmp eq i32 %ta, 14
+  %b_fn = icmp eq i32 %tb, 14
+  %fn_case = and i1 %a_fn, %b_fn
+  %fn_eq = icmp eq i128 %da, %db
+  %fn_res = and i1 %fn_case, %fn_eq
+  %a_cl = icmp eq i32 %ta, 15
+  %b_cl = icmp eq i32 %tb, 15
+  %cl_case = and i1 %a_cl, %b_cl
+  %cl_eq = icmp eq i128 %da, %db
+  %cl_res = and i1 %cl_case, %cl_eq
+  %r8a = or i1 %r8, %fn_res
+  %r8b = or i1 %r8a, %cl_res
   ; Phase 2 聚合：两值均为聚合 tag（>=8）→ 深比较（递归 helper）
   %a_agg = icmp uge i32 %ta, 8
   %b_agg = icmp uge i32 %tb, 8
   %agg_case = and i1 %a_agg, %b_agg
   %agg_call = call i1 @hc_eq_agg(%Value %a, %Value %b)
   %agg_res = and i1 %agg_case, %agg_call
-  %r9 = or i1 %r8, %agg_res
+  %r9 = or i1 %r8b, %agg_res
   ret i1 %r9
 }
 "#;

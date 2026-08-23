@@ -147,41 +147,79 @@ pub(crate) fn emit_func(
     out: &mut String,
     f: &IrFunc,
     idx: usize,
+    n_caps: Option<usize>,
     strings: &[String],
     errors: &ErrorCodeTable,
     canon: &HashMap<String, Vec<usize>>,
     funcs: &[IrFunc],
+    closures: &[IrFunc],
     gidx: &HashMap<String, usize>,
     prefix: &str,
     links: &HashMap<String, String>,
     ext_decls: &mut Vec<(String, usize)>,
 ) {
     let slot_consts = build_slot_consts(f);
-    let _ = writeln!(out, "; {prefix}hc_fn{idx} = {}", f.name);
-    let params = (0..f.params.len())
-        .map(|i| format!("%Value %p{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let is_closure = n_caps.is_some();
+    let fn_tag = if is_closure { "hc_closure" } else { "hc_fn" };
+    let _ = writeln!(out, "; {prefix}{fn_tag}{idx} = {}", f.name);
+    // 闭包函数：第一个参数为 env 指针，显式参数跳过前 n_caps 个捕获参数
+    let n = n_caps.unwrap_or(0);
+    let params = if is_closure {
+        let explicit: Vec<String> = (n..f.params.len())
+            .map(|i| format!("%Value %p{i}"))
+            .collect();
+        if explicit.is_empty() {
+            "%Value %env".to_string()
+        } else {
+            format!("%Value %env, {}", explicit.join(", "))
+        }
+    } else {
+        (0..f.params.len())
+            .map(|i| format!("%Value %p{i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     // A1（ADR-0020）：`extern fn`——纯声明→ emit `declare` 而非 `define`
     if f.is_extern {
-        let _ = writeln!(out, "declare %Value @\"{prefix}hc_fn{idx}\"({params})");
+        let _ = writeln!(out, "declare %Value @\"{prefix}{fn_tag}{idx}\"({params})");
         return;
     }
-    let _ = writeln!(out, "define %Value @\"{prefix}hc_fn{idx}\"({params}) {{");
+    let _ = writeln!(out, "define %Value @\"{prefix}{fn_tag}{idx}\"({params}) {{");
     // 序言（槽数组 + 参数存槽）并入 entry 块（BodyEmitter 首个块即 entry）
     let mut be = BodyEmitter::new(prefix, links);
-    be.emit(format!(
-        "%slots = alloca [{} x %Value], align 16",
-        f.n_slots
-    ));
+    let ns = f.n_slots;
+    be.emit(format!("%slots = alloca [{ns} x %Value], align 16",));
     for i in 0..f.n_slots {
         be.emit(format!(
-            "%sp.{i} = getelementptr inbounds [{n} x %Value], [{n} x %Value]* %slots, i32 0, i32 {i}",
-            n = f.n_slots
+            "%sp.{i} = getelementptr inbounds [{ns} x %Value], [{ns} x %Value]* %slots, i32 0, i32 {i}",
         ));
     }
-    for (i, ps) in f.params.iter().enumerate() {
-        be.emit(format!("store %Value %p{i}, %Value* %sp.{ps}"));
+    // 闭包函数：从 env 结构加载捕获变量到对应槽
+    if is_closure {
+        let env_int = be.r();
+        be.emit(format!("{env_int} = extractvalue %Value %env, 1"));
+        let env_ptr = be.r();
+        be.emit(format!("{env_ptr} = inttoptr i128 {env_int} to i8*"));
+        let env_vals = be.r();
+        be.emit(format!("{env_vals} = bitcast i8* {env_ptr} to %Value*"));
+        for i in 0..n {
+            let cptr = be.r();
+            let cv = be.r();
+            let slot = f.params[i];
+            be.emit(format!(
+                "{cptr} = getelementptr inbounds %Value, %Value* {env_vals}, i64 {i}"
+            ));
+            be.emit(format!("{cv} = load %Value, %Value* {cptr}"));
+            be.emit(format!("store %Value {cv}, %Value* %sp.{slot}"));
+        }
+        // 只存显式参数（跳过前 n 个捕获参数）
+        for (rel_i, &ps) in f.params.iter().enumerate().skip(n) {
+            be.emit(format!("store %Value %p{rel_i}, %Value* %sp.{ps}"));
+        }
+    } else {
+        for (i, ps) in f.params.iter().enumerate() {
+            be.emit(format!("store %Value %p{i}, %Value* %sp.{ps}"));
+        }
     }
     // defer 活跃计数表（Phase 6）：每个 PushDefer id 一个 i32 计数器，entry 置零。
     // 计数 = 本调用内待运行 defers 多重集；PushDefer 增 / PopDefer 减 / 守卫 JumpIfNotDefer 查零。
@@ -202,7 +240,16 @@ pub(crate) fn emit_func(
         }
     }
     for inst in &f.body {
-        be.inst(inst, strings, errors, canon, funcs, gidx, &slot_consts);
+        be.inst(
+            inst,
+            strings,
+            errors,
+            canon,
+            funcs,
+            closures,
+            gidx,
+            &slot_consts,
+        );
     }
     let per_func = std::mem::take(&mut be.ext_decls);
     out.push_str(&be.finish());

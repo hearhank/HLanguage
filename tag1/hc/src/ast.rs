@@ -115,12 +115,6 @@ pub enum Decl {
         select: Option<Vec<(String, Option<String>)>>,
         span: Span,
     },
-    Script {
-        body: Block,
-        /// 块闭合 `}` 之后字节偏移（E1 script 装载期文本替换的替换终点）
-        close_end: usize,
-        span: Span,
-    },
     /// E1.2（组 D D2）：`comptime { ... }` 块——编译期求值（装载期受限 Interp，
     /// 结果丢弃、失败 = 编译错误）。仅编译期存在，不产生运行时代码、不替换源码。
     Comptime { body: Block, span: Span },
@@ -149,7 +143,6 @@ impl Decl {
             | Decl::Namespace { pub_, .. } => *pub_,
             Decl::Using { .. }
             | Decl::Import { .. }
-            | Decl::Script { .. }
             | Decl::Comptime { .. }
             | Decl::Include { .. } => false,
         }

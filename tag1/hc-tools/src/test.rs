@@ -110,6 +110,11 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
         groups.entry(dir).or_default().push(f.clone());
     }
 
+    // M4-1：如果目标目录有 version.hc，执行编译时版本号自增
+    if target.is_dir() {
+        crate::versiongen::bump_version(target);
+    }
+
     let mut total_p = 0usize;
     let mut total_f = 0usize;
     let mut total_s = 0usize;
@@ -128,7 +133,13 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
                 .to_string();
             match std::fs::read_to_string(f) {
                 Ok(src) => match scriptgen::parse_with_scripts(&src) {
-                    Ok((expanded, p)) => parsed.push((f.clone(), expanded, p)),
+                    Ok((expanded, mut p)) => {
+                        // M1-1：文件级命名空间自动推断
+                        let project_root = scriptgen::find_project_root(f);
+                        let ns_name = scriptgen::compute_namespace_name(f, project_root.as_deref());
+                        scriptgen::infer_namespace(&mut p, &ns_name);
+                        parsed.push((f.clone(), expanded, p));
+                    }
                     Err(msg) => {
                         bad.push((f.clone(), "parse/script error".into()));
                         eprintln!("{} {name}: {}", paint(err_color(), "31", "[FAIL]"), msg);
