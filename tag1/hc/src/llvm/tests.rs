@@ -441,8 +441,11 @@ fn main(io: Io) !void {
 }"#);
         assert!(ll.contains("call %Value @hc_intcast"), "{ll}");
         assert!(ll.contains("call %Value @hc_typeof"), "{ll}");
-        assert!(ll.contains("call %Value @hc_min"), "{ll}");
-        assert!(ll.contains("call %Value @hc_max"), "{ll}");
+        // min/max 已内联为 icmp + select，不再走 helper
+        assert!(!ll.contains("call %Value @hc_min"), "{ll}");
+        assert!(!ll.contains("call %Value @hc_max"), "{ll}");
+        assert!(ll.contains("icmp slt i128"), "{ll}");
+        assert!(ll.contains("select i1"), "{ll}");
         assert!(ll.contains("call %Value @hc_box"), "{ll}");
         // @sizeOf 编译期常量折叠 → i32 槽直接存 4（非 helper 调用）
         assert!(ll.contains("store %Value"), "{ll}");

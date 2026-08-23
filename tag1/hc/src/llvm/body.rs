@@ -627,12 +627,86 @@ impl BodyEmitter {
         }
         // ---------- 数值/字节内建 ----------
         match name {
-            "min" => {
-                self.emit_binop_helper("hc_min", args, temp);
-                return;
-            }
-            "max" => {
-                self.emit_binop_helper("hc_max", args, temp);
+            "min" | "max" => {
+                let is_min = name == "min";
+                if args.len() < 2 {
+                    self.abort_feature("builtin");
+                    return;
+                }
+                // 从类型槽表推断类型，选择原生或 helper 路径
+                let ty = args
+                    .first()
+                    .and_then(|a| self.type_slot_map.get(a).cloned());
+                let is_int = ty.as_ref().map_or(false, |t| {
+                    matches!(
+                        t.as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "isize"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                            | "bool"
+                    )
+                });
+                let is_float = ty.as_ref().map_or(false, |t| {
+                    matches!(t.as_str(), "f16" | "f32" | "f64" | "f128")
+                });
+                if is_int || is_float {
+                    let va = self.r();
+                    self.emit(format!("{va} = load %Value, %Value* %sp.{}", args[0]));
+                    let vb = self.r();
+                    self.emit(format!("{vb} = load %Value, %Value* %sp.{}", args[1]));
+                    let da = self.r();
+                    self.emit(format!("{da} = extractvalue %Value {va}, 1"));
+                    let db = self.r();
+                    self.emit(format!("{db} = extractvalue %Value {vb}, 1"));
+                    if is_int {
+                        let is_unsigned = ty.as_ref().map_or(false, |t| t.starts_with('u'));
+                        let icmp_op = if is_min {
+                            if is_unsigned {
+                                "icmp ult"
+                            } else {
+                                "icmp slt"
+                            }
+                        } else {
+                            if is_unsigned {
+                                "icmp ugt"
+                            } else {
+                                "icmp sgt"
+                            }
+                        };
+                        let cmp = self.r();
+                        self.emit(format!("{cmp} = {icmp_op} i128 {da}, {db}"));
+                        let sel = self.r();
+                        self.emit(format!("{sel} = select i1 {cmp}, i128 {da}, i128 {db}"));
+                        self.build_store(temp, T_INT, sel);
+                    } else {
+                        // Float: bitcast i128 to double, fcmp, select, bitcast back
+                        let fa = self.r();
+                        self.emit(format!("{fa} = bitcast i128 {da} to double"));
+                        let fb = self.r();
+                        self.emit(format!("{fb} = bitcast i128 {db} to double"));
+                        let fcmp_op = if is_min { "fcmp olt" } else { "fcmp ogt" };
+                        let cmp = self.r();
+                        self.emit(format!("{cmp} = {fcmp_op} double {fa}, {fb}"));
+                        let sel = self.r();
+                        self.emit(format!("{sel} = select i1 {cmp}, double {fa}, double {fb}"));
+                        let bits = self.r();
+                        self.emit(format!("{bits} = bitcast double {sel} to i64"));
+                        let z = self.r();
+                        self.emit(format!("{z} = zext i64 {bits} to i128"));
+                        self.build_store(temp, T_FLOAT, z);
+                    }
+                    return;
+                }
+                // 未知类型：回退到 helper
+                self.emit_binop_helper(if is_min { "hc_min" } else { "hc_max" }, args, temp);
                 return;
             }
             "sqrt" => {
