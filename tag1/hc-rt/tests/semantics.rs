@@ -581,6 +581,32 @@ fn m43_alignof_and_offsetof() {
 }
 
 #[test]
+fn m43_field_align_override() {
+    // 字段级 [align(8)] 覆盖自然对齐——i32 字段按 8 对齐
+    // 布局：a@0(4) + b@4(4) = 8，尾部圆整到 8
+    run_ok(
+        "struct Foo { [align(8)] a: i32, b: i32 }\n[test] fn t() !void {\n    try expect_eq(@offsetOf(Foo, \"a\"), 0);\n    try expect_eq(@offsetOf(Foo, \"b\"), 4);\n    try expect_eq(@sizeOf(Foo), 8);\n}\n",
+    );
+}
+
+#[test]
+fn m43_field_align_affects_struct_align() {
+    // 字段级 [align(8)] 提升 struct 整体对齐
+    run_ok(
+        "struct Bar { [align(8)] a: i32 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(Bar), 8);\n}\n",
+    );
+}
+
+#[test]
+fn m43_field_align_padding() {
+    // 字段级 [align(8)] 导致字段前填充——y 对齐到 8 需跳过 4 字节
+    // 布局：x@0(4) + pad(4) + y@8(4) = 12，尾部圆整到 8 → 16
+    run_ok(
+        "struct Baz { x: i32, [align(8)] y: i32 }\n[test] fn t() !void {\n    try expect_eq(@offsetOf(Baz, \"x\"), 0);\n    try expect_eq(@offsetOf(Baz, \"y\"), 8);\n    try expect_eq(@sizeOf(Baz), 16);\n}\n",
+    );
+}
+
+#[test]
 fn m43_intcast_ok_and_overflow() {
     // @intCast：范围检查（Debug 溢出抛错）
     run_ok(

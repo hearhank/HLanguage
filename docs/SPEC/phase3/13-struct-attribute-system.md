@@ -20,13 +20,13 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 1.4 `arena.init(T)` 使用默认值 | ✅ | `hc-rt/src/interp/call.rs` |
 | 1.5 测试验证 | ✅ | `hc-rt/tests/semantics.rs` |
 
-### 任务 2: 字段级 `[Align(n)]`（P1，~45min）
+### 任务 2: 字段级 `[Align(n)]` ✅（2026-08-24 完成）
 
-| 功能点 | 预估 | 验证方法 |
-|--------|------|---------|
-| 2.1 `continuous_layout()` 读取字段级 Align 特性 | 15min | 字段对齐覆盖 struct 级 |
-| 2.2 `field_align()` 优先使用字段级对齐 | 10min | 同上 |
-| 2.3 添加测试 | 20min | `@alignOf` / `@sizeOf` 值正确 |
+| 功能点 | 状态 | 文件 |
+|--------|------|------|
+| 2.1 `continuous_layout()` 读取字段级 Align 特性 | ✅ | `hc-rt/src/interp/layout.rs` |
+| 2.2 `continuous_align()` 优先使用字段级对齐 | ✅ | `hc-rt/src/interp/layout.rs` |
+| 2.3 测试验证 | ✅ | `hc-rt/tests/semantics.rs` |
 
 ### 任务 3: 特性解析改用字典查找（P1，~1h）
 

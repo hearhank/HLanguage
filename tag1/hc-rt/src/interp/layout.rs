@@ -44,7 +44,14 @@ impl Interp {
             let align = if packed {
                 1
             } else {
-                self.field_align(&fd.ty, size)
+                // 字段级 [Align(n)] 优先于自然对齐
+                if let Some(Trait::Align(a)) =
+                    fd.traits.iter().find(|t| matches!(t, Trait::Align(_)))
+                {
+                    *a as usize
+                } else {
+                    self.field_align(&fd.ty, size)
+                }
             };
             max_align = max_align.max(align);
             while offset % align != 0 {
@@ -101,7 +108,14 @@ impl Interp {
         let mut max_a = 1usize;
         for fd in fdecls {
             if let Some(s) = self.field_serialized_size(&fd.ty) {
-                max_a = max_a.max(self.field_align(&fd.ty, s));
+                let align = if let Some(Trait::Align(a)) =
+                    fd.traits.iter().find(|t| matches!(t, Trait::Align(_)))
+                {
+                    *a as usize
+                } else {
+                    self.field_align(&fd.ty, s)
+                };
+                max_a = max_a.max(align);
             }
         }
         Some(max_a)
