@@ -428,13 +428,18 @@ impl Interp {
     /// G1（E3.1）：HTTP GET 客户端——`http://host[:port][/path]` → TCP connect →
     /// `GET {path} HTTP/1.1` + Host 头 → 读响应 → 按 Content-Length 提取体。
     pub(crate) fn http_get(&self, url: &str) -> std::result::Result<Vec<u8>, String> {
-        let rest = url.strip_prefix("http://").ok_or_else(|| "InvalidUrl".to_string())?;
+        let rest = url
+            .strip_prefix("http://")
+            .ok_or_else(|| "InvalidUrl".to_string())?;
         let (authority, path) = match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
         };
         let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => (h.to_string(), p.parse::<u16>().map_err(|_| "InvalidUrl".to_string())?),
+            Some((h, p)) => (
+                h.to_string(),
+                p.parse::<u16>().map_err(|_| "InvalidUrl".to_string())?,
+            ),
             None => (authority.to_string(), 80u16),
         };
         let mut stream = std::net::TcpStream::connect((host.as_str(), port))
@@ -617,7 +622,12 @@ impl Interp {
         }
     }
 
-    pub(crate) fn call_fs_method(&mut self, field: &str, args: &[Expr], span: &Span) -> Result<Option<Value>> {
+    pub(crate) fn call_fs_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
         match field {
             // io.fs.open(path)：读写、不创建（缺失 → error.NotFound，Zig 式）
             "open" => {
@@ -888,7 +898,12 @@ impl Interp {
                 let size = size.max(0) as usize;
                 let id = self.next_shm_fd;
                 self.next_shm_fd += 1;
-                self.shms.insert(id, Rc::new(RefCell::new(Shm { data: vec![0u8; size] })));
+                self.shms.insert(
+                    id,
+                    Rc::new(RefCell::new(Shm {
+                        data: vec![0u8; size],
+                    })),
+                );
                 let mut fld = HashMap::new();
                 fld.insert("shm".into(), Value::Int(id as i128));
                 Ok(Some(Value::class("Shm", fld)))
@@ -900,7 +915,9 @@ impl Interp {
     /// Pipe 值 → 管道 id（`pipe` 字段；先 deref_value 剥 Ptr）
     pub(crate) fn pipe_id_of(&self, v: &Value, span: &Span) -> Result<i64> {
         match self.deref_value(v.clone()) {
-            Value::Class(c) if c.borrow().name == "PipeReader" || c.borrow().name == "PipeWriter" => {
+            Value::Class(c)
+                if c.borrow().name == "PipeReader" || c.borrow().name == "PipeWriter" =>
+            {
                 match c.borrow().fields.get("pipe") {
                     Some(Value::Int(id)) => Ok(*id as i64),
                     _ => Err(RtError::new("BadFd", Some(span.clone()))),
@@ -1328,7 +1345,11 @@ impl Interp {
         match field {
             "seed" => {
                 let v = self.eval_int_arg(args, 0, span)?;
-                self.rng_state = if v == 0 { 0x9e37_79b9_7f4a_7c15 } else { v as u64 };
+                self.rng_state = if v == 0 {
+                    0x9e37_79b9_7f4a_7c15
+                } else {
+                    v as u64
+                };
                 Ok(Some(Value::Void))
             }
             "next" => {
@@ -1498,12 +1519,46 @@ impl Interp {
                     .as_nanos() as i128;
                 Ok(Some(Value::Int((now - tick).max(0) / 1_000_000)))
             }
+            // 时区完整（A4）：UTC 日历分量
+            "components" => {
+                let ts = self.eval_int_arg(args, 0, span)?;
+                let (year, month, day, hour, min, sec, ms) = timestamp_to_components(ts);
+                let mut fields = HashMap::new();
+                fields.insert("year".to_string(), Value::Int(year as i128));
+                fields.insert("month".to_string(), Value::Int(month as i128));
+                fields.insert("day".to_string(), Value::Int(day as i128));
+                fields.insert("hour".to_string(), Value::Int(hour as i128));
+                fields.insert("min".to_string(), Value::Int(min as i128));
+                fields.insert("sec".to_string(), Value::Int(sec as i128));
+                fields.insert("ms".to_string(), Value::Int(ms as i128));
+                Ok(Some(Value::class("TimeComponents", fields)))
+            }
+            // 本地 UTC 偏移（分钟）
+            "local_offset" => {
+                let offset_min = local_utc_offset_minutes();
+                Ok(Some(Value::Int(offset_min as i128)))
+            }
+            // 格式化时间戳为 ISO 8601 字符串
+            "format" => {
+                let ts = self.eval_int_arg(args, 0, span)?;
+                let (year, month, day, hour, min, sec, ms) = timestamp_to_components(ts);
+                let s = format!(
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                    year, month, day, hour, min, sec, ms
+                );
+                Ok(Some(Value::str(&s)))
+            }
             _ => Ok(None),
         }
     }
 
     /// `X.new(args, alloc)` 兼容构造（C1 审计后旧示例；tag1 仅支持 value 类构造）
-    pub(crate) fn call_new_builtin(&mut self, ty: &str, args: &[Expr], span: &Span) -> Result<Value> {
+    pub(crate) fn call_new_builtin(
+        &mut self,
+        ty: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Value> {
         let fields = match self.types.get(ty) {
             Some(TypeDef::Class { fields, .. }) => fields.clone(),
             _ => return Err(RtError::new("UnknownType", Some(span.clone()))),
@@ -1702,7 +1757,12 @@ impl Interp {
     }
 
     /// String 内建静态方法（String = 内建新类型，M3 定案；tag1：from/from_slice/concat）
-    pub(crate) fn call_string_builtin(&mut self, field: &str, args: &[Expr], span: &Span) -> Result<Value> {
+    pub(crate) fn call_string_builtin(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Value> {
         match field {
             "from" => {
                 let v = self.eval(&args[0])?;
@@ -1849,4 +1909,43 @@ impl Interp {
             _ => Ok(None),
         }
     }
+}
+
+// ---------- 时区辅助函数 ----------
+
+/// 将毫秒时间戳转换为 UTC 日历分量（year, month, day, hour, min, sec, ms）
+/// 算法：类 gmtime 分解，处理闰年、跨世纪闰年规则。
+fn timestamp_to_components(ts: i128) -> (i32, u32, u32, u32, u32, u32, u32) {
+    let ms = (ts.rem_euclid(1000)) as u32;
+    let total_secs = ts.div_euclid(1000);
+    let sec_of_day = total_secs.rem_euclid(86400);
+    let hour = (sec_of_day / 3600) as u32;
+    let min = ((sec_of_day / 60) % 60) as u32;
+    let sec = (sec_of_day % 60) as u32;
+
+    let days = total_secs.div_euclid(86400);
+
+    // Howard Hinnant 算法：days since epoch → year/month/day
+    const DAYS_PER_400Y: i128 = 146097;
+    let z = days + 719468; // 从 0000-03-01 偏移
+    let era = z.div_euclid(DAYS_PER_400Y);
+    let doe = z.rem_euclid(DAYS_PER_400Y); // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // month phase [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // day [1, 31]
+    let (month, year) = if mp < 10 {
+        ((mp + 3) as u32, y) // month 3..12
+    } else {
+        ((mp - 9) as u32, y + 1) // month 1..2, year+1
+    };
+
+    (year as i32, month, day, hour, min, sec, ms)
+}
+
+/// 获取本地 UTC 偏移（分钟）。
+/// 当前实现返回 0（UTC）；后续可通过平台 API 或 TZ 环境变量扩展。
+fn local_utc_offset_minutes() -> i32 {
+    0
 }

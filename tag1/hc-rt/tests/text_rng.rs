@@ -225,3 +225,34 @@ fn rng_float_range() {
 "##,
     );
 }
+
+#[test]
+fn timezone_components_format() {
+    // 时区完整（A4）：UTC 日历分量 + ISO 8601 格式化
+    run_ok(
+        r##"[test] fn t() !void {
+    var ts = io.time.now();
+    try expect(ts > 0);
+
+    // 测试日历分量
+    var comp = io.time.components(ts);
+    try expect(comp.year >= 2026);
+    try expect(comp.year < 2100);
+    try expect(comp.month >= 1 and comp.month <= 12);
+    try expect(comp.day >= 1 and comp.day <= 31);
+    try expect(comp.hour >= 0 and comp.hour <= 23);
+    try expect(comp.min >= 0 and comp.min <= 59);
+    try expect(comp.sec >= 0 and comp.sec <= 59);
+    try expect(comp.ms >= 0 and comp.ms <= 999);
+
+    // 测试格式化
+    var fmt = io.time.format(ts);
+    try expect(fmt.len > 10);
+    // 格式应为 ISO 8601: YYYY-MM-DDTHH:MM:SS.mmmZ
+    try expect(fmt[4] == 45); // '-'
+    try expect(fmt[7] == 45); // '-'
+    try expect(fmt[10] == 84); // 'T'
+}
+"##,
+    );
+}
