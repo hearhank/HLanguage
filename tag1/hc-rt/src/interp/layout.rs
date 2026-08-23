@@ -1115,6 +1115,15 @@ impl Interp {
         tests.sort_by(|a, b| a.span.line.cmp(&b.span.line));
         let (mut passed, mut failed, mut skipped) = (0, 0, 0);
         for t in tests {
+            if t.test_mode == TestMode::Thread {
+                // D1-4：线程模式测试——在独立 OS 线程中执行，支持硬超时
+                let (p, f, s, out) = self.run_test_threaded(&t);
+                passed += p;
+                failed += f;
+                skipped += s;
+                self.test_out.extend(out);
+                continue;
+            }
             // D1-5：每测试独立输出缓冲——保存主缓冲，创建临时缓冲
             let main_out = std::mem::take(&mut self.test_out);
             let start = std::time::Instant::now();
@@ -1205,6 +1214,84 @@ impl Interp {
         // E2.2 根回收：未 join/未 detach 的线程在全部测试结束后运行到完成
         self.drain_root_threads();
         (passed, failed, skipped)
+    }
+
+    /// D1-4：线程模式测试执行器——在独立 OS 线程中运行测试，支持硬超时。
+    /// 克隆程序快照 + 环境数据到新 Interp，在子线程中重新 load + 执行，
+    /// 通过 mpsc channel 返回结果；超时后标记为 FAIL 并继续（OS 线程无法强制终止）。
+    fn run_test_threaded(&self, t: &FnDef) -> (usize, usize, usize, Vec<String>) {
+        let program = self
+            .program
+            .clone()
+            .expect("run_test_threaded: no program stored (load() not called?)");
+        let source = self.source.clone();
+        let args = self.args.clone();
+        let extern_programs = self.extern_programs.clone();
+        let dep_programs = self.dep_programs.clone();
+        let import_env = self.import_env.clone();
+        let t = t.clone();
+        // 默认超时 5 秒；`[test(timeout=N)]` 覆盖
+        let timeout_secs = t.test_timeout.unwrap_or(5);
+        let display = t.test_name.clone().unwrap_or_else(|| t.name.clone());
+        let display_clone = display.clone();
+
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let mut child = Interp::new(&source);
+            child.args = args;
+            child.extern_programs = extern_programs;
+            child.dep_programs = dep_programs;
+            child.import_env = import_env;
+            if let Err(e) = child.load(&program) {
+                let _ = tx.send((
+                    0,
+                    1,
+                    0,
+                    vec![format!(
+                        "[FAIL] {} (load error: {})",
+                        display_clone, e.message
+                    )],
+                ));
+                return;
+            }
+            let mut test_out = Vec::new();
+            child.push_scope();
+            child.fail_info = None;
+            child.bind("io", child.io_value());
+            child.bind("alloc", Value::Alloc);
+            let r = child.exec_fn_body(&t.body, &[]);
+            let _ = child.pop_scope(false);
+            match r {
+                Ok(Value::Err { name, .. }) if name == "SkipTest" => {
+                    test_out.push(format!("[SKIP] {}", display_clone));
+                    let _ = tx.send((0, 0, 1, test_out));
+                }
+                Ok(Value::Err { name, .. }) => {
+                    test_out.push(format!("[FAIL] {} (error.{})", display_clone, name));
+                    let _ = tx.send((0, 1, 0, test_out));
+                }
+                Ok(_) => {
+                    test_out.push(format!("[PASS] {}", display_clone));
+                    let _ = tx.send((1, 0, 0, test_out));
+                }
+                Err(e) => {
+                    test_out.push(format!("[FAIL] {} (error.{})", display_clone, e.name));
+                    let _ = tx.send((0, 1, 0, test_out));
+                }
+            }
+        });
+
+        match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                (0, 1, 0, vec![format!("[FAIL] {} (timeout)", display)])
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // 线程 panic 或异常退出；标记为 FAIL
+                (0, 1, 0, vec![format!("[FAIL] {} (thread panic)", display)])
+            }
+        }
     }
 
     pub fn collect_tests(&self) -> Vec<String> {

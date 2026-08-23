@@ -885,6 +885,9 @@ impl Checker {
                     ));
                 }
             }
+            // 类型未知 / 待推断时保守放行
+            // （如 var t = Table<i32>.init(...) 类型推断未完成，泛型实参被 parser 跳过）
+            Some(SType::Infer) | Some(SType::Unknown) | None => {}
             _ => {
                 if indices.len() > 1 {
                     self.diags.push(Diagnostic::error(

@@ -47,6 +47,7 @@ impl Interp {
             script_mode: false,
             instantiating: Vec::new(),
             comptime_value_depth: 0,
+            program: None,
         }
     }
 
@@ -180,6 +181,8 @@ impl Interp {
         self.apply_usings(program);
         // ADR-0010：`import` 语句运行时绑定（A2a——镜像语义层 apply_imports）
         self.apply_imports(program);
+        // D1-4：保存程序快照，供线程模式测试 fork 新 Interp
+        self.program = Some(Arc::new(program.clone()));
         Ok(())
     }
 

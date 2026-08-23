@@ -2519,3 +2519,112 @@ fn f_atomic_consistent() {
 "#,
     );
 }
+
+#[test]
+/// D2-1：Table multi-index 一致性——init / 多参索引 / 多参写入 / len
+fn d2_table_multi_index_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var t = Table<i32>.init(alloc, 2, 3, 7);
+    try expect_eq(t.len(), 2);
+    try expect_eq(t[0, 0], 7);
+    try expect_eq(t[0, 1], 7);
+    try expect_eq(t[1, 2], 7);
+    t[1, 1] = 42;
+    try expect_eq(t[1, 1], 42);
+    t[0, 2] = 99;
+    try expect_eq(t[0, 2], 99);
+}
+"#,
+    );
+}
+
+#[test]
+/// D2-2：Vec 操作一致性——init / append / index / len / index write
+fn d2_vec_operations_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var v = Vec<i32>.init(alloc);
+    try expect_eq(v.len(), 0);
+    v.append(10);
+    v.append(20);
+    v.append(30);
+    try expect_eq(v.len(), 3);
+    try expect_eq(v[0], 10);
+    try expect_eq(v[1], 20);
+    try expect_eq(v[2], 30);
+    v[1] = 99;
+    try expect_eq(v[1], 99);
+}
+"#,
+    );
+}
+
+#[test]
+/// D2-2：Map 操作一致性——init / put / get / len
+fn d2_map_operations_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var m = Map<i32, i32>.init(alloc);
+    try expect_eq(m.len(), 0);
+    m.put(1, 100);
+    m.put(2, 200);
+    m.put(3, 300);
+    try expect_eq(m.len(), 3);
+    try expect_eq(m.get(1).?, 100);
+    try expect_eq(m.get(2).?, 200);
+    try expect_eq(m.get(3).?, 300);
+    // 覆盖不存在的键
+    try expect(m.get(99) == null);
+}
+"#,
+    );
+}
+
+#[test]
+/// D2-2：Deque 操作一致性——init / pushFirst / pushLast / popFirst / popLast / len
+fn d2_deque_operations_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var d = Deque<i32>.init(alloc);
+    try expect_eq(d.len, 0);
+    d.push_back(10);
+    d.push_back(20);
+    d.push_front(30);
+    try expect_eq(d.len, 3);
+    try expect_eq(d.pop_front().?, 30);
+    try expect_eq(d.pop_front().?, 10);
+    try expect_eq(d.pop_back().?, 20);
+    try expect_eq(d.len, 0);
+}
+"#,
+    );
+}
+
+#[test]
+/// D1-4：线程模式测试——`[test(thread)]` 在独立 OS 线程中执行
+fn d1_thread_test_runner() {
+    assert_all_pass(
+        r#"
+[test(thread)] fn t() !void {
+    try expect_eq(1 + 1, 2);
+}
+"#,
+    );
+}
+
+#[test]
+/// D1-4：线程模式测试 + 超时——`[test(thread, timeout=1)]`
+fn d1_thread_test_with_timeout() {
+    assert_all_pass(
+        r#"
+[test(thread, timeout=1)] fn t() !void {
+    try expect_eq(2 + 2, 4);
+}
+"#,
+    );
+}

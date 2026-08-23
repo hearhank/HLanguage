@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::rc::Rc;
+use std::sync::{mpsc, Arc};
 
 use hc::ast::*;
 use hc::comptime::{self, Instantiated};
@@ -373,6 +374,8 @@ pub struct Interp {
     /// E1.2 组 D D4c：comptime 值函数调用深度（自递归守卫——`fn f(T: type)` 体再调
     /// `f<i32>` 无限编译期求值会栈溢出，超限报编译错误）。
     comptime_value_depth: usize,
+    /// D1-4：装载的程序快照，供线程模式测试 fork 新 Interp
+    program: Option<Arc<Program>>,
 }
 
 impl Flow {
