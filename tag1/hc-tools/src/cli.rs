@@ -15,7 +15,7 @@ use crate::package::package_entry;
 use crate::project::{init_project, pkg_add, pkg_publish};
 use crate::run::{
     load_manifest_deps_into, load_siblings_into, program_args, run_file, run_file_bytecode,
-    run_file_dangle, run_file_ir,
+    run_file_dangle, run_file_dangle_bench, run_file_ir,
 };
 use crate::scriptgen;
 use crate::test::{test_dir, test_dir_dangle};
@@ -155,16 +155,18 @@ pub(crate) fn run_cli() -> ExitCode {
             ExitCode::SUCCESS
         }
         "run" => {
-            let Some(path) = args.get(2) else {
+            let bench = args.get(2).map_or(false, |a| a == "--bench");
+            let path_offset = if bench { 1 } else { 0 };
+            let Some(path) = args.get(2 + path_offset) else {
                 eprintln!("error: `hc run` requires a file path");
                 return ExitCode::from(2);
             };
             // C2（ADR-0016）：从剩余参数提取 --dangle 标志
-            let (dangle_mode, rest_start) = extract_dangle(&args, 3);
+            let (dangle_mode, rest_start) = extract_dangle(&args, 3 + path_offset);
             // 显式模式标志：`hc run --ir <file>` 走 IR 参考解释器；
             // `.hbc`（HBC2 字节码）走字节码 VM；否则默认 tree-walking
             if path == "--ir" {
-                let Some(p) = args.get(3) else {
+                let Some(p) = args.get(3 + path_offset) else {
                     eprintln!("error: `hc run --ir` requires a file path");
                     return ExitCode::from(2);
                 };
@@ -181,7 +183,7 @@ pub(crate) fn run_cli() -> ExitCode {
                     Ok(entry) => {
                         let entry_s = entry.to_string_lossy().into_owned();
                         let prog_args = program_args(&args[rest_start..], &entry_s);
-                        run_file_dangle(&entry, &prog_args, dangle_mode)
+                        run_file_dangle_bench(&entry, &prog_args, dangle_mode, bench)
                     }
                     Err(msg) => {
                         eprintln!("error: {msg}");
@@ -190,7 +192,7 @@ pub(crate) fn run_cli() -> ExitCode {
                 }
             } else {
                 let prog_args = program_args(&args[rest_start..], path);
-                run_file_dangle(Path::new(path), &prog_args, dangle_mode)
+                run_file_dangle_bench(Path::new(path), &prog_args, dangle_mode, bench)
             }
         }
         // 调试：打印 script 块展开后的源码（组 C 开发辅助）

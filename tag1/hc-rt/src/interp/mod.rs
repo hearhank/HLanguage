@@ -222,6 +222,10 @@ pub(crate) struct FnDef {
     is_test: bool,
     /// `[test("名称")]`：测试显示名（省略时显示函数名）
     test_name: Option<String>,
+    /// D1：`[test(async)]` / `[test(thread)]` 测试模式
+    test_mode: TestMode,
+    /// D1：`[test(timeout=5)]` 测试超时（秒）
+    test_timeout: Option<u64>,
     #[allow(dead_code)] // 类型方法标记（tag1：方法经注入 self 路径调用）
     method_of: Option<String>,
     /// 组 E E2：`async fn` 标记——调用点返回 `Future(R)`（延迟执行），await 运行体

@@ -216,6 +216,8 @@
 | J1 | 开放问题裁决：#1 切换粒度、#3 Arena 惯例、#4 schema 演进（C1 已带）、#5 注册治理（I4 已带）、#6 跨线程标记 | 05 状态表关闭项 + ADR | — | 1h |
 | J2 | 惰性迭代、switch 守卫、Send/Sync 静态标记（编译期诊断） | 语义测试绿 | — | 2h |
 | J3 | 并发测试（`[test]` 并发形态：异步/线程测试 runner） | 测试基建绿 | E/F | 1.5h |
+
+> ✅ **J3 异步测试 runner（D1-3）已完成（2026-08-23）**：`[test(async)]` 测试使用 evented IO 模式（`io_value_with_runtime("evented")` + Future 执行），通过 `make_future`/`future_run` 路径运行。`hc test ../examples/` 147/0/1 全绿。线程 runner（D1-4）待实现。
 | J4 | Table 多索引（M8 记录项） | Table 测试绿 | — | 1.5h |
 | J5 | 吃狗粮反馈：编译器编写（第四阶段自举）暴露的语言缺口反馈回设计 + 修订 | 06 修订记录 | 第四阶段自举首段 | 1h |
 

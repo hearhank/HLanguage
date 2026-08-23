@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
 
 use hc::diag;
 use hc_rt::Interp;
@@ -363,10 +364,22 @@ pub(crate) fn load_deps_into(
 
 /// C2（ADR-0016）：`hc run [--dangle=on|off|auto]`——设置悬垂检查模式后运行。
 pub(crate) fn run_file_dangle(path: &Path, prog_args: &[String], dangle: DangleMode) -> ExitCode {
+    run_file_dangle_bench(path, prog_args, dangle, false)
+}
+
+/// B6（E5.6）：`hc run --bench <file>`——分阶段计时输出。
+pub(crate) fn run_file_dangle_bench(
+    path: &Path,
+    prog_args: &[String],
+    dangle: DangleMode,
+    bench: bool,
+) -> ExitCode {
+    let t0 = if bench { Some(Instant::now()) } else { None };
     let source = match crate::fsio::read_program(path) {
         Ok(s) => s,
         Err(c) => return c,
     };
+    let t1 = if bench { Some(Instant::now()) } else { None };
     let (source, program) = match crate::scriptgen::parse_with_scripts(&source) {
         Ok(t) => t,
         Err(msg) => {
@@ -374,6 +387,7 @@ pub(crate) fn run_file_dangle(path: &Path, prog_args: &[String], dangle: DangleM
             return ExitCode::FAILURE;
         }
     };
+    let t2 = if bench { Some(Instant::now()) } else { None };
     let mut interp = Interp::new(&source);
     interp.set_debug_dangling(dangle.is_on());
     interp.args = prog_args.to_vec();
@@ -387,7 +401,37 @@ pub(crate) fn run_file_dangle(path: &Path, prog_args: &[String], dangle: DangleM
         eprintln!("{}", e.render(&source));
         return ExitCode::FAILURE;
     }
-    match interp.run_main() {
+    let t3 = if bench { Some(Instant::now()) } else { None };
+    let result = interp.run_main();
+    let t4 = if bench { Some(Instant::now()) } else { None };
+    if bench {
+        let t1 = t1.unwrap();
+        let t2 = t2.unwrap();
+        let t3 = t3.unwrap();
+        let t4 = t4.unwrap();
+        let t0 = t0.unwrap();
+        eprintln!(
+            "[bench] read:    {:>8}µs",
+            t1.duration_since(t0).as_micros()
+        );
+        eprintln!(
+            "[bench] parse:   {:>8}µs",
+            t2.duration_since(t1).as_micros()
+        );
+        eprintln!(
+            "[bench] load:    {:>8}µs",
+            t3.duration_since(t2).as_micros()
+        );
+        eprintln!(
+            "[bench] execute: {:>8}µs",
+            t4.duration_since(t3).as_micros()
+        );
+        eprintln!(
+            "[bench] total:   {:>8}µs",
+            t4.duration_since(t0).as_micros()
+        );
+    }
+    match result {
         Ok(()) => {
             report_leaks(path.to_string_lossy().as_ref(), &interp.leak_report());
             match interp.exit_code {

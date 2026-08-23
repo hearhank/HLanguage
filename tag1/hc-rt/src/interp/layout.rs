@@ -1115,48 +1115,84 @@ impl Interp {
         tests.sort_by(|a, b| a.span.line.cmp(&b.span.line));
         let (mut passed, mut failed, mut skipped) = (0, 0, 0);
         for t in tests {
+            let start = std::time::Instant::now();
             self.push_scope();
-            // A3/ADR-0010：测试环境绑定 io（import H.std.{io} 等价；`&io` 传参走作用域 cell）
-            self.bind("io", self.io_value());
-            self.bind("alloc", Value::Alloc);
             self.fail_info = None;
-            let r = self.exec_fn_body(&t.body, &[]);
+            let r = if t.test_mode == TestMode::Async {
+                // D1-3：异步测试——使用 evented IO 模式，通过 Future 执行
+                self.bind("io", self.io_value_with_runtime("evented"));
+                self.bind("alloc", Value::Alloc);
+                let fut = self.make_future(&t, vec![]);
+                self.future_run(&fut, &Span::new(0, 0, 0, 0))
+            } else {
+                // A3/ADR-0010：测试环境绑定 io（import H.std.{io} 等价；`&io` 传参走作用域 cell）
+                self.bind("io", self.io_value());
+                self.bind("alloc", Value::Alloc);
+                self.exec_fn_body(&t.body, &[])
+            };
             let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
             // 显示名：名称 ?? 函数名
             let display = t.test_name.clone().unwrap_or_else(|| t.name.clone());
+            // D1-2：测试超时检测——测试完成后检查耗时是否超过 timeout（秒）
+            let timeout_exceeded = t.test_timeout.map_or(false, |timeout| {
+                let elapsed = start.elapsed();
+                elapsed.as_secs() >= timeout
+            });
             match r {
                 Ok(Value::Err { name, .. }) if name == "SkipTest" => {
-                    // Q-T3：`return error.SkipTest` 到达测试根 → 统计为 SKIP（值通道；
-                    // 与下方 Err(RtError::SkipTest) 抛出通道同义，见 23-tests.hc）
-                    self.test_out.push(format!("[SKIP] {}", display));
-                    skipped += 1;
+                    // Q-T3：`return error.SkipTest` 到达测试根 → 统计为 SKIP
+                    if timeout_exceeded {
+                        self.test_out.push(format!("[FAIL] {} (timeout)", display));
+                        failed += 1;
+                    } else {
+                        self.test_out.push(format!("[SKIP] {}", display));
+                        skipped += 1;
+                    }
                 }
                 Ok(Value::Err { name, .. }) => {
-                    // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL（不中止其它测试，Q-T2）
-                    self.test_out
-                        .push(format!("[FAIL] {} (error.{})", display, name));
+                    // M2.6：未处理错误到达测试根（值通道）→ 记 FAIL
+                    if timeout_exceeded {
+                        self.test_out.push(format!("[FAIL] {} (timeout)", display));
+                    } else {
+                        self.test_out
+                            .push(format!("[FAIL] {} (error.{})", display, name));
+                    }
                     failed += 1;
                 }
                 Ok(_) => {
-                    self.test_out.push(format!("[PASS] {}", display));
-                    passed += 1;
+                    if timeout_exceeded {
+                        self.test_out.push(format!("[FAIL] {} (timeout)", display));
+                        failed += 1;
+                    } else {
+                        self.test_out.push(format!("[PASS] {}", display));
+                        passed += 1;
+                    }
                 }
                 Err(e) if e.name == "SkipTest" => {
-                    self.test_out.push(format!("[SKIP] {}", display));
-                    skipped += 1;
+                    if timeout_exceeded {
+                        self.test_out.push(format!("[FAIL] {} (timeout)", display));
+                        failed += 1;
+                    } else {
+                        self.test_out.push(format!("[SKIP] {}", display));
+                        skipped += 1;
+                    }
                 }
                 Err(e) => {
                     let extra = self.fail_info.clone().unwrap_or_default();
-                    self.test_out.push(format!(
-                        "[FAIL] {} (error.{}{})",
-                        display,
-                        e.name,
-                        if extra.is_empty() {
-                            "".into()
-                        } else {
-                            format!(": {extra}")
-                        }
-                    ));
+                    if timeout_exceeded {
+                        self.test_out.push(format!("[FAIL] {} (timeout)", display));
+                    } else {
+                        self.test_out.push(format!(
+                            "[FAIL] {} (error.{}{})",
+                            display,
+                            e.name,
+                            if extra.is_empty() {
+                                "".into()
+                            } else {
+                                format!(": {extra}")
+                            }
+                        ));
+                    }
                     failed += 1;
                 }
             }

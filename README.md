@@ -20,7 +20,7 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | 测试 | `cargo test --workspace` **796 项全绿**（2026-08-23） |
 | 示例回归 | 解释模式 **147 passed / 0 failed / 1 skipped**（全部转绿，含四模式容器 37/76/77/78） |
 | 原生交叉验证 | 编译模式 **57 项 mismatch**（21 Unsupported + 31 运行时 + 3 其他；未实现原生内建以 `error.*` 响亮中止） |
-| 第三块（E1–E7） | 🟡 推进中 —— **E1 元编程 / E2 并发与异步 / E3 标准库扩展 / E4 系统编程已全部落地**；E5 大部分落地（hc fmt/lint/doc/lsp/init/pkg/cc 均已实现）；**B7 质量工具完整（LSP/格式化/lint 集）已完成**；E6 部分落地（switch 守卫 + 开放问题裁决 + C2 `with_arena`/`--dangle`）；**四模式容器 Send·Sync 豁免已修复，hc test 147/0/1 全绿**；E7 计划中（见下） |
+| 第三块（E1–E7） | 🟡 推进中 —— **E1 元编程 / E2 并发与异步 / E3 标准库扩展 / E4 系统编程已全部落地**；E5 大部分落地（hc fmt/lint/doc/lsp/init/pkg/cc 均已实现）；**B7 质量工具完整（LSP/格式化/lint 集）已完成**；E6 部分落地（switch 守卫 + 开放问题裁决 + C2 `with_arena`/`--dangle` + C5 泛型嵌套具体化 + C6 格式串 comptime 校验）；**四模式容器 Send·Sync 豁免已修复，hc test 147/0/1 全绿**；**D1-2 超时检测 + D1-3 异步测试 runner（evented IO + Future 执行）已实现**；D1-4 线程 runner 待实现；E7 计划中（见下） |
 | CI | 每次 push/PR 运行完整示例套件回归门（`tag1/scripts/check-examples.sh`） |
 | 原生编译依赖 | 外部 `zig cc`（`hc build` / `hc test --mode=compile` 需要，缺失时回退字节码产物） |
 
@@ -75,7 +75,7 @@ H2/
 
 ### 🟡 推进中 —— 第三块 · 扩展与自举（E1–E7）
 
-> **2026-08-23**：E1 元编程、E2 并发与异步、E3 标准库扩展、E4 系统编程已全部落地；E5 工具链扩展大部分落地，B7 质量工具完整（LSP 跳转定义/hover/补全/格式化/lint 集）已完成；E6 部分落地（switch 守卫 + 开放问题裁决 + C2 `with_arena`/`--dangle` + C5 泛型嵌套具体化 + C6 格式串 comptime 校验）；**四模式容器 Send·Sync 豁免已修复，hc test 147/0/1 全绿**；D1 并发测试 runner 解析器已修复（`[test(async)]`/`[test(thread)]`/`[test(timeout=5)]` 属性解析完成）。E7 计划中。
+> **2026-08-23**：E1 元编程、E2 并发与异步、E3 标准库扩展、E4 系统编程已全部落地；E5 工具链扩展大部分落地，B7 质量工具完整（LSP 跳转定义/hover/补全/格式化/lint 集）已完成；E6 部分落地（switch 守卫 + 开放问题裁决 + C2 `with_arena`/`--dangle` + C5 泛型嵌套具体化 + C6 格式串 comptime 校验）；**四模式容器 Send·Sync 豁免已修复，hc test 147/0/1 全绿**；**D1-3 异步测试 runner 已实现（evented IO + Future 执行），D1-2 超时检测已实现**；D1-4 线程 runner 待实现。E7 计划中。
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
