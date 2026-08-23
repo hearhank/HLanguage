@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 数组/集合/复杂类型：引用类型——赋值 = 编译错误（Q1'），复制需显式 copy(&x)
 //   - String = u8[] 别名（Q3）：复制需显式 copy(&x)（默认深复制，浅复制需显式标注）
 
-[continuous] class Point {   // 连续内存值类型（H1 特性标注）
+struct Point {   // 连续内存值类型（H1 特性标注）
     mut x: f32,
     y: f32,
 }

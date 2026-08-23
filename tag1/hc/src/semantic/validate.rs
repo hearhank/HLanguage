@@ -261,7 +261,7 @@ impl Checker {
             }
             Type::Tuple(ts) => ts.iter().all(|t| self.type_is_value(t)),
             Type::Optional(_) | Type::Slice(_, _) | Type::Ptr(_, _) => false,
-            Type::Array(_, _) => false, // 定长数组 = 引用类型（06-02）
+            Type::Array(_, inner) => self.type_is_value(inner), // 定长数组的元素为值类型则可内联
             _ => false,
         }
     }

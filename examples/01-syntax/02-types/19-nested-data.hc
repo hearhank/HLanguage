@@ -6,8 +6,7 @@ import H.std.{io};
 //   - 字面量嵌套：Position{...} / Value{...} / [1,2,3] 组合
 //   - 含数组字段的 class：数组为引用类型 → 未标 continuous（堆上，B3）
 
-[continuous]   // 连续内存值类型（H1 特性标注）
-class Position {
+struct Position {
     x: f32,
     y: f32,
 }

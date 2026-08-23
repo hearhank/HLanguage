@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 堆上 class ↔ JSON：内建 to_json()/from_json() + 脚本生成可定制（Q37）
 //   - Vec/Map/切片 → byte 数组（二进制序列化）
 
-[continuous] class Point {   // 连续内存值类型（H1 特性标注）
+struct Point {   // 连续内存值类型（H1 特性标注）
     x: f32,
     y: f32,
 }

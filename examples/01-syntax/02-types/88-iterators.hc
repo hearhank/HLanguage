@@ -7,7 +7,6 @@ import H.std.{io};
 //   - 用户类型实现迭代接口即可参与 for；arr.iter() 迭代器 = 显式数据对象
 
 // 用户类型：斐波那契数列（一次性迭代器，next 消耗状态）
-[continuous]   // 全值字段 → 连续内存值类型（H1 特性标注）
 class Fib: IIterable<i32> {
     mut a: i32,
     mut b: i32,

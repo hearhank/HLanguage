@@ -110,6 +110,10 @@ impl Parser {
             } else {
                 false
             };
+            // 字段：支持 `mut` 前缀（与 class 一致）
+            if self.at(&TokenKind::KwMut) {
+                self.advance();
+            }
             let fstart = self.span();
             let fname = self.expect_ident()?;
             self.expect(&TokenKind::Colon, "`:` after field name")?;
