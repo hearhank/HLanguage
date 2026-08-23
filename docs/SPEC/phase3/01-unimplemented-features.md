@@ -75,13 +75,14 @@
 - **出处**：`02-milestones.md` M8 / M10
 - **备注**：M10 冻结前正式版；B3 为基础
 
-### B5｜`hc cc`（C 互操作编译）｜🟡（**设计已并入 A1，待实施**）
+### B5｜`hc cc`（C 互操作编译）｜🟢（**已实施**）
 - **出处**：`02-milestones.md` M8；`10-part3-execution.md` G6（ffi 验收依赖）
-- **备注**：**与 A1（ffi）统一设计（2026-08-22，ADR-0020）**——`hc cc` = zig cc 薄封装 + build.zon C 源声明，A1 完成即 B5 完成
+- **落点**：`hc-tools/src/cli.rs`（`hc cc` 子命令 = zig cc 薄封装）
+- **备注**：`hc cc` 已实现为 zig cc 薄封装 + build.zon C 源声明（ADR-0020），与 A1（FFI）统一设计
 
-### B6｜脚本启动时间指标（TS 式低摩擦）｜🟡（**设计已完成**）
+### B6｜脚本启动时间指标（TS 式低摩擦）｜🟡（**设计已完成，待实施**）
 - **出处**：`02-milestones.md` M5（「脚本启动时间指标」）
-- **备注**：字节码 VM 复用 `run_ir`（盒式表示），性能优化留后续；需一致性套件证明等价后优化。**设计定案（2026-08-22 grilling 会话）**：指标 = 零到 script 块展开完成时间；`hc run --bench` 分阶段输出（parse / script_expand / sema_check / lower / exec）；空脚本 <10ms / 含 script 块 <50ms 基线；`~/.hc/cache/script/<source_hash>` 缓存展开结果
+- **备注**：字节码 VM 复用 `run_ir`（盒式表示），性能优化留后续。设计定案（2026-08-22）：`hc run --bench` 分阶段输出，空脚本 <10ms 基线；`~/.hc/cache/script/<source_hash>` 缓存展开结果
 
 ### B7｜质量工具完整（LSP / 格式化 / lint 集）｜🟢（**已实施**）
 - **出处**：`02-milestones.md` M8
@@ -101,11 +102,11 @@
   - `init_with` 密封表：编译期强制只读（`t[i,j]=v`/复合/`&mut t` 编译错误）
   - 新测试：多索引写 / 行视图 / `init_with` 密封 / 复合赋值 / to_bytes 往返 / 空表
 
-### C2｜开放问题裁决（J1：E6.1）｜🟡（**设计已完成，待实施**）
+### C2｜开放问题裁决（J1：E6.1）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 J1；`05-open-questions-and-risks.md`
-- **落点**：ADR + SPEC 补定
-- **条目**：① Debug 悬垂标记切换粒度（编译单元 / 函数 / 引用点，#1）；② 无 GC 长运行脚本 Arena 惯例（#3，time/rng 同组推广）；③ 注册中心治理（#5，B3 已带）；④ 跨线程引用传递 Send/Sync 式静态标记（#6）
-- **备注**：**设计定案全部就绪（2026-08-22，ADR-0016，grill-with-docs 访谈 4 子项全推荐）**——① 编译单元级 + `--dangle=on|off|auto`；② 机制就绪 + 每请求一 arena + `mem.with_arena(fn)`；③ MVP 只做唯一包名 + 指纹发布、治理 1.0；④ Send/Sync 语法先行（编译期接口）、语义留 1.x、详细诊断归 C3。05 状态表 #1/#3/#5/#6 已关闭；待实施：`--dangle` CLI 标志 + tag1 `debug_dangling` 对齐 + `with_arena` stdlib 包装
+- **落点**：ADR + SPEC 补定 + `hc-tools/src/cli.rs`（`--dangle` 标志）+ `hc-rt/src/interp/call.rs`（`with_arena` 解释器）+ `hc/src/ir/builtin.rs`（`with_arena` IR）+ `hc/src/semantic/mod.rs` + `hc/src/semantic/infer.rs`（语义注册）
+- **条目**：① `--dangle=on|off|auto` CLI 标志；② `mem.with_arena(fn)` stdlib 包装
+- **备注**：**全部实施完毕（2026-08-23）**——① `--dangle` CLI 标志（`hc run`/`hc test` 均支持 `DangleMode::On/Off/Auto`，`Auto` 默认 Debug 开）；② `mem.with_arena(fn)` 创建临时 Arena，调用函数后自动释放（无论成功或失败），解释器 + IR 双后端实现，语义层注册为内建函数。`debug_dangling` 与 `--dangle` 已对齐（tag1 默认 Auto = Debug 开）。
 
 ### C3｜惰性迭代、switch 守卫、Send/Sync 静态标记（编译期诊断）｜🟢（**已实施**）
 - **出处**：`10-part3-execution.md` 组 J2；`07-bootstrap-plan.md` E6.1
@@ -178,10 +179,9 @@
 
 ## 统计
 
-- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 3 🟡 / 1 ⏳ / 3 🟢）+ C 8（0 🔴 / 2 🟡 / 2 ⏳ / 1 🟣 / 3 🟢）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
+- **第三阶段活动项**：A 8（0 🔴 / 0 🟡 / 6 ⏳ / 1 🟣 / 1 🟢）+ B 7（0 🔴 / 2 🟡 / 1 ⏳ / 4 🟢）+ C 8（0 🔴 / 2 🟡 / 2 ⏳ / 1 🟣 / 3 🟢）+ D 2（0 🔴 / 2 🟡）+ E 4（4 ⏳）
   - 注：⏳ 标记项（1.x 延迟）已迁移至 [`docs/phase4/02-1x-delayed-items.md`](../phase4/02-1x-delayed-items.md)；🟣 标记项（A8 端到端示例、C8 LLVM 原生内建）已移至第四阶段
-- **第三阶段立即实施候选（🔴/🟡 且 1.x/🟣 无关）**：**C2 开放问题裁决**（`--dangle` 等）、**D1 并发测试 runner**、**B6 启动时间指标**、**B7 质量工具完整**、**D2 一致性套件扩展**
-- **建议首项**：**C2（开放问题裁决）**——设计已定案（J1 E6.1），影响面可控，为后续 D1 并发测试 runner 铺路
+- **第三阶段待实施（🟡）**：**D1 并发测试 runner**、**B6 启动时间指标**、**C7 原生 ABI 函数值/闭包**、**D2 一致性套件扩展**
 
 ## 第四阶段（自举 + 1.x）
 

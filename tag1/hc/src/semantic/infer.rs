@@ -1226,6 +1226,7 @@ impl Checker {
             // G1：`spawn(f, args...) owned Thread(T)` 返回线程句柄（协作式延迟执行）。
             // G3 精化：check_call 拦截 spawn 走 spawn_capture_info 提取 T；此处兜底。
             "spawn" => SType::Named("Thread".to_string(), vec![]),
+            "with_arena" => SType::Void,
             _ => SType::Void,
         }
     }

@@ -8,6 +8,7 @@ fn test_while() void {
     var mut i: i32 = 0;
     while (i < 10) {
         var x: i32 = i;
+        i+=1;
     }
 }
 fn test_if_else(x: i32) void {

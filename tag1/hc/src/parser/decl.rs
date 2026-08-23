@@ -269,7 +269,11 @@ impl Parser {
                     }
                     self.expect(&TokenKind::RParen, "`)`")?;
                 }
-                Trait::Test { name }
+                Trait::Test {
+                    name,
+                    mode: TestMode::Serial,
+                    timeout: None,
+                }
             }
             _ => {
                 return Err(Diagnostic::error(
@@ -397,13 +401,17 @@ impl Parser {
     ) -> Result<Decl, Diagnostic> {
         let (name, type_params, params, ret, where_clause, body, span) =
             self.parse_fn_rest(start)?;
-        let (is_test, test_name) = traits
+        let (is_test, test_name, test_mode, test_timeout) = traits
             .iter()
             .find_map(|t| match t {
-                Trait::Test { name } => Some((true, name.clone())),
+                Trait::Test {
+                    name,
+                    mode,
+                    timeout,
+                } => Some((true, name.clone(), *mode, *timeout)),
                 _ => None,
             })
-            .unwrap_or((false, None));
+            .unwrap_or((false, None, TestMode::Serial, None));
         Ok(Decl::Fn {
             name,
             type_params,
@@ -414,6 +422,8 @@ impl Parser {
             span,
             is_test,
             test_name,
+            test_mode,
+            test_timeout,
             pub_: is_pub,
             is_async,
             exported: is_export,
@@ -454,13 +464,17 @@ impl Parser {
         };
         self.expect(&TokenKind::Semi, "`;` after extern fn declaration")?;
         let end = self.span();
-        let (is_test, test_name) = traits
+        let (is_test, test_name, test_mode, test_timeout) = traits
             .iter()
             .find_map(|t| match t {
-                Trait::Test { name } => Some((true, name.clone())),
+                Trait::Test {
+                    name,
+                    mode,
+                    timeout,
+                } => Some((true, name.clone(), *mode, *timeout)),
                 _ => None,
             })
-            .unwrap_or((false, None));
+            .unwrap_or((false, None, TestMode::Serial, None));
         Ok(Decl::Fn {
             name,
             type_params,
@@ -474,6 +488,8 @@ impl Parser {
             span: start.merge(&end),
             is_test,
             test_name,
+            test_mode,
+            test_timeout,
             pub_: is_pub,
             is_async: false,
             exported: false,

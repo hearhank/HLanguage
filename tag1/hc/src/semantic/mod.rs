@@ -336,6 +336,7 @@ pub(crate) fn is_builtin_fn(name: &str) -> bool {
                 | "fmt_int"
                 | "fmt_float"
                 | "spawn"
+                | "with_arena"
         )
 }
 

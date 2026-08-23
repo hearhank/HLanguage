@@ -317,6 +317,7 @@
 | `Arena` | Arena 分配器 | ✅ |
 | 全局回退 | 默认全局分配器 | ✅ |
 | `arena.init(T)` | typed 构造：bump 分配 + 字段默认值填充 | ✅ |
+| `mem.with_arena(fn)` | 创建临时 Arena，调用函数后自动释放 | ✅ |
 
 ### 7.2 collections 集合
 | 功能 | 描述 | 状态 |
@@ -427,6 +428,8 @@
 |------|------|------|
 | `[test]` 标记 | 声明级测试标记 | ✅ |
 | `[test("name")]` | 带显示名的测试函数 | ✅ |
+| `[test(async)]` / `[test(thread)]` | 测试模式属性解析 | ✅ |
+| `[test(timeout=5)]` | 测试超时属性解析 | ✅ |
 | 断言五件套 | `expect` / `expect_eq` / `expect_neq` / `expect_error` / `expect_eq_slices` | ✅ |
 | 输出统计 | `[PASS]` / `[FAIL]` / `[SKIP]` + 汇总 | ✅ |
 | 失败非零退出 | 测试失败非零退出码 | ✅ |

@@ -805,6 +805,7 @@ const STDLIB: &[(&str, &[(&str, &str)])] = &[
             ("alloc.free(ptr) !void", "释放"),
             ("mem.Arena.init(alloc) Arena", "Arena 分配器（typed 构造 arena.init(T)）"),
             ("mem.Allocator", "分配器抽象"),
+            ("mem.with_arena(fn(*Arena) void) void", "创建临时 Arena，调用函数后自动释放"),
         ],
     ),
     (

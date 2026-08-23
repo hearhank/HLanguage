@@ -40,6 +40,10 @@ pub enum Decl {
         is_test: bool,
         /// `[test("名称")]` 特性：测试显示名（可省，省略时显示函数名）
         test_name: Option<String>,
+        /// D1：`[test(async)]` / `[test(thread)]` 测试模式
+        test_mode: TestMode,
+        /// D1：`[test(timeout=5)]` 测试超时（秒）
+        test_timeout: Option<u64>,
         /// 跨包导出（默认私有；`pub` 管包边界）
         pub_: bool,
         /// 组 E：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型，含错误联合）
@@ -142,12 +146,24 @@ impl Decl {
     }
 }
 
+/// D1 并发测试 runner：测试执行模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestMode {
+    Serial,
+    Async,
+    Thread,
+}
+
 pub enum Trait {
     Continuous,
     Pad,
     Align(String),
     Test {
         name: Option<String>,
+        /// D1 测试模式：`[test]` = Serial（默认）、`[test(async)]` = Async、`[test(thread)]` = Thread
+        mode: TestMode,
+        /// D1 测试超时：`[test(timeout=5)]` = 5 秒（默认 None = 5s）
+        timeout: Option<u64>,
     },
     /// `[module]`（2026-08-17 定案）：命名空间 = 模块——内容与其它命名空间隔离
     /// （不参与同包共享命名空间），需要其它库的数据经上下文（init 参数列表）注入
@@ -161,10 +177,24 @@ impl std::fmt::Debug for Trait {
             Trait::Pad => write!(f, "[pad]"),
             Trait::Align(s) => write!(f, "[align({s})]"),
             Trait::Module => write!(f, "[module]"),
-            Trait::Test { name } => match name {
-                Some(n) => write!(f, "[test({n:?})]"),
-                None => write!(f, "[test]"),
-            },
+            Trait::Test {
+                name,
+                mode,
+                timeout,
+            } => {
+                let mut s = match name {
+                    Some(n) => format!("[test({n:?})"),
+                    None => format!("[test"),
+                };
+                if *mode != TestMode::Serial {
+                    s.push_str(&format!(", {mode:?}"));
+                }
+                if let Some(t) = timeout {
+                    s.push_str(&format!(", timeout={t}"));
+                }
+                s.push(']');
+                write!(f, "{s}")
+            }
         }
     }
 }
@@ -176,7 +206,15 @@ impl Clone for Trait {
             Trait::Pad => Trait::Pad,
             Trait::Align(s) => Trait::Align(s.clone()),
             Trait::Module => Trait::Module,
-            Trait::Test { name } => Trait::Test { name: name.clone() },
+            Trait::Test {
+                name,
+                mode,
+                timeout,
+            } => Trait::Test {
+                name: name.clone(),
+                mode: *mode,
+                timeout: *timeout,
+            },
         }
     }
 }

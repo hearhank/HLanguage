@@ -700,6 +700,39 @@ impl Interp {
                 f.insert("result".to_string(), Value::Void);
                 Ok(Some(Value::class("Thread", f)))
             }
+            // C2（ADR-0016）：`with_arena(fn)`——创建临时 Arena，调用函数，
+            // 函数结束后自动释放 Arena（无论成功或失败）。
+            "with_arena" => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let callee = self.eval(&args[0])?;
+                let callee = self.deref_value(callee);
+                match &callee {
+                    Value::Fn(_) | Value::Closure(_) => {}
+                    _ => return Err(RtError::new("NotCallable", Some(span.clone()))),
+                }
+                // 创建临时 Arena
+                let arena_v = Value::Arena(Rc::new(RefCell::new(ArenaState::new())));
+                let arg_vals = vec![arena_v.clone()];
+                // 调用函数
+                let result = match &callee {
+                    Value::Fn(fname) => {
+                        let fdef = self.pick_fn(fname, &arg_vals)?;
+                        self.call_fn(&fdef, &arg_vals, span)
+                    }
+                    Value::Closure(cl) => self.call_closure(cl, &arg_vals, span),
+                    _ => unreachable!(),
+                };
+                // 释放 Arena（无论成功或失败）
+                if let Value::Arena(a) = &arena_v {
+                    a.borrow_mut().deinit();
+                }
+                match result {
+                    Ok(v) => Ok(Some(v)),
+                    Err(e) => Err(e),
+                }
+            }
             _ => Ok(None),
         }
     }
