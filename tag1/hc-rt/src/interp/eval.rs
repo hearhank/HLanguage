@@ -237,6 +237,8 @@ impl Interp {
             "intrlist".into(),
             Value::class("IntrListNs", HashMap::new()),
         );
+        // A6：标准库数据结构——TreeMap（有序映射）命名空间
+        f.insert("treemap".into(), Value::class("TreeMapNs", HashMap::new()));
         Value::class("Io", f)
     }
 

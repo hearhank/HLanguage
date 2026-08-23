@@ -2832,3 +2832,65 @@ fn a6_intrlist_consistent() {
 "#,
     );
 }
+
+#[test]
+/// A6 标准库数据结构：TreeMap 有序映射——interp == IR 双模式一致。
+fn a6_treemap_consistent() {
+    assert_all_pass(
+        r#"
+[test] fn t() !void {
+    var map = try io.treemap.init();
+    try expect_eq(map.len(), 0);
+    try expect_eq(map.is_empty(), true);
+    try expect_eq(map.get(42), null);
+    try expect_eq(map.contains(42), false);
+
+    // insert + get
+    map.insert(10, 100);
+    map.insert(20, 200);
+    map.insert(30, 300);
+    try expect_eq(map.len(), 3);
+    try expect_eq(map.get(10), 100);
+    try expect_eq(map.get(20), 200);
+    try expect_eq(map.get(30), 300);
+    try expect_eq(map.get(99), null);
+
+    // update existing key
+    map.insert(10, 999);
+    try expect_eq(map.get(10), 999);
+    try expect_eq(map.len(), 3);
+
+    // contains
+    try expect_eq(map.contains(10), true);
+    try expect_eq(map.contains(30), true);
+    try expect_eq(map.contains(99), false);
+
+    // descending insert
+    var map2 = try io.treemap.init();
+    map2.insert(30, 300);
+    map2.insert(20, 200);
+    map2.insert(10, 100);
+    try expect_eq(map2.len(), 3);
+    try expect_eq(map2.get(30), 300);
+    try expect_eq(map2.get(20), 200);
+    try expect_eq(map2.get(10), 100);
+
+    // clear
+    map2.clear();
+    try expect_eq(map2.is_empty(), true);
+    try expect_eq(map2.len(), 0);
+    try expect_eq(map2.get(10), null);
+
+    // negative keys
+    var map3 = try io.treemap.init();
+    map3.insert(-5, 10);
+    map3.insert(0, 20);
+    map3.insert(5, 30);
+    try expect_eq(map3.len(), 3);
+    try expect_eq(map3.get(-5), 10);
+    try expect_eq(map3.get(0), 20);
+    try expect_eq(map3.get(5), 30);
+}
+"#,
+    );
+}

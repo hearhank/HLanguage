@@ -2013,6 +2013,374 @@ impl Interp {
         }
     }
 
+    // ---------- A6：TreeMap 有序映射 ----------
+
+    /// io.treemap.init() !TreeMap——创建空 TreeMap。
+    pub(crate) fn call_treemap_ns_method(
+        &mut self,
+        field: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        match field {
+            "init" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let mut fields = HashMap::new();
+                fields.insert("keys".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert("vals".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert("left".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                fields.insert(
+                    "right".into(),
+                    Value::Arr(Rc::new(RefCell::new(Vec::new()))),
+                );
+                fields.insert("root".into(), Value::Int(-1));
+                fields.insert("len".into(), Value::Int(0));
+                fields.insert("free".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                Ok(Some(Value::class("TreeMap", fields)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// TreeMap 实例方法：insert/get/contains/remove/len/is_empty/clear。
+    pub(crate) fn call_treemap_method(
+        &mut self,
+        method: &str,
+        v: &Value,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Value>> {
+        let class_data = match self.deref_value(v.clone()) {
+            Value::Class(c) => c,
+            _ => return Ok(Some(self.err_val("TypeError"))),
+        };
+
+        let get_i = |name: &str| -> Option<i128> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Int(n) => Some(*n),
+                _ => None,
+            }
+        };
+        let get_arr = |name: &str| -> Option<Rc<RefCell<Vec<Rc<RefCell<Value>>>>>> {
+            match class_data.borrow().fields.get(name)? {
+                Value::Arr(a) => Some(a.clone()),
+                _ => None,
+            }
+        };
+        let set_i = |cd: &Rc<RefCell<ClassData>>, name: &str, val: i128| {
+            cd.borrow_mut().fields.insert(name.into(), Value::Int(val));
+        };
+
+        match method {
+            "insert" => {
+                let key = self.eval_int_arg(args, 0, span)?;
+                let val = self.eval(&args[1])?;
+                // 如果 root 为空，直接创建根节点
+                let root = get_i("root").unwrap_or(-1);
+                if root < 0 {
+                    let idx = 0;
+                    // 扩展所有数组
+                    if let Some(keys) = get_arr("keys") {
+                        keys.borrow_mut()
+                            .push(Rc::new(RefCell::new(Value::Int(key))));
+                    }
+                    if let Some(vals) = get_arr("vals") {
+                        vals.borrow_mut().push(Rc::new(RefCell::new(val)));
+                    }
+                    if let Some(left) = get_arr("left") {
+                        left.borrow_mut()
+                            .push(Rc::new(RefCell::new(Value::Int(-1))));
+                    }
+                    if let Some(right) = get_arr("right") {
+                        right
+                            .borrow_mut()
+                            .push(Rc::new(RefCell::new(Value::Int(-1))));
+                    }
+                    set_i(&class_data, "root", 0);
+                    set_i(&class_data, "len", 1);
+                    return Ok(Some(Value::Void));
+                }
+
+                // 非递归遍历查找插入位置
+                let mut cur = root as usize;
+                loop {
+                    let cur_key = if let Some(keys) = get_arr("keys") {
+                        let k = keys.borrow();
+                        match k
+                            .get(cur)
+                            .map(|c| c.borrow().clone())
+                            .unwrap_or(Value::Int(0))
+                        {
+                            Value::Int(n) => n,
+                            _ => 0,
+                        }
+                    } else {
+                        0
+                    };
+                    if key == cur_key {
+                        // 键已存在，更新值
+                        if let Some(vals) = get_arr("vals") {
+                            let mut v = vals.borrow_mut();
+                            if let Some(cell) = v.get(cur) {
+                                *cell.borrow_mut() = val;
+                            }
+                        }
+                        return Ok(Some(Value::Void));
+                    }
+
+                    let side_opt = if key < cur_key {
+                        // 检查左子节点
+                        if let Some(left) = get_arr("left") {
+                            let l = left.borrow();
+                            match l
+                                .get(cur)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Int(-1))
+                            {
+                                Value::Int(n) if n >= 0 => Some(n as usize),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        // 检查右子节点
+                        if let Some(right) = get_arr("right") {
+                            let r = right.borrow();
+                            match r
+                                .get(cur)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Int(-1))
+                            {
+                                Value::Int(n) if n >= 0 => Some(n as usize),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    match side_opt {
+                        Some(next) => cur = next,
+                        None => {
+                            // 分配新节点
+                            let idx = if let Some(free) = get_arr("free") {
+                                let mut f = free.borrow_mut();
+                                f.pop().map(|cell| match *cell.borrow() {
+                                    Value::Int(n) => n as usize,
+                                    _ => unreachable!(),
+                                })
+                            } else {
+                                None
+                            };
+                            let idx = idx.unwrap_or_else(|| {
+                                if let Some(keys) = get_arr("keys") {
+                                    keys.borrow().len()
+                                } else {
+                                    0
+                                }
+                            });
+                            // 设置新节点
+                            if let Some(keys) = get_arr("keys") {
+                                let mut k = keys.borrow_mut();
+                                if idx >= k.len() {
+                                    k.push(Rc::new(RefCell::new(Value::Int(key))));
+                                } else {
+                                    k[idx] = Rc::new(RefCell::new(Value::Int(key)));
+                                }
+                            }
+                            if let Some(vals) = get_arr("vals") {
+                                let mut v = vals.borrow_mut();
+                                if idx >= v.len() {
+                                    v.push(Rc::new(RefCell::new(val)));
+                                } else {
+                                    v[idx] = Rc::new(RefCell::new(val));
+                                }
+                            }
+                            if let Some(left) = get_arr("left") {
+                                let mut l = left.borrow_mut();
+                                if idx >= l.len() {
+                                    l.push(Rc::new(RefCell::new(Value::Int(-1))));
+                                } else {
+                                    l[idx] = Rc::new(RefCell::new(Value::Int(-1)));
+                                }
+                            }
+                            if let Some(right) = get_arr("right") {
+                                let mut r = right.borrow_mut();
+                                if idx >= r.len() {
+                                    r.push(Rc::new(RefCell::new(Value::Int(-1))));
+                                } else {
+                                    r[idx] = Rc::new(RefCell::new(Value::Int(-1)));
+                                }
+                            }
+                            // 更新父节点的子节点指针
+                            if key < cur_key {
+                                if let Some(left) = get_arr("left") {
+                                    let mut l = left.borrow_mut();
+                                    if let Some(cell) = l.get(cur) {
+                                        *cell.borrow_mut() = Value::Int(idx as i128);
+                                    }
+                                }
+                            } else {
+                                if let Some(right) = get_arr("right") {
+                                    let mut r = right.borrow_mut();
+                                    if let Some(cell) = r.get(cur) {
+                                        *cell.borrow_mut() = Value::Int(idx as i128);
+                                    }
+                                }
+                            }
+                            let cur_len = get_i("len").unwrap_or(0);
+                            set_i(&class_data, "len", cur_len + 1);
+                            return Ok(Some(Value::Void));
+                        }
+                    }
+                }
+            }
+            "get" => {
+                let key = self.eval_int_arg(args, 0, span)?;
+                let mut cur = get_i("root").unwrap_or(-1);
+                loop {
+                    if cur < 0 {
+                        return Ok(Some(Value::Opt(None)));
+                    }
+                    let cur_key = if let Some(keys) = get_arr("keys") {
+                        let k = keys.borrow();
+                        match k
+                            .get(cur as usize)
+                            .map(|c| c.borrow().clone())
+                            .unwrap_or(Value::Int(0))
+                        {
+                            Value::Int(n) => n,
+                            _ => 0,
+                        }
+                    } else {
+                        0
+                    };
+                    if key == cur_key {
+                        let val = if let Some(vals) = get_arr("vals") {
+                            let v = vals.borrow();
+                            v.get(cur as usize)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Void)
+                        } else {
+                            Value::Void
+                        };
+                        return Ok(Some(val));
+                    }
+                    if key < cur_key {
+                        if let Some(left) = get_arr("left") {
+                            let l = left.borrow();
+                            cur = match l
+                                .get(cur as usize)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Int(-1))
+                            {
+                                Value::Int(n) => n,
+                                _ => -1,
+                            };
+                        } else {
+                            cur = -1;
+                        }
+                    } else {
+                        if let Some(right) = get_arr("right") {
+                            let r = right.borrow();
+                            cur = match r
+                                .get(cur as usize)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Int(-1))
+                            {
+                                Value::Int(n) => n,
+                                _ => -1,
+                            };
+                        } else {
+                            cur = -1;
+                        }
+                    }
+                }
+            }
+            "contains" => {
+                let key = self.eval_int_arg(args, 0, span)?;
+                let mut cur = get_i("root").unwrap_or(-1);
+                loop {
+                    if cur < 0 {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+                    let cur_key = if let Some(keys) = get_arr("keys") {
+                        let k = keys.borrow();
+                        match k
+                            .get(cur as usize)
+                            .map(|c| c.borrow().clone())
+                            .unwrap_or(Value::Int(0))
+                        {
+                            Value::Int(n) => n,
+                            _ => 0,
+                        }
+                    } else {
+                        0
+                    };
+                    if key == cur_key {
+                        return Ok(Some(Value::Bool(true)));
+                    }
+                    if key < cur_key {
+                        if let Some(left) = get_arr("left") {
+                            let l = left.borrow();
+                            cur = match l
+                                .get(cur as usize)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Int(-1))
+                            {
+                                Value::Int(n) => n,
+                                _ => -1,
+                            };
+                        } else {
+                            cur = -1;
+                        }
+                    } else {
+                        if let Some(right) = get_arr("right") {
+                            let r = right.borrow();
+                            cur = match r
+                                .get(cur as usize)
+                                .map(|c| c.borrow().clone())
+                                .unwrap_or(Value::Int(-1))
+                            {
+                                Value::Int(n) => n,
+                                _ => -1,
+                            };
+                        } else {
+                            cur = -1;
+                        }
+                    }
+                }
+            }
+            "len" => Ok(Some(get_i("len").map(Value::Int).unwrap_or(Value::Int(0)))),
+            "is_empty" => {
+                let cur_len = get_i("len").unwrap_or(0);
+                Ok(Some(Value::Bool(cur_len == 0)))
+            }
+            "clear" => {
+                let mut f = class_data.borrow_mut();
+                f.fields
+                    .insert("keys".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                f.fields
+                    .insert("vals".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                f.fields
+                    .insert("left".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                f.fields.insert(
+                    "right".into(),
+                    Value::Arr(Rc::new(RefCell::new(Vec::new()))),
+                );
+                f.fields.insert("root".into(), Value::Int(-1));
+                f.fields.insert("len".into(), Value::Int(0));
+                f.fields
+                    .insert("free".into(), Value::Arr(Rc::new(RefCell::new(Vec::new()))));
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
     // ---------- G5（E3.3 text）正则文本处理 ----------
 
     /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制

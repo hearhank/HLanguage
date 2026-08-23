@@ -1837,6 +1837,287 @@ pub(crate) fn call_intrlist_method_ir(
     }
 }
 
+// ---- A6：标准库数据结构——TreeMap 有序映射 ----
+
+/// io.treemap.init() !TreeMap——创建空 TreeMap。
+pub(crate) fn call_treemap_ns_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    field: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match field {
+        "init" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "init"));
+            }
+            let mut fields = HashMap::new();
+            fields.insert("keys".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("vals".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("left".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("right".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            fields.insert("root".into(), ctx.alloc(Cell::Value(IrValue::Int(-1))));
+            fields.insert("len".into(), ctx.alloc(Cell::Value(IrValue::Int(0))));
+            fields.insert("free".into(), ctx.alloc(Cell::Elems(Vec::new())));
+            Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                name: "TreeMap".into(),
+                fields,
+            }))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// TreeMap 实例方法：insert/get/contains/len/is_empty/clear。
+pub(crate) fn call_treemap_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    method: &str,
+    self_v: &IrValue,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let class_cell = match self_v {
+        IrValue::Class(c) => *c,
+        _ => return Err(IrError::msg("TypeError", "expected TreeMap")),
+    };
+    let get_field = |ctx: &Ctx, name: &str| -> Option<usize> {
+        match &ctx.cells[class_cell] {
+            Cell::Class { fields, .. } => fields.get(name).copied(),
+            _ => None,
+        }
+    };
+    let get_int = |ctx: &Ctx, name: &str| -> Option<i128> {
+        let cell = get_field(ctx, name)?;
+        match &ctx.cells[cell] {
+            Cell::Value(IrValue::Int(n)) => Some(*n),
+            _ => None,
+        }
+    };
+    let set_int = |ctx: &mut Ctx, name: &str, val: i128| {
+        if let Some(cell) = get_field(ctx, name) {
+            ctx.cells[cell] = Cell::Value(IrValue::Int(val));
+        }
+    };
+
+    // 辅助：获取数组中指定索引的值
+    let get_arr_elem = |ctx: &Ctx, arr_name: &str, idx: usize| -> Option<IrValue> {
+        let cell = get_field(ctx, arr_name)?;
+        match &ctx.cells[cell] {
+            Cell::Elems(elems) => {
+                if idx < elems.len() {
+                    match &ctx.cells[elems[idx]] {
+                        Cell::Value(v) => Some(v.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    };
+    // 辅助：设置数组中指定索引的值
+    let set_arr_elem = |ctx: &mut Ctx, arr_name: &str, idx: usize, val: IrValue| {
+        if let Some(cell) = get_field(ctx, arr_name) {
+            let elems = match &ctx.cells[cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            let new_elem = ctx.alloc(Cell::Value(val));
+            let mut new_elems = elems;
+            if idx < new_elems.len() {
+                new_elems[idx] = new_elem;
+            } else {
+                new_elems.push(new_elem);
+            }
+            ctx.cells[cell] = Cell::Elems(new_elems);
+        }
+    };
+
+    match method {
+        "insert" => {
+            let key = int_arg_ir(ctx, args, 0)?;
+            let val = args
+                .get(1)
+                .ok_or_else(|| IrError::msg("ArityMismatch", "insert"))?;
+
+            let root = get_int(ctx, "root").unwrap_or(-1);
+            if root < 0 {
+                // 创建根节点
+                set_arr_elem(ctx, "keys", 0, IrValue::Int(key));
+                set_arr_elem(ctx, "vals", 0, val.clone());
+                set_arr_elem(ctx, "left", 0, IrValue::Int(-1));
+                set_arr_elem(ctx, "right", 0, IrValue::Int(-1));
+                set_int(ctx, "root", 0);
+                set_int(ctx, "len", 1);
+                return Ok(Some(IrValue::Void));
+            }
+
+            let mut cur = root as usize;
+            loop {
+                let cur_key = match get_arr_elem(ctx, "keys", cur) {
+                    Some(IrValue::Int(n)) => n,
+                    _ => 0,
+                };
+                if key == cur_key {
+                    // 键已存在，更新值
+                    set_arr_elem(ctx, "vals", cur, val.clone());
+                    return Ok(Some(IrValue::Void));
+                }
+
+                let next_opt = if key < cur_key {
+                    match get_arr_elem(ctx, "left", cur) {
+                        Some(IrValue::Int(n)) if n >= 0 => Some(n as usize),
+                        _ => None,
+                    }
+                } else {
+                    match get_arr_elem(ctx, "right", cur) {
+                        Some(IrValue::Int(n)) if n >= 0 => Some(n as usize),
+                        _ => None,
+                    }
+                };
+
+                match next_opt {
+                    Some(next) => cur = next,
+                    None => {
+                        // 分配新节点
+                        let idx = if let Some(free_cell) = get_field(ctx, "free") {
+                            let elems = match &ctx.cells[free_cell] {
+                                Cell::Elems(e) => e.clone(),
+                                _ => Vec::new(),
+                            };
+                            if let Some(last) = elems.last() {
+                                let val = match &ctx.cells[*last] {
+                                    Cell::Value(v) => v.clone(),
+                                    _ => IrValue::Int(0),
+                                };
+                                let mut new_elems = elems;
+                                new_elems.pop();
+                                ctx.cells[free_cell] = Cell::Elems(new_elems);
+                                match val {
+                                    IrValue::Int(n) => Some(n as usize),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        let idx = idx.unwrap_or_else(|| {
+                            if let Some(keys_cell) = get_field(ctx, "keys") {
+                                match &ctx.cells[keys_cell] {
+                                    Cell::Elems(e) => e.len(),
+                                    _ => 0,
+                                }
+                            } else {
+                                0
+                            }
+                        });
+
+                        set_arr_elem(ctx, "keys", idx, IrValue::Int(key));
+                        set_arr_elem(ctx, "vals", idx, val.clone());
+                        set_arr_elem(ctx, "left", idx, IrValue::Int(-1));
+                        set_arr_elem(ctx, "right", idx, IrValue::Int(-1));
+
+                        // 更新父节点的子节点指针
+                        if key < cur_key {
+                            set_arr_elem(ctx, "left", cur, IrValue::Int(idx as i128));
+                        } else {
+                            set_arr_elem(ctx, "right", cur, IrValue::Int(idx as i128));
+                        }
+
+                        let cur_len = get_int(ctx, "len").unwrap_or(0);
+                        set_int(ctx, "len", cur_len + 1);
+                        return Ok(Some(IrValue::Void));
+                    }
+                }
+            }
+        }
+        "get" => {
+            let key = int_arg_ir(ctx, args, 0)?;
+            let mut cur = get_int(ctx, "root").unwrap_or(-1);
+            loop {
+                if cur < 0 {
+                    return Ok(Some(IrValue::Opt(None)));
+                }
+                let cur_key = match get_arr_elem(ctx, "keys", cur as usize) {
+                    Some(IrValue::Int(n)) => n,
+                    _ => 0,
+                };
+                if key == cur_key {
+                    let val = get_arr_elem(ctx, "vals", cur as usize).unwrap_or(IrValue::Void);
+                    return Ok(Some(val));
+                }
+                if key < cur_key {
+                    cur = match get_arr_elem(ctx, "left", cur as usize) {
+                        Some(IrValue::Int(n)) => n,
+                        _ => -1,
+                    };
+                } else {
+                    cur = match get_arr_elem(ctx, "right", cur as usize) {
+                        Some(IrValue::Int(n)) => n,
+                        _ => -1,
+                    };
+                }
+            }
+        }
+        "contains" => {
+            let key = int_arg_ir(ctx, args, 0)?;
+            let mut cur = get_int(ctx, "root").unwrap_or(-1);
+            loop {
+                if cur < 0 {
+                    return Ok(Some(IrValue::Bool(false)));
+                }
+                let cur_key = match get_arr_elem(ctx, "keys", cur as usize) {
+                    Some(IrValue::Int(n)) => n,
+                    _ => 0,
+                };
+                if key == cur_key {
+                    return Ok(Some(IrValue::Bool(true)));
+                }
+                if key < cur_key {
+                    cur = match get_arr_elem(ctx, "left", cur as usize) {
+                        Some(IrValue::Int(n)) => n,
+                        _ => -1,
+                    };
+                } else {
+                    cur = match get_arr_elem(ctx, "right", cur as usize) {
+                        Some(IrValue::Int(n)) => n,
+                        _ => -1,
+                    };
+                }
+            }
+        }
+        "len" => Ok(Some(IrValue::Int(get_int(ctx, "len").unwrap_or(0)))),
+        "is_empty" => {
+            let cur_len = get_int(ctx, "len").unwrap_or(0);
+            Ok(Some(IrValue::Bool(cur_len == 0)))
+        }
+        "clear" => {
+            if let Some(cell) = get_field(ctx, "keys") {
+                ctx.cells[cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(cell) = get_field(ctx, "vals") {
+                ctx.cells[cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(cell) = get_field(ctx, "left") {
+                ctx.cells[cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(cell) = get_field(ctx, "right") {
+                ctx.cells[cell] = Cell::Elems(Vec::new());
+            }
+            if let Some(cell) = get_field(ctx, "free") {
+                ctx.cells[cell] = Cell::Elems(Vec::new());
+            }
+            set_int(ctx, "root", -1);
+            set_int(ctx, "len", 0);
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- G5（E3.3 text）正则文本处理 ----
 
 /// io.text.* —— `matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制
@@ -2683,6 +2964,13 @@ pub(crate) fn call_builtin_method(
         }
         (IrValue::Class(c), m) if class_name(ctx, *c) == "IntrList" => {
             call_intrlist_method_ir(ctx, module, m, &IrValue::Class(*c), args)
+        }
+        // A6：标准库数据结构——TreeMap 有序映射
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "TreeMapNs" => {
+            call_treemap_ns_method_ir(ctx, module, m, args)
+        }
+        (IrValue::Class(c), m) if class_name(ctx, *c) == "TreeMap" => {
+            call_treemap_method_ir(ctx, module, m, &IrValue::Class(*c), args)
         }
         // Class to_bytes：无布局表（Phase 7 取舍——堆类型请用 to_json）
         (IrValue::Class(_), "to_bytes") => Err(IrError::msg(

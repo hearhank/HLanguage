@@ -14,6 +14,7 @@ pub mod ds_bitmap;
 pub mod ds_intrlist;
 pub mod ds_pagemem;
 pub mod ds_ringbuf;
+pub mod ds_treemap;
 pub mod errorcodes;
 pub mod ir;
 pub mod lexer;

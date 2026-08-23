@@ -1214,6 +1214,15 @@ pub(crate) fn io_value_ir(ctx: &mut Ctx) -> IrValue {
         "intrlist".into(),
         ctx.alloc(Cell::Value(IrValue::Class(intrlist))),
     );
+    // A6：标准库数据结构——TreeMap 有序映射命名空间
+    let treemap = ctx.alloc(Cell::Class {
+        name: "TreeMapNs".into(),
+        fields: HashMap::new(),
+    });
+    fields.insert(
+        "treemap".into(),
+        ctx.alloc(Cell::Value(IrValue::Class(treemap))),
+    );
     IrValue::Class(ctx.alloc(Cell::Class {
         name: "Io".into(),
         fields,
