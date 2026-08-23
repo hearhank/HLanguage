@@ -15,7 +15,7 @@ use hc::token::Span;
 
 use crate::value::{
     AllocBlock, AllocErr, AllocatorImpl, ArenaAllocErr, ArenaState, BoxedData, ClassData,
-    ClosureData, LeakRecord, MapData, PoolState, Value, VecData,
+    ClosureData, LazyIterData, LazyOp, LeakRecord, MapData, PoolState, Value, VecData,
 };
 
 // ---------- 子模块 ----------

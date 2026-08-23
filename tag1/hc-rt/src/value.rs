@@ -66,6 +66,10 @@ pub enum Value {
     Allocator(Rc<RefCell<AllocatorImpl>>),
     /// 原始内存块（Phase 1 新增；分配器返回的原始内存，与 Str 区分）
     Bytes(Rc<RefCell<Vec<u8>>>),
+    /// 惰性迭代器（A7 惰性/组合子迭代器，2026-08-23）
+    /// 包装一个可迭代源 + 位置 + 可选的 filter/map 变换。
+    /// `next()` 按需求值，链式延迟计算。
+    LazyIter(Rc<RefCell<LazyIterData>>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -90,6 +94,33 @@ pub struct ClosureData {
 
 /// Arena 默认块大小（首块及新块下限；单块申请大于此值时按实际大小开块）
 pub const ARENA_BLOCK_SIZE: usize = 1024;
+
+/// 惰性迭代器操作类型（filter/map 按链式调用顺序存储）
+#[derive(Debug, Clone)]
+pub enum LazyOp {
+    /// 筛选闭包：返回 false 则跳过该元素
+    Filter(Value),
+    /// 变换闭包：变换元素值
+    Map(Value),
+}
+
+/// 惰性迭代器数据（A7：`next()` 按需求值，filter/map 链式延迟计算）
+/// 操作按链式调用顺序存储在 `ops` 中，`lazy_iter_next` 按序应用。
+/// 例如 `arr.map(g).filter(f)` → ops = [Map(g), Filter(f)]，
+/// 对每个源元素：先 Map(g) 变换，再 Filter(f) 筛选。
+#[derive(Debug, Clone)]
+pub struct LazyIterData {
+    /// 源数据（原始可迭代值：Arr/Slice/Str/Map/Vec/Class）
+    pub source: Value,
+    /// 当前位置（源的迭代索引）
+    pub index: usize,
+    /// 源类型名（"arr"/"slice"/"str"/"map"/"vec"/"class"）
+    pub source_type: String,
+    /// 操作列表（按链式调用顺序存储：filter/map 交错，按序应用）
+    pub ops: Vec<LazyOp>,
+    /// Map 遍历键缓存（非 Map 源时为空；构造时固定顺序保证确定性遍历）
+    pub keys_cache: Vec<String>,
+}
 
 /// 分配器对齐下限（§2.3：H 值为 i128/f64 承载，对齐 ≥ 16 字节，与 tag1 `%Value` 盒一致）。
 /// bump 游标按此圆整，返回区域起始相对块起点恒为 16 的倍数。
@@ -618,6 +649,15 @@ impl Value {
                 let d = b.borrow();
                 format!("Bytes({} bytes)", d.len())
             }
+            Value::LazyIter(li) => {
+                let d = li.borrow();
+                format!(
+                    "LazyIter({} @{})({} ops)",
+                    d.source_type,
+                    d.index,
+                    d.ops.len(),
+                )
+            }
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -805,6 +845,7 @@ impl Value {
             Value::Arena(_) => "Arena".into(),
             Value::Allocator(_) => "allocator".into(),
             Value::Bytes(_) => "Bytes".into(),
+            Value::LazyIter(_) => "LazyIter".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }

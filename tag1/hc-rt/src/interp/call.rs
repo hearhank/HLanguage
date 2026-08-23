@@ -1107,47 +1107,40 @@ impl Interp {
                 }
                 Ok(Some(Value::vec(items, Value::Alloc)))
             }
-            // 迭代器链（12.8：立即求值变换，产生新数据对象）——统一覆盖全部内建
-            // 可迭代类型（Arr/Slice/Str/Map/用户类型）经 iter_to_arr 归一化为元素数组
-            (_, "iter") => Ok(Some(self.iter_to_arr(self_v)?)),
+            // 惰性迭代器链（A7：iter/filter/map 返回 LazyIter，next() 按需求值）
+            (_, "iter") => {
+                if matches!(self_v, Value::LazyIter(_)) {
+                    // 已是 LazyIter，直接返回自身
+                    return Ok(Some(self_v.clone()));
+                }
+                let data = self.make_lazy_iter_data(self_v)?;
+                Ok(Some(Value::LazyIter(Rc::new(RefCell::new(data)))))
+            }
             (_, "filter") => {
                 let f = self.eval(&args[0])?;
                 let f = self.deref_value(f);
-                if let Value::Closure(closure) = f {
-                    let Value::Arr(a) = self.iter_to_arr(self_v)? else {
-                        unreachable!("iter_to_arr 恒返回 Arr")
-                    };
-                    let src = a.borrow().clone();
-                    let mut out = Vec::new();
-                    for cell in src {
-                        let item = cell.borrow().clone();
-                        if self.call_closure_bool(&closure, &[item.clone()], span)? {
-                            out.push(item);
-                        }
-                    }
-                    Ok(Some(Value::arr(out)))
-                } else {
-                    Err(RtError::new("TypeError", Some(span.clone())))
+                if !matches!(f, Value::Closure(_)) {
+                    return Err(RtError::new("TypeError", Some(span.clone())));
                 }
+                let li = match self_v {
+                    Value::LazyIter(existing) => existing.clone(),
+                    _ => Rc::new(RefCell::new(self.make_lazy_iter_data(self_v)?)),
+                };
+                li.borrow_mut().ops.push(LazyOp::Filter(f));
+                Ok(Some(Value::LazyIter(li)))
             }
             (_, "map") => {
                 let f = self.eval(&args[0])?;
                 let f = self.deref_value(f);
-                if let Value::Closure(closure) = f {
-                    let Value::Arr(a) = self.iter_to_arr(self_v)? else {
-                        unreachable!("iter_to_arr 恒返回 Arr")
-                    };
-                    let src = a.borrow().clone();
-                    let mut out = Vec::new();
-                    for cell in src {
-                        let item = cell.borrow().clone();
-                        let mapped = self.call_closure_value(&closure, &[item], span)?;
-                        out.push(mapped);
-                    }
-                    Ok(Some(Value::arr(out)))
-                } else {
-                    Err(RtError::new("TypeError", Some(span.clone())))
+                if !matches!(f, Value::Closure(_)) {
+                    return Err(RtError::new("TypeError", Some(span.clone())));
                 }
+                let li = match self_v {
+                    Value::LazyIter(existing) => existing.clone(),
+                    _ => Rc::new(RefCell::new(self.make_lazy_iter_data(self_v)?)),
+                };
+                li.borrow_mut().ops.push(LazyOp::Map(f));
+                Ok(Some(Value::LazyIter(li)))
             }
             // Map 方法（Map = class 实例，字段即键值）
             (Value::Class(c), "put") if c.borrow().name == "Map" => {
@@ -1650,7 +1643,202 @@ impl Interp {
                 let v = Value::Class(c.clone());
                 self.call_four_mode_method(&v, m, args, span)
             }
+            // LazyIter 方法：next() 按需求值，to_array() 解析全部剩余项
+            (Value::LazyIter(li), "next") => {
+                let v = self.lazy_iter_next(&mut li.borrow_mut(), span)?;
+                Ok(Some(v))
+            }
+            (Value::LazyIter(li), "to_array") => {
+                let mut items = Vec::new();
+                loop {
+                    let v = self.lazy_iter_next(&mut li.borrow_mut(), span)?;
+                    match v {
+                        Value::Opt(Some(val)) => items.push((*val).clone()),
+                        Value::Opt(None) => break,
+                        _ => break,
+                    }
+                }
+                Ok(Some(Value::arr(items)))
+            }
             _ => Ok(None),
+        }
+    }
+
+    // ---------- LazyIter 辅助方法 ----------
+
+    /// 根据值创建 LazyIterData（非 LazyIter 可迭代值 → LazyIterData）
+    fn make_lazy_iter_data(&self, v: &Value) -> Result<LazyIterData> {
+        match v {
+            Value::Arr(_) => Ok(LazyIterData {
+                source: v.clone(),
+                index: 0,
+                source_type: "arr".to_string(),
+                ops: Vec::new(),
+                keys_cache: Vec::new(),
+            }),
+            Value::Slice { .. } => Ok(LazyIterData {
+                source: v.clone(),
+                index: 0,
+                source_type: "slice".to_string(),
+                ops: Vec::new(),
+                keys_cache: Vec::new(),
+            }),
+            Value::Str(_) => Ok(LazyIterData {
+                source: v.clone(),
+                index: 0,
+                source_type: "str".to_string(),
+                ops: Vec::new(),
+                keys_cache: Vec::new(),
+            }),
+            Value::Class(c) if c.borrow().name == "Map" => {
+                let keys_cache = c.borrow().fields.keys().cloned().collect();
+                Ok(LazyIterData {
+                    source: v.clone(),
+                    index: 0,
+                    source_type: "map".to_string(),
+                    ops: Vec::new(),
+                    keys_cache,
+                })
+            }
+            Value::Map(m) => {
+                let keys_cache = m.borrow().fields.keys().cloned().collect();
+                Ok(LazyIterData {
+                    source: v.clone(),
+                    index: 0,
+                    source_type: "map".to_string(),
+                    ops: Vec::new(),
+                    keys_cache,
+                })
+            }
+            Value::Class(_) => Ok(LazyIterData {
+                source: v.clone(),
+                index: 0,
+                source_type: "class".to_string(),
+                ops: Vec::new(),
+                keys_cache: Vec::new(),
+            }),
+            _ => Err(RtError::msg(
+                "NotIterable",
+                format!("value of type `{}` is not iterable", v.type_name()),
+            )),
+        }
+    }
+
+    /// LazyIter 按需求值：从源取下一元素，经 filter/map 链后返回 `Opt(T)`
+    pub(crate) fn lazy_iter_next(&mut self, data: &mut LazyIterData, span: &Span) -> Result<Value> {
+        loop {
+            // 克隆源以避免与 data.index 的借用冲突
+            let source = data.source.clone();
+            let element = match data.source_type.as_str() {
+                "arr" => {
+                    let Value::Arr(a) = &source else {
+                        return Err(RtError::msg(
+                            "InternalError",
+                            "lazy_iter: arr source_type mismatch",
+                        ));
+                    };
+                    let items = a.borrow();
+                    if data.index >= items.len() {
+                        return Ok(Value::Opt(None));
+                    }
+                    let v = items[data.index].borrow().clone();
+                    data.index += 1;
+                    v
+                }
+                "slice" => {
+                    let Value::Slice {
+                        data: d,
+                        start,
+                        len,
+                    } = &source
+                    else {
+                        return Err(RtError::msg(
+                            "InternalError",
+                            "lazy_iter: slice source_type mismatch",
+                        ));
+                    };
+                    let items = d.borrow();
+                    if data.index >= *len {
+                        return Ok(Value::Opt(None));
+                    }
+                    let v = items[*start + data.index].borrow().clone();
+                    data.index += 1;
+                    v
+                }
+                "str" => {
+                    let Value::Str(s) = &source else {
+                        return Err(RtError::msg(
+                            "InternalError",
+                            "lazy_iter: str source_type mismatch",
+                        ));
+                    };
+                    let bytes = s.borrow();
+                    if data.index >= bytes.len() {
+                        return Ok(Value::Opt(None));
+                    }
+                    let v = Value::Int(bytes[data.index] as i128);
+                    data.index += 1;
+                    v
+                }
+                "map" => {
+                    if data.index >= data.keys_cache.len() {
+                        return Ok(Value::Opt(None));
+                    }
+                    let key = &data.keys_cache[data.index];
+                    data.index += 1;
+                    let val = match &source {
+                        Value::Class(c) => c.borrow().fields.get(key).cloned(),
+                        Value::Map(m) => m.borrow().fields.get(key).cloned(),
+                        _ => None,
+                    };
+                    let val = val.unwrap_or(Value::Void);
+                    let mut f = HashMap::new();
+                    f.insert("key".to_string(), Value::str(key));
+                    f.insert("value".to_string(), val);
+                    Value::class("KV", f)
+                }
+                "class" => {
+                    // 用户类型迭代：委托给源自身的 next() 方法
+                    let next_v = self.eval_next_method(&source)?;
+                    match next_v {
+                        Value::Opt(Some(v)) => (*v).clone(),
+                        Value::Opt(None) | Value::Void => return Ok(Value::Opt(None)),
+                        other => other,
+                    }
+                }
+                other => {
+                    return Err(RtError::msg(
+                        "NotIterable",
+                        format!("lazy_iter: unknown source_type `{other}`"),
+                    ));
+                }
+            };
+
+            // 按链式调用顺序应用所有操作（filter/map 交错）
+            let mut result = element;
+            let mut skipped = false;
+            for op in &data.ops {
+                match op {
+                    LazyOp::Filter(v) => {
+                        if let Value::Closure(c) = v {
+                            if !self.call_closure_bool(c, &[result.clone()], span)? {
+                                skipped = true;
+                                break;
+                            }
+                        }
+                    }
+                    LazyOp::Map(v) => {
+                        if let Value::Closure(c) = v {
+                            result = self.call_closure_value(c, &[result], span)?;
+                        }
+                    }
+                }
+            }
+            if skipped {
+                continue;
+            }
+
+            return Ok(Value::Opt(Some(Rc::new(result))));
         }
     }
 

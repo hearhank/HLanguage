@@ -725,6 +725,27 @@ impl Interp {
                     .map(|b| (Rc::new(RefCell::new(Value::Int(b as i128))), false))
                     .collect())
             }
+            Value::LazyIter(li) => {
+                // 惰性迭代器：逐项按需求值，收集为 (共享槽, false) 列表
+                let mut items = Vec::new();
+                let dummy_span = Span {
+                    start: 0,
+                    end: 0,
+                    line: 0,
+                    col: 0,
+                };
+                loop {
+                    let v = self.lazy_iter_next(&mut li.borrow_mut(), &dummy_span)?;
+                    match v {
+                        Value::Opt(Some(val)) => {
+                            items.push((Rc::new(RefCell::new((*val).clone())), false));
+                        }
+                        Value::Opt(None) => break,
+                        _ => break,
+                    }
+                }
+                Ok(items)
+            }
             _ => Err(RtError::msg(
                 "NotIterable",
                 format!("value of type `{}` is not iterable", deref.type_name()),
