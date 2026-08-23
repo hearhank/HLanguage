@@ -130,6 +130,7 @@ fn decode_func(r: &mut Reader) -> Result<IrFunc, String> {
         name,
         params,
         param_ty,
+        ret_ty: Type::Named("void".to_string(), vec![]),
         param_defaults,
         defaults,
         n_slots,

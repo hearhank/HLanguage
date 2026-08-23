@@ -2,8 +2,9 @@
 
 use super::body::BodyEmitter;
 use super::*;
+use crate::ast::Type;
 use crate::errorcodes::ErrorCodeTable;
-use crate::ir::{IrConst, IrFunc, IrInst, IrModule};
+use crate::ir::{IrBinOp, IrConst, IrFunc, IrInst, IrModule};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -12,6 +13,195 @@ pub(crate) fn build_slot_consts(f: &IrFunc) -> HashMap<usize, IrConst> {
     for inst in &f.body {
         if let IrInst::Const { temp, val } = inst {
             m.insert(*temp, val.clone());
+        }
+    }
+    m
+}
+
+/// 将 AST 类型转换为简单字符串表示（用于类型槽表）
+pub(crate) fn type_to_string(ty: &Type) -> String {
+    match ty.strip() {
+        Type::Named(name, _) => name.clone(),
+        Type::Ptr(inner, mut_) => {
+            let inner_s = type_to_string(inner);
+            if *mut_ {
+                format!("*mut {}", inner_s)
+            } else {
+                format!("*{}", inner_s)
+            }
+        }
+        Type::Slice(inner, mut_) => {
+            let inner_s = type_to_string(inner);
+            if *mut_ {
+                format!("&mut [{}]", inner_s)
+            } else {
+                format!("&[{}]", inner_s)
+            }
+        }
+        Type::Optional(inner) => format!("?{}", type_to_string(inner)),
+        Type::ErrorUnion(err, ok) => {
+            let ok_s = type_to_string(ok);
+            if let Some(e) = err {
+                format!("{}!{}", type_to_string(e), ok_s)
+            } else {
+                format!("!{}", ok_s)
+            }
+        }
+        Type::Tuple(items) => {
+            let items: Vec<String> = items.iter().map(type_to_string).collect();
+            format!("({})", items.join(", "))
+        }
+        Type::Array(n, inner) => format!("[{}]{}", n, type_to_string(inner)),
+        Type::ComptimeInt(_) => "comptime_int".to_string(),
+        Type::Infer => "infer".to_string(),
+        Type::Owned(inner) => type_to_string(inner),
+    }
+}
+
+/// 构建类型槽表：从函数参数类型 + 常量 + 指令传播推断每个槽的类型
+pub(crate) fn build_type_slot_map(f: &IrFunc) -> HashMap<usize, String> {
+    let mut m = HashMap::new();
+    // 参数槽：从 param_ty 获取类型
+    for (i, ps) in f.params.iter().enumerate() {
+        if let Some(pt) = f.param_ty.get(i) {
+            let ty_str = type_to_string(pt);
+            m.insert(*ps, ty_str);
+        }
+    }
+    // 多次传播：Load → Bin/Un → Store → Load 链需要多轮才能收敛
+    for _pass in 0..3 {
+        let mut changed = false;
+        for inst in &f.body {
+            match inst {
+                IrInst::Const { temp, val } => {
+                    let ty_str = match val {
+                        IrConst::Int(_) => "i128",
+                        IrConst::Float(_) => "f64",
+                        IrConst::Bool(_) => "bool",
+                        IrConst::Str(_) => "String",
+                        IrConst::Void => "void",
+                        IrConst::Null => "?void",
+                        IrConst::Err { .. } => "error",
+                        IrConst::End => "i64",
+                    };
+                    if m.insert(*temp, ty_str.to_string()).is_none() {
+                        changed = true;
+                    }
+                }
+                IrInst::Load { temp, slot } => {
+                    if let Some(ty) = m.get(slot).cloned() {
+                        if m.insert(*temp, ty).is_none() {
+                            changed = true;
+                        }
+                    }
+                }
+                IrInst::Store { slot, temp } => {
+                    if let Some(ty) = m.get(temp).cloned() {
+                        if m.insert(*slot, ty).is_none() {
+                            changed = true;
+                        }
+                    }
+                }
+                IrInst::Bin { op, temp, a, b } => {
+                    // 比较运算符返回 bool（C8-1c）
+                    match op {
+                        IrBinOp::Eq
+                        | IrBinOp::Ne
+                        | IrBinOp::Lt
+                        | IrBinOp::Le
+                        | IrBinOp::Gt
+                        | IrBinOp::Ge => {
+                            if m.insert(*temp, "bool".to_string()).is_none() {
+                                changed = true;
+                            }
+                        }
+                        _ => {
+                            let ta = m.get(a);
+                            let tb = m.get(b);
+                            if let (Some(ta), Some(tb)) = (ta, tb) {
+                                if ta == tb {
+                                    if m.insert(*temp, ta.clone()).is_none() {
+                                        changed = true;
+                                    }
+                                } else if m.get(temp).is_none() {
+                                    // 类型不同时优先用 a 类型
+                                    if m.insert(*temp, ta.clone()).is_none() {
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                IrInst::Un { op: _, temp, a } => {
+                    if let Some(ty) = m.get(a).cloned() {
+                        if m.insert(*temp, ty).is_none() {
+                            changed = true;
+                        }
+                    }
+                }
+                IrInst::DeepCopy { temp, a } => {
+                    if let Some(ty) = m.get(a).cloned() {
+                        if m.insert(*temp, ty).is_none() {
+                            changed = true;
+                        }
+                    }
+                }
+                IrInst::AddrSlot { temp, .. } | IrInst::AddrValue { temp, .. } => {
+                    if m.insert(*temp, "*mut".to_string()).is_none() {
+                        changed = true;
+                    }
+                }
+                IrInst::Deref { temp, a } => {
+                    if let Some(ty) = m.get(a).cloned() {
+                        // 解引用：*mut T → T（去掉指针前缀）
+                        let inner = if ty.starts_with("*mut ") {
+                            ty[5..].to_string()
+                        } else if ty.starts_with("*") {
+                            ty[1..].to_string()
+                        } else {
+                            ty.clone()
+                        };
+                        if m.insert(*temp, inner).is_none() {
+                            changed = true;
+                        }
+                    }
+                }
+                // C8-1c: CallBuiltin 已知返回类型
+                IrInst::CallBuiltin { name, temp, .. } => {
+                    let ty_str = match name.as_str() {
+                        "@eq" | "@neq" | "@lt" | "@le" | "@gt" | "@ge" | "@is_null" | "@is_err"
+                        | "@truthy" | "@not" | "@bool" => "bool",
+                        "@len" | "@sizeOf" | "@alignOf" | "@offsetOf" => "i64",
+                        _ => continue, // 未知内建跳过
+                    };
+                    if m.insert(*temp, ty_str.to_string()).is_none() {
+                        changed = true;
+                    }
+                }
+                // C8-1c: MakeClass → 类名
+                IrInst::MakeClass { temp, ty, .. } => {
+                    if m.insert(*temp, ty.clone()).is_none() {
+                        changed = true;
+                    }
+                }
+                // C8-1c: MakeEnum → 枚举名
+                IrInst::MakeEnum { temp, name, .. } => {
+                    if m.insert(*temp, name.clone()).is_none() {
+                        changed = true;
+                    }
+                }
+                // C8-1c: MakeArr → 数组
+                IrInst::MakeArr { temp, .. } => {
+                    if m.insert(*temp, "array".to_string()).is_none() {
+                        changed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            break;
         }
     }
     m
@@ -186,7 +376,8 @@ pub(crate) fn emit_func(
     }
     let _ = writeln!(out, "define %Value @\"{prefix}{fn_tag}{idx}\"({params}) {{");
     // 序言（槽数组 + 参数存槽）并入 entry 块（BodyEmitter 首个块即 entry）
-    let mut be = BodyEmitter::new(prefix, links);
+    let type_slot_map = build_type_slot_map(f);
+    let mut be = BodyEmitter::new(prefix, links, type_slot_map);
     let ns = f.n_slots;
     be.emit(format!("%slots = alloca [{ns} x %Value], align 16",));
     for i in 0..f.n_slots {

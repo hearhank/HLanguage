@@ -19,10 +19,16 @@ pub(crate) struct BodyEmitter {
     links: HashMap<String, String>,
     /// C3：已引用的外部链接符号 (符号名, 参数个数)——emit_func 末尾补 declare
     pub(crate) ext_decls: Vec<(String, usize)>,
+    /// C8-1a: 类型槽表——每个槽的推断类型（用于原生 ABI 判定、标量运算内联）
+    pub(crate) type_slot_map: HashMap<usize, String>,
 }
 
 impl BodyEmitter {
-    pub(crate) fn new(prefix: &str, links: &HashMap<String, String>) -> Self {
+    pub(crate) fn new(
+        prefix: &str,
+        links: &HashMap<String, String>,
+        type_slot_map: HashMap<usize, String>,
+    ) -> Self {
         BodyEmitter {
             ssa: 0,
             fresh: 0,
@@ -32,6 +38,7 @@ impl BodyEmitter {
             prefix: prefix.to_string(),
             links: links.clone(),
             ext_decls: Vec::new(),
+            type_slot_map,
         }
     }
 

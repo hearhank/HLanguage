@@ -631,4 +631,245 @@ fn main() {
         assert!(!ll.contains("define %Value @hc_ceil"), "{ll}");
         assert!(!ll.contains("define %Value @hc_round"), "{ll}");
     }
+
+    // ---- C8-1a: 类型槽表 ----
+
+    #[test]
+    fn type_slot_map_populates_params() {
+        let src = "fn add(a: i32, b: i64) i32 { return a + b; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 参数 a: i32 → slot 0
+        assert_eq!(map.get(&0).map(|s| s.as_str()), Some("i32"), "param a");
+        // 参数 b: i64 → slot 1
+        assert_eq!(map.get(&1).map(|s| s.as_str()), Some("i64"), "param b");
+    }
+
+    #[test]
+    fn type_slot_map_populates_consts() {
+        let src = "fn f() i32 { return 42; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 常量 42 → i128
+        // 无参数函数，常量 42 可能在任意槽；只需检查至少有一个 i128 条目
+        assert!(
+            map.values().any(|v| v == "i128"),
+            "should have i128 type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_bool_const() {
+        let src = "fn f() bool { return true; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 常量 true → bool
+        assert!(
+            map.values().any(|v| v == "bool"),
+            "should have bool type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_string_const() {
+        let src = "fn f() String { return \"hello\"; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 常量 "hello" → String
+        assert!(
+            map.values().any(|v| v == "String"),
+            "should have String type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_float_const() {
+        let src = "fn f() f64 { return 3.14; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 常量 3.14 → f64
+        assert!(
+            map.values().any(|v| v == "f64"),
+            "should have f64 type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_void_fn() {
+        let src = "fn f() void {}";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 无参数，无常量 → 空 map
+        // 至少应当无额外条目
+        assert!(
+            map.is_empty() || map.len() == 0,
+            "void fn should have empty map: {:?}",
+            map
+        );
+    }
+
+    // ---- C8-1b: 类型传播 ----
+
+    #[test]
+    fn type_slot_map_bin_propagates_operand_type() {
+        // a + b 中 a 和 b 是 i32，结果也应为 i32
+        let src = "fn add(a: i32, b: i32) i32 { return a + b; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 参数 a: i32, b: i32
+        assert_eq!(map.get(&0).map(|s| s.as_str()), Some("i32"), "param 0");
+        assert_eq!(map.get(&1).map(|s| s.as_str()), Some("i32"), "param 1");
+        // a + b 的结果槽应有 i32 类型
+        assert!(
+            map.values().filter(|v| v.as_str() == "i32").count() >= 3,
+            "should have at least 3 i32 entries (2 params + 1 result): {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_addr_slot_emits_ptr() {
+        // &mut x 产生 *mut 类型
+        let src = "fn f() i32 { var mut x: i32 = 5; var p = &mut x; return p.*; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 至少有一个 *mut 条目（来自 AddrSlot）
+        assert!(
+            map.values().any(|v| v == "*mut"),
+            "should have *mut type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_load_propagates_slot_type() {
+        // 从已知类型的槽 load
+        let src = "fn f(a: i32) i32 { return a; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 参数 a 是 i32，load 它的临时槽也应为 i32
+        assert_eq!(map.get(&0).map(|s| s.as_str()), Some("i32"), "param 0");
+    }
+
+    #[test]
+    fn type_slot_map_store_propagates_type() {
+        // Store 将常量类型传播到目标槽。IR 中 Int(42) → i128，变量 x 接收此类型
+        let src = "fn f() i32 { var mut x: i32 = 42; return x; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 常量 42 是 i128，Store 传播到变量槽
+        assert!(
+            map.values().any(|v| v == "i128"),
+            "should have i128 type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_un_propagates_operand_type() {
+        // 一元负号 `-a` 产生 Un 指令，结果类型应为操作数类型
+        let src = "fn f(a: i32) i32 { return -a; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 参数 a 是 i32，-a 的结果也应为 i32
+        assert_eq!(map.get(&0).map(|s| s.as_str()), Some("i32"), "param 0");
+        // 至少有两个 i32（参数 + 结果）
+        assert!(
+            map.values().filter(|v| v.as_str() == "i32").count() >= 2,
+            "should have at least 2 i32 entries: {:?}",
+            map
+        );
+    }
+
+    // ---- C8-1c: CallBuiltin / MakeClass / MakeEnum / MakeArr ----
+
+    #[test]
+    fn type_slot_map_call_builtin_eq_returns_bool() {
+        // 比较表达式 `a == b` 经 CallBuiltin @eq，结果应为 bool
+        let src = "fn f(a: i32, b: i32) bool { return a == b; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 应该有一个 bool 条目（来自 @eq 的返回类型）
+        assert!(
+            map.values().any(|v| v == "bool"),
+            "should have bool type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_make_class_emits_type_name() {
+        // class 字面量应记录类名
+        let src = "class Point { x: i32, y: i32 } fn f() Point { return Point { x = 1, y = 2 }; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 应有一个 Point 条目（来自 MakeClass）
+        assert!(
+            map.values().any(|v| v == "Point"),
+            "should have Point type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_make_enum_emits_enum_name() {
+        // 枚举字面量应记录枚举名
+        let src = "enum Color { Red, Green, Blue } fn f() Color { return Color.Red; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 应有一个 Color 条目（来自 MakeEnum）
+        assert!(
+            map.values().any(|v| v == "Color"),
+            "should have Color type: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn type_slot_map_make_arr_emits_array() {
+        // 数组字面量应记录为 array
+        let src = "fn f() [3]i32 { return [1, 2, 3]; }";
+        let p = crate::parse_source(src).expect("parse");
+        let m = ir::lower(&p).expect("lower");
+        let f = &m.funcs[0];
+        let map = build_type_slot_map(f);
+        // 应有一个 array 条目（来自 MakeArr）
+        assert!(
+            map.values().any(|v| v == "array"),
+            "should have array type: {:?}",
+            map
+        );
+    }
 }

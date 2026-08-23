@@ -21,7 +21,7 @@ fn transform(nums: &Vec<i32>) Vec<i32> {
     return nums.iter().filter(|n| n % 2 == 0).map(|n| n * 10);
 }
 
-fn main(args: owned Vec(String)) !void {
+fn main(args: owned Vec<String>) !void {
     // 管道：读 → 变换 → 汇总
     var nums = try read_numbers(&io, "data.txt");
     var evens = transform(&nums);

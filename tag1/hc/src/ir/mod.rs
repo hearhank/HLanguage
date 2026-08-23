@@ -80,6 +80,8 @@ pub struct IrFunc {
     pub params: Vec<usize>,
     /// 参数类型（声明序，重载按实参值类型分派用；与 params 等长）
     pub param_ty: Vec<Type>,
+    /// 返回类型（None → void，即 Type::Named("void", vec![])）
+    pub ret_ty: Type,
     /// 参数是否有默认值（声明序；可选参数 = 尾部默认，对齐 ADR-0009）
     pub param_defaults: Vec<bool>,
     /// 参数默认常量值（编译期常量默认值；缺失尾参时调用点补齐）

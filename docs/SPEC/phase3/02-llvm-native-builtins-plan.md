@@ -301,6 +301,9 @@ store %Value %v1, %Value* %sp.{temp}
 | P3-5: @ptrFromInt/@intFromPtr 测试 | Phase 3 | 低 | 15min | 无 |
 | P3-7: @volatileLoad/@volatileStore 内联 | Phase 3 | 低 | 30min | 无 |
 | P4-1: 类型槽表 | Phase 4 | 高 | 3h | 无 |
+|   P4-1a: 定义+参数/常量填充 | 已完成 | ✅ | 45min | 无 |
+|   P4-1b: Load/Bin/Un/Store/AddrSlot/Deref 传播 | 已完成 | ✅ | 45min | 无 |
+|   P4-1c: CallBuiltin/MakeClass/MakeEnum/MakeArr + 比较→bool | 已完成 | ✅ | 45min | 无 |
 | P4-2: 标量运算原生 ABI | Phase 4 | 高 | 7h | P4-1 |
 | P4-3: 聚合类型 LLVM struct | Phase 4 | 高 | 7h | P4-1 |
 | P4-4: 错误值原生处理 | Phase 4 | 高 | 5h | P4-1 |

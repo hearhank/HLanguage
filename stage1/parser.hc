@@ -53,6 +53,14 @@ fn utf8_width(b: u8) i32 {
     return 4;
 }
 
+fn is_oct(b: u8) bool {
+    return b >= '0' and b <= '7';
+}
+
+fn is_bin(b: u8) bool {
+    return b == '0' or b == '1';
+}
+
 // ============================================================
 // Token 绫诲瀷
 // ============================================================
@@ -310,14 +318,6 @@ class Lexer {
         }
         if (is_float) { self.finish_number(start, "Float", buf); }
         else { self.finish_number(start, "Int", buf); }
-    }
-
-    fn is_oct(b: u8) bool {
-        return b >= '0' and b <= '7';
-    }
-
-    fn is_bin(b: u8) bool {
-        return b == '0' or b == '1';
     }
 
     fn is_suffix_cont(self: *mut Self, b: u8) bool {
@@ -928,7 +928,8 @@ class Parser {
             var cp = make_node("Comptime");
             return cp;
         }
-        // 鏈煡澹版槑 鈫?绌鸿妭鐐?
+        // 鏈煡澹版槑 鈫?绌鸿妭鐐?骞朵笖鎺ㄨ繘褰撳墠 token 闃叉鏃犻檺寰幆
+        self.advance();
         return make_node("UnknownDecl");
     }
 
@@ -1046,7 +1047,6 @@ class Parser {
                     r.props.append(ret_ty[@intCast(usize, k)]);
                     k += 1;
                 }
-                r.props.append(0);
                 node_add_child(&f, r);
             } else {
                 self.parse_type();
@@ -1064,7 +1064,6 @@ class Parser {
                 r.props.append(ret_ty[@intCast(usize, k)]);
                 k += 1;
             }
-            r.props.append(0);
             node_add_child(&f, r);
         }
         // where 子句
@@ -1115,7 +1114,6 @@ class Parser {
                     r.props.append(ret_ty[@intCast(usize, k)]);
                     k += 1;
                 }
-                r.props.append(0);
                 node_add_child(&f, r);
             } else {
                 self.parse_type();
@@ -1129,7 +1127,6 @@ class Parser {
                 r.props.append(ret_ty[@intCast(usize, k)]);
                 k += 1;
             }
-            r.props.append(0);
             node_add_child(&f, r);
         }
         self.expect("Semi");
