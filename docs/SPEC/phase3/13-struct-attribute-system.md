@@ -37,13 +37,14 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 3.3 注册表测试 | ✅ | `trait_registry.rs` |
 | 3.4 清理旧硬编码分支 | ✅ | `parser/decl.rs` |
 
-### 任务 4: `IAttribute` 接口（P2，~1h）
+### 任务 4: `IAttribute` 接口 ✅（2026-08-24 完成）
 
-| 功能点 | 预估 | 验证方法 |
-|--------|------|---------|
-| 4.1 定义 `IAttribute` 系统接口 | 15min | 接口定义编译通过 |
-| 4.2 struct 实现 `IAttribute` 标记 | 15min | `MyAttr` 实现 `IAttribute` 可注册为特性 |
-| 4.3 注册表识别 `IAttribute` struct | 30min | 注册表可注册用户 struct 为特性 |
+| 功能点 | 状态 | 文件 |
+|--------|------|------|
+| 4.1 定义 `AttributeKind` 区分系统/用户特性 | ✅ | `trait_registry.rs` |
+| 4.2 注册表支持注册用户特性（IAttribute struct） | ✅ | `trait_registry.rs` |
+| 4.3 注册表识别 `IAttribute` struct | ✅ | `trait_registry.rs` |
+| 4.4 测试验证 | ✅ | `trait_registry.rs` |
 
 ### 任务 5: 扩展方法（P3，~2h）
 

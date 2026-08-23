@@ -15,6 +15,15 @@ use crate::ast::Trait;
 use crate::diag::Diagnostic;
 use crate::parser::Parser;
 
+/// 特性属性标记：描述一个类型是否可作为特性使用（Q23/Q24）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeKind {
+    /// 系统内建特性（pad / module / align / test）
+    System,
+    /// 用户自定义特性（struct 实现 IAttribute 接口）
+    User,
+}
+
 /// 特性参数定义
 #[derive(Debug, Clone)]
 pub enum TraitParam {
@@ -37,6 +46,8 @@ pub struct TraitInfo {
     pub params: &'static [TraitParam],
     /// 简要说明
     pub description: &'static str,
+    /// 特性类型（系统/用户）
+    pub kind: AttributeKind,
 }
 
 /// 特性处理器：从解析器解析特性参数并构造 `Trait` 值
@@ -72,18 +83,21 @@ impl TraitRegistry {
             name: "pad",
             params: &[],
             description: "紧凑布局，字段间无填充，alignOf = 1",
+            kind: AttributeKind::System,
         });
         // [module]：命名空间隔离
         self.register(TraitInfo {
             name: "module",
             params: &[],
             description: "命名空间模块隔离，内容不参与同包共享命名空间",
+            kind: AttributeKind::System,
         });
         // [align(N)]：类型级对齐
         self.register(TraitInfo {
             name: "align",
             params: &[TraitParam::Positional { ty: "u32" }],
             description: "类型级对齐，尾部圆整到 N 字节（1/2/4/8）",
+            kind: AttributeKind::System,
         });
         // [test] / [test("name")] / [test(async)] / [test(thread)] / [test(timeout=N)]
         self.register(TraitInfo {
@@ -106,6 +120,7 @@ impl TraitRegistry {
                 },
             ],
             description: "测试函数标记，支持名称/模式(async/thread)/超时(timeout=N)",
+            kind: AttributeKind::System,
         });
     }
 
@@ -117,6 +132,24 @@ impl TraitRegistry {
     /// 注册一个特性处理器
     pub fn register_handler(&mut self, name: &'static str, handler: TraitHandlerFn) {
         self.handlers.insert(name, handler);
+    }
+
+    /// 注册一个用户特性（struct 实现 IAttribute）
+    /// 返回 true 表示注册成功，false 表示名称已存在
+    pub fn register_user_attribute(&mut self, name: &'static str) -> bool {
+        if self.traits.contains_key(name) {
+            return false;
+        }
+        self.traits.insert(
+            name,
+            TraitInfo {
+                name,
+                params: &[],
+                description: "用户自定义特性",
+                kind: AttributeKind::User,
+            },
+        );
+        true
     }
 
     /// 按名称查找特性
@@ -132,6 +165,20 @@ impl TraitRegistry {
     /// 检查特性名称是否已注册
     pub fn is_known(&self, name: &str) -> bool {
         self.traits.contains_key(name)
+    }
+
+    /// 检查特性是否为系统特性
+    pub fn is_system(&self, name: &str) -> bool {
+        self.traits
+            .get(name)
+            .map_or(false, |info| info.kind == AttributeKind::System)
+    }
+
+    /// 检查特性是否为用户特性（IAttribute struct）
+    pub fn is_user_attribute(&self, name: &str) -> bool {
+        self.traits
+            .get(name)
+            .map_or(false, |info| info.kind == AttributeKind::User)
     }
 
     /// 获取所有已注册的特性名称
@@ -182,6 +229,24 @@ mod tests {
         reg.register_handler("custom", test_handler);
         assert!(reg.lookup_handler("custom").is_some());
         assert!(reg.lookup_handler("unknown").is_none());
-        assert!(reg.lookup_handler("pad").is_none()); // pad 有 info 但无 handler
+        // pad 有 info 但无 handler（handler 由 Parser::new 注册）
+        assert!(reg.lookup_handler("pad").is_none());
+    }
+
+    #[test]
+    fn test_user_attribute_registration() {
+        let mut reg = TraitRegistry::new();
+        // 注册用户特性
+        assert!(reg.register_user_attribute("my_attr"));
+        assert!(reg.is_known("my_attr"));
+        assert!(reg.is_user_attribute("my_attr"));
+        assert!(!reg.is_system("my_attr"));
+        // 系统特性不能重复注册
+        assert!(!reg.register_user_attribute("pad"));
+        // 确认系统特性标记正确
+        assert!(reg.is_system("pad"));
+        assert!(reg.is_system("align"));
+        assert!(reg.is_system("test"));
+        assert!(reg.is_system("module"));
     }
 }
