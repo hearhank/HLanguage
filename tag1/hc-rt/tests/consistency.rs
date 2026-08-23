@@ -2618,12 +2618,58 @@ fn d1_thread_test_runner() {
 }
 
 #[test]
-/// D1-4：线程模式测试 + 超时——`[test(thread, timeout=1)]`
-fn d1_thread_test_with_timeout() {
+/// D2-2：String 操作一致性——concat / len / find / substring / replace / split
+fn d2_string_operations_consistent() {
     assert_all_pass(
         r#"
-[test(thread, timeout=1)] fn t() !void {
-    try expect_eq(2 + 2, 4);
+[test] fn t() !void {
+    var s = "hello, world";
+    try expect_eq(s.len, 12);
+    // concat
+    var c = s.concat("!");
+    try expect_eq(c.len, 13);
+    try expect_eq_slices(c, "hello, world!");
+    // find
+    var idx = s.find("world");
+    try expect_eq(idx.?, 7);
+    try expect(s.find("xyz") == null);
+    // substring
+    var sub = s.substring(0, 5);
+    try expect_eq_slices(sub, "hello");
+    var sub2 = s.substring(7, 12);
+    try expect_eq_slices(sub2, "world");
+    // replace
+    var r = s.replace("world", "rust");
+    try expect_eq_slices(r, "hello, rust");
+    // split
+    var parts = s.split(", ");
+    try expect_eq(parts.len, 2);
+    try expect_eq_slices(parts[0], "hello");
+    try expect_eq_slices(parts[1], "world");
+}
+"#,
+    );
+}
+
+#[test]
+/// D1-3：异步测试模式——`[test(async)]` 基本执行
+fn d1_async_test_runner() {
+    assert_all_pass(
+        r#"
+[test(async)] fn t() !void {
+    try expect_eq(1 + 1, 2);
+}
+"#,
+    );
+}
+
+#[test]
+/// D1-2：序列测试超时——`[test(timeout=1)]` 基本执行（超时阈值内完成）
+fn d1_serial_timeout_test() {
+    assert_all_pass(
+        r#"
+[test(timeout=1)] fn t() !void {
+    try expect_eq(3 + 3, 6);
 }
 "#,
     );
