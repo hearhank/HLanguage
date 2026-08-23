@@ -25,6 +25,7 @@ pub mod rle;
 pub mod rng;
 pub mod semantic;
 pub mod token;
+pub mod trait_registry;
 
 pub use ast::Program;
 pub use diag::{Diagnostic, Severity};

@@ -382,10 +382,12 @@ impl Parser {
                 }
             }
             _ => {
+                let reg = crate::trait_registry::TraitRegistry::new();
+                let known = reg.known_names().join(", ");
                 return Err(Diagnostic::error(
                     start,
-                    format!("unknown trait attribute `[{name}]`"),
-                ))
+                    format!("unknown trait attribute `[{name}]`; known traits: {known}"),
+                ));
             }
         };
         self.expect(&TokenKind::RBracket, "`]`")?;
