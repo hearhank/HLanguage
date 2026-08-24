@@ -268,8 +268,17 @@ pub(crate) fn alloc_zeroed_bytes(n: i128) -> Option<Vec<u8>> {
 
 /// 组 F：四模式共享容器类型名（Pipe/Tee/Funnel/Hub——内建泛型
 /// 共享容器，写者数量由类型名保证；协作式单线程下四变体运行时行为相同）
+///
+/// 已弃用：请使用 `chan<T>` 替代。
 pub(crate) fn is_four_mode_type(name: &str) -> bool {
-    matches!(name, "Pipe" | "Tee" | "Funnel" | "Hub")
+    let matched = matches!(name, "Pipe" | "Tee" | "Funnel" | "Hub");
+    if matched {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("warning: `{name}` is deprecated; use `chan<T>` instead");
+        }
+    }
+    matched
 }
 
 /// 渲染类型为源码串（E1 `types.fields` 元数据 + 诊断用）——对齐 06-02 类型语法

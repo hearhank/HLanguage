@@ -78,8 +78,17 @@ pub(crate) fn is_assert_builtin(name: &str) -> bool {
 }
 
 /// 组 F：四模式共享容器类型名（对齐 oracle interp.rs `is_four_mode_type`）
+///
+/// 已弃用：请使用 `chan<T>` 替代。
 pub(crate) fn is_four_mode_type_ir(name: &str) -> bool {
-    matches!(name, "Pipe" | "Tee" | "Funnel" | "Hub")
+    let matched = matches!(name, "Pipe" | "Tee" | "Funnel" | "Hub");
+    if matched {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("warning: `{name}` is deprecated; use `chan<T>` instead");
+        }
+    }
+    matched
 }
 
 /// 自由内建（非 `@` 前缀；测试内隐式可用，普通函数体按名路由到 `CallBuiltin`）。
