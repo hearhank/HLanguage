@@ -53,6 +53,29 @@ fn box_deref_read_write() {
 }
 
 #[test]
+fn box_auto_release_on_scope_exit() {
+    // Q14：Boxed 值离开作用域自动释放（在块内装箱，块外不可用）
+    run_ok(
+        "[test] fn t() !void {\n\
+         var outer = 0;\n\
+         {\n\
+             var p = box(42);\n\
+             outer = p.*;\n\
+         }\n\
+         try expect_eq(outer, 42);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn box_unbox_returns_inner_value() {
+    // unbox(box(v)) 返回内部值
+    run_ok(
+        "[test] fn t() !void {\n    var p = box(42);\n    var v = unbox(p);\n    try expect_eq(v, 42);\n}\n",
+    );
+}
+
+#[test]
 fn box_compare_with_plain_value() {
     // Boxed 与普通值比较：解引用后比较（对齐 Ptr 语义）
     run_ok("[test] fn t() !void {\n    var p = box(42);\n    try expect_eq(p, 42);\n}\n");
