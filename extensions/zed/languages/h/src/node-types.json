@@ -468,6 +468,10 @@
           "named": true
         },
         {
+          "type": "struct_declaration",
+          "named": true
+        },
+        {
           "type": "test_declaration",
           "named": true
         },
@@ -1499,6 +1503,57 @@
     }
   },
   {
+    "type": "struct_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "struct_declaration",
+    "named": true,
+    "fields": {
+      "attribute": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "attribute",
+            "named": true
+          }
+        ]
+      },
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "struct_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "switch_case",
     "named": true,
     "fields": {
@@ -2205,6 +2260,10 @@
   {
     "type": "string_content",
     "named": true
+  },
+  {
+    "type": "struct",
+    "named": false
   },
   {
     "type": "switch",
