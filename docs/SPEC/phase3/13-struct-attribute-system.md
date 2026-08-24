@@ -58,15 +58,29 @@ Phase 1-4 基础功能已全部实现（Phase 4 自举推迟）。
 | 4. `IAttribute` 接口基础设施 | ✅ | `AttributeKind` 区分系统/用户特性 |
 | 5. 扩展方法 | ✅ | `[Extension(Type)] fn method(...)` 语法 + 运行时方法分派 |
 | 6. Struct 化 test 特性 | ✅ | 支持 `[test{name="x", mode=async}]` 和 `[align{value=8}]` 语法 |
+| 7. Box 自动释放 + unbox | ✅ | `box(v)` 离开作用域自动释放；`unbox(box)` 取出值 |
+
+### 任务 7: Box 生命周期完整化 ✅（2026-08-24 完成）
+
+| 功能点 | 状态 | 文件 |
+|--------|------|------|
+| 7.1 `Frame.boxed` 跟踪集 | ✅ | `ir/mod.rs` |
+| 7.2 `Return`/`ReturnVoid` 自动释放 Boxed 值 | ✅ | `ir/runtime.rs` |
+| 7.3 `CallBuiltin` 中追踪 `box` 结果 | ✅ | `ir/runtime.rs` |
+| 7.4 `unbox` 内建函数（IR 运行时） | ✅ | `ir/builtin.rs` |
+| 7.5 `unbox` 内建函数（解释器运行时） | ✅ | `hc-rt/src/interp/call.rs` |
+| 7.6 `unbox` 加入 `is_free_builtin` | ✅ | `ir/ops.rs` |
+| 7.7 测试验证 | ✅ | `hc-rt/tests/box.rs` |
 
 ### 未实现（推迟到 1.x）
 
 - 第四阶段自举（Phase 4 Bootstrapping）
+- Continuous 特性残留清理（`hc-tools/hc-rt` 死代码）
 
 ## 执行顺序
 
 按序号顺序执行，每个功能点完成后必须：
 1. 编译验证（`cargo build`）
-2. 运行相关测试（`cargo test -p hc && cargo test -p hc-rt`）
+2. 运行相关测试（`cargo test --workspace`）
 3. 上传到 git
 4. 再继续下一个功能点
