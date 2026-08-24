@@ -3450,9 +3450,39 @@ pub(crate) fn call_builtin(
                     fields,
                 })))
             } else {
+                // E4：Tee/Funnel/Hub 使用 Mutex+Condvar 队列
+                let queue = Arc::new(Mutex::new(VecDeque::new()));
+                let condvar = Arc::new(Condvar::new());
+                let cid = ctx.next_channel_id;
+                ctx.next_channel_id += 1;
+                let state = match name {
+                    "Tee" => ChannelStateIr::Tee {
+                        queue: queue.clone(),
+                        condvar: condvar.clone(),
+                    },
+                    "Funnel" => ChannelStateIr::Funnel {
+                        queue: queue.clone(),
+                        condvar: condvar.clone(),
+                    },
+                    "Hub" => ChannelStateIr::Hub {
+                        queue: queue.clone(),
+                        condvar: condvar.clone(),
+                    },
+                    _ => unreachable!(),
+                };
+                ctx.channels.insert(cid, state);
+                let mut fields = HashMap::new();
+                fields.insert(
+                    "_chan_id".to_string(),
+                    ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
+                );
+                fields.insert(
+                    "closed".to_string(),
+                    ctx.alloc(Cell::Value(IrValue::Bool(false))),
+                );
                 Ok(IrValue::Class(ctx.alloc(Cell::Class {
                     name: name.into(),
-                    fields: HashMap::new(),
+                    fields,
                 })))
             }
         }

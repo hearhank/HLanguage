@@ -23,10 +23,10 @@ use crate::errorcodes::ErrorCodeTable;
 use crate::regex::{parse_regex, RegexMatcher};
 use crate::rng::xorshift64;
 use crate::token::Span;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 // ---------- 子模块 ----------
@@ -756,6 +756,21 @@ pub(crate) enum ChannelStateIr {
     Pipe {
         sender: std::sync::mpsc::Sender<IrValue>,
         receiver: std::sync::mpsc::Receiver<IrValue>,
+    },
+    /// 三通（1 写 N 读）：Mutex+Condvar 队列
+    Tee {
+        queue: Arc<Mutex<VecDeque<IrValue>>>,
+        condvar: Arc<Condvar>,
+    },
+    /// 漏斗（N 写 1 读）：Mutex+Condvar 队列
+    Funnel {
+        queue: Arc<Mutex<VecDeque<IrValue>>>,
+        condvar: Arc<Condvar>,
+    },
+    /// 集线器（N 写 N 读）：Mutex+Condvar 队列
+    Hub {
+        queue: Arc<Mutex<VecDeque<IrValue>>>,
+        condvar: Arc<Condvar>,
     },
 }
 

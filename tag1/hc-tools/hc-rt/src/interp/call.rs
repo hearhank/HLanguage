@@ -2211,6 +2211,29 @@ impl Interp {
                 },
             );
             f.insert("_chan_id".to_string(), Value::Int(cid as i128));
+        } else if name == "Tee" || name == "Funnel" || name == "Hub" {
+            // E4：Tee/Funnel/Hub 使用 Mutex+Condvar 队列
+            let queue = Arc::new(Mutex::new(VecDeque::new()));
+            let condvar = Arc::new(Condvar::new());
+            let cid = self.next_channel_id;
+            self.next_channel_id += 1;
+            let state = match name {
+                "Tee" => ChannelState::Tee {
+                    queue: queue.clone(),
+                    condvar: condvar.clone(),
+                },
+                "Funnel" => ChannelState::Funnel {
+                    queue: queue.clone(),
+                    condvar: condvar.clone(),
+                },
+                "Hub" => ChannelState::Hub {
+                    queue: queue.clone(),
+                    condvar: condvar.clone(),
+                },
+                _ => unreachable!(),
+            };
+            self.channels.insert(cid, state);
+            f.insert("_chan_id".to_string(), Value::Int(cid as i128));
         } else {
             // 其他模式保持 Vec 实现（后续升级）
             f.insert("queue".to_string(), Value::arr(vec![]));
@@ -2245,7 +2268,15 @@ impl Interp {
             };
             return self.call_one_to_one_method(cid, &name, m, args, span, closed, ccell);
         }
-        // 原有 Vec 实现（其他模式）
+        // E4：Tee/Funnel/Hub 使用 Mutex+Condvar 队列
+        if name == "Tee" || name == "Funnel" || name == "Hub" {
+            let cid = match ccell.borrow().fields.get("_chan_id") {
+                Some(Value::Int(id)) => *id,
+                _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+            };
+            return self.call_mutex_condvar_method(cid, &name, m, args, span, closed, ccell);
+        }
+        // 原有 Vec 实现（其他模式，如 Deque 等）
         let (queue, cap) = match &tv {
             Value::Class(c) => {
                 let d = c.borrow();
@@ -2375,6 +2406,7 @@ impl Interp {
                     ChannelState::Pipe { sender, .. } => {
                         let _ = sender.send(v);
                     }
+                    _ => unreachable!(),
                 }
                 Ok(Some(Value::Void))
             }
@@ -2391,6 +2423,7 @@ impl Interp {
                         Ok(v) => Ok(Some(v)),
                         Err(_) => Ok(Some(self.err_val("Closed"))),
                     },
+                    _ => unreachable!(),
                 }
             }
             "try_read" => {
@@ -2406,6 +2439,7 @@ impl Interp {
                         Ok(v) => Ok(Some(Value::Opt(Some(Rc::new(v))))),
                         Err(_) => Ok(Some(Value::Opt(None))),
                     },
+                    _ => unreachable!(),
                 }
             }
             "close" => {
@@ -2418,6 +2452,95 @@ impl Interp {
                     .borrow_mut()
                     .fields
                     .insert("closed".to_string(), Value::Bool(true));
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// E4：Mutex+Condvar 队列方法（Tee/Funnel/Hub 共享实现）
+    fn call_mutex_condvar_method(
+        &mut self,
+        cid: i128,
+        _name: &str,
+        m: &str,
+        args: &[Expr],
+        span: &Span,
+        closed: bool,
+        _ccell: Rc<RefCell<ClassData>>,
+    ) -> Result<Option<Value>> {
+        let cid_i64 = cid as i64;
+        match m {
+            "write" | "send" => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if closed {
+                    return Ok(Some(self.err_val("Closed")));
+                }
+                let v = self.eval(&args[0])?;
+                let state = self
+                    .channels
+                    .get(&cid_i64)
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let (queue, condvar) = match state {
+                    ChannelState::Tee { queue, condvar }
+                    | ChannelState::Funnel { queue, condvar }
+                    | ChannelState::Hub { queue, condvar } => (queue, condvar),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let mut q = queue.lock().unwrap();
+                q.push_back(v);
+                condvar.notify_all();
+                Ok(Some(Value::Void))
+            }
+            "read" | "recv" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let state = self
+                    .channels
+                    .get(&cid_i64)
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let (queue, condvar) = match state {
+                    ChannelState::Tee { queue, condvar }
+                    | ChannelState::Funnel { queue, condvar }
+                    | ChannelState::Hub { queue, condvar } => (queue, condvar),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let mut q = queue.lock().unwrap();
+                while q.is_empty() {
+                    q = condvar.wait(q).unwrap();
+                }
+                let v = q.pop_front().unwrap();
+                Ok(Some(v))
+            }
+            "try_read" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let state = self
+                    .channels
+                    .get(&cid_i64)
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let queue = match state {
+                    ChannelState::Tee { queue, .. }
+                    | ChannelState::Funnel { queue, .. }
+                    | ChannelState::Hub { queue, .. } => queue,
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let mut q = queue.lock().unwrap();
+                match q.pop_front() {
+                    Some(v) => Ok(Some(Value::Opt(Some(Rc::new(v))))),
+                    None => Ok(Some(Value::Opt(None))),
+                }
+            }
+            "close" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                // Remove the channel to signal close
+                self.channels.remove(&cid_i64);
                 Ok(Some(Value::Void))
             }
             _ => Ok(None),

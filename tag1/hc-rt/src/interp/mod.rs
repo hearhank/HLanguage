@@ -4,11 +4,11 @@
 //! 后端（M3.3）留后续里程碑；本模块保证双模式承诺的「脚本模式」先行可用。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, Write};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 
 use hc::ast::*;
@@ -39,6 +39,21 @@ pub(crate) enum ChannelState {
     Pipe {
         sender: mpsc::Sender<Value>,
         receiver: mpsc::Receiver<Value>,
+    },
+    /// 三通（1 写 N 读）：广播——每个消息复制到所有读者
+    Tee {
+        queue: Arc<Mutex<VecDeque<Value>>>,
+        condvar: Arc<Condvar>,
+    },
+    /// 漏斗（N 写 1 读）：Mutex+Condvar 队列
+    Funnel {
+        queue: Arc<Mutex<VecDeque<Value>>>,
+        condvar: Arc<Condvar>,
+    },
+    /// 集线器（N 写 N 读）：Mutex+Condvar 队列
+    Hub {
+        queue: Arc<Mutex<VecDeque<Value>>>,
+        condvar: Arc<Condvar>,
     },
 }
 

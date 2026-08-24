@@ -588,6 +588,28 @@ pub(crate) fn call_four_mode_method_ir(
         };
         return call_one_to_one_method_ir(ctx, module, cid, &class_name, m, args, closed, c);
     }
+    // E4：Tee/Funnel/Hub 使用 Mutex+Condvar 队列
+    if class_name == "Tee" || class_name == "Funnel" || class_name == "Hub" {
+        let (closed, cid) = {
+            let fields = match &ctx.cells[c] {
+                Cell::Class { fields, .. } => fields.clone(),
+                _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
+            };
+            let closed = matches!(
+                fields.get("closed"),
+                Some(fc) if matches!(ctx.cell_value(*fc), IrValue::Bool(true))
+            );
+            let cid = match fields.get("_chan_id") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(id) => *id,
+                    _ => return Err(IrError::msg("TypeError", "bad _chan_id")),
+                },
+                _ => return Err(IrError::msg("TypeError", "missing _chan_id")),
+            };
+            (closed, cid)
+        };
+        return call_mutex_condvar_method_ir(ctx, module, cid, &class_name, m, args, closed, c);
+    }
     // 原有 Vec 实现（其他模式）
     let (queue, closed, cap) = {
         let fields = match &ctx.cells[c] {
@@ -740,6 +762,7 @@ fn call_one_to_one_method_ir(
                 ChannelStateIr::Pipe { sender, .. } => {
                     let _ = sender.send(args[0].clone());
                 }
+                _ => unreachable!("call_one_to_one_method_ir: write on non-Pipe channel"),
             }
             Ok(Some(IrValue::Void))
         }
@@ -756,6 +779,7 @@ fn call_one_to_one_method_ir(
                     Ok(v) => Ok(Some(v)),
                     Err(_) => Ok(Some(err_val(module, "Closed"))),
                 },
+                _ => unreachable!("call_one_to_one_method_ir: read on non-Pipe channel"),
             }
         }
         "try_read" => {
@@ -771,6 +795,7 @@ fn call_one_to_one_method_ir(
                     Ok(v) => Ok(Some(opt_val(Some(v)))),
                     Err(_) => Ok(Some(opt_val(None))),
                 },
+                _ => unreachable!("call_one_to_one_method_ir: try_read on non-Pipe channel"),
             }
         }
         "close" => {
@@ -787,6 +812,93 @@ fn call_one_to_one_method_ir(
                 }
                 _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
             }
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// E4：Mutex+Condvar 队列方法（Tee/Funnel/Hub 共享实现，IR 版本）
+fn call_mutex_condvar_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    cid: i128,
+    _name: &str,
+    m: &str,
+    args: &[IrValue],
+    closed: bool,
+    _c: usize,
+) -> R<Option<IrValue>> {
+    let cid_i64 = cid as i64;
+    match m {
+        "write" | "send" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "write"));
+            }
+            if closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            let state = ctx
+                .channels
+                .get(&cid_i64)
+                .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
+            let (queue, condvar) = match state {
+                ChannelStateIr::Tee { queue, condvar }
+                | ChannelStateIr::Funnel { queue, condvar }
+                | ChannelStateIr::Hub { queue, condvar } => (queue, condvar),
+                _ => return Err(IrError::msg("TypeError", "bad channel state")),
+            };
+            let mut q = queue.lock().unwrap();
+            q.push_back(args[0].clone());
+            condvar.notify_all();
+            Ok(Some(IrValue::Void))
+        }
+        "read" | "recv" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "read"));
+            }
+            let state = ctx
+                .channels
+                .get(&cid_i64)
+                .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
+            let (queue, condvar) = match state {
+                ChannelStateIr::Tee { queue, condvar }
+                | ChannelStateIr::Funnel { queue, condvar }
+                | ChannelStateIr::Hub { queue, condvar } => (queue, condvar),
+                _ => return Err(IrError::msg("TypeError", "bad channel state")),
+            };
+            let mut q = queue.lock().unwrap();
+            while q.is_empty() {
+                q = condvar.wait(q).unwrap();
+            }
+            let v = q.pop_front().unwrap();
+            Ok(Some(v))
+        }
+        "try_read" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "try_read"));
+            }
+            let state = ctx
+                .channels
+                .get(&cid_i64)
+                .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
+            let (queue, _condvar) = match state {
+                ChannelStateIr::Tee { queue, .. }
+                | ChannelStateIr::Funnel { queue, .. }
+                | ChannelStateIr::Hub { queue, .. } => (queue, &Arc::new(Condvar::new())),
+                _ => return Err(IrError::msg("TypeError", "bad channel state")),
+            };
+            let mut q = queue.lock().unwrap();
+            match q.pop_front() {
+                Some(v) => Ok(Some(opt_val(Some(v)))),
+                None => Ok(Some(opt_val(None))),
+            }
+        }
+        "close" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "close"));
+            }
+            ctx.channels.remove(&cid_i64);
             Ok(Some(IrValue::Void))
         }
         _ => Ok(None),
