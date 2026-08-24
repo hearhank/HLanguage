@@ -1802,6 +1802,15 @@ impl Interp {
                 }
                 Ok(Some(Value::arr(items)))
             }
+            // E4：Mutex 方法 lock/try_lock
+            (Value::Mutex(m), "lock") => match m.lock() {
+                Ok(v) => Ok(Some(v.clone())),
+                Err(_) => Err(RtError::new("MutexPoisoned", Some(span.clone()))),
+            },
+            (Value::Mutex(m), "try_lock") => match m.try_lock() {
+                Ok(v) => Ok(Some(Value::Opt(Some(Rc::new(v.clone()))))),
+                Err(_) => Ok(Some(Value::Opt(None))),
+            },
             _ => Ok(None),
         }
     }

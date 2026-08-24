@@ -300,6 +300,7 @@ pub(crate) fn ir_type_name(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::Closure { .. } => "closure".into(),
         IrValue::End => "end".into(),
         IrValue::Iter(_) => "<iter>".into(),
+        IrValue::Mutex(_) => "Mutex".into(),
         IrValue::Void => "void".into(),
     }
 }

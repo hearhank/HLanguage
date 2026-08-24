@@ -487,7 +487,7 @@ pub struct EnumInfo {
     pub variants: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum IrValue {
     Int(i128),
     Float(f64),
@@ -520,6 +520,8 @@ pub enum IrValue {
     Class(usize),
     /// Arena 分配器句柄（G1：真实 bump + 块链表；指向 `Cell::Arena`）
     Arena(usize),
+    /// 互斥锁（E4：真 OS 并行——Mutex.init(v) 构造，.lock()/.try_lock() 访问）
+    Mutex(Arc<std::sync::Mutex<IrValue>>),
     /// 枚举值（`Type.variant` 常量 或 `Type{variant = payload}`）
     Enum {
         name: String,
@@ -541,6 +543,70 @@ pub enum IrValue {
         is_mut: bool,
     },
     Void,
+}
+
+impl PartialEq for IrValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (IrValue::Int(a), IrValue::Int(b)) => a == b,
+            (IrValue::Float(a), IrValue::Float(b)) => a == b,
+            (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
+            (IrValue::Str(a), IrValue::Str(b)) => a == b,
+            (IrValue::Opt(a), IrValue::Opt(b)) => a == b,
+            (IrValue::Err { name: an, code: ac }, IrValue::Err { name: bn, code: bc }) => {
+                an == bn && ac == bc
+            }
+            (IrValue::Ptr(a), IrValue::Ptr(b)) => a == b,
+            (IrValue::Boxed(a), IrValue::Boxed(b)) => a == b,
+            (IrValue::Arr(a), IrValue::Arr(b)) => a == b,
+            (IrValue::Vec(a), IrValue::Vec(b)) => a == b,
+            (IrValue::Map(a), IrValue::Map(b)) => a == b,
+            (
+                IrValue::Slice {
+                    data: da,
+                    start: sa,
+                    len: la,
+                },
+                IrValue::Slice {
+                    data: db,
+                    start: sb,
+                    len: lb,
+                },
+            ) => da == db && sa == sb && la == lb,
+            (IrValue::Class(a), IrValue::Class(b)) => a == b,
+            (IrValue::Arena(a), IrValue::Arena(b)) => a == b,
+            (IrValue::Mutex(a), IrValue::Mutex(b)) => Arc::ptr_eq(a, b),
+            (
+                IrValue::Enum {
+                    name: an,
+                    variant: av,
+                    payload: ap,
+                },
+                IrValue::Enum {
+                    name: bn,
+                    variant: bv,
+                    payload: bp,
+                },
+            ) => an == bn && av == bv && ap == bp,
+            (IrValue::End, IrValue::End) => true,
+            (IrValue::Iter(a), IrValue::Iter(b)) => a == b,
+            (IrValue::Fn(a), IrValue::Fn(b)) => a == b,
+            (
+                IrValue::Closure {
+                    func: af,
+                    captures: ac,
+                    is_mut: am,
+                },
+                IrValue::Closure {
+                    func: bf,
+                    captures: bc,
+                    is_mut: bm,
+                },
+            ) => af == bf && ac == bc && am == bm,
+            (IrValue::Void, IrValue::Void) => true,
+            _ => false,
+        }
+    }
 }
 
 // ---------- 堆/单元模型（Phase 1：别名与 tree-walking `Rc<RefCell<Value>>` 对齐） ----------
@@ -885,6 +951,7 @@ fn type_descr(v: &IrValue) -> String {
         IrValue::Iter(_) => "<iter>".into(),
         IrValue::Fn(_) => "fn".into(),
         IrValue::Closure { .. } => "closure".into(),
+        IrValue::Mutex(_) => "Mutex".into(),
         IrValue::Void => "void".into(),
     }
 }
@@ -1471,6 +1538,10 @@ impl IrValue {
             IrValue::Iter(_) => "<iter>".into(),
             IrValue::Fn(name) => name.clone(),
             IrValue::Closure { .. } => "<closure>".into(),
+            IrValue::Mutex(m) => match m.lock() {
+                Ok(v) => format!("Mutex({})", v.display(ctx)),
+                Err(_) => "Mutex(<poisoned>)".to_string(),
+            },
             IrValue::Void => "void".into(),
         }
     }
@@ -1620,6 +1691,10 @@ impl IrValue {
             (IrValue::Closure { .. }, _) | (_, IrValue::Closure { .. }) => false,
             (IrValue::End, IrValue::End) => true,
             (IrValue::Void, IrValue::Void) => true,
+            (IrValue::Mutex(a), IrValue::Mutex(b)) => match (a.lock(), b.lock()) {
+                (Ok(av), Ok(bv)) => av.value_eq(ctx, &bv),
+                _ => false,
+            },
             _ => false,
         }
     }

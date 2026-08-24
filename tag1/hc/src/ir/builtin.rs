@@ -3010,6 +3010,15 @@ pub(crate) fn call_builtin_method(
             }
             Ok(Some(make_arr(ctx, out)))
         }
+        // E4：Mutex 方法 lock/try_lock
+        (IrValue::Mutex(m), "lock") => match m.lock() {
+            Ok(v) => Ok(Some(v.clone())),
+            Err(_) => Err(IrError::msg("MutexPoisoned", "Mutex is poisoned")),
+        },
+        (IrValue::Mutex(m), "try_lock") => match m.try_lock() {
+            Ok(v) => Ok(Some(IrValue::Opt(Some(Box::new(v.clone()))))),
+            Err(_) => Ok(Some(IrValue::Opt(None))),
+        },
         _ => Ok(None),
     }
 }
@@ -3033,6 +3042,14 @@ pub(crate) fn call_dotted_implicit(
         // 特判——返回新建 arena，而非 Void）
         "Arena.init" => {
             return Ok(IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new()))));
+        }
+        // E4：Mutex.init(v) 内建：互斥锁（Arc<std::sync::Mutex>）
+        "Mutex.init" => {
+            if args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "Mutex.init expects 1 arg"));
+            }
+            let v = deref_value(ctx, &args[0]).clone();
+            return Ok(IrValue::Mutex(Arc::new(std::sync::Mutex::new(v))));
         }
         // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
         "Table.init" => {

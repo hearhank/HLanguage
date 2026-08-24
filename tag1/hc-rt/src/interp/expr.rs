@@ -1199,6 +1199,15 @@ impl Interp {
                             )))),
                         ))));
                     }
+                    // E4：Mutex.init(v) 内建：互斥锁（Arc<std::sync::Mutex>）
+                    if bname == "Mutex" && field == "init" {
+                        if args.is_empty() {
+                            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                        }
+                        let v = self.eval(&args[0])?;
+                        let v = self.deref_value(v);
+                        return Ok(Value::Mutex(Arc::new(std::sync::Mutex::new(v))));
+                    }
                     // 组 E E3：Io.threaded(alloc) / Io.evented(alloc) 运行时构造
                     // （协作式单线程；evented = 单线程事件循环风味，携带 runtime 字段）
                     if bname == "Io" && (field == "threaded" || field == "evented") {
@@ -1757,7 +1766,15 @@ impl Interp {
         }
         if matches!(
             name,
-            "Vec" | "Map" | "Deque" | "Table" | "Allocator" | "Arena" | "Pool" | "ExitType"
+            "Vec"
+                | "Map"
+                | "Deque"
+                | "Table"
+                | "Allocator"
+                | "Arena"
+                | "Pool"
+                | "ExitType"
+                | "Mutex"
         ) {
             return true;
         }

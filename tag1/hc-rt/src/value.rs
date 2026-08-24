@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
+use std::sync::{Arc, Mutex as StdMutex};
 
 /// 运行时值
 #[derive(Debug, Clone)]
@@ -70,6 +71,8 @@ pub enum Value {
     /// 包装一个可迭代源 + 位置 + 可选的 filter/map 变换。
     /// `next()` 按需求值，链式延迟计算。
     LazyIter(Rc<RefCell<LazyIterData>>),
+    /// 互斥锁（E4：真 OS 并行——Mutex.init(v) 构造，.lock()/.try_lock() 访问）
+    Mutex(Arc<StdMutex<Value>>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -682,6 +685,10 @@ impl Value {
                     d.ops.len(),
                 )
             }
+            Value::Mutex(m) => match m.lock() {
+                Ok(v) => format!("Mutex({})", v.display()),
+                Err(_) => "Mutex(<poisoned>)".to_string(),
+            },
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -809,6 +816,10 @@ impl Value {
                     .all(|(k, v)| b.fields.get(k).map_or(false, |w| v.value_eq(w)))
             }
             (Value::Void, Value::Void) => true,
+            (Value::Mutex(a), Value::Mutex(b)) => match (a.lock(), b.lock()) {
+                (Ok(av), Ok(bv)) => av.value_eq(&bv),
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -870,6 +881,7 @@ impl Value {
             Value::Allocator(_) => "allocator".into(),
             Value::Bytes(_) => "Bytes".into(),
             Value::LazyIter(_) => "LazyIter".into(),
+            Value::Mutex(_) => "Mutex".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }
