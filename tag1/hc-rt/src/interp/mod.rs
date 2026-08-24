@@ -731,3 +731,117 @@ pub fn count_fns(program: &Program) -> usize {
     }
     count(&program.decls)
 }
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_submit_and_complete() {
+        // 提交协程任务并验证完成
+        let sched = GoroutineScheduler::new();
+        let done = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+        let gid = sched.submit(
+            "test".to_string(),
+            Box::new(move || {
+                done_clone.store(true, Ordering::SeqCst);
+            }),
+        );
+        assert_eq!(sched.get_state(gid), Some(GState::Runnable));
+        // 启动调度器处理任务
+        {
+            let mut s = sched.inner.lock().unwrap();
+            // 手动执行（worker 线程未启动，直接取任务执行）
+            if let Some(gid) = s.global_queue.pop_front() {
+                if let Some(g) = s.goroutines.get_mut(&gid) {
+                    g.state = GState::Running;
+                    if let Some(task) = g.task.take() {
+                        task();
+                    }
+                    g.state = GState::Done;
+                }
+            }
+        }
+        assert!(done.load(Ordering::SeqCst));
+        assert_eq!(sched.get_state(gid), Some(GState::Done));
+    }
+
+    #[test]
+    fn scheduler_state_transitions() {
+        // 协程状态机：新建 → 就绪 → 运行 → 完成
+        let sched = GoroutineScheduler::new();
+        let gid = sched.submit("test".to_string(), Box::new(|| {}));
+        assert_eq!(sched.get_state(gid), Some(GState::Runnable));
+        // 手动执行
+        {
+            let mut s = sched.inner.lock().unwrap();
+            if let Some(gid) = s.global_queue.pop_front() {
+                if let Some(g) = s.goroutines.get_mut(&gid) {
+                    g.state = GState::Running;
+                    if let Some(task) = g.task.take() {
+                        task();
+                    }
+                    g.state = GState::Done;
+                }
+            }
+        }
+        assert_eq!(sched.get_state(gid), Some(GState::Done));
+    }
+
+    #[test]
+    fn scheduler_multiple_goroutines() {
+        // 多个协程提交和执行
+        let sched = GoroutineScheduler::new();
+        let mut results = Vec::new();
+        for i in 0..5 {
+            let result = Arc::new(AtomicBool::new(false));
+            let r = result.clone();
+            let gid = sched.submit(
+                format!("g{i}"),
+                Box::new(move || {
+                    r.store(true, Ordering::SeqCst);
+                }),
+            );
+            results.push((gid, result));
+        }
+        // 手动执行所有任务
+        loop {
+            let gid = {
+                let mut s = sched.inner.lock().unwrap();
+                s.global_queue.pop_front()
+            };
+            match gid {
+                Some(gid) => {
+                    let task = {
+                        let mut s = sched.inner.lock().unwrap();
+                        if let Some(g) = s.goroutines.get_mut(&gid) {
+                            g.state = GState::Running;
+                            g.task.take()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(task) = task {
+                        task();
+                        let mut s = sched.inner.lock().unwrap();
+                        if let Some(g) = s.goroutines.get_mut(&gid) {
+                            g.state = GState::Done;
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+        for (_, result) in &results {
+            assert!(result.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn scheduler_get_state_unknown() {
+        // 不存在的协程返回 None
+        let sched = GoroutineScheduler::new();
+        assert_eq!(sched.get_state(999), None);
+    }
+}
