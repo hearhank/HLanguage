@@ -180,12 +180,10 @@ impl Interp {
         }
     }
 
-    /// 类型是否为 [continuous] 连续内存
+    /// 类型是否为连续内存（struct 始终连续，class 视情况）
     pub(crate) fn type_is_continuous(&self, tn: &str) -> bool {
         match self.types.get(tn) {
-            Some(TypeDef::Class { traits, .. }) => {
-                traits.iter().any(|tr| matches!(tr, Trait::Continuous))
-            }
+            Some(TypeDef::Class { is_struct, .. }) => *is_struct,
             _ => false,
         }
     }

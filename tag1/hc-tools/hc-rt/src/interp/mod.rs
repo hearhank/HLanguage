@@ -246,6 +246,8 @@ enum TypeDef {
         traits: Vec<Trait>,
         fields: Vec<FieldDecl>,
         methods: Vec<Method>,
+        /// struct（连续内存值类型）= true；class（可能非连续）= false
+        is_struct: bool,
     },
     Enum {
         variants: Vec<EnumVariant>,
