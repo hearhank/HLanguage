@@ -697,8 +697,7 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // E2.2 线程生命周期（组 G，协作式延迟执行）：spawn(f, args...) owned Thread(T)
-            // 立即返回句柄但不并发运行——join/detach/程序结束时才执行到完成（真并行留第三块 E2）。
+            // E4 true-OMP：spawn(f, args...) 立即启动 OS 线程执行 f，返回 Thread 句柄
             "spawn" => {
                 if args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -717,14 +716,82 @@ impl Interp {
                 let alloc_v = Value::Allocator(Rc::new(RefCell::new(AllocatorImpl::Arena(
                     Rc::new(RefCell::new(ArenaState::new())),
                 ))));
+
+                // E4：创建 OS 线程共享状态
+                let result = Arc::new(Mutex::new(None::<ThreadResult>));
+                let cancel = Arc::new(AtomicBool::new(false));
+                let done = Arc::new(AtomicBool::new(false));
+
+                let source = self.source.clone();
+                let tid = self.next_tid;
+                self.next_tid += 1;
+
+                let result_tx = result.clone();
+                let cancel_tx = cancel.clone();
+                let done_tx = done.clone();
+
+                let callee_clone = callee.clone();
+                let arg_vals_clone = arg_vals.clone();
+
+                // 启动 OS 线程立即执行
+                let join_handle = thread::spawn(move || {
+                    let mut interp = Interp::new(&source);
+                    let program =
+                        hc::parse_source(&source).unwrap_or_else(|_| panic!("spawn: parse failed"));
+                    interp
+                        .load(&program)
+                        .unwrap_or_else(|e| panic!("spawn: load failed: {} {}", e.name, e.message));
+
+                    // 检查取消标志
+                    if cancel_tx.load(Ordering::SeqCst) {
+                        let err_v = interp.err_val("Cancelled");
+                        let mut r = result_tx.lock().unwrap();
+                        *r = Some(ThreadResult::Ok(err_v));
+                        done_tx.store(true, Ordering::SeqCst);
+                        return;
+                    }
+
+                    // 绑定每线程 alloc
+                    interp.push_scope();
+                    interp.bind("alloc", alloc_v);
+
+                    let r = match callee_clone {
+                        Value::Fn(ref fname) => match interp.pick_fn(fname, &arg_vals_clone) {
+                            Ok(fdef) => {
+                                interp.call_fn(&fdef, &arg_vals_clone, &Span::new(0, 0, 0, 0))
+                            }
+                            Err(e) => Err(e),
+                        },
+                        Value::Closure(ref cl) => {
+                            interp.call_closure(cl, &arg_vals_clone, &Span::new(0, 0, 0, 0))
+                        }
+                        _ => Err(RtError::new("NotCallable", None)),
+                    };
+                    let _ = interp.pop_scope(true);
+
+                    let mut rv = result_tx.lock().unwrap();
+                    *rv = Some(match r {
+                        Ok(v) => ThreadResult::Ok(v),
+                        Err(e) => ThreadResult::Err(e),
+                    });
+                    done_tx.store(true, Ordering::SeqCst);
+                });
+
+                self.thread_handles.insert(
+                    tid,
+                    ThreadState {
+                        join_handle: Some(join_handle),
+                        result,
+                        cancel,
+                        done,
+                    },
+                );
+
                 let mut f = HashMap::new();
-                f.insert("fn".to_string(), callee);
-                f.insert("args".to_string(), Value::arr(arg_vals));
-                f.insert("alloc".to_string(), alloc_v);
-                f.insert("cancel".to_string(), Value::Bool(false));
+                f.insert("_tid".to_string(), Value::Int(tid as i128));
                 f.insert("done".to_string(), Value::Bool(false));
+                f.insert("cancel".to_string(), Value::Bool(false));
                 f.insert("detached".to_string(), Value::Bool(false));
-                f.insert("result".to_string(), Value::Void);
                 Ok(Some(Value::class("Thread", f)))
             }
             // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
@@ -1907,10 +1974,10 @@ impl Interp {
         }
     }
 
-    // ---------- E2.2 线程生命周期（协作式延迟执行） ----------
+    // ---------- E4 true-OMP：线程生命周期（OS 线程） ----------
 
-    /// Thread 类方法分派：`join() !T`（运行到完成返回结果）/ `cancel() !void`（协作标志）/
-    /// `is_done() bool` / `detach()`（运行并弃结果）。
+    /// Thread 类方法分派：`join() !T`（等待 OS 线程结束返回结果）/ `cancel() !void`（设置取消标志）/
+    /// `is_done() bool` / `detach()`（标记分离，线程继续运行，程序结束时不等待）。
     pub(crate) fn call_thread_method(
         &mut self,
         self_v: &Value,
@@ -1921,21 +1988,31 @@ impl Interp {
         if !args.is_empty() {
             return Err(RtError::new("ArityMismatch", Some(span.clone())));
         }
+        let tid = self.get_thread_tid(self_v);
         match m {
-            "join" => Ok(Some(self.thread_run(self_v, span)?)),
+            "join" => {
+                let result = self.thread_join(tid, span)?;
+                self.thread_set_bool(self_v, "done", true);
+                Ok(Some(result))
+            }
             "detach" => {
-                // 运行到完成并丢弃结果（副作用发生；置 detached 标记——
-                // 已运行完成，作用域退出根提升扫描跳过）
-                let _ = self.thread_run(self_v, span)?;
+                // OS 线程已运行，仅标记分离（程序结束时不等待）
                 self.thread_set_bool(self_v, "detached", true);
                 Ok(Some(Value::Void))
             }
             "is_done" => {
+                // 先查 thread_handles（运行中线程的实时状态）
+                if let Some(th) = self.thread_handles.get(&tid) {
+                    return Ok(Some(Value::Bool(th.done.load(Ordering::SeqCst))));
+                }
+                // 已从 thread_handles 移除（joined），查 Thread 类字段
                 let done = self.thread_field_bool(self_v, "done");
                 Ok(Some(Value::Bool(done)))
             }
             "cancel" => {
-                // 协作式：置标志；运行点（join/detach）检查后跳过执行 → error.Cancelled
+                if let Some(th) = self.thread_handles.get(&tid) {
+                    th.cancel.store(true, Ordering::SeqCst);
+                }
                 self.thread_set_bool(self_v, "cancel", true);
                 Ok(Some(Value::Void))
             }
@@ -1943,62 +2020,50 @@ impl Interp {
         }
     }
 
-    /// 运行线程到完成（协作式延迟执行）：
-    /// - 已运行（done）→ 返回缓存 result；
-    /// - 已取消（cancel 且未运行）→ 置 done、缓存 `error.Cancelled`、返回 Cancelled；
-    /// - 否则在子任务作用域（alloc 绑定线程独立实例 Q8）中调用 fn，缓存 result 并置 done。
-    /// 硬错误（StackOverflow/ExitRequested 等）不缓存、直接传播。
-    pub(crate) fn thread_run(&mut self, thread: &Value, span: &Span) -> Result<Value> {
+    /// 提取 Thread 类中的 `_tid` 字段
+    pub(crate) fn get_thread_tid(&self, thread: &Value) -> i64 {
         let tv = self.deref_value(thread.clone());
-        let (callee, args, alloc_v, cancelled, done) = match tv {
-            Value::Class(c) => {
-                let d = c.borrow();
-                let callee = d.fields.get("fn").cloned().unwrap_or(Value::Void);
-                let args = match d.fields.get("args") {
-                    Some(Value::Arr(a)) => a
-                        .borrow()
-                        .iter()
-                        .map(|c| c.borrow().clone())
-                        .collect::<Vec<_>>(),
-                    _ => vec![],
-                };
-                let alloc_v = d.fields.get("alloc").cloned().unwrap_or(Value::Alloc);
-                let cancelled = matches!(d.fields.get("cancel"), Some(Value::Bool(true)));
-                let done = matches!(d.fields.get("done"), Some(Value::Bool(true)));
-                (callee, args, alloc_v, cancelled, done)
+        if let Value::Class(c) = tv {
+            let d = c.borrow();
+            if let Some(Value::Int(tid)) = d.fields.get("_tid") {
+                return *tid as i64;
             }
-            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
-        };
-        if done {
-            return self.thread_result(thread, span);
         }
-        if cancelled {
-            let err_v = self.err_val("Cancelled");
-            self.thread_set_bool(thread, "done", true);
-            self.thread_set_value(thread, "result", err_v);
-            return self.thread_result(thread, span);
+        0
+    }
+
+    /// 等待 OS 线程结束并返回结果
+    fn thread_join(&mut self, tid: i64, span: &Span) -> Result<Value> {
+        let mut handle = self
+            .thread_handles
+            .remove(&tid)
+            .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+
+        // 等待线程结束
+        if let Some(jh) = handle.join_handle.take() {
+            jh.join()
+                .map_err(|_| RtError::msg("ThreadPanic", format!("thread {tid} panicked")))?;
         }
-        // Q8：子任务作用域绑定每线程 alloc 实例
-        self.push_scope();
-        self.bind("alloc", alloc_v);
-        let r = (|| -> Result<Value> {
-            match callee {
-                Value::Fn(fname) => {
-                    let fdef = self.pick_fn(&fname, &args)?;
-                    self.call_fn(&fdef, &args, span)
-                }
-                Value::Closure(cl) => self.call_closure(&cl, &args, span),
-                _ => Err(RtError::new("NotCallable", Some(span.clone()))),
+
+        // 获取结果
+        let mut r = handle.result.lock().unwrap();
+        match r.take() {
+            Some(ThreadResult::Ok(v)) => Ok(v),
+            Some(ThreadResult::Err(e)) => Err(e),
+            None => Err(RtError::msg(
+                "ThreadNoResult",
+                format!("thread {tid} produced no result"),
+            )),
+        }
+    }
+
+    /// 非失败版 thread_join（用于 drain_root_threads，丢弃错误）
+    pub(crate) fn thread_join_impl(&mut self, tid: i64) {
+        if let Some(mut handle) = self.thread_handles.remove(&tid) {
+            if let Some(jh) = handle.join_handle.take() {
+                let _ = jh.join();
             }
-        })();
-        let _ = self.pop_scope(Self::is_err_path(&r.clone().map(Flow::Value)));
-        let result = match r {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
-        self.thread_set_bool(thread, "done", true);
-        self.thread_set_value(thread, "result", result.clone());
-        Ok(result)
+        }
     }
 
     /// 读取线程缓存结果（done 或已取消时有效）

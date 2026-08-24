@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 use hc::ast::*;
 use hc::comptime::{self, Instantiated};
@@ -17,6 +19,20 @@ use crate::value::{
     AllocBlock, AllocErr, AllocatorImpl, ArenaAllocErr, ArenaState, BoxedData, ClassData,
     ClosureData, LazyIterData, LazyOp, LeakRecord, MapData, PoolState, Value, VecData,
 };
+
+/// 线程运行结果（跨线程传递）
+enum ThreadResult {
+    Ok(Value),
+    Err(RtError),
+}
+
+/// OS 线程控制块
+struct ThreadState {
+    join_handle: Option<thread::JoinHandle<()>>,
+    result: Arc<Mutex<Option<ThreadResult>>>,
+    cancel: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
 
 // ---------- 子模块 ----------
 mod call;
@@ -377,6 +393,10 @@ pub struct Interp {
     comptime_value_depth: usize,
     /// D1-4：装载的程序快照，供线程模式测试 fork 新 Interp
     program: Option<Arc<Program>>,
+    /// E4 true-OMP：OS 线程注册表（线程 ID → 控制块）
+    thread_handles: HashMap<i64, ThreadState>,
+    /// E4：下一线程 ID（自增分配）
+    next_tid: i64,
 }
 
 impl Flow {

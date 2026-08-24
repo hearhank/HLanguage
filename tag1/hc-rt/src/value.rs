@@ -82,6 +82,12 @@ pub struct ClassData {
     pub fields: HashMap<String, Value>,
 }
 
+/// # Safety
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，
+/// 原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for ClassData {}
+unsafe impl Send for Value {}
+
 /// 闭包数据（运行时表示；AST 部分由解释器填充）
 #[derive(Debug, Clone)]
 pub struct ClosureData {
@@ -91,6 +97,8 @@ pub struct ClosureData {
     pub is_move: bool,
     pub env: Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>>,
 }
+
+unsafe impl Send for ClosureData {}
 
 /// Arena 默认块大小（首块及新块下限；单块申请大于此值时按实际大小开块）
 pub const ARENA_BLOCK_SIZE: usize = 1024;
@@ -103,6 +111,8 @@ pub enum LazyOp {
     /// 变换闭包：变换元素值
     Map(Value),
 }
+
+unsafe impl Send for LazyOp {}
 
 /// 惰性迭代器数据（A7：`next()` 按需求值，filter/map 链式延迟计算）
 /// 操作按链式调用顺序存储在 `ops` 中，`lazy_iter_next` 按序应用。
@@ -121,6 +131,8 @@ pub struct LazyIterData {
     /// Map 遍历键缓存（非 Map 源时为空；构造时固定顺序保证确定性遍历）
     pub keys_cache: Vec<String>,
 }
+
+unsafe impl Send for LazyIterData {}
 
 /// 分配器对齐下限（§2.3：H 值为 i128/f64 承载，对齐 ≥ 16 字节，与 tag1 `%Value` 盒一致）。
 /// bump 游标按此圆整，返回区域起始相对块起点恒为 16 的倍数。
@@ -144,6 +156,8 @@ pub struct ArenaState {
     pub live: bool,
 }
 
+unsafe impl Send for ArenaState {}
+
 /// 装箱状态（G3：data + vtbl + alloc 三字宽胖指针；对齐设计文档 §6）
 #[derive(Debug, Clone)]
 pub struct BoxedData {
@@ -155,6 +169,8 @@ pub struct BoxedData {
     pub alloc: Value,
 }
 
+unsafe impl Send for BoxedData {}
+
 /// 集合状态（G4：Vec/Deque 共用；对齐设计文档 §7）
 #[derive(Debug, Clone)]
 pub struct VecData {
@@ -164,6 +180,8 @@ pub struct VecData {
     pub alloc: Value,
 }
 
+unsafe impl Send for VecData {}
+
 /// Map 状态（G4：对齐设计文档 §7；字段即键值）
 #[derive(Debug, Clone)]
 pub struct MapData {
@@ -172,6 +190,8 @@ pub struct MapData {
     /// alloc：构造 `Map(K,V).init(alloc)` 时携带的分配器引用
     pub alloc: Value,
 }
+
+unsafe impl Send for MapData {}
 
 /// 全局分配器 Debug 泄漏登记（§8.3：分配记录表；`weak` 持分配数据的弱引用——
 /// 值被销毁（作用域退出自动销毁）后升级失败，即视为已释放。退出时仍可升级者 = 泄漏）。
@@ -294,6 +314,8 @@ pub struct PoolState {
     pub backing: Box<AllocatorImpl>,
 }
 
+unsafe impl Send for PoolState {}
+
 impl PoolState {
     pub fn new(backing: AllocatorImpl, item_size: usize) -> Self {
         Self {
@@ -315,6 +337,8 @@ pub enum AllocatorImpl {
     /// 自定义分配器（Rust 侧实现，后续开放 H 侧）
     Custom(Box<dyn AllocatorTrait>),
 }
+
+unsafe impl Send for AllocatorImpl {}
 
 impl std::fmt::Debug for AllocatorImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

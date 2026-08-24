@@ -48,6 +48,8 @@ impl Interp {
             instantiating: Vec::new(),
             comptime_value_depth: 0,
             program: None,
+            thread_handles: HashMap::new(),
+            next_tid: 1,
         }
     }
 
@@ -933,12 +935,18 @@ impl Interp {
         }
     }
 
-    /// E2.2：程序结束（main 返回 / 全部测试完成）时运行根回收队列中的线程到完成。
+    /// E4 true-OMP：程序结束（main 返回 / 全部测试完成）时等待所有 OS 线程结束。
     /// 错误丢弃（副作用已发生；无隐式阻塞、不改变测试通过判定）。
     pub(crate) fn drain_root_threads(&mut self) {
         let pending = std::mem::take(&mut self.root_threads);
         for t in pending {
-            let _ = self.thread_run(&t, &Span::new(0, 0, 0, 0));
+            let tid = self.get_thread_tid(&t);
+            self.thread_join_impl(tid);
+        }
+        // 清理仍在 thread_handles 中的线程
+        let tids: Vec<i64> = self.thread_handles.keys().copied().collect();
+        for tid in tids {
+            self.thread_join_impl(tid);
         }
     }
 

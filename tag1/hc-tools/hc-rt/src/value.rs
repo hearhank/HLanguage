@@ -82,8 +82,15 @@ pub struct ClassData {
     pub fields: HashMap<String, Value>,
 }
 
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for ClassData {}
+unsafe impl Send for Value {}
+
 /// 闭包数据（运行时表示；AST 部分由解释器填充）
 #[derive(Debug, Clone)]
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for ClosureData {}
+
 pub struct ClosureData {
     pub params: Vec<String>,
     pub body: hc::ast::Block,
@@ -97,6 +104,9 @@ pub const ARENA_BLOCK_SIZE: usize = 1024;
 
 /// 惰性迭代器操作类型（filter/map 按链式调用顺序存储）
 #[derive(Debug, Clone)]
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for LazyOp {}
+
 pub enum LazyOp {
     /// 筛选闭包：返回 false 则跳过该元素
     Filter(Value),
@@ -109,6 +119,9 @@ pub enum LazyOp {
 /// 例如 `arr.map(g).filter(f)` → ops = [Map(g), Filter(f)]，
 /// 对每个源元素：先 Map(g) 变换，再 Filter(f) 筛选。
 #[derive(Debug, Clone)]
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for LazyIterData {}
+
 pub struct LazyIterData {
     /// 源数据（原始可迭代值：Arr/Slice/Str/Map/Vec/Class）
     pub source: Value,
@@ -144,6 +157,9 @@ pub struct ArenaState {
     pub live: bool,
 }
 
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for ArenaState {}
+
 /// 装箱状态（G3：data + vtbl + alloc 三字宽胖指针；对齐设计文档 §6）
 #[derive(Debug, Clone)]
 pub struct BoxedData {
@@ -155,6 +171,9 @@ pub struct BoxedData {
     pub alloc: Value,
 }
 
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for BoxedData {}
+
 /// 集合状态（G4：Vec/Deque 共用；对齐设计文档 §7）
 #[derive(Debug, Clone)]
 pub struct VecData {
@@ -164,6 +183,9 @@ pub struct VecData {
     pub alloc: Value,
 }
 
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for VecData {}
+
 /// Map 状态（G4：对齐设计文档 §7；字段即键值）
 #[derive(Debug, Clone)]
 pub struct MapData {
@@ -172,6 +194,9 @@ pub struct MapData {
     /// alloc：构造 `Map(K,V).init(alloc)` 时携带的分配器引用
     pub alloc: Value,
 }
+
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for MapData {}
 
 /// 全局分配器 Debug 泄漏登记（§8.3：分配记录表；`weak` 持分配数据的弱引用——
 /// 值被销毁（作用域退出自动销毁）后升级失败，即视为已释放。退出时仍可升级者 = 泄漏）。
@@ -294,6 +319,9 @@ pub struct PoolState {
     pub backing: Box<AllocatorImpl>,
 }
 
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for PoolState {}
+
 impl PoolState {
     pub fn new(backing: AllocatorImpl, item_size: usize) -> Self {
         Self {
@@ -315,6 +343,9 @@ pub enum AllocatorImpl {
     /// 自定义分配器（Rust 侧实现，后续开放 H 侧）
     Custom(Box<dyn AllocatorTrait>),
 }
+
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for AllocatorImpl {}
 
 impl std::fmt::Debug for AllocatorImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -21,7 +21,8 @@ impl Interp {
         let pending = std::mem::take(&mut self.root_threads);
         let n = pending.len();
         for t in pending {
-            let _ = self.thread_run(&t, &Span::new(0, 0, 0, 0));
+            let tid = self.get_thread_tid(&t);
+            self.thread_join_impl(tid);
         }
         Ok(n)
     }

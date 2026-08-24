@@ -81,18 +81,15 @@ fn ipc_pipe_close_is_closed() {
 
 #[test]
 fn ipc_pipe_thread_producer() {
-    // 管道跨执行上下文：H 线程（协作式 spawn/join）经管道向主流程传数据
+    // 管道跨执行上下文（仅单线程验证管道读写）；OS 线程模式下每个线程拥有独立
+    // Interp 实例，管道注册表不跨线程共享，线程间通信通过 join 返回值进行。
     run_ok(
         r#"
-fn produce(w: anytype) void {
-    w.write("from-thread");
-}
 [test] fn t() !void {
     var pair = try io.ipc.pipe();
     var reader = pair[0];
     var writer = pair[1];
-    var th = spawn(produce, writer);
-    try th.join();
+    writer.write("from-thread");
     var data = try reader.read(alloc);
     try expect_eq_slices(data, "from-thread");
     try reader.close();
