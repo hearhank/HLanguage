@@ -1,7 +1,4 @@
-//! comptime 类型函数具体化引擎单元测试（E1.2 组 D；ADR-0012）
-//!
-//! 覆盖：类型函数判定 / 具体化名 / 类型规范串 / 类型替换 / 体求值（struct → Class、
-//! 透传 → Type）/ 错误路径（实参个数、体形态）。
+//! hc/tests/comptime.rs
 
 use std::collections::HashMap;
 

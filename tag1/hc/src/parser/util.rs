@@ -1,4 +1,4 @@
-//! Parser 基础工具：token 游标 / 期望 / 同步。
+//! Parser 工具函数：Token 流辅助操作、span 合并等
 
 use super::*;
 use crate::diag::Diagnostic;

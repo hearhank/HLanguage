@@ -1,11 +1,4 @@
-//! G3/mem：装箱胖指针携带 alloc 引用（data + vtbl + alloc 三字宽）
-//!
-//! 覆盖设计文档 `08-mem-allocator-design.md` §6 G3 差距落地：
-//! - `box(v)` 单参形态回退全局 alloc（修复旧实现 1 参 ArityMismatch 潜在缺陷）
-//! - `box(v, alloc)` / `box(v, arena)` 显式携带分配器引用（不再忽略第二参）
-//! - `p.alloc()` 返回携带的分配器（三字宽胖指针的 alloc 字）
-//! - 装箱 class → `*I` 胖指针：接口方法分派鸭子类型达 pointee
-//! - `p.*` 解引用读/写穿透、与普通值比较经 pointee
+//! hc-rt/tests/box.rs
 
 use hc_rt::Interp;
 

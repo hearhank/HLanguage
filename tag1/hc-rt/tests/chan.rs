@@ -1,9 +1,4 @@
-//! 组 G1：`chan<T>` 通道测试（E4：M:N 协程通信）。
-//!
-//! 验证 chan.init(alloc[, cap]) 构造、send/recv/try_send/try_recv/close 方法。
-//! 通道使用 Mutex+Condvar 实现阻塞式 send/recv，非阻塞操作返回 bool/Opt。
-//!
-//! 注：spawn 模式下子线程拥有独立 Interp 实例，通道通过 Arc<ChanState> 跨线程共享。
+//! hc-rt/tests/chan.rs
 
 use hc_rt::Interp;
 

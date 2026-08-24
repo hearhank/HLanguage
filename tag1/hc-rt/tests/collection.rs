@@ -1,12 +1,4 @@
-//! G4/mem：集合持有分配器引用（`08-mem-allocator-design.md` §7 定案落地）
-//!
-//! 覆盖（tree-walking interp）：
-//! - `Vec<T>.init(alloc)` / `Map<K,V>.init(alloc)` / `Table<T>.init(alloc, rows, cols, init)`
-//!   把 alloc 存为内部字段，`.alloc()` 可观测（返回构造时携带的分配器引用）
-//! - 未显式传 alloc（含裸类型表达式 `Vec<i32>` 实例化）回退全局 alloc
-//! - 扩容/子对象分配走该分配器（tag1 中 items 为 Rc 存储，可观测面即 `.alloc()`；
-//!   真实后端按 §7 在扩容/销毁时经它分配/递归销毁）
-//! - 集合可遍历（Vec 句柄 / Map 句柄）
+//! hc-rt/tests/collection.rs
 
 use hc_rt::Interp;
 

@@ -1,7 +1,9 @@
-//! Parser（M1.2）：token 流 → AST
+//! Parser 模块根：递归下降解析器入口与类型解析
 //!
-//! 递归下降 + 运算符优先级表（Q4 定案）：
-//! 后缀 > 前缀/一元 > `*` `/` `%` `%%` > `+` `-` > `<<` `>>` > `&` > `^` > `|` > 比较（非结合）> and/or
+//! 定义：结构体：Parser
+
+pub mod ast;
+pub use ast::*;
 
 mod decl;
 mod expr;
@@ -12,8 +14,8 @@ mod util;
 
 use crate::ast::*;
 use crate::diag::Diagnostic;
-use crate::token::{Span, Token, TokenKind};
-use crate::trait_registry::TraitRegistry;
+use crate::lexer::token::{Span, Token, TokenKind};
+use crate::semantic::trait_registry::TraitRegistry;
 
 use decl::register_system_trait_handlers;
 

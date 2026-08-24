@@ -1,4 +1,7 @@
-//! hc 编译器前端单元测试（M1/M2 验收：词法、解析、诊断）
+//! hc/tests/frontend.rs
+//!
+//! 定义：枚举：Kind
+//! 定义：结构体：Point
 
 use hc::ast::Decl;
 use hc::lexer::lex;

@@ -1,8 +1,6 @@
-//! M4.4 序列化内建（packed/align 尊重 + 嵌套连续 round-trip + 堆类型 JSON 完整）
+//! hc-rt/tests/serialize.rs
 //!
-//! 覆盖：`[pad]`（紧凑布局）/ `[align(T)]`（类型级对齐）对 `to_bytes`/`from_bytes`
-//! 与 `@sizeOf`/`@offsetOf`/`@alignOf` 的一致映射；嵌套连续类型字段的字节 round-trip；
-//! 堆上 class 的 `to_json`/`from_json` 嵌套（Vec 字段 / 嵌套 class 字段）还原。
+//! 定义：结构体：Packed, Aligned, Inner, Outer
 
 use hc_rt::Interp;
 

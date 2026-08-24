@@ -1,12 +1,6 @@
-//! G1/mem：Arena 真实内存管理（bump + 块链表 + deinit 批量归还 + 统计）
+//! hc-rt/tests/arena.rs
 //!
-//! 覆盖设计文档 `08-mem-allocator-design.md` §4 G1 差距落地：
-//! - 小块多次分配复用同一块（bump，不逐次开块）
-//! - 单次分配超过默认块大小（1024）→ 块链表增长
-//! - 分配内容零初始化、长度正确、相邻区域互不干扰
-//! - `deinit` 批量归还 backing（blocks/bytes 归零）、幂等
-//! - deinit 后 alloc → 运行期错误 `ArenaDeinitialized`
-//! - OOM（`1 << 63` 超容量）仍返回可 catch 的 `error.OutOfMemory`
+//! 定义：结构体：Point
 
 use hc_rt::Interp;
 

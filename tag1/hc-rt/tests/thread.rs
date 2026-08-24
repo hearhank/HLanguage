@@ -1,11 +1,4 @@
-//! 组 G1：`spawn(f, args...) owned Thread(T)` 真 OS 并行（E4）。
-//!
-//! tree-walking interp 侧验证：spawn 立即启动 OS 线程执行、join 等待线程完成并返回
-//! 结果、is_done 状态转移（false → true）、每线程独立 alloc 实例（bump 到自身 arena，
-//! 不进全局泄漏跟踪）、cancel 设置取消标志（线程启动前检查）、detach 标记分离。
-//!
-//! 注：OS 线程模式下每个线程拥有独立 Interp 实例，全局变量不跨线程共享。
-//! 线程间通信通过 Mutex / 通道进行。
+//! hc-rt/tests/thread.rs
 
 use hc_rt::{Interp, Value};
 

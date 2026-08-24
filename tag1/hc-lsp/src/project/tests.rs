@@ -1,3 +1,5 @@
+//! hc-lsp/src/project/tests.rs
+
 use super::*;
 
 #[test]

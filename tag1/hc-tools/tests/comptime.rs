@@ -1,10 +1,4 @@
-//! 组 D D2：`comptime { }` 块编译期求值端到端测试（ADR-0012，E1.2）。
-//!
-//! 用 `hc` 二进制（CARGO_BIN_EXE_hc-tools）驱动 CLI，覆盖最小切片：
-//!   - 块通过：`types` 全量可见（all / fields），求值后丢弃、正常进入运行
-//!   - 块失败：`return error.X` = 编译错误（带块内位置 + 所属块位置）
-//!   - 负例：`types.fields` 未知类型 / io 禁用 → 编译错误
-//!   - 顺序：script 展开后求值——comptime 块可见 script 生成类型
+//! hc-tools/tests/comptime.rs
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

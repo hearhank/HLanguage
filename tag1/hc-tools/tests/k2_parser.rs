@@ -1,12 +1,4 @@
-//! K2：H 版 parser 对照测试——对 `stage1/corpus/*.hc` 逐个文件比较
-//! Rust 参考 parser（`hc parse`）与 H 版 parser（`hc run stage1/parser.hc`）的 AST 输出。
-//!
-//! 对照格式：每行一个节点，缩进表示嵌套层级，格式 `NodeType|key=val|key=val`。
-//! 逐行 diff 必须一致。语料覆盖：函数声明、变量声明、if/while、表达式、return 等。
-//!
-//! 注意：只测试 `hc parse` 与 H 版 parser 输出一致的语料文件。
-//! K2 自举尚未完成，H 版 parser 对部分语法结构（如复合赋值 `+=`）尚不支持，
-//! 这些文件会自动跳过并在报告中列出。
+//! hc-tools/tests/k2_parser.rs
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

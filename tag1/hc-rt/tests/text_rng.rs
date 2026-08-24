@@ -1,18 +1,4 @@
-//! G5（E3.3 text/time/rng）验收：io.text 正则文本处理 + io.time 单调测量 +
-//! io.rng 伪随机数。
-//!
-//! 形态：
-//! - `io.text.matches(pattern, text) bool`（是否含匹配；`^`/`$` 锚定控制全串）/
-//!   `find(pattern, text) ?int`（首个匹配起点；无 → null）/
-//!   `replace(pattern, text, repl) &[u8]`（替换全部非重叠匹配，每处取最长）/
-//!   `split(pattern, text) Vec(&[u8])`（按匹配分割，含空段）。非法模式 →
-//!   error.InvalidFormat。支持子集：字面量 / `.` / `[...]`（范围、取反、`\d` `\w`
-//!   `\s`）/ 分组 / `*` `+` `?` `{n,m}` / `|` / `^` `$` 锚定 / `\n` `\t` `\r` `\xNN`
-//!   及转义元字符。
-//! - `io.time.tick() int`（纳秒计数，epoch 基准）/ `io.time.elapsed(tick) int`
-//!   （自 tick 起毫秒数）。
-//! - `io.rng.seed(v)` / `io.rng.next() int`（xorshift64* 原始 64 位）/
-//!   `io.rng.int(n) int`（[0, n) 均匀）/ `io.rng.float() f64`（[0, 1)）。
+//! hc-rt/tests/text_rng.rs
 
 use hc_rt::Interp;
 

@@ -1,5 +1,7 @@
-//! M2.6 Q-S8：`!T` 推断错误集收集——从函数体收集 `return error.X` + `try`/`return`
-//! 传播的实际返回集（固定点闭包）。递归自调用无法收集 → 退化为 anyerror。
+//! 错误集推断：!T 返回类型的错误集自动收集
+//!
+//! 定义：枚举：FnErrorForm
+//! 定义：结构体：InferredErrorSets, BodyErrors
 
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};

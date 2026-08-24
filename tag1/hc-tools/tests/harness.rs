@@ -1,10 +1,4 @@
-//! F3 测试基建自测：`hc test` 自身的独立测试文件——收集 / 退出码 / 注入 / 汇总。
-//!
-//! 用 `hc` 二进制（CARGO_BIN_EXE_hc-tools）驱动 CLI，断言：
-//!   - 收集：仅 `[test]` fn 运行（普通 fn 不收集）；目录内多文件各自跑
-//!   - 退出码：全过 → 0；有 FAIL → 非零；解析失败文件 → 非零
-//!   - 注入：测试 fn 隐式可用 io/alloc（Q-T4，无需声明参数）
-//!   - 汇总：逐项 `[PASS]/[FAIL]/[SKIP]` + `N passed, M failed, K skipped`
+//! hc-tools/tests/harness.rs
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

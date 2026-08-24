@@ -1,3 +1,5 @@
+//! IO 内建函数：标准库 io 命名空间的内建实现
+
 use super::*;
 
 impl Interp {

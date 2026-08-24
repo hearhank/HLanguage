@@ -1,7 +1,4 @@
-//! A6 标准库数据结构：Bitmap 位图验收测试
-//!
-//! API：`io.bitmap.init(nbits) !Bitmap` → `.set(idx)` / `.get(idx) bool` /
-//! `.clear(idx)` / `.count() usize` / `.len() usize`
+//! hc-rt/tests/bitmap.rs
 
 use hc_rt::Interp;
 

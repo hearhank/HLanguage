@@ -1,7 +1,4 @@
-//! M5.2 Deque 运行时实现（双端队列 + 最小方法集 get/put/remove）
-//!
-//! tag1：Vec/Deque 共享 `Value::Arr` 值模型；Deque 方法按名分派
-//! （push_front/pop_front/push_back/pop_back/front/back + get/put/remove）。
+//! hc-rt/tests/deque.rs
 
 use hc_rt::Interp;
 

@@ -1,9 +1,4 @@
-//! G3（E3.2 ipc）验收：进程内 IPC 原语——匿名管道（pipe）+ 命名共享内存（shm）。
-//!
-//! 形态：`io.ipc.pipe()` → `[reader, writer]`（2 元素数组，同 UDP recv_from 约定）；
-//! 写端 `write(data)`/`close()`，读端 `read(alloc)`（排空可读字节，空且写端开 → 空切片，
-//! 不阻塞——协作式模型）/`read_all(alloc)`/`is_closed()`/`close()`。
-//! `io.ipc.shm(name, size)` → 定长共享字节区（write 覆盖截断到 size，read 取当前内容）。
+//! hc-rt/tests/ipc.rs
 
 use hc_rt::Interp;
 

@@ -1,3 +1,5 @@
+//! 方法调用 IR 降级：方法表查找与方法调用的 IR 指令生成
+
 use super::*;
 
 pub(crate) fn call_scalar_method_ir(

@@ -1,7 +1,4 @@
-//! A6 标准库数据结构：PageMem 页内存池验收测试
-//!
-//! API：`io.pagemem.init(num_pages)` → PageMem → `.alloc() ?usize` /
-//! `.free(idx)` / `.available() usize` / `.total() usize`
+//! hc-rt/tests/pagemem.rs
 
 use hc_rt::Interp;
 

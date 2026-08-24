@@ -1,8 +1,4 @@
-//! A6 标准库数据结构：RingBuf 环形缓冲验收测试
-//!
-//! API：`io.ringbuf.init(cap)` → RingBuf → `.push(v)` / `.pop() ?T` /
-//! `.len() usize` / `.capacity() usize` / `.is_full() bool` / `.is_empty() bool` /
-//! `.clear()` / `.peek(idx) ?T`
+//! hc-rt/tests/ringbuf.rs
 
 use hc_rt::Interp;
 

@@ -1,8 +1,4 @@
-//! C3：Send/Sync 编译期诊断测试
-//!
-//! Send/Sync = 内建标记接口（编译器内建实现，不可自定义）。
-//! 组合性验证：标量/值类型自动 Send+Sync、指针/切片看指向、内建容器看元素。
-//! 用户 `class Foo: Send` 字段全满足才合法。
+//! hc/tests/send_sync.rs
 
 use hc::{check_semantics, parse_source};
 

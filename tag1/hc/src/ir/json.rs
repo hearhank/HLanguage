@@ -1,3 +1,5 @@
+//! JSON 序列化 IR：@toJson/@fromJson 内建的 IR 指令生成
+
 use super::*;
 
 pub(crate) fn parse_json_value_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {

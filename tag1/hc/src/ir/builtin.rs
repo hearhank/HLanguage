@@ -1,3 +1,5 @@
+//! 内建函数 IR 降级：@sizeOf/@intCast/@panic 等内建函数的 IR 指令生成
+
 use super::*;
 
 pub(crate) fn call_fs_method_ir(
@@ -819,11 +821,13 @@ pub(crate) fn call_archive_method_ir(
     match field {
         "compress" => {
             let data = str_arg_ir(ctx, args, 0)?;
-            Ok(Some(str_bytes_val(crate::compress::compress(&data))))
+            Ok(Some(str_bytes_val(crate::runtime::compress::compress(
+                &data,
+            ))))
         }
         "decompress" => {
             let data = str_arg_ir(ctx, args, 0)?;
-            match crate::compress::decompress(&data) {
+            match crate::runtime::compress::decompress(&data) {
                 Ok(out) => Ok(Some(str_bytes_val(out))),
                 Err(_) => Ok(Some(err_val(module, "InvalidFormat"))),
             }

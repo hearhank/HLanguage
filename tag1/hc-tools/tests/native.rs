@@ -1,7 +1,6 @@
-//! M3.3 原生后端集成测试：源码 → LLVM IR → `zig cc` → 运行可执行文件。
+//! hc-tools/tests/native.rs
 //!
-//! 依赖外部 `zig cc`（emit-.ll 驱动）；`zig` 缺失时全部测试跳过（打印 SKIP，
-//! 不失败——与纯文本发射测试 `hc::llvm` 分离，后者无外部依赖始终运行）。
+//! 定义：枚举：Color, Maybe
 
 use std::path::PathBuf;
 use std::process::Command;

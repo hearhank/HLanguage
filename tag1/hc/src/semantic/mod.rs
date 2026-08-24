@@ -1,15 +1,14 @@
-//! 语义检查（M2.2 完整：表达式级类型检查 / 期望类型传播 / 字段与索引校验 /
-//! 存储形态验证 / 泛型 where 约束验证）
+//! 语义分析模块根：类型检查器主入口、SType 类型系统
 //!
-//! tag1 静态 pass：在解释器 load 之前运行。检查策略：**能精确判定才报错**（准确
-//! 可靠——调试友好语言要求不误报）；类型信息不足（Unknown / 泛型未单态化）时
-//! 保守放行，交由运行时诊断。
+//! 定义：枚举：SType, IntWidth, TypeKind, AllocSource
+//! 定义：结构体：TypeInfo, FnSig, VarInfo, ThreadState, Checker
 
 mod check;
 mod collect;
 mod error_infer;
 mod infer;
 mod resolve;
+pub(crate) mod trait_registry;
 mod validate;
 
 use crate::ast::*;

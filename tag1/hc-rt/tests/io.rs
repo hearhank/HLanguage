@@ -1,4 +1,4 @@
-//! M5.4 io 模块验收：net（TCP echo/帧）/ fs（seek/pos/read_at/write_at）/ time / 环境
+//! hc-rt/tests/io.rs
 
 use hc_rt::Interp;
 

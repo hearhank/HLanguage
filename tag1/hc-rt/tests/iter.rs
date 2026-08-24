@@ -1,8 +1,4 @@
-//! M4.6 / A7 惰性迭代器链（iter/filter/map 返回 LazyIter，next() 按需求值）
-//!
-//! tag1 采用「惰性组合子」形态：`iter()` 返回 LazyIter（延迟包装），`filter`/`map`
-//! 链式追加变换（不立即求值），`next()` 按需逐一计算，`to_array()` 解析全部剩余项。
-//! 覆盖：Arr/Slice/Str/Map/用户类型。
+//! hc-rt/tests/iter.rs
 
 use hc_rt::Interp;
 

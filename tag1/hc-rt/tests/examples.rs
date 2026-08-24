@@ -1,7 +1,4 @@
-//! 解释器集成测试：以 examples 的 [test] fn 为验收基线（Q-T2/Q-T6）
-//!
-//! 覆盖 tag1 垂直切片核心功能：变量/控制流/类型/函数/错误/class/enum/
-//! 闭包/切片/序列化/集合/所有权/泛型。
+//! hc-rt/tests/examples.rs
 
 use hc_rt::Interp;
 use std::thread;

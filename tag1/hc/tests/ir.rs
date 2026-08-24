@@ -1,7 +1,7 @@
-//! M3.1 共享 IR 验收测试：lower（AST→IR）+ run_ir（参考解释器）
+//! hc/tests/ir.rs
 //!
-//! 语义锚点 = tree-walking 解释器（hc-rt）：标量/短路/if/while/return/
-//! try/catch/orelse/断言/限定名调用/作用域遮蔽/复合赋值。
+//! 定义：枚举：Color
+//! 定义：结构体：Point, Point, Point, Point, Point, Point, Point
 
 use hc::ir::{lower, run_ir, IrValue};
 use hc::parse_source;

@@ -1,11 +1,4 @@
-//! ADR-0010 / 09 组 A2a：`import` 语句运行时绑定（镜像语义层 `apply_imports`）
-//!
-//! - 符号选择 + as 别名：`import H.std.{io as my}` → `my.print(...)` 走 io 环境对象分发
-//! - 整模块导入：`import H.std.io;` → 绑定名 = 末段 `io`（与既有环境名一致）
-//! - 整模块 + 别名：`import H.std.io as out;` → `out.print(...)`
-//! - 用户包整模块 + 别名：`import jsonlib as j;` → `j.double(21)`
-//! - 用户包符号选择：`import jsonlib.{double as dbl};` → `dbl(21)` 直调
-//! - 文件自身定义优先：import 绑定不覆盖自身符号
+//! hc-rt/tests/import.rs
 
 use hc_rt::Interp;
 

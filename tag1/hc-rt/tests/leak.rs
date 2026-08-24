@@ -1,11 +1,4 @@
-//! G5/mem：对齐保证与 Debug 泄漏检测（`08-mem-allocator-design.md` §2.3 / §8.3 定案落地）
-//!
-//! 覆盖（tree-walking interp）：
-//! - **对齐（§2.3）**：Arena bump 切出前游标圆整到 16 字节（`ALLOC_ALIGN`），返回区域
-//!   起始相对块起点恒为 16 的倍数；对齐填充计入 `arena.bytes()`（真实 bump 语义）
-//! - **泄漏检测（§8.3）**：全局 `alloc.alloc(n)` 登记分配记录（大小 + 调用行号），
-//!   值销毁（作用域退出自动销毁）后弱引用失效自动视为释放；
-//!   `alloc.leaks()` 当前活跃数、`alloc.leak_report()` 清单文本
+//! hc-rt/tests/leak.rs
 
 use hc_rt::Interp;
 

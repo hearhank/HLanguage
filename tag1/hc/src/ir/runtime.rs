@@ -1,3 +1,5 @@
+//! IR 运行时：run_ir 执行引擎、值模型与错误处理
+
 use super::*;
 
 /// 重载/可选参数分派（对齐 oracle `pick_fn` `interp.rs:2665-2796`）：

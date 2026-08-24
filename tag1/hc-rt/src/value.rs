@@ -1,7 +1,7 @@
-//! 运行时值模型（M4 运行时与语言内建——tag1 子集）
+//! Value 值模型：H 语言运行时值类型系统
 //!
-//! tag1 采用引用计数值模型：变量槽 = `Rc<RefCell<Value>>`，指针 = 槽的共享引用。
-//! 完整所有权（作用域销毁/唯一写者/悬垂标记）归 M2.4/M2.5/M4.1 后续里程碑。
+//! 定义：枚举：Value, LazyOp, ArenaAllocErr, AllocErr, AllocatorImpl
+//! 定义：结构体：ClassData, ChanState, ChanInner, ClosureData, LazyIterData, ArenaState, BoxedData, VecData, MapData, LeakRecord, AllocBlock, PoolState
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};

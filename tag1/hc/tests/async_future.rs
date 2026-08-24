@@ -1,9 +1,4 @@
-//! 组 E E1：async fn / await 解析与语义（协作式 Future，ADR-0011/0008）
-//!
-//! 覆盖：`async fn` 解析（Decl::Fn.is_async）/ `await` 解析（Expr::Await）/
-//! async 调用点返回 `Future(R)`（R = 声明返回类型，含错误联合）/
-//! await 解包 Future(R)→R / 非 Future 的 await 诊断 / async 缺返回类型诊断。
-//! E1 范围 = parse + semantic；运行时语义（协作式 join）留 E2。
+//! hc/tests/async_future.rs
 
 use hc::ast::Decl;
 use hc::check_semantics;

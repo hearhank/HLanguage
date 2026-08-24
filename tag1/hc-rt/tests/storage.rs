@@ -1,13 +1,4 @@
-//! G4（E3.3 storage/archive）验收：文件持久化键值存储（io.storage）+ RLE 压缩
-//! （io.archive）。
-//!
-//! 形态：`io.storage.open(path) !KvStore`——`put(key, value) !void` / `get(key) !?&[u8]`
-//! （缺失 → null）/ `contains(key) bool` / `remove(key) !void`（幂等）/ `len() usize` /
-//! `close() !void`（落盘 + 注销；已关闭再 close 为 no-op）。持久化格式 = 二进制
-//! （u32 键长 + 键 + u32 值长 + 值，小端）；close 后 reopen 可读回。
-//! `io.archive.compress(data) !&[u8]` / `io.archive.decompress(data) !&[u8]`——RLE
-//! 压缩（token 0x00 字面跑 / 0x01 重复跑），round-trip 保真；非法压缩数据 →
-//! error.InvalidFormat。
+//! hc-rt/tests/storage.rs
 
 use hc_rt::Interp;
 

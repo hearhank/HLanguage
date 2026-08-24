@@ -1,28 +1,14 @@
-//! M3.1 共享 IR（唯一语义源，ADR-0004）
+//! 共享 IR 模块根：线性指令集、IrModule 结构与执行引擎
 //!
-//! 线性指令 + 标签形态——字节码 VM（M3.2）与 LLVM 原生后端（M3.3）共用，
-//! 禁止各后端私语义。覆盖：标量运算 / 控制流 / 函数调用 / **错误值通道**
-//! （M2.6 传播模型：错误是值，`try`/`catch` 降级为错误值检查 + 分支）。
-//!
-//! 垂直切片范围（tag1）：标量 + bool + 字符串 + 函数/参数/局部变量 +
-//! if（语句/表达式/else-if/optional 捕获）+ while（含续步）+ return +
-//! error 字面量 + try/catch + orelse + 全局函数调用（含多级限定名）+
-//! 断言内建 + **指针**（Phase 1：`&`/`&mut` 取址、`p.*` 解引用、写穿别名）+
-//! **聚合**（Phase 2：数组/元组字面量、struct/枚举字面量与常量、字段/索引/切片
-//! 读写、`.?` 断言解包、元组解构、`move`）+
-//! **switch + range + for**（Phase 3：`MatchTest`/`IrPattern` first-match 线性链、
-//! `0..n` 区间糖、`IterMake/IterNext/IterWriteBack` 迭代含 mut 写回、无标签
-//! break/continue）。
-//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、带标签 break/continue
-//! （Phase 6 起）。
-//! 复杂库操作 = `CallBuiltin` 原子指令。
+//! 定义：枚举：IrConst, IrBinOp, IrUnOp, IrInst, IrPattern, IrValue, Cell, ArenaAllocErrIr, ThreadResultIr, GStateIr, GResultIr, ChannelStateIr
+//! 定义：结构体：IrModule, IrFunc, TypeTable, UnionInfo, ClassInfo, EnumInfo, ArenaStateIr, IterItem, ThreadStateIr, GoroutineIr, SchedulerInnerIr, GoroutineSchedulerIr, ChanStateIr, ChanInnerIr, Ctx, PipeIr, Frame, IrError, IrRuntime
 
+use self::comptime::Instantiated;
 use crate::ast::*;
-use crate::comptime::{self, Instantiated};
-use crate::errorcodes::ErrorCodeTable;
-use crate::regex::{parse_regex, RegexMatcher};
-use crate::rng::xorshift64;
-use crate::token::Span;
+use crate::lexer::token::Span;
+use crate::runtime::errorcodes::ErrorCodeTable;
+use crate::runtime::regex::{parse_regex, RegexMatcher};
+use crate::runtime::rng::xorshift64;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +17,7 @@ use std::thread;
 
 // ---------- 子模块 ----------
 mod builtin;
+pub mod comptime;
 mod json;
 mod lower_impl;
 mod method;

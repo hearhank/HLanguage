@@ -1,3 +1,5 @@
+//! hc-lsp/src/compiler/tests.rs
+
 use super::*;
 
 #[test]
@@ -55,7 +57,7 @@ fn test_compile_type_error() {
 
 #[test]
 fn test_to_lsp_diagnostic_error() {
-    use hc::Span;
+    use hc::token::Span;
 
     // Create a diagnostic at line 2, col 5, spanning 3 characters
     let span = Span::new(10, 13, 2, 5);
@@ -78,7 +80,7 @@ fn test_to_lsp_diagnostic_error() {
 
 #[test]
 fn test_to_lsp_diagnostic_warning() {
-    use hc::Span;
+    use hc::token::Span;
 
     let span = Span::new(0, 5, 1, 1);
     let diag = Diagnostic::warning(span, "test warning");

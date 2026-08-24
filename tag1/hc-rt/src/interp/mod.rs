@@ -1,7 +1,7 @@
-//! Tree-walking 解释器（M3.2 脚本模式 `hc run`——tag1 子集）
+//! 解释器模块根：Interp 结构体、脚本模式执行入口与内建函数
 //!
-//! tag1 采用作用域链环境 + 引用计数槽。字节码 VM（M3.2 完整）与 LLVM 原生
-//! 后端（M3.3）留后续里程碑；本模块保证双模式承诺的「脚本模式」先行可用。
+//! 定义：枚举：ThreadResult, ChannelState, GState, GResult, Flow, TypeDef
+//! 定义：结构体：ThreadState, Goroutine, SchedulerInner, GoroutineScheduler, RtError, Scope, DeferEntry, FnDef, Pipe, Shm, KvStore, Interp
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};

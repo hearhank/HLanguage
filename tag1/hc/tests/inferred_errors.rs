@@ -1,7 +1,4 @@
-//! M2.6 Q-S8：!T 推断错误集收集
-//!
-//! `!T` = 编译器从函数体收集 `return error.X` + `try`/`return` 传播的实际返回集；
-//! 递归自调用无法收集 → 退化为 anyerror，并提示显式标注（warning，非 error）。
+//! hc/tests/inferred_errors.rs
 
 use hc::{check_semantics, inferred_error_sets, parse_source};
 

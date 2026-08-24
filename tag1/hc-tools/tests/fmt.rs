@@ -1,11 +1,4 @@
-//! I1 格式化测试：`hc fmt`——token 级重排，AST 保真。
-//!
-//! 验收「幂等 + 示例断言」：
-//! 1) 幂等：对代表性排版形态与全部示例源码，`hc fmt` 一次后 `hc fmt --check` 必须
-//!    exit 0（产物稳定，二次格式化无变化）；
-//! 2) 保真：`hc fmt` 内置 token 序列自检（格式化前后签名一致），失败即 exit 非 0，
-//!    测试通过即隐含断言产物词法干净且 AST 不变；
-//! 3) 示例断言：整个 examples/ 语料一次格式化后收敛（无 "would reformat"）。
+//! hc-tools/tests/fmt.rs
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

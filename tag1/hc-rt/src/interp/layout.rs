@@ -1,3 +1,5 @@
+//! 内存布局：struct/enum 的内存布局计算与字段偏移
+
 use super::*;
 
 impl Interp {

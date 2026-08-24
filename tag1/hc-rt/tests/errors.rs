@@ -1,4 +1,4 @@
-//! 梯队 1 第二轮验收测试（M2.6 错误集检查 / M4.2 @panic / io.exit / ExitType）
+//! hc-rt/tests/errors.rs
 
 use hc_rt::Interp;
 

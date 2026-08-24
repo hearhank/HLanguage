@@ -1,8 +1,6 @@
-//! M3.2 字节码 VM 验收测试：`encode`/`decode` 往返 + 字节码 VM == IR 参考解释器。
+//! hc/tests/bytecode.rs
 //!
-//! 核心断言 = 一致性：`run_bytecode(encode(lower(p)), entry, args)` 的结果与
-//! `run_ir(lower(p), entry, args)`（唯一语义源）逐值相等（含错误路径）。
-//! 覆盖 M3.1 切片：标量/短路/if/while/return/try/catch/orelse/断言/限定名调用/字符串。
+//! 定义：枚举：Maybe
 
 use hc::bytecode::{encode, run_bytecode};
 use hc::ir::{lower, run_ir, IrError, IrValue};

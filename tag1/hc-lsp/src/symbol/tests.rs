@@ -1,3 +1,7 @@
+//! hc-lsp/src/symbol/tests.rs
+//!
+//! 定义：枚举：Color
+
 use super::*;
 use hc::parse_source;
 

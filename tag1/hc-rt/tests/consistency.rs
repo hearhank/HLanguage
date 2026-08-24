@@ -1,21 +1,7 @@
-//! M3.4 双模式一致性验收测试
+//! hc-rt/tests/consistency.rs
 //!
-//! 同一程序分别经 **tree-walking 解释器**（hc-rt `Interp`，脚本模式）与
-//! **IR 参考解释器**（`hc::ir::IrRuntime`，M3.1 共享 IR 语义源）运行全部
-//! `test fn`，PASS/FAIL 结果必须完全一致（ADR-0004 双模式一致性承诺根基）。
-//! IR 侧共享同一运行时实例：全局/const 只初始化一次，跨 test fn 可变全局可见
-//! （对齐 tree-walking 共享 `Interp` 的 `globals: HashMap`）。
-//!
-//! 结果归一化：
-//! - tree-walk：`[PASS]/[FAIL]`（`run_tests` 输出）
-//! - IR：`Ok(非错误值)` = PASS；`Ok(错误值)` = FAIL（未处理错误到根 = panic 式失败，
-//!   M2.6 传播模型）；`Err` = FAIL
-//!
-//! 程序约束：必须通过语义检查（`Interp::load` 内置 M2 静态 pass）——例如
-//! `catch` 只能用于错误联合值、字面量必须在声明的宽度内。
-//! 覆盖范围 = M3.1 IR 切片：标量/短路/if/while/递归/try/catch/orelse/
-//! error 字面量/断言/限定名调用（含多级 namespace）/作用域/复合赋值/除零溢出；
-//! Phase 5 起含 global/const（`@__init__` 声明序初始化、跨 test fn 可变全局）。
+//! 定义：枚举：Color, Maybe, Value, Status
+//! 定义：结构体：Point
 
 use std::collections::HashMap;
 use std::fs;

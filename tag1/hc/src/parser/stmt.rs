@@ -1,4 +1,4 @@
-//! Parser 语句解析：块 / 声明 / 控制流 / switch。
+//! 语句解析：变量声明、if、while、for、switch、return、break、continue、defer 等语句
 
 use super::*;
 use crate::ast::*;

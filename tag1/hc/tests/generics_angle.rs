@@ -1,4 +1,5 @@
-//! 临时验证：泛型 <> 语法迁移
+//! hc/tests/generics_angle.rs
+
 use hc::parse_source;
 
 fn try_parse(label: &str, src: &str) {

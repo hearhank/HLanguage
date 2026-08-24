@@ -1,10 +1,10 @@
-//! Parser 声明解析：fn / global / const / trait 标注。
+//! 声明解析：函数、变量、常量、全局、类、枚举、结构体、接口、命名空间等声明
 
 use super::*;
 use crate::ast::*;
 use crate::diag::Diagnostic;
+use crate::semantic::trait_registry::TraitRegistry;
 use crate::token::TokenKind;
-use crate::trait_registry::TraitRegistry;
 
 // ---------- 特性处理器函数（Q24：字典式查找注册） ----------
 

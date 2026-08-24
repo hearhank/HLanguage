@@ -1,4 +1,4 @@
-//! 梯队 1 语义完整验收测试（M2.2 类型检查 / M2.5 definite / M2.4 所有权 / M4.3 @ 内建）
+//! hc-rt/tests/semantics.rs
 
 use hc_rt::Interp;
 

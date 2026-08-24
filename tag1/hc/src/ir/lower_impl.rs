@@ -1,7 +1,12 @@
+//! IR 降级实现：AST → IR 指令的降级转换
+//!
+//! 定义：枚举：ErrPath
+//! 定义：结构体：LowerCtx, LoopCtx, DeferRecord
+
 use super::*;
 
 pub fn lower(program: &Program) -> Result<IrModule, IrError> {
-    let errors = crate::errorcodes::collect(program, 0);
+    let errors = crate::runtime::errorcodes::collect(program, 0);
     let types = build_type_table(program);
     let funcs = collect_func_names(program);
     let mut globals = collect_globals(program);
