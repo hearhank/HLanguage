@@ -423,20 +423,14 @@ pub(crate) fn call_thread_method_ir(
         _ => return Err(IrError::msg("TypeError", "bad Thread cell")),
     };
     match method {
-        // join：等待 OS 线程结束，返回结果
+        // join：等待协程结束，返回结果
         "join" => {
             let ts = ctx.thread_handles.get_mut(&tid).ok_or_else(|| {
                 IrError::msg("ThreadError", "Thread handle not found (already joined?)")
             })?;
-            if let Some(h) = ts.join_handle.take() {
-                let _ = h
-                    .join()
-                    .map_err(|_| IrError::msg("Panic", "thread panicked"))?;
-            } else {
-                // 句柄已被 detach 或前次 join 取走，等待 done
-                while !ts.done.load(Ordering::SeqCst) {
-                    std::thread::yield_now();
-                }
+            // 等待协程完成（轮询 done 标志，worker 线程执行任务）
+            while !ts.done.load(Ordering::SeqCst) {
+                std::thread::yield_now();
             }
             let result_guard = ts.result.lock().unwrap();
             let result = result_guard

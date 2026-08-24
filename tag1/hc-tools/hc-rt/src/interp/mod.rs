@@ -58,7 +58,7 @@ pub(crate) enum ChannelState {
     },
 }
 
-// ---------- 协程调度器（M:N 模型，Tasks 2+3+4）----------
+// ---------- 协程调度器（M:N 模型，Task 5 实现）----------
 
 /// 协程（Goroutine）ID
 pub(crate) type GId = u64;
@@ -80,33 +80,27 @@ pub(crate) enum GResult {
 }
 
 /// 协程（Goroutine）——轻量执行单元
-#[derive(Debug)]
 pub(crate) struct Goroutine {
     pub id: GId,
     pub state: GState,
     pub name: String,
+    pub task: Option<Box<dyn FnOnce() + Send>>,
+    pub result: Option<GResult>,
 }
 
-/// 协程调度器（M:N 模型，G-M-P 简化版）
-///
-/// 管理 G 的生命周期：创建、调度、完成。实际 work-stealing 与 worker 循环
-/// 在 Task 4 中实现；本模块仅提供数据结构与基本方法。
-pub(crate) struct GoroutineScheduler {
-    /// 全局就绪队列
+/// 调度器内部状态（共享，Arc<Mutex<>> 保护）
+struct SchedulerInner {
     global_queue: VecDeque<GId>,
-    /// 所有 G 的映射表
     goroutines: HashMap<GId, Goroutine>,
-    /// G 结果表
-    results: HashMap<GId, GResult>,
-    /// 下一 G ID（自增分配）
     next_gid: GId,
-    /// 工作线程数（GOMAXPROCS）
     num_workers: usize,
-    /// 工作线程句柄
+}
+
+/// 协程调度器（M:N 模型）
+pub(crate) struct GoroutineScheduler {
+    inner: Arc<Mutex<SchedulerInner>>,
     workers: Vec<thread::JoinHandle<()>>,
-    /// 是否已启动
     started: bool,
-    /// 停止标志（共享给 worker 线程）
     stop: Arc<AtomicBool>,
 }
 
@@ -116,16 +110,27 @@ impl GoroutineScheduler {
             .map(|v| v.get())
             .unwrap_or(4);
         GoroutineScheduler {
-            global_queue: VecDeque::new(),
-            goroutines: HashMap::new(),
-            results: HashMap::new(),
-            next_gid: 1,
-            num_workers: n,
+            inner: Arc::new(Mutex::new(SchedulerInner {
+                global_queue: VecDeque::new(),
+                goroutines: HashMap::new(),
+                next_gid: 1,
+                num_workers: n,
+            })),
             workers: Vec::new(),
             started: false,
             stop: Arc::new(AtomicBool::new(false)),
         }
     }
+
+impl Drop for GoroutineScheduler {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let workers = std::mem::take(&mut self.workers);
+        for w in workers {
+            let _ = w.join();
+        }
+    }
+}
 
     /// 启动 worker 线程池
     pub fn start(&mut self) {
@@ -133,64 +138,95 @@ impl GoroutineScheduler {
             return;
         }
         self.started = true;
-        let n = self.num_workers;
+        let n = { self.inner.lock().unwrap().num_workers };
         for i in 0..n {
+            let inner = self.inner.clone();
             let stop = self.stop.clone();
             let worker = thread::Builder::new()
                 .name(format!("hc-worker-{i}"))
                 .spawn(move || {
-                    Self::worker_loop(i, stop);
+                    Self::worker_loop(inner, stop);
                 })
                 .expect("spawn scheduler worker");
             self.workers.push(worker);
         }
     }
 
-    /// Worker 主循环（Task 4 中实现实际调度）
-    fn worker_loop(_worker_id: usize, stop: Arc<AtomicBool>) {
+    /// Worker 主循环：从全局队列取 G、执行任务、标记完成
+    fn worker_loop(inner: Arc<Mutex<SchedulerInner>>, stop: Arc<AtomicBool>) {
         while !stop.load(Ordering::Relaxed) {
-            // 暂为空闲循环——实际 work-stealing 调度在 Task 4 中实现
-            thread::sleep(std::time::Duration::from_millis(10));
+            let gid = {
+                let mut s = inner.lock().unwrap();
+                s.global_queue.pop_front()
+            };
+            let Some(gid) = gid else {
+                thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            };
+            let task = {
+                let mut s = inner.lock().unwrap();
+                if let Some(g) = s.goroutines.get_mut(&gid) {
+                    g.state = GState::Running;
+                    g.task.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(task) = task {
+                task();
+                let mut s = inner.lock().unwrap();
+                if let Some(g) = s.goroutines.get_mut(&gid) {
+                    g.state = GState::Done;
+                }
+            }
         }
     }
 
     /// 提交一个协程到调度器
-    pub fn submit(&mut self, name: String) -> GId {
-        let id = self.next_gid;
-        self.next_gid += 1;
-        self.goroutines.insert(
+    pub fn submit(&self, name: String, task: Box<dyn FnOnce() + Send>) -> GId {
+        let mut s = self.inner.lock().unwrap();
+        let id = s.next_gid;
+        s.next_gid += 1;
+        s.goroutines.insert(
             id,
             Goroutine {
                 id,
                 state: GState::Runnable,
                 name,
+                task: Some(task),
+                result: None,
             },
         );
-        self.global_queue.push_back(id);
+        s.global_queue.push_back(id);
         id
     }
 
     /// 获取协程状态
     pub fn get_state(&self, id: GId) -> Option<GState> {
-        self.goroutines.get(&id).map(|g| g.state)
-    }
-
-    /// 设置协程状态
-    pub fn set_state(&mut self, id: GId, state: GState) {
-        if let Some(g) = self.goroutines.get_mut(&id) {
-            g.state = state;
-        }
-    }
-
-    /// 设置协程结果并标记为 Done
-    pub fn set_result(&mut self, id: GId, result: GResult) {
-        self.results.insert(id, result);
-        self.set_state(id, GState::Done);
+        self.inner
+            .lock()
+            .unwrap()
+            .goroutines
+            .get(&id)
+            .map(|g| g.state)
     }
 
     /// 获取协程结果
-    pub fn get_result(&self, id: GId) -> Option<&GResult> {
-        self.results.get(&id)
+    pub fn get_result(&self, id: GId) -> Option<GResult> {
+        self.inner
+            .lock()
+            .unwrap()
+            .goroutines
+            .get(&id)
+            .and_then(|g| g.result.clone())
+    }
+
+    /// 设置协程结果
+    pub fn set_result(&self, id: GId, result: GResult) {
+        let mut s = self.inner.lock().unwrap();
+        if let Some(g) = s.goroutines.get_mut(&id) {
+            g.result = Some(result);
+        }
     }
 }
 

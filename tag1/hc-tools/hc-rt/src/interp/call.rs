@@ -733,8 +733,11 @@ impl Interp {
                 let callee_clone = callee.clone();
                 let arg_vals_clone = arg_vals.clone();
 
-                // 启动 OS 线程立即执行
-                let join_handle = thread::spawn(move || {
+                // 确保调度器已启动
+                self.scheduler.start();
+
+                // 创建协程任务闭包
+                let task: Box<dyn FnOnce() + Send> = Box::new(move || {
                     let mut interp = Interp::new(&source);
                     let program =
                         hc::parse_source(&source).unwrap_or_else(|_| panic!("spawn: parse failed"));
@@ -777,10 +780,13 @@ impl Interp {
                     done_tx.store(true, Ordering::SeqCst);
                 });
 
+                // 提交协程到调度器
+                let gid = self.scheduler.submit("spawn".to_string(), task);
+
                 self.thread_handles.insert(
                     tid,
                     ThreadState {
-                        join_handle: Some(join_handle),
+                        join_handle: None,
                         result,
                         cancel,
                         done,
@@ -2111,17 +2117,16 @@ impl Interp {
         0
     }
 
-    /// 等待 OS 线程结束并返回结果
+    /// 等待协程结束并返回结果
     fn thread_join(&mut self, tid: i64, span: &Span) -> Result<Value> {
         let mut handle = self
             .thread_handles
             .remove(&tid)
             .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
 
-        // 等待线程结束
-        if let Some(jh) = handle.join_handle.take() {
-            jh.join()
-                .map_err(|_| RtError::msg("ThreadPanic", format!("thread {tid} panicked")))?;
+        // 等待协程完成（轮询 done 标志，worker 线程执行任务）
+        while !handle.done.load(Ordering::SeqCst) {
+            thread::yield_now();
         }
 
         // 获取结果
@@ -2138,9 +2143,10 @@ impl Interp {
 
     /// 非失败版 thread_join（用于 drain_root_threads，丢弃错误）
     pub(crate) fn thread_join_impl(&mut self, tid: i64) {
-        if let Some(mut handle) = self.thread_handles.remove(&tid) {
-            if let Some(jh) = handle.join_handle.take() {
-                let _ = jh.join();
+        if let Some(handle) = self.thread_handles.remove(&tid) {
+            // 等待协程完成
+            while !handle.done.load(Ordering::SeqCst) {
+                thread::yield_now();
             }
         }
     }

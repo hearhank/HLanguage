@@ -3434,8 +3434,11 @@ pub(crate) fn call_builtin(
             let callee_clone = callee.clone();
             let arg_vals_clone = arg_vals.clone();
 
-            // 启动 OS 线程立即执行
-            let join_handle = thread::spawn(move || {
+            // 确保调度器已启动
+            ctx.scheduler.start();
+
+            // 创建协程任务闭包
+            let task: Box<dyn FnOnce() + Send> = Box::new(move || {
                 // 检查取消标志
                 if cancel_tx.load(Ordering::SeqCst) {
                     let err_v = err_val(&*module, "Cancelled");
@@ -3479,10 +3482,13 @@ pub(crate) fn call_builtin(
                 done_tx.store(true, Ordering::SeqCst);
             });
 
+            // 提交协程到调度器
+            let _gid = ctx.scheduler.submit("spawn".to_string(), task);
+
             ctx.thread_handles.insert(
                 tid,
                 ThreadStateIr {
-                    join_handle: Some(join_handle),
+                    join_handle: None,
                     result,
                     cancel,
                     done,

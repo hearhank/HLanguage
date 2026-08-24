@@ -33,3 +33,8 @@ extensions/zed/grammars/
 # 编辑器/系统
 .DS_Store
 Thumbs.db
+
+# Tool
+# .claude/
+.Zed/
+.*/
