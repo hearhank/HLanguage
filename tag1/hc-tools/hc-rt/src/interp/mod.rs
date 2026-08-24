@@ -232,6 +232,7 @@ impl Drop for GoroutineScheduler {
 
 // ---------- 子模块 ----------
 mod call;
+mod chan;
 mod eval;
 mod expr;
 mod io;
@@ -239,6 +240,7 @@ mod layout;
 mod loader;
 
 pub(crate) use self::call::*;
+pub(crate) use self::chan::*;
 pub(crate) use self::eval::*;
 pub(crate) use self::expr::*;
 pub(crate) use self::io::*;
