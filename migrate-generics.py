@@ -14,8 +14,8 @@ import sys
 # H generic type constructors actually used across examples/docs.
 GENERICS = {
     "Vec", "Map", "Table", "Pair", "PairPair", "Future", "Thread",
-    "Fn1", "FnN", "IIterable", "ArrayLen", "OneToOne", "OneToMany",
-    "ManyToOne", "ManyToMany", "LinkedList", "Opt", "List",
+    "Fn1", "FnN", "IIterable", "ArrayLen", "Pipe", "Tee",
+    "Funnel", "Hub", "LinkedList", "Opt", "List",
 }
 
 

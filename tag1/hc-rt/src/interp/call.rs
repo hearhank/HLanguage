@@ -2178,9 +2178,9 @@ impl Interp {
         }
     }
 
-    // ---------- 组 F：四模式共享容器（OneToOne/OneToMany/ManyToOne/ManyToMany） ----------
+    // ---------- 组 F：四模式共享容器（Pipe/Tee/Funnel/Hub） ----------
 
-    /// 四模式容器构造：`OneToOne(T).init(alloc[, cap])`。fields 布局：
+    /// 四模式容器构造：`Pipe<T>.init(alloc[, cap])`。fields 布局：
     /// `queue`（FIFO 元素数组）/ `closed`（结束标志）/ `alloc`（分配器引用）/
     /// `cap`（仅通道形态 init(alloc, cap)——send/recv 有界）。
     pub(crate) fn make_four_mode_container(
@@ -2208,14 +2208,14 @@ impl Interp {
             };
             f.insert("cap".to_string(), Value::Int(cap_i));
         }
-        // E4：OneToOne 使用 mpsc 通道（无锁 SPSC）
-        if name == "OneToOne" {
+        // E4：Pipe 使用 mpsc 通道（无锁 SPSC）
+        if name == "Pipe" {
             let (tx, rx) = mpsc::channel();
             let cid = self.next_channel_id;
             self.next_channel_id += 1;
             self.channels.insert(
                 cid,
-                ChannelState::OneToOne {
+                ChannelState::Pipe {
                     sender: tx,
                     receiver: rx,
                 },
@@ -2247,8 +2247,8 @@ impl Interp {
             }
             _ => return Err(RtError::new("TypeError", Some(span.clone()))),
         };
-        // E4：OneToOne 使用 mpsc 通道
-        if name == "OneToOne" {
+        // E4：Pipe 使用 mpsc 通道
+        if name == "Pipe" {
             let cid = match ccell.borrow().fields.get("_chan_id") {
                 Some(Value::Int(id)) => *id,
                 _ => return Err(RtError::new("TypeError", Some(span.clone()))),
@@ -2355,7 +2355,7 @@ impl Interp {
         }
     }
 
-    /// E4：OneToOne 通道方法（使用 mpsc 无锁 SPSC 队列）
+    /// E4：Pipe 通道方法（使用 mpsc 无锁 SPSC 队列）
     fn call_one_to_one_method(
         &mut self,
         cid: i128,
@@ -2382,7 +2382,7 @@ impl Interp {
                     .get_mut(&cid_i64)
                     .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
                 match state {
-                    ChannelState::OneToOne { sender, .. } => {
+                    ChannelState::Pipe { sender, .. } => {
                         let _ = sender.send(v);
                     }
                 }
@@ -2397,7 +2397,7 @@ impl Interp {
                     .get_mut(&cid_i64)
                     .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
                 match state {
-                    ChannelState::OneToOne { receiver, .. } => match receiver.recv() {
+                    ChannelState::Pipe { receiver, .. } => match receiver.recv() {
                         Ok(v) => Ok(Some(v)),
                         Err(_) => Ok(Some(self.err_val("Closed"))),
                     },
@@ -2412,7 +2412,7 @@ impl Interp {
                     .get_mut(&cid_i64)
                     .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
                 match state {
-                    ChannelState::OneToOne { receiver, .. } => match receiver.try_recv() {
+                    ChannelState::Pipe { receiver, .. } => match receiver.try_recv() {
                         Ok(v) => Ok(Some(Value::Opt(Some(Rc::new(v))))),
                         Err(_) => Ok(Some(Value::Opt(None))),
                     },

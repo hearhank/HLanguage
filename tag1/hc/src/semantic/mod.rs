@@ -364,12 +364,12 @@ pub(crate) fn is_serialize_builtin(field: &str) -> bool {
 pub(crate) fn is_builtin_type(name: &str) -> bool {
     matches!(
         name,
-        // 组 F（Q32 内建共享特例）：四模式共享容器类型——OneToOne/OneToMany/ManyToOne/
-        // ManyToMany 为内建泛型共享特例（方法取 *Self；不占用唯一写者槽）
-        "OneToOne"
-            | "OneToMany"
-            | "ManyToOne"
-            | "ManyToMany"
+        // 组 F（Q32 内建共享特例）：四模式共享容器类型——Pipe/Tee/Funnel/
+        // Hub 为内建泛型共享特例（方法取 *Self；不占用唯一写者槽）
+        "Pipe"
+            | "Tee"
+            | "Funnel"
+            | "Hub"
             | "String"
             | "Vec"
             | "Map"

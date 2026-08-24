@@ -3422,16 +3422,16 @@ pub(crate) fn call_builtin(
             })))
         }
         // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
-        // ---------- 组 F：四模式类型实例化（OneToOne<i32> → 空容器标记） ----------
+        // ---------- 组 F：四模式类型实例化（Pipe<i32> → 空容器标记） ----------
         // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
-        "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {
-            if name == "OneToOne" {
+        "Pipe" | "Tee" | "Funnel" | "Hub" => {
+            if name == "Pipe" {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let cid = ctx.next_channel_id;
                 ctx.next_channel_id += 1;
                 ctx.channels.insert(
                     cid,
-                    ChannelStateIr::OneToOne {
+                    ChannelStateIr::Pipe {
                         sender: tx,
                         receiver: rx,
                     },

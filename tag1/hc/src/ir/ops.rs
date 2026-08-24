@@ -79,7 +79,7 @@ pub(crate) fn is_assert_builtin(name: &str) -> bool {
 
 /// 组 F：四模式共享容器类型名（对齐 oracle interp.rs `is_four_mode_type`）
 pub(crate) fn is_four_mode_type_ir(name: &str) -> bool {
-    matches!(name, "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany")
+    matches!(name, "Pipe" | "Tee" | "Funnel" | "Hub")
 }
 
 /// 自由内建（非 `@` 前缀；测试内隐式可用，普通函数体按名路由到 `CallBuiltin`）。
@@ -103,8 +103,8 @@ pub(crate) fn is_free_builtin(name: &str) -> bool {
             | "parse_int" | "parse_float"
             // 组 G 线程（E2.2）：spawn(f, args...) owned Thread(T)——协作式延迟执行
             | "spawn"
-            // 组 F：四模式类型实例化 OneToOne<i32> → 空容器标记（init 构造真实容器）
-            | "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany"
+            // 组 F：四模式类型实例化 Pipe<i32> → 空容器标记（init 构造真实容器）
+            | "Pipe" | "Tee" | "Funnel" | "Hub"
     )
 }
 
@@ -120,9 +120,9 @@ pub(crate) fn is_type_arg_pos(name: &str, i: usize) -> bool {
         "@atomicLoad" | "@atomicStore" | "@atomicRmw" => i == 0,
         // alloc.init(ABC) / arena.init(ABC)：类型名参数（运行时按名建空实例）
         "alloc.init" | "arena.init" => i == 0,
-        // 组 F：四模式类型实例化 OneToOne<i32> 的类型参数——降级 Const Str、
+        // 组 F：四模式类型实例化 Pipe<i32> 的类型参数——降级 Const Str、
         // 运行时 call_builtin 忽略（对齐 oracle 的 eval_call 标记短路）
-        "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => i == 0,
+        "Pipe" | "Tee" | "Funnel" | "Hub" => i == 0,
         // math.nan/math.inf/math.inf_neg(f64)：类型名参数（运行时忽略，仅指示宽度）
         "math.nan" | "math.inf" | "math.inf_neg" => i == 0,
         _ => false,

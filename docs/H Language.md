@@ -839,7 +839,7 @@ fn List(T: type) type     // comptime 式泛型：编译期函数、类型即值
 ### 15.1 基础语法
 
 ```hc
-var shared: owned ManyToMany<i32> = ...;        // 四模式共享容器
+var shared: owned Hub<i32> = ...;        // 四模式共享容器
 var t: owned Thread<i32> = spawn(af, ...);       // spawn = 函数 + 显式参数
 var r = try t.join();                        // 消耗所有权（await 同源）
 t.cancel() / t.is_done() / t.detach()
@@ -850,10 +850,10 @@ var f: Future<R> = af(...); var v = await f;  // await 任何函数可用
 
 | 类型 | 语义 |
 |---|---|
-| `OneToOne<T>` | 单读单写 |
-| `OneToMany<T>` | 单读多写 |
-| `ManyToOne<T>` | 多读单写 |
-| `ManyToMany<T>` | 多读多写 |
+| `Pipe<T>` | 单读单写 |
+| `Tee<T>` | 单读多写 |
+| `Funnel<T>` | 多读单写 |
+| `Hub<T>` | 多读多写 |
 
 - 内建泛型共享内存容器；写者数量由类型名保证（单写者无锁、多写者互斥）
 - **协作式透明实现**：单线程确定性模型下四变体运行时行为一致（读者/写者数量为类型层契约，不引入真锁/真并发；真 OS 并行归 1.x）

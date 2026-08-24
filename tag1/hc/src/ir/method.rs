@@ -520,14 +520,14 @@ pub(crate) fn make_four_mode_ir(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> 
             ctx.alloc(Cell::Value(IrValue::Int(cap_i))),
         );
     }
-    // E4：OneToOne 使用 mpsc 通道（无锁 SPSC）
-    if name == "OneToOne" {
+    // E4：Pipe 使用 mpsc 通道（无锁 SPSC）
+    if name == "Pipe" {
         let (tx, rx) = std::sync::mpsc::channel();
         let cid = ctx.next_channel_id;
         ctx.next_channel_id += 1;
         ctx.channels.insert(
             cid,
-            ChannelStateIr::OneToOne {
+            ChannelStateIr::Pipe {
                 sender: tx,
                 receiver: rx,
             },
@@ -566,8 +566,8 @@ pub(crate) fn call_four_mode_method_ir(
         Cell::Class { name, .. } => name.clone(),
         _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
     };
-    // E4：OneToOne 使用 mpsc 通道
-    if class_name == "OneToOne" {
+    // E4：Pipe 使用 mpsc 通道
+    if class_name == "Pipe" {
         let (closed, cid) = {
             let fields = match &ctx.cells[c] {
                 Cell::Class { fields, .. } => fields.clone(),
@@ -711,7 +711,7 @@ pub(crate) fn call_four_mode_method_ir(
     }
 }
 
-/// E4：OneToOne 通道方法（IR 版本，使用 mpsc 无锁 SPSC 队列）
+/// E4：Pipe 通道方法（IR 版本，使用 mpsc 无锁 SPSC 队列）
 fn call_one_to_one_method_ir(
     ctx: &mut Ctx,
     module: &IrModule,
@@ -737,7 +737,7 @@ fn call_one_to_one_method_ir(
                 .get_mut(&cid_i64)
                 .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
             match state {
-                ChannelStateIr::OneToOne { sender, .. } => {
+                ChannelStateIr::Pipe { sender, .. } => {
                     let _ = sender.send(args[0].clone());
                 }
             }
@@ -752,7 +752,7 @@ fn call_one_to_one_method_ir(
                 .get_mut(&cid_i64)
                 .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
             match state {
-                ChannelStateIr::OneToOne { receiver, .. } => match receiver.recv() {
+                ChannelStateIr::Pipe { receiver, .. } => match receiver.recv() {
                     Ok(v) => Ok(Some(v)),
                     Err(_) => Ok(Some(err_val(module, "Closed"))),
                 },
@@ -767,7 +767,7 @@ fn call_one_to_one_method_ir(
                 .get_mut(&cid_i64)
                 .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
             match state {
-                ChannelStateIr::OneToOne { receiver, .. } => match receiver.try_recv() {
+                ChannelStateIr::Pipe { receiver, .. } => match receiver.try_recv() {
                     Ok(v) => Ok(Some(opt_val(Some(v)))),
                     Err(_) => Ok(Some(opt_val(None))),
                 },

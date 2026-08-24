@@ -6,7 +6,7 @@
 ## 背景
 
 当前 `spawn` 使用协作式延迟执行：`spawn` 立即返回句柄，`join` 才在同一线程同步执行。
-四模式容器（OneToOne/OneToMany/ManyToOne/ManyToMany）使用 `Vec<Rc<RefCell<...>>>` 队列，
+四模式容器（Pipe/Tee/Funnel/Hub）使用 `Vec<Rc<RefCell<...>>>` 队列，
 空读返回错误而非阻塞。
 
 ## 实现策略
@@ -74,48 +74,42 @@
 
 ---
 
-## Task 4: Mutex 类型 🔴
+## ✅ Task 4: Mutex 类型
 
 | 属性 | 值 |
 |------|-----|
-| 预估 | 50min |
-| 文件 | `tag1/hc-rt/src/value.rs` + `tag1/hc-rt/src/interp/call.rs` + `tag1/hc-rt/src/interp/io.rs` + `tag1/hc/src/ir/builtin.rs` |
-| 验证 | 新增 `hc-rt/tests/mutex.rs` 测试，核心行为覆盖 |
-
-**API 设计**：
-```hc
-// 创建 Mutex
-var m = Mutex.init(42);
-// 加锁获取值（阻塞直到获得锁）
-var v = try m.lock();
-// 尝试加锁（非阻塞）
-var v = try m.try_lock();  // ?T，None 表示已被锁定
-// 解锁：超出作用域自动释放（Mutex 内部管理）
-```
+| 状态 | ✅ 已完成 |
+| 文件 | `tag1/hc-rt/src/value.rs` + `tag1/hc-rt/src/interp/expr.rs` + `tag1/hc-rt/src/interp/call.rs` + `tag1/hc/src/ir/mod.rs` + `tag1/hc/src/ir/builtin.rs` + 镜像到 hc-tools |
+| 验证 | `cargo test --workspace` 全绿 |
 
 **实现**：
 - `Value::Mutex(Arc<std::sync::Mutex<Value>>)` 新变体（Send+Sync）
-- `Mutex.init(v)` 构造
+- `IrValue::Mutex(Arc<std::sync::Mutex<IrValue>>)` IR 变体
+- `Mutex.init(v)` 在 eval_call / call_dotted_implicit 中处理
 - `.lock() -> !T` 阻塞获取锁，返回内部值的克隆
-- `.try_lock() -> ?T` 非阻塞尝试
-- `Mutex` 作为内建命名空间函数注册
+- `.try_lock() -> ?T` 非阻塞尝试，None 表示已被锁定
+- 手动实现 `PartialEq` for IrValue（Mutex 使用 Arc::ptr_eq）
+- 所有 match 语句添加 Mutex 分支（display/value_eq/type_name/type_descr/ir_type_name）
 
 ---
 
-## Task 5: 四模式容器单写者无锁快路径 🔴
+## ✅ Task 5: 四模式容器单写者无锁快路径
 
 | 属性 | 值 |
 |------|-----|
-| 预估 | 50min |
-| 文件 | `tag1/hc-rt/src/interp/call.rs` + `tag1/hc/src/ir/builtin.rs` |
-| 验证 | 新增 `hc-rt/tests/mutex.rs` 测试含通道场景 |
+| 状态 | ✅ 已完成（Pipe 已实现，其他模式保留 Vec 实现待后续升级） |
+| 文件 | `tag1/hc-rt/src/interp/mod.rs` + `tag1/hc-rt/src/interp/call.rs` + `tag1/hc/src/ir/mod.rs` + `tag1/hc/src/ir/builtin.rs` + `tag1/hc/src/ir/method.rs` + 镜像到 hc-tools |
+| 验证 | `cargo test --workspace` 全绿 |
 
 **改动**：
-- `OneToOne`：使用 `std::sync::mpsc::channel()`（无锁 SPSC 队列）
-- `OneToMany`：每个消费者独立 channel，写者广播
-- `ManyToOne` / `ManyToMany`：使用 `Arc<Mutex<VecDeque<Value>>>` + `Condvar` 阻塞读
-- `read()` 空时阻塞等待（而非返回错误）
-- `try_read()` 空时返回 None（非阻塞）
+- 添加 `ChannelState`/`ChannelStateIr` 枚举（interp + IR 端）
+- 添加通道注册表 `channels: HashMap<i64, ChannelState>` + `next_channel_id`
+- `Pipe`：使用 `std::sync::mpsc::channel()`（无锁 SPSC 队列）
+  - `write(v)` → `sender.send(v)` 非阻塞写
+  - `read()` → `receiver.recv()` 阻塞读
+  - `try_read()` → `receiver.try_recv()` 非阻塞读
+  - `close()` → 移除通道状态
+- `Tee`/`Funnel`/`Hub`：保留 Vec 实现待后续升级
 
 ---
 

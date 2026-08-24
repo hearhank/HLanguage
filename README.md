@@ -80,7 +80,7 @@ H2/
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | E1 元编程 | 脚本生成（`script` 块）、comptime 完整（类型即值）、泛型完整 | ✅ 已落地（script 块装载期展开 + 序列化定制 + comptime 类型函数/值函数/anytype + 泛型实例化） |
-| E2 并发与异步 | 线程 / 异步 / 四模式 / @atomic / Send·Sync 静态标记 | ✅ 已落地：spawn/join/cancel/is_done/detach + async fn/await + Io.threaded/evented + 四模式容器（OneToOne/OneToMany/ManyToOne/ManyToMany）+ @atomicLoad/Store/Rmw + Send·Sync 编译期诊断（type_is_send/type_is_sync 递归检查含四模式类型豁免 + spawn 边界诊断） |
+| E2 并发与异步 | 线程 / 异步 / 四模式 / @atomic / Send·Sync 静态标记 | ✅ 已落地：spawn/join/cancel/is_done/detach + async fn/await + Io.threaded/evented + 四模式容器（Pipe/Tee/Funnel/Hub）+ @atomicLoad/Store/Rmw + Send·Sync 编译期诊断（type_is_send/type_is_sync 递归检查含四模式类型豁免 + spawn 边界诊断） |
 | E3 标准库扩展 | 四大支柱完整（含 UDP / HTTP / IPC / FFI / 序列化库等） | ✅ 已落地：net UDP/HTTP、ipc 管道/共享内存、storage/archive、text/time/rng、serialize 库（fmt_int/fmt_float/parse 辅助组）、Table 类型、`hc cc` C 互操作编译 |
 | E4 系统编程 | 系统编程特性（K1–K11） | ✅ 已落地：K1 无标签 union / K2 volatile / K4 @ptrFromInt·@intFromPtr / K5 export fn + `extern fn` 外部函数声明，K3 asm / K6 freestanding / K7–K11 1.x |
 | E5 工具链扩展 | LSP / 格式化 / lint / 文档生成 / 项目脚手架 / 包注册中心 | ✅ 大部分落地：hc fmt（token 级重排 + AST 保真 + --check）/ hc lint（9 规则 + --json）/ hc doc（Markdown 生成 + 索引页）/ hc lsp（诊断推送 + 自动补全 + 跳转定义 + 悬停提示 + 文档注释）/ hc init 脚手架 / hc cc C 互操作编译 / hc pkg add/publish；B7 质量工具完整（LSP/格式化/lint 集）已完成；包注册中心正式版 1.x |

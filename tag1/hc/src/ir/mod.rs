@@ -753,7 +753,7 @@ pub(crate) struct ThreadStateIr {
 /// 通道状态（IR 版本，E4：四模式容器真并行）
 #[derive(Debug)]
 pub(crate) enum ChannelStateIr {
-    OneToOne {
+    Pipe {
         sender: std::sync::mpsc::Sender<IrValue>,
         receiver: std::sync::mpsc::Receiver<IrValue>,
     },
@@ -821,7 +821,7 @@ pub struct Ctx {
     pub thread_handles: HashMap<i64, ThreadStateIr>,
     /// E4：下一线程 ID（自增分配）
     pub next_tid: i64,
-    /// E4：通道注册表（通道 ID → 通道状态，OneToOne 使用 mpsc）
+    /// E4：通道注册表（通道 ID → 通道状态，Pipe 使用 mpsc）
     pub channels: HashMap<i64, ChannelStateIr>,
     /// E4：下一通道 ID（自增分配）
     pub next_channel_id: i64,

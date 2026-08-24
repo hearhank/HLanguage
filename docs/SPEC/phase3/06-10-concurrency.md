@@ -4,17 +4,17 @@
 >
 > **组 G 已提前落地（2026-08-17，第二部分）**：E2.2 **线程生命周期**子集 = `spawn(f, args...) owned Thread<T>` / `join() !T` / `cancel() !void` / `is_done() bool` / `detach()` + 每线程 alloc（Q8）+ 捕获规则（Q18 绑定/逃逸 + Q19 冻结窗口静态检查）。并发模型为**协作式延迟执行**（确定性、单线程）：spawn 立即返回句柄但不并发运行，join/detach/程序结束时才执行到完成。实现覆盖三后端（interp / IR / 字节码一致）；**原生 LLVM 为子集边界**——spawn 需函数引用（FnRef），原生 ABI 未支持（Phase 8），编译模式响亮拒绝（`error.NotCallable`），不静默误编译（G4b 定案 A）。**C7 设计已定案（2026-08-22，ADR-0019）**：原生函数值/闭包 ABI 已定（胖闭包对象 + FnRef 函数符号地址 + 隐藏 env 首参 + 复用 `%Value` 通道），原生 spawn 子集边界待 Phase 8 实施解除。
 >
-> **状态（2026-08-18 组 F 落地后更新）**：`async`/`await`/`Future<T>`/`Io.threaded()/evented()` 已随组 E（E2.3 异步，协作式 Future）落地（标注 ✅）；**四模式类型（OneToOne/OneToMany/ManyToOne/ManyToMany）与 `@atomic*` 已随组 F（E2.1/E2.4）落地（2026-08-18，ADR-0011 逆转）**——协作式透明实现：单线程确定性下四变体运行时行为一致（读者/写者数量为类型层契约），原子操作无竞争 → 透明（标注 ✅）。**真 OS 并行与 `mutex` 仍按 ADR-0011 延迟 1.x**（需真并发硬件语义，本块不实现）。
+> **状态（2026-08-18 组 F 落地后更新）**：`async`/`await`/`Future<T>`/`Io.threaded()/evented()` 已随组 E（E2.3 异步，协作式 Future）落地（标注 ✅）；**四模式类型（Pipe/Tee/Funnel/Hub）与 `@atomic*` 已随组 F（E2.1/E2.4）落地（2026-08-18，ADR-0011 逆转）**——协作式透明实现：单线程确定性下四变体运行时行为一致（读者/写者数量为类型层契约），原子操作无竞争 → 透明（标注 ✅）。**真 OS 并行与 `mutex` 仍按 ADR-0011 延迟 1.x**（需真并发硬件语义，本块不实现）。
 
 ```hc
-var shared: owned ManyToMany<i32> = ...;   // 四模式共享容器
+var shared: owned Hub<i32> = ...;   // 四模式共享容器
 var t: owned Thread<i32> = spawn(af, ...); // spawn = 函数 + 显式参数（Q18）
 var r = try t.join();                  // 消耗所有权（await 同源）
 t.cancel() / t.is_done() / t.detach()
 var f: Future<R> = af(...); var v = await f;  // await 任何函数可用（Q19）；R = 完整返回类型（Q20）
 ```
 
-- ✅ **四模式类型（组 F，2026-08-18 落地）**：`OneToOne<T>`（单读单写）/ `OneToMany<T>`（单读多写）/ `ManyToOne<T>`（多读单写）/ `ManyToMany<T>`（多读多写）——内建泛型共享内存容器，写者数量由类型名保证（单写者无锁、多写者互斥）；用泛型（脚本生成）插入数据类型。**协作式透明实现**：单线程确定性模型下四变体运行时行为一致（读者/写者数量为类型层契约，不引入真锁/真并发；真 OS 并行归 1.x）；运行时 = `Value::Class`/`IrValue::Class` + 类名分派，fields `queue`（FIFO）/`closed`/`alloc`/`cap`
+- ✅ **四模式类型（组 F，2026-08-18 落地）**：`Pipe<T>`（单读单写）/ `Tee<T>`（单读多写）/ `Funnel<T>`（多读单写）/ `Hub<T>`（多读多写）——内建泛型共享内存容器，写者数量由类型名保证（单写者无锁、多写者互斥）；用泛型（脚本生成）插入数据类型。**协作式透明实现**：单线程确定性模型下四变体运行时行为一致（读者/写者数量为类型层契约，不引入真锁/真并发；真 OS 并行归 1.x）；运行时 = `Value::Class`/`IrValue::Class` + 类名分派，fields `queue`（FIFO）/`closed`/`alloc`/`cap`
 - ✅ **四模式类型方法集（组 F，Q14 定案 + Q-R12 通道方法）**：`init(alloc)`（构造）/ `init(alloc, cap)`（通道有界）/ `write(v)`（队尾追加；close 后 → `error.Closed`）/ `read() T`（队首弹出；空 → `error.Empty`）/ `try_read() ?T`（队首弹出或 null）/ `close()`（置结束标志）/ **`send(v)` / `recv() T`**（通道方法：send = 有界写，满 → `error.ChannelFull`；recv ≡ read）；全部方法取 `*Self`（Q32 内建共享特例：并发安全由类型保证，用户类型不可模拟）
 - ✅ **缓冲与阻塞（组 F，2026-08-14 设计按协作式映射）**：共享内存容器（write/read）**无容量概念**——write 不阻塞（队尾追加）、read 空 → `error.Empty`；通道（send/recv）为**有界队列**——容量构造时指定（`init(alloc, cap)`），send 满 → `error.ChannelFull`（协作式无真阻塞）、recv 空 ≡ read；close 后 write/send 报 `error.Closed`、try_read 返回 null
 - ✅ **线程所有权（组 G）**：spawn 归当前作用域；退出时已完成→销毁、运行中→移交根作用域（**无隐式阻塞**）；**根作用域 = 程序最后退出场所**，负责最终资源回收（评审 A7）；显式 `join() !T` 消耗所有权，错误以 error union 跨线程传播（G2 已落地：join 透传 / cancel→`error.Cancelled` / detach 立即运行）

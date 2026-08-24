@@ -46,7 +46,7 @@
 
 | 功能 | Rust | H | 优缺点 |
 |---|---|---|---|
-| 共享状态 | `Arc<Mutex<T>>`/`RwLock`/atomics 自由组合 | **四模式类型**（OneToOne…ManyToMany，写者数由类型保证）+ 通道 `send`/`recv` | Rust 原语自由、生态大；H 模式化更语义化——牺牲灵活换正确性 |
+| 共享状态 | `Arc<Mutex<T>>`/`RwLock`/atomics 自由组合 | **四模式类型**（Pipe…Hub，写者数由类型保证）+ 通道 `send`/`recv` | Rust 原语自由、生态大；H 模式化更语义化——牺牲灵活换正确性 |
 | async/await | `async fn` + Future + tokio 生态 | `async fn` + `Future<R>` + `Io.threaded/evented` | 类似；H **await 任何函数可用**（无 async 传染）；Rust 生态成熟 |
 | Send/Sync | 编译期自动 trait 推导 | 静态并发安全标记（编译器内置，未细化） | Rust 推导强且久经考验；H 需在 M2/M5 细化 |
 | 无锁结构 | std 原子 + crossbeam | `@atomic` 原语 + 五内存序 | 原语齐备；Rust 生态更成熟 |

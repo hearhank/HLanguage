@@ -6,7 +6,7 @@ import H.std.{io};
 //   - spawn(f, args...)：函数 + 显式参数；返回 owned Thread<T>
 //   - 作用域绑定：async 任务 await 后回到当前作用域 → 可捕获引用
 //   - 逃逸线程：引用捕获禁用（编译期检查）
-//   - 四模式类型：OneToOne / OneToMany / ManyToOne / ManyToMany
+//   - 四模式类型：Pipe / Tee / Funnel / Hub
 
 fn compute(x: i32, y: i32) i32 {
     return x * y;
@@ -23,7 +23,7 @@ fn main() !void {
     io.print("result = {}\n", result);
 
     // 四模式共享容器：多读多写（写者互斥内建）
-    var shared = ManyToMany<i32>.init(alloc);
+    var shared = Hub<i32>.init(alloc);
     shared.write(42);
     io.print("shared = {}\n", shared.read());
 
@@ -41,7 +41,7 @@ fn main() !void {
 }
 
 [test] fn four_mode_shared_container() !void {
-    var shared = ManyToMany<i32>.init(alloc);
+    var shared = Hub<i32>.init(alloc);
     shared.write(42);
     try expect_eq(shared.read(), 42);
 }

@@ -1,12 +1,12 @@
 # 并发模型衔接定案：async/Future 走协作式；四模式与 @atomic 延迟至 1.x
 
-> **逆转注记（2026-08-18，本块内）**：本 ADR 原定「四模式类型与 `@atomic*` 延迟 1.x」。用户指令「完成并发和异步」**主动逆转**该裁决——**组 F（E2.1 四模式 + E2.4 原子）已在第三块内落地**，无需真 OS 线程：协作式单线程确定性模型下，四模式容器四变体（OneToOne/OneToMany/ManyToOne/ManyToMany）**运行时行为相同**（读者/写者数量为类型层契约，不引入真锁/真并发）；`@atomic*` 的 C11 内存序无竞争 → **透明实现**（load = deref、store = 写穿、Rmw = add/sub/exchange 返回旧值，内存序求值后丢弃）。示例 37/76/77/78 转绿（interpret 147/0/1）。**真 OS 并行与 `mutex` 仍归 1.x**。本 ADR 的 async/Future 协作式决策与「确定性承诺不变」不受影响。
+> **逆转注记（2026-08-18，本块内）**：本 ADR 原定「四模式类型与 `@atomic*` 延迟 1.x」。用户指令「完成并发和异步」**主动逆转**该裁决——**组 F（E2.1 四模式 + E2.4 原子）已在第三块内落地**，无需真 OS 线程：协作式单线程确定性模型下，四模式容器四变体（Pipe/Tee/Funnel/Hub）**运行时行为相同**（读者/写者数量为类型层契约，不引入真锁/真并发）；`@atomic*` 的 C11 内存序无竞争 → **透明实现**（load = deref、store = 写穿、Rmw = add/sub/exchange 返回旧值，内存序求值后丢弃）。示例 37/76/77/78 转绿（interpret 147/0/1）。**真 OS 并行与 `mutex` 仍归 1.x**。本 ADR 的 async/Future 协作式决策与「确定性承诺不变」不受影响。
 
 > 2026-08-18 定案（第三块前置裁决 A1）。关联：[ADR-0007 多线程模型](0007-threading-model.md)、[ADR-0008 async/await](0008-async-await.md)、[ADR-0004 双模式架构](0004-dual-mode-architecture.md)、[06-10-concurrency.md](../SPEC/06-10-concurrency.md)、[07-bootstrap-plan.md](../SPEC/07-bootstrap-plan.md)、执行细表 [10-part3-execution.md](../SPEC/10-part3-execution.md)。
 
 ## 背景
 
-- **ADR-0007/0008（2026-08-13）**：四模式共享容器（`OneToOne/OneToMany/ManyToOne/ManyToMany`）以**真 OS 线程**为预设——「单写者无锁路径」「send 满时阻塞」；async/await 提交任务「即生成线程」（`Io.Threaded` 默认）；`@atomic*`（Q-S3）= C11 五内存序无锁原语，且是四模式内部实现基础
+- **ADR-0007/0008（2026-08-13）**：四模式共享容器（`Pipe/Tee/Funnel/Hub`）以**真 OS 线程**为预设——「单写者无锁路径」「send 满时阻塞」；async/await 提交任务「即生成线程」（`Io.Threaded` 默认）；`@atomic*`（Q-S3）= C11 五内存序无锁原语，且是四模式内部实现基础
 - **组 G（2026-08-17，第二部分）**：落地 E2.2 线程生命周期时经用户裁决采用**协作式延迟执行**（确定性、单线程）——spawn 不并发运行，join/detach/程序结束时才执行到完成；一致性套件（ADR-0004 唯一语义源）要求 interp == IR 对同一程序 PASS/FAIL 完全一致
 - **张力**：四模式/@atomic 的「无锁路径」「阻塞 send」「C11 内存序」在协作式单线程模型下**无实际并发对象**——语义无法落地为真并发行为；而引入真 OS 线程将破坏协作式的确定性，与「没有隐藏控制」（ADR-0007 选择理由）和一致性套件的可比性冲突
 

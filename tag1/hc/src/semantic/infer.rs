@@ -2456,7 +2456,7 @@ impl Checker {
             SType::Named(n, args) => {
                 if is_collection(n) || is_builtin_type(n) {
                     // 集合类型（Vec/Map/Deque/Table/String）与内建类型（包括四模式共享
-                    // 容器 OneToOne/OneToMany/ManyToOne/ManyToMany）均为 Send——
+                    // 容器 Pipe/Tee/Funnel/Hub）均为 Send——
                     // 四模式容器是内建共享特例（Q32），内部同步，Send 由实现保证
                     args.iter().all(|a| self.type_is_send(a))
                 } else {

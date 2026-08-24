@@ -3,7 +3,7 @@ import H.std.{io};
 // 76-threads-edge.hc — 线程边缘语义（12.21/12.24）
 //
 //   - Thread 接口：join（消耗所有权）/ cancel / is_done / detach
-//   - 四模式类型全演示：OneToOne / OneToMany / ManyToOne / ManyToMany
+//   - 四模式类型全演示：Pipe / Tee / Funnel / Hub
 //   - 线程捕获：值复制 / move / global；作用域绑定可捕获引用（Q18）
 
 fn worker(x: i32) i32 {
@@ -26,10 +26,10 @@ fn main() !void {
     t2.detach();
 
     // 四模式类型（写者数量由类型名保证：单写者无锁、多写者互斥）
-    var s1 = OneToOne<i32>.init(alloc);    // 单读单写
-    var s2 = OneToMany<i32>.init(alloc);   // 单读多写
-    var s3 = ManyToOne<i32>.init(alloc);   // 多读单写
-    var s4 = ManyToMany<i32>.init(alloc);  // 多读多写（互斥）
+    var s1 = Pipe<i32>.init(alloc);    // 单读单写
+    var s2 = Tee<i32>.init(alloc);   // 单读多写
+    var s3 = Funnel<i32>.init(alloc);   // 多读单写
+    var s4 = Hub<i32>.init(alloc);  // 多读多写（互斥）
     s4.write(1);
     io.print("shared = {}\n", s4.read());
 
@@ -47,10 +47,10 @@ fn main() !void {
 }
 
 [test] fn four_mode_types() !void {
-    var s1 = OneToOne<i32>.init(alloc);
+    var s1 = Pipe<i32>.init(alloc);
     s1.write(2);
     try expect_eq(s1.read(), 2);
-    var s4 = ManyToMany<i32>.init(alloc);
+    var s4 = Hub<i32>.init(alloc);
     s4.write(1);
     try expect_eq(s4.read(), 1);
 }

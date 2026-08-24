@@ -148,7 +148,7 @@ graph TD
 
 | 模块 | 功能 | 详细说明 |
 |---|---|---|
-| E2.1 四模式类型 | 共享内存容器 | `OneToOne/OneToMany/ManyToOne/ManyToMany`：write/read/try_read/close/send/recv；**缓冲语义**（共享内存无容量、通道有界 `init(alloc, cap)`）；单写者无锁路径 |
+| E2.1 四模式类型 | 共享内存容器 | `Pipe/Tee/Funnel/Hub`：write/read/try_read/close/send/recv；**缓冲语义**（共享内存无容量、通道有界 `init(alloc, cap)`）；单写者无锁路径 |
 | ✅ E2.2 线程 | spawn/join/cancel | `spawn(f, args...) owned Thread(T)`；join/cancel（协作式）/is_done/detach；线程所有权（作用域 → 根作用域提升）；捕获规则（值复制/move/global + Q18 绑定例外 + Q19 冻结窗口）——**2026-08-17 组 G 提前落地**（协作式延迟执行；原生子集边界 Phase 8） |
 | E2.3 异步 | Future/async/await | `async fn` → `Future(R)`；`await` ≡ `join()`（任何函数可用）；协作式取消；`Io.threaded()`/`Io.evented()`（单线程事件循环） |
 | E2.4 原子 | @atomic | `@atomicLoad/Store/Rmw` + C11 五内存序；四模式内部实现基础 |

@@ -157,7 +157,7 @@ var sp: owned *INumber = box(a, alloc);     // 胖指针：data + 虚表 + alloc
 ## 9. 线程模型
 
 - 全局 `alloc` 每线程独立实例（§3.1），线程内分配/释放无锁
-- **Arena 线程本地**使用，不跨线程共享；跨线程共享数据走四种模式类型（`OneToOne` 等，内部自行管理存储，构造时接收 alloc）
+- **Arena 线程本地**使用，不跨线程共享；跨线程共享数据走四种模式类型（`Pipe` 等，内部自行管理存储，构造时接收 alloc）
 - `Allocator` 接口不承诺线程安全；需要共享分配器时用互斥包装（1.x，标准库提供 `mem.MutexAllocator` 候选）
 
 ## 10. tag1 现状与正式设计的差距

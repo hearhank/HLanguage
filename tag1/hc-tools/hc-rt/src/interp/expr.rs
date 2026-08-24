@@ -60,7 +60,7 @@ impl Interp {
                     "Vec" | "Deque" => return Ok(Value::vec(vec![], Value::Alloc)),
                     "Map" => return Ok(Value::map(HashMap::new(), Value::Alloc)),
                     "Table" => return Ok(Value::vec(vec![], Value::Alloc)),
-                    "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {
+                    "Pipe" | "Tee" | "Funnel" | "Hub" => {
                         return Ok(Value::class(name, HashMap::new()))
                     }
                     _ => {}
@@ -1414,7 +1414,7 @@ impl Interp {
                     // Table<i32> 类型实例化：空二维容器（init 填充）
                     return Ok(Value::vec(vec![], Value::Alloc));
                 }
-                // 组 F：四模式类型实例化 OneToOne<i32> → 空容器标记（init 构造真实容器）
+                // 组 F：四模式类型实例化 Pipe<i32> → 空容器标记（init 构造真实容器）
                 if is_four_mode_type(name) {
                     return Ok(Value::class(name, HashMap::new()));
                 }

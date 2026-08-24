@@ -19,7 +19,7 @@
 #      52→53 为 D1 副作用：interpret 侧 fmt_int 修复使 63-template-render 转绿，原生侧
 #      String.from/replace/find 仍缺 → 该例由双失败转为 mismatch。
 #      53→54 为 G1 副作用：`spawn(f, …)` 解析落地，77-producer-consumer 由双解析失败转为
-#      interpret 运行至 error.UndefinedName（四模式类型 OneToOne 未实现，第三块）而原生
+#      interpret 运行至 error.UndefinedName（四模式类型 Pipe 未实现，第三块）而原生
 #      LLVM 在 spawn 处 error.Unsupported 拒绝 → 计入 mismatch 的 +1；两后端均失败不变。
 #      54→55 为 G5 副作用：新增在列示例 90-thread-lifecycle（组 G 线程，interpret 全绿），
 #      原生子集边界（spawn 需 FnRef → error.NotCallable，Phase 8 ABI）→ 该例 1 mismatch。
@@ -28,11 +28,11 @@
 #      34-generics 原生编译转绿（降 2 mismatch——interpret 与 compile 双计数消除）；
 #      53→58 为组 E E1 副作用：async/await 解析落地使含 `async fn`/`await` 的 5 例
 #      （37/38/39/76/80）由双后端解析失败转为 interpret 绿 + 原生红——原生/IR 后端尚无
-#      Future/async 与四模式容器（ManyToMany 等），error.Unsupported 响亮中止。
+#      Future/async 与四模式容器（Hub 等），error.Unsupported 响亮中止。
 #      组 E E2-E4 后：5 例的 `[test]` 异步断言已在双后端（interpret + compile）全绿——
 #      IR 侧 async fn 调用同步执行 + await 透传（子集边界）对齐纯函数结果；剩余 58
 #      mismatch 中 5 例的文件级 MISMATCH 来自 `main` 函数特性而非 async：四模式容器
-#      （37/76 行 26/29，ManyToMany/OneToOne——组 F 已落地（2026-08-18 逆转），原生
+#      （37/76 行 26/29，Hub/Pipe——组 F 已落地（2026-08-18 逆转），原生
 #      LLVM 仍为子集边界 error.Unsupported）、38/80（G1 net 已落地仍红：38 主函数旧
 #      URL 形式 connect(url)/read_all(&conn) + JsonValue 类型未实现，80 主函数 https://
 #      网络不可达——仅 http:// 支持，均非 G1 范围）、Io.evented 原生构造器（39，

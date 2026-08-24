@@ -36,7 +36,7 @@ struct ThreadState {
 
 /// 通道状态（E4：四模式容器真并行）
 pub(crate) enum ChannelState {
-    OneToOne {
+    Pipe {
         sender: mpsc::Sender<Value>,
         receiver: mpsc::Receiver<Value>,
     },
@@ -74,10 +74,10 @@ pub(crate) fn alloc_zeroed_bytes(n: i128) -> Option<Vec<u8>> {
     Some(v)
 }
 
-/// 组 F：四模式共享容器类型名（OneToOne/OneToMany/ManyToOne/ManyToMany——内建泛型
+/// 组 F：四模式共享容器类型名（Pipe/Tee/Funnel/Hub——内建泛型
 /// 共享容器，写者数量由类型名保证；协作式单线程下四变体运行时行为相同）
 pub(crate) fn is_four_mode_type(name: &str) -> bool {
-    matches!(name, "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany")
+    matches!(name, "Pipe" | "Tee" | "Funnel" | "Hub")
 }
 
 /// 渲染类型为源码串（E1 `types.fields` 元数据 + 诊断用）——对齐 06-02 类型语法

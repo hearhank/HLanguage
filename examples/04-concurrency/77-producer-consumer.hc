@@ -8,13 +8,13 @@ import H.std.{io};
 //   - 作用域绑定（join 后回到当前作用域）→ 引用捕获允许（Q18）
 //   - 仅四模式类型可模拟（用户类型不可——需唯一写者）
 
-fn producer(ch: *OneToOne<i32>, n: i32) void {
+fn producer(ch: *Pipe<i32>, n: i32) void {
     for (0..n) |i| {
         ch.write(i * i);
     }
 }
 
-fn consumer(ch: *OneToOne<i32>, count: i32) i32 {
+fn consumer(ch: *Pipe<i32>, count: i32) i32 {
     var sum = 0;
     for (0..count) |_| {
         sum += ch.read();
@@ -23,7 +23,7 @@ fn consumer(ch: *OneToOne<i32>, count: i32) i32 {
 }
 
 fn main() !void {
-    var ch: owned OneToOne<i32> = OneToOne<i32>.init(alloc);
+    var ch: owned Pipe<i32> = Pipe<i32>.init(alloc);
 
     // 两个线程共享同一容器：各持 &ch（内建共享特例，Q32）
     var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
@@ -35,7 +35,7 @@ fn main() !void {
 }
 
 [test] fn producer_consumer() !void {
-    var ch: owned OneToOne<i32> = OneToOne<i32>.init(alloc);
+    var ch: owned Pipe<i32> = Pipe<i32>.init(alloc);
     var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
     var c_thread: owned Thread<i32> = spawn(consumer, &ch, 10);
     try p_thread.join();
