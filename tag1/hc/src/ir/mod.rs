@@ -25,6 +25,9 @@ use crate::rng::xorshift64;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 // ---------- 子模块 ----------
 mod builtin;
@@ -665,6 +668,22 @@ pub struct IterItem {
     pub is_ref: bool,
 }
 
+/// 线程运行结果（跨线程传递，IR 版本）
+#[derive(Debug)]
+pub(crate) enum ThreadResultIr {
+    Ok(IrValue),
+    Err(IrError),
+}
+
+/// OS 线程控制块（IR 版本）
+#[derive(Debug)]
+pub(crate) struct ThreadStateIr {
+    join_handle: Option<thread::JoinHandle<()>>,
+    result: Arc<Mutex<Option<ThreadResultIr>>>,
+    cancel: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+
 /// 运行时堆：跨帧共享的 cell 池（指针可跨帧存活——如传入函数后写穿调用方槽）。
 #[derive(Debug, Default)]
 pub struct Ctx {
@@ -723,6 +742,12 @@ pub struct Ctx {
     /// `@ptrFromInt` 依此重建原指针；未登记地址合成匿名槽（同地址幂等——对齐 interp
     /// 合成 cell 与原生 inttoptr 虚拟指针语义）。
     pub addr_registry: HashMap<i128, IrValue>,
+    /// E4：OS 线程控制表（tid → ThreadStateIr）
+    pub thread_handles: HashMap<i64, ThreadStateIr>,
+    /// E4：下一线程 ID（自增分配）
+    pub next_tid: i64,
+    /// E4：当前模块引用（供 spawn 新线程克隆以访问函数定义）
+    pub module: Option<Arc<IrModule>>,
 }
 
 /// io.ipc 管道共享态（协作式：读写均不阻塞；writer_open=false 且空缓冲 = 读端空切片）
@@ -1630,6 +1655,8 @@ impl IrRuntime {
             return Ok(());
         }
         self.inited = true;
+        // E4：存储模块引用供 spawn 新线程使用
+        self.ctx.module = Some(Arc::new(module.clone()));
         // G5：rng 默认状态（对齐 oracle Interp::new——seed(0) 亦回退该常量）
         self.ctx.rng_state = 0x9e37_79b9_7f4a_7c15;
         // 预分配全部全局 cell（声明序）——即使无全局也继续（保险：`@__init__` 仍须执行）。

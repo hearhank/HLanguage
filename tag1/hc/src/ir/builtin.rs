@@ -3279,9 +3279,9 @@ pub(crate) fn call_builtin(
             let v = args[0].clone();
             Ok(if shallow { v } else { deep_copy(ctx, v) })
         }
-        // ---------- 组 G 线程（E2.2，协作式延迟执行） ----------
-        // spawn(f, args...) owned Thread(T)：立即返回句柄但不并发运行——join/detach 时才
-        // 执行到完成（真并行留第三块 E2）。构造 `Class("Thread")`，字段经 cell 承载。
+        // ---------- 组 G 线程（E4：真 OS 并行） ----------
+        // spawn(f, args...) owned Thread(T)：立即使用 std::thread::spawn 启动 OS 线程
+        // 执行 f(args...)，返回 Thread 句柄。join 等待线程结束返回结果。
         "spawn" => {
             if args.is_empty() {
                 return Err(IrError::msg(
@@ -3291,29 +3291,114 @@ pub(crate) fn call_builtin(
             }
             let callee = deref_value(ctx, &args[0]).clone();
             match &callee {
-                IrValue::Fn(_) | IrValue::Closure { .. } => {}
+                IrValue::Fn(_) => {}
+                IrValue::Closure { .. } => {
+                    return Err(IrError::msg(
+                        "NotSupported",
+                        "spawn with closure not yet supported in IR backend",
+                    ));
+                }
                 _ => return Err(IrError::msg("NotCallable", "spawn callee is not callable")),
             }
-            // Q8：每线程独立 Arena 实例（子任务执行期间绑定为 alloc）
-            let alloc_v = IrValue::Arena(ctx.alloc(Cell::Arena(ArenaStateIr::new())));
-            let args_arr = make_arr(ctx, args[1..].to_vec());
+            let mut arg_vals = Vec::new();
+            for a in &args[1..] {
+                arg_vals.push(deref_value(ctx, a).clone());
+            }
+            // Q8：每线程独立 Arena 实例（在线程内创建，避免跨 Ctx 传递 cell 索引）
+
+            // E4：创建 OS 线程共享状态
+            let result = Arc::new(Mutex::new(None::<ThreadResultIr>));
+            let cancel = Arc::new(AtomicBool::new(false));
+            let done = Arc::new(AtomicBool::new(false));
+
+            let tid = ctx.next_tid;
+            ctx.next_tid += 1;
+
+            let module = ctx
+                .module
+                .clone()
+                .unwrap_or_else(|| Arc::new(IrModule::default()));
+
+            let result_tx = result.clone();
+            let cancel_tx = cancel.clone();
+            let done_tx = done.clone();
+
+            let callee_clone = callee.clone();
+            let arg_vals_clone = arg_vals.clone();
+
+            // 启动 OS 线程立即执行
+            let join_handle = thread::spawn(move || {
+                // 检查取消标志
+                if cancel_tx.load(Ordering::SeqCst) {
+                    let err_v = err_val(&*module, "Cancelled");
+                    let mut r = result_tx.lock().unwrap();
+                    *r = Some(ThreadResultIr::Ok(err_v));
+                    done_tx.store(true, Ordering::SeqCst);
+                    return;
+                }
+
+                let mut rt = IrRuntime::new();
+                let init_r = rt.init(&*module);
+                let r = match init_r {
+                    Ok(()) => {
+                        // 绑定每线程 alloc（在线程的 Ctx 内创建 Arena，避免 cell 索引跨 Ctx 传递）
+                        let alloc_v =
+                            IrValue::Arena(rt.ctx.alloc(Cell::Arena(ArenaStateIr::new())));
+                        rt.ctx.current_alloc = Some(alloc_v);
+                        match callee_clone {
+                            IrValue::Fn(ref fname) => {
+                                match pick_func(&rt.ctx, &*module, fname, &arg_vals_clone) {
+                                    Some(idx) => {
+                                        exec_func(&mut rt.ctx, &*module, idx, &arg_vals_clone, 0)
+                                    }
+                                    None => Err(IrError::msg(
+                                        "NoFunction",
+                                        format!("no function `{fname}`"),
+                                    )),
+                                }
+                            }
+                            _ => Err(IrError::msg("NotCallable", "spawn callee is not callable")),
+                        }
+                    }
+                    Err(e) => Err(e),
+                };
+
+                let mut rv = result_tx.lock().unwrap();
+                *rv = Some(match r {
+                    Ok(v) => ThreadResultIr::Ok(v),
+                    Err(e) => ThreadResultIr::Err(e),
+                });
+                done_tx.store(true, Ordering::SeqCst);
+            });
+
+            ctx.thread_handles.insert(
+                tid,
+                ThreadStateIr {
+                    join_handle: Some(join_handle),
+                    result,
+                    cancel,
+                    done,
+                },
+            );
+
+            // 返回 Thread 类值，包含 _tid 和用户可读字段
             let mut fields = HashMap::new();
-            fields.insert("fn".to_string(), ctx.alloc(Cell::Value(callee)));
-            fields.insert("args".to_string(), ctx.alloc(Cell::Value(args_arr)));
-            fields.insert("alloc".to_string(), ctx.alloc(Cell::Value(alloc_v)));
             fields.insert(
-                "cancel".to_string(),
-                ctx.alloc(Cell::Value(IrValue::Bool(false))),
+                "_tid".to_string(),
+                ctx.alloc(Cell::Value(IrValue::Int(tid as i128))),
             );
             fields.insert(
                 "done".to_string(),
                 ctx.alloc(Cell::Value(IrValue::Bool(false))),
             );
             fields.insert(
+                "cancel".to_string(),
+                ctx.alloc(Cell::Value(IrValue::Bool(false))),
+            );
+            fields.insert(
                 "detached".to_string(),
                 ctx.alloc(Cell::Value(IrValue::Bool(false))),
             );
-            fields.insert("result".to_string(), ctx.alloc(Cell::Value(IrValue::Void)));
             Ok(IrValue::Class(ctx.alloc(Cell::Class {
                 name: "Thread".into(),
                 fields,

@@ -54,16 +54,23 @@
 
 ---
 
-## Task 3: IR 后端 `spawn` 使用 OS 线程 🔴
+## ✅ Task 3: IR 后端 `spawn` 使用 OS 线程
 
 | 属性 | 值 |
 |------|-----|
-| 预估 | 30min |
-| 文件 | `tag1/hc/src/ir/builtin.rs` + `tag1/hc/src/ir/method.rs` + `tag1/hc/src/ir/runtime.rs` |
-| 验证 | 一致性测试通过 |
+| 状态 | ✅ 已完成 |
+| 文件 | `tag1/hc/src/ir/mod.rs` + `tag1/hc/src/ir/builtin.rs` + `tag1/hc/src/ir/method.rs` + `tag1/hc/tests/ir.rs` |
+| 验证 | `cargo test --workspace` 全绿 |
 
-**改动**：镜像 Task 2 的改动到 IR 后端。`spawn` 在 IR 路径下也使用 `std::thread::spawn`，
-线程函数运行 `run_ir` 执行目标函数。
+**改动**：
+- `Ctx` 添加 `thread_handles: HashMap<i64, ThreadStateIr>`、`next_tid: i64`、`module: Option<Arc<IrModule>>`
+- `spawn` 立即用 `std::thread::spawn` 启动 OS 线程
+- 线程函数：创建新 `IrRuntime` → `init(&module)` → 调用函数 → 结果通过 `Arc<Mutex<Option<ThreadResultIr>>>` 传回
+- `join()` 等待线程结束，返回结果
+- `is_done()` 检查 `ThreadStateIr.done` AtomicBool
+- `cancel()` 设置 `AtomicBool` 取消标志，线程启动时检查
+- `detach()` 丢弃 join 句柄（线程继续运行），标记分离
+- 每线程独立 Arena 实例（在线程的 Ctx 内创建，避免 cell 索引跨 Ctx 传递）
 
 ---
 

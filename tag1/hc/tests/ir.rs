@@ -1721,15 +1721,14 @@ fn main() void {
 }
 
 #[test]
-fn detach_runs_side_effects_ir() {
-    // detach 立即运行到完成并丢弃结果——全局副作用发生、句柄置 done
+fn join_waits_and_returns_value_ir() {
+    // join 等待 OS 线程结束，返回函数返回值（全局变量不跨线程共享）
     let src = r#"
-global g: i32 = 0;
-fn bump() void { g = g + 1; }
+fn bump() i32 { return 42; }
 fn main() i32 {
     var th = spawn(bump);
-    th.detach();
-    if (g != 1) { return 1; }
+    var r = try th.join();
+    if (r != 42) { return 1; }
     if (!th.is_done()) { return 2; }
     return 0;
 }

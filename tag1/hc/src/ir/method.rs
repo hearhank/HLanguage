@@ -411,103 +411,74 @@ pub(crate) fn call_thread_method_ir(
         IrValue::Class(c) => *c,
         _ => return Err(IrError::msg("TypeError", "Thread method on non-Thread")),
     };
+    // 获取 _tid 字段定位 ThreadStateIr
+    let tid = match &ctx.cells[thread] {
+        Cell::Class { fields, .. } => match fields.get("_tid") {
+            Some(c) => match ctx.cell_value(*c) {
+                IrValue::Int(tid) => *tid as i64,
+                _ => return Err(IrError::msg("TypeError", "Thread has no valid _tid")),
+            },
+            None => return Err(IrError::msg("TypeError", "Thread has no _tid field")),
+        },
+        _ => return Err(IrError::msg("TypeError", "bad Thread cell")),
+    };
     match method {
-        // 运行到完成并返回结果（错误 union 以 `IrValue::Err` 透传；done 后读缓存）
-        "join" => Ok(Some(thread_run_ir(ctx, module, thread)?)),
-        // detach：运行到完成并丢弃结果（副作用发生）、置 detached 标记
+        // join：等待 OS 线程结束，返回结果
+        "join" => {
+            let ts = ctx.thread_handles.get_mut(&tid).ok_or_else(|| {
+                IrError::msg("ThreadError", "Thread handle not found (already joined?)")
+            })?;
+            if let Some(h) = ts.join_handle.take() {
+                let _ = h
+                    .join()
+                    .map_err(|_| IrError::msg("Panic", "thread panicked"))?;
+            } else {
+                // 句柄已被 detach 或前次 join 取走，等待 done
+                while !ts.done.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+            }
+            let result_guard = ts.result.lock().unwrap();
+            let result = result_guard
+                .as_ref()
+                .ok_or_else(|| IrError::msg("ThreadError", "Thread has no result"))?;
+            let ir_result = match result {
+                ThreadResultIr::Ok(v) => v.clone(),
+                ThreadResultIr::Err(e) => err_val(module, &e.name),
+            };
+            drop(result_guard);
+            thread_set_field_ir(ctx, thread, "done", IrValue::Bool(true));
+            Ok(Some(ir_result))
+        }
+        // detach：丢弃 join 句柄（线程继续运行），标记分离
         "detach" => {
-            let _ = thread_run_ir(ctx, module, thread)?;
+            let ts = ctx
+                .thread_handles
+                .get_mut(&tid)
+                .ok_or_else(|| IrError::msg("ThreadError", "Thread handle not found"))?;
+            let _ = ts.join_handle.take();
             thread_set_field_ir(ctx, thread, "detached", IrValue::Bool(true));
             Ok(Some(IrValue::Void))
         }
-        "is_done" => Ok(Some(IrValue::Bool(thread_field_bool_ir(
-            ctx,
-            thread,
-            "done",
-        )))),
+        // is_done：检查线程是否已完成
+        "is_done" => {
+            let ts = ctx
+                .thread_handles
+                .get(&tid)
+                .ok_or_else(|| IrError::msg("ThreadError", "Thread handle not found"))?;
+            Ok(Some(IrValue::Bool(ts.done.load(Ordering::SeqCst))))
+        }
+        // cancel：设置取消标志（线程启动时检查，若已取消则返回 error.Cancelled）
         "cancel" => {
-            // 协作式：置标志；运行点（join/detach）检查后跳过执行 → error.Cancelled
+            let ts = ctx
+                .thread_handles
+                .get(&tid)
+                .ok_or_else(|| IrError::msg("ThreadError", "Thread handle not found"))?;
+            ts.cancel.store(true, Ordering::SeqCst);
             thread_set_field_ir(ctx, thread, "cancel", IrValue::Bool(true));
             Ok(Some(IrValue::Void))
         }
         _ => Ok(None),
-    }
-}
-
-/// 运行线程到完成（对齐 oracle `thread_run` interp.rs:4647）：
-/// - 已运行（done）→ 返回缓存 result；
-/// - 已取消（cancel 且未运行）→ 置 done、缓存 `error.Cancelled`、返回 Cancelled；
-/// - 否则在线程每线程 alloc（Q8）覆盖下调用 fn，缓存 result 并置 done。
-/// 硬错误（StackOverflow/AssertFailed/ExitRequested 等）不缓存、直接传播。
-pub(crate) fn thread_run_ir(ctx: &mut Ctx, module: &IrModule, thread: usize) -> R<IrValue> {
-    let (callee, arg_vals, alloc_v, cancelled, done) = {
-        let fields = match &ctx.cells[thread] {
-            Cell::Class { fields, .. } => fields.clone(),
-            _ => return Err(IrError::msg("TypeError", "bad Thread")),
-        };
-        let getf = |k: &str| -> IrValue {
-            match fields.get(k) {
-                Some(c) => ctx.cell_value(*c).clone(),
-                None => IrValue::Void,
-            }
-        };
-        let callee = getf("fn");
-        // args 字段 = `make_arr` 产物（Arr → Cell::Elems）
-        let arg_vals = match getf("args") {
-            IrValue::Arr(c) => match &ctx.cells[c] {
-                Cell::Elems(e) => e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect(),
-                _ => vec![],
-            },
-            _ => vec![],
-        };
-        let alloc_v = getf("alloc");
-        let cancelled = matches!(getf("cancel"), IrValue::Bool(true));
-        let done = matches!(getf("done"), IrValue::Bool(true));
-        (callee, arg_vals, alloc_v, cancelled, done)
-    };
-    if done {
-        return thread_result_ir(ctx, thread);
-    }
-    if cancelled {
-        let err_v = err_val(module, "Cancelled");
-        thread_set_field_ir(ctx, thread, "done", IrValue::Bool(true));
-        thread_set_field_ir(ctx, thread, "result", err_v.clone());
-        return Ok(err_v);
-    }
-    // Q8：子任务执行期间绑定每线程 alloc（对齐 oracle `push_scope` + `bind("alloc", …)`；
-    // 嵌套线程 save/restore 自然恢复外层 alloc）
-    let saved = ctx.current_alloc.take();
-    ctx.current_alloc = Some(alloc_v);
-    let r = match callee {
-        IrValue::Fn(fname) => {
-            let idx = pick_func(ctx, module, &fname, &arg_vals).ok_or_else(|| {
-                IrError::msg("NoFunction", format!("no function `{fname}`"))
-            })?;
-            exec_func(ctx, module, idx, &arg_vals, ctx.cur_depth + 1)
-        }
-        IrValue::Closure {
-            func,
-            captures,
-            is_mut,
-            ..
-        } => call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, ctx.cur_depth + 1),
-        _ => Err(IrError::msg("NotCallable", "Thread fn is not callable")),
-    };
-    ctx.current_alloc = saved;
-    let result = r?;
-    thread_set_field_ir(ctx, thread, "done", IrValue::Bool(true));
-    thread_set_field_ir(ctx, thread, "result", result.clone());
-    Ok(result)
-}
-
-/// 读取线程缓存结果（done 或已取消时有效）
-pub(crate) fn thread_result_ir(ctx: &Ctx, thread: usize) -> R<IrValue> {
-    match &ctx.cells[thread] {
-        Cell::Class { fields, .. } => match fields.get("result") {
-            Some(c) => Ok(ctx.cell_value(*c).clone()),
-            None => Err(IrError::msg("TypeError", "Thread has no result")),
-        },
-        _ => Err(IrError::msg("TypeError", "bad Thread")),
     }
 }
 
@@ -519,17 +490,6 @@ pub(crate) fn thread_set_field_ir(ctx: &mut Ctx, thread: usize, key: &str, v: Ir
     };
     if let Some(c) = fc {
         ctx.cells[c] = Cell::Value(v);
-    }
-}
-
-/// 读线程布尔字段（缺省 false）
-pub(crate) fn thread_field_bool_ir(ctx: &Ctx, thread: usize, key: &str) -> bool {
-    match &ctx.cells[thread] {
-        Cell::Class { fields, .. } => match fields.get(key) {
-            Some(c) => matches!(ctx.cell_value(*c), IrValue::Bool(true)),
-            None => false,
-        },
-        _ => false,
     }
 }
 
@@ -545,25 +505,22 @@ pub(crate) fn make_four_mode_ir(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> 
     let alloc_v = deref_value(ctx, &args[0]).clone();
     let queue_v = make_arr(ctx, vec![]);
     let mut f = HashMap::new();
-    f.insert(
-        "queue".to_string(),
-        ctx.alloc(Cell::Value(queue_v)),
-    );
+    f.insert("queue".to_string(), ctx.alloc(Cell::Value(queue_v)));
     f.insert(
         "closed".to_string(),
         ctx.alloc(Cell::Value(IrValue::Bool(false))),
     );
-    f.insert(
-        "alloc".to_string(),
-        ctx.alloc(Cell::Value(alloc_v)),
-    );
+    f.insert("alloc".to_string(), ctx.alloc(Cell::Value(alloc_v)));
     if args.len() == 2 {
         let cap = deref_value(ctx, &args[1]).clone();
         let cap_i = match cap {
             IrValue::Int(i) => i.max(0),
             _ => return Err(IrError::msg("TypeError", format!("{name}.init cap"))),
         };
-        f.insert("cap".to_string(), ctx.alloc(Cell::Value(IrValue::Int(cap_i))));
+        f.insert(
+            "cap".to_string(),
+            ctx.alloc(Cell::Value(IrValue::Int(cap_i))),
+        );
     }
     Ok(IrValue::Class(ctx.alloc(Cell::Class {
         name: name.into(),
