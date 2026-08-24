@@ -214,26 +214,29 @@ _Avoid_: 把泛型当脚本生成做
 
 ## 7. 并发模型（M5）
 
-> **组 G 已提前落地 E2.2 线程生命周期（2026-08-17，第二部分）**：`spawn(f, args...) owned Thread<T>` / `join() !T` / `cancel() !void` / `is_done() bool` / `detach()` + 每线程 alloc（Q8）+ 捕获规则静态检查（Q18 绑定/逃逸 + Q19 冻结窗口）。并发模型 = **协作式延迟执行**（确定性、单线程）：spawn 立即返回句柄但不并发运行，join / detach / 程序结束时才执行到完成；cancel 置协作标志（运行点 = join/detach/程序结束）；未 join/未 detach 线程作用域退出 → 根回收队列，程序结束运行。三后端（interp / IR / 字节码）一致；**原生为子集边界**（spawn 需函数引用 FnRef，原生 ABI 未支持，Phase 8；`error.NotCallable` 响亮拒绝，不静默误编译——G4b 定案 A）。**C7 设计已定案（2026-08-22，ADR-0019）**：原生函数值/闭包 ABI 已定（胖闭包对象 + FnRef 函数符号地址 + 隐藏 env 首参 + 复用 `%Value` 通道），原生 spawn 子集边界待 Phase 8 实施解除。**组 E/F 已落地（2026-08-18）**：Future / async-await / 四模式类型 / @atomic / 通道均已在第三块 E2 实现——组 E（async/await + Io 事件循环）、组 F（四模式容器 + @atomic 协作式透明，ADR-0011 逆转；示例 37/76/77/78 转绿）；真 OS 并行与 `mutex` 仍 1.x。
+> **2026-08-24 模型重构（ADR-0024）**：从「OS 线程 + 四模式容器」迁移到「M:N 协程 + 单一通道 `chan<T>`」。
 
-**线程访问模式 (Thread access pattern)**:
-✅ **已落地（组 F，2026-08-18，ADR-0011 逆转）**。多线程共享数据的**内建泛型类型族**（共享内存容器）：`Pipe<T>`（单写单读）、`Tee<T>`（单写多读）、`Funnel<T>`（多写单读）、`Hub<T>`（多写多读）。写者数量由类型名保证（单写者无锁路径、多写者互斥——**协作式单线程下四变体运行时行为一致，读者/写者数量为类型层契约**）；用泛型（脚本生成）插入数据类型。**内建共享特例（Q32）**：容器方法取 `*Self`（只读引用）、内部同步——并发安全由类型内部保证，不依赖指针自由约束；用户类型不可模拟。**通道方法（2026-08-13 Q-R12 定案）**：`send(v)` / `recv() T`——线程间数据传输（与 write/read 同源），四模式类型即线程间传输通道。**缓冲与阻塞（2026-08-14 定案，协作式映射）**：共享内存容器（write/read）**无容量概念**——write 队尾追加、read 空 → `error.Empty`；通道（send/recv）为**有界队列**——容量构造时指定（`init(alloc, cap)`），send 满 → `error.ChannelFull`、recv ≡ read；close 后 write/send 报 `error.Closed`、try_read 返回 null。
-_Avoid_: 裸 Mutex/通道二选一
+**协程调度**：M:N 模型——N 个协程多路复用到 M 个 OS 线程上。`spawn(f, args...)` 创建轻量协程（G），由运行时调度器分配到处理器（P）上执行。`GOMAXPROCS` 控制并行 OS 线程数（默认 = CPU 核数）。初始为**协作式调度**（通道操作或显式 `yield` 时让出），后续可加异步抢占。调度器在 Rust 运行时（`hc-rt`）中实现，解释器与 LLVM 后端共用。
+_Avoid_: 裸 OS 线程创建（用协程替代）
+
+**通道 `chan<T>`**：单一通道类型替代四种容器（`Pipe`/`Tee`/`Funnel`/`Hub`）。API：`send(v)` / `recv() T` / `try_send(v) bool` / `try_recv() ?T` / `close()`。有缓冲/无缓冲两种模式，容量在 `init(alloc, cap)` 时指定。通道操作是协程调度点——send 在缓冲满时挂起当前协程，recv 在空时挂起，就绪时唤醒等待协程。
+_Avoid_: 四种容器类型的认知负担（用单一 `chan<T>`）
+
+**Mutex**：`Mutex.init(v)` / `.lock() !T` / `.try_lock() ?T`。与协程配合使用，用于保护共享状态。
 
 **线程所有权 (Thread ownership)**:
-任何作用域可开启线程，所有权默认归当前作用域。作用域退出时：线程已完成 → 销毁后退出；仍在运行 → 所有权移交根作用域管理。
+任何作用域可开启协程，所有权默认归当前作用域。作用域退出时：协程已完成 → 销毁后退出；仍在运行 → 所有权移交根作用域管理。
 _Avoid_: 隐式 join 阻塞
 
-**线程捕获 (Thread capture)**:
-线程捕获参数的规则：值类型 → 复制值；引用类型 → 必须 move 所有权，或为根作用域上下文中的 global 变量（global 不可 move）。**作用域例外（2026-08-13 Q18 定案）**：作用域绑定的执行（异步任务 `await`/`join` 后回到当前作用域）可捕获引用；可能逃逸的线程（运行中移交根作用域）引用捕获禁用。**静态检查（Q19 定案）**：绑定/逃逸由句柄数据流判定（作用域内 join/await = 绑定，detach/未 join 退出 = 逃逸禁捕获）；绑定场景下被捕获目标在 spawn→await 间处于**冻结窗口**——主线程不可写（await 后恢复）。**Send/Sync 编译期诊断（2026-08-22 定案，ADR-0017 C3-3）**：`Send`/`Sync` = **内建标记接口**（编译器内建实现，不可自定义）；组合性验证（标量/值类型自动 Send+Sync、指针/切片看指向、内建容器看元素、用户 `class Foo: Send` 字段全满足才合法，含 `*mut`/可变共享 → 非 `Sync`）；`spawn`/`await` 边界捕获非 `Send` 引用 → **编译错误带位置**；与 Q19 正交（Q19 管借用期、Send/Sync 管类型层可传递性）；真并行检查 1.x 启用（详见 06-10）。
-_Avoid_: 闭包式只读捕获用于逃逸线程
+**协程捕获 (Goroutine capture)**:
+协程捕获参数的规则：值类型 → 复制值；引用类型 → 必须 move 所有权，或为根作用域上下文中的 global 变量。**冻结窗口**：绑定场景下，被捕获引用目标在 spawn 到 join 之间主协程不可写。**Send/Sync 编译期诊断**：`spawn` 边界捕获非 `Send` 引用 → 编译错误带位置。
+_Avoid_: 闭包式只读捕获用于逃逸协程
 
 **Future**:
-异步任务的结果句柄（复杂类型）。`async fn f(...) R` 返回 **`Future<R>`**（R = 完整返回类型，含 `!`，2026-08-13 Q20 定案）；`await` 等待其完成（2026-08-13 定案：async/await 为语言关键字，逆转此前 Zig 式的无关键字决策）。基于线程任务（默认）或事件循环实现；执行语义待细化。
-_Avoid_: 把 await 当作隐藏阻塞（显式语义）
+异步任务的结果句柄。`async fn f(...) R` 返回 `Future<R>`；`await` 等待其完成。基于协程任务实现。
 
 **原子操作 (@ atomics, 2026-08-13 Q-S3 定案)**:
-无锁原语：`@atomicLoad(T, p, order)` / `@atomicStore(T, p, v, order)` / `@atomicRmw(T, p, op, v, order)`（op = `.add`/`.sub`/`.exchange`/`.cmpxchg` 等，限整数/指针/枚举等可原子类型）；**内存序 C11 五序子集**——`relaxed` / `acquire` / `release` / `acq_rel` / `seq_cst`（**默认 `seq_cst`**，弱序需显式）；四模式类型内部实现基于这些原语。
+无锁原语：`@atomicLoad(T, p, order)` / `@atomicStore(T, p, v, order)` / `@atomicRmw(T, p, op, v, order)`（op = `.add`/`.sub`/`.exchange`/`.cmpxchg` 等，限整数/指针/枚举等可原子类型）；**内存序 C11 五序子集**——`relaxed` / `acquire` / `release` / `acq_rel` / `seq_cst`（**默认 `seq_cst`**，弱序需显式）。
 _Avoid_: 用普通读写模拟原子（数据竞争）
 
 ## 8. 测试（M8）

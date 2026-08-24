@@ -1133,6 +1133,32 @@ impl Interp {
                     }
                     return Ok(Value::vec(grid, alloc_v));
                 }
+                // E4：chan.init(alloc[, cap]) 内建：通道构造
+                if bname == "chan" && field == "init" {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                    }
+                    let _alloc = self.eval(&args[0])?; // consume alloc arg
+                    let capacity = if args.len() == 2 {
+                        let cap_v = self.eval(&args[1])?;
+                        let cap_v = self.deref_value(cap_v);
+                        match cap_v {
+                            Value::Int(i) => i.max(0) as usize,
+                            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                        }
+                    } else {
+                        0 // unbuffered
+                    };
+                    return Ok(Value::Chan(Arc::new(ChanState {
+                        inner: std::sync::Mutex::new(ChanInner {
+                            queue: VecDeque::new(),
+                            closed: false,
+                        }),
+                        send_cond: Condvar::new(),
+                        recv_cond: Condvar::new(),
+                        capacity,
+                    })));
+                }
             }
             let self_v = self.eval(base)?;
             let self_v = self.deref_value(self_v);
@@ -1207,6 +1233,32 @@ impl Interp {
                         let v = self.eval(&args[0])?;
                         let v = self.deref_value(v);
                         return Ok(Value::Mutex(Arc::new(std::sync::Mutex::new(v))));
+                    }
+                    // E4：chan.init(alloc[, cap]) 内建：通道构造
+                    if bname == "chan" && field == "init" {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                        }
+                        let _alloc = self.eval(&args[0])?; // consume alloc arg
+                        let capacity = if args.len() == 2 {
+                            let cap_v = self.eval(&args[1])?;
+                            let cap_v = self.deref_value(cap_v);
+                            match cap_v {
+                                Value::Int(i) => i.max(0) as usize,
+                                _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                            }
+                        } else {
+                            0 // unbuffered
+                        };
+                        return Ok(Value::Chan(Arc::new(ChanState {
+                            inner: std::sync::Mutex::new(ChanInner {
+                                queue: VecDeque::new(),
+                                closed: false,
+                            }),
+                            send_cond: Condvar::new(),
+                            recv_cond: Condvar::new(),
+                            capacity,
+                        })));
                     }
                     // 组 E E3：Io.threaded(alloc) / Io.evented(alloc) 运行时构造
                     // （协作式单线程；evented = 单线程事件循环风味，携带 runtime 字段）
@@ -1775,6 +1827,7 @@ impl Interp {
                 | "Pool"
                 | "ExitType"
                 | "Mutex"
+                | "chan"
         ) {
             return true;
         }

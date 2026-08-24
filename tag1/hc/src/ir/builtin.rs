@@ -3019,6 +3019,74 @@ pub(crate) fn call_builtin_method(
             Ok(v) => Ok(Some(IrValue::Opt(Some(Box::new(v.clone()))))),
             Err(_) => Ok(Some(IrValue::Opt(None))),
         },
+        // E4：chan<T> 方法
+        (IrValue::Chan(ch), "send") => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "send"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            if inner.closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            while inner.queue.len() >= ch.capacity && !inner.closed {
+                inner = ch.send_cond.wait(inner).unwrap();
+            }
+            if inner.closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            inner.queue.push_back(args[0].clone());
+            ch.recv_cond.notify_one();
+            Ok(Some(IrValue::Void))
+        }
+        (IrValue::Chan(ch), "recv") => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "recv"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            while inner.queue.is_empty() && !inner.closed {
+                inner = ch.recv_cond.wait(inner).unwrap();
+            }
+            if inner.queue.is_empty() && inner.closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            let v = inner.queue.pop_front().unwrap();
+            ch.send_cond.notify_one();
+            Ok(Some(v))
+        }
+        (IrValue::Chan(ch), "try_send") => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "try_send"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            if inner.closed || inner.queue.len() >= ch.capacity {
+                return Ok(Some(IrValue::Bool(false)));
+            }
+            inner.queue.push_back(args[0].clone());
+            ch.recv_cond.notify_one();
+            Ok(Some(IrValue::Bool(true)))
+        }
+        (IrValue::Chan(ch), "try_recv") => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "try_recv"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            if let Some(v) = inner.queue.pop_front() {
+                ch.send_cond.notify_one();
+                Ok(Some(opt_val(Some(v))))
+            } else {
+                Ok(Some(IrValue::Opt(None)))
+            }
+        }
+        (IrValue::Chan(ch), "close") => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "close"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            inner.closed = true;
+            ch.send_cond.notify_all();
+            ch.recv_cond.notify_all();
+            Ok(Some(IrValue::Void))
+        }
         _ => Ok(None),
     }
 }
@@ -3050,6 +3118,29 @@ pub(crate) fn call_dotted_implicit(
             }
             let v = deref_value(ctx, &args[0]).clone();
             return Ok(IrValue::Mutex(Arc::new(std::sync::Mutex::new(v))));
+        }
+        // E4：chan.init(alloc[, cap]) 内建：通道构造
+        "chan.init" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(IrError::msg("ArityMismatch", "chan.init expects 1-2 args"));
+            }
+            let capacity = if args.len() == 2 {
+                match deref_value(ctx, &args[1]) {
+                    IrValue::Int(i) => (*i).max(0) as usize,
+                    _ => return Err(IrError::msg("TypeError", "chan.init cap must be int")),
+                }
+            } else {
+                0
+            };
+            return Ok(IrValue::Chan(Arc::new(ChanStateIr {
+                inner: Mutex::new(ChanInnerIr {
+                    queue: VecDeque::new(),
+                    closed: false,
+                }),
+                send_cond: Condvar::new(),
+                recv_cond: Condvar::new(),
+                capacity,
+            })));
         }
         // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
         "Table.init" => {

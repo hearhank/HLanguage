@@ -301,6 +301,7 @@ pub(crate) fn ir_type_name(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::End => "end".into(),
         IrValue::Iter(_) => "<iter>".into(),
         IrValue::Mutex(_) => "Mutex".into(),
+        IrValue::Chan(_) => "Chan".into(),
         IrValue::Void => "void".into(),
     }
 }

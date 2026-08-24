@@ -522,6 +522,8 @@ pub enum IrValue {
     Arena(usize),
     /// 互斥锁（E4：真 OS 并行——Mutex.init(v) 构造，.lock()/.try_lock() 访问）
     Mutex(Arc<std::sync::Mutex<IrValue>>),
+    /// 通道（E4：M:N 协程通信——chan<T>）
+    Chan(Arc<ChanStateIr>),
     /// 枚举值（`Type.variant` 常量 或 `Type{variant = payload}`）
     Enum {
         name: String,
@@ -576,6 +578,7 @@ impl PartialEq for IrValue {
             (IrValue::Class(a), IrValue::Class(b)) => a == b,
             (IrValue::Arena(a), IrValue::Arena(b)) => a == b,
             (IrValue::Mutex(a), IrValue::Mutex(b)) => Arc::ptr_eq(a, b),
+            (IrValue::Chan(a), IrValue::Chan(b)) => Arc::ptr_eq(a, b),
             (
                 IrValue::Enum {
                     name: an,
@@ -772,6 +775,21 @@ pub(crate) enum ChannelStateIr {
         queue: Arc<Mutex<VecDeque<IrValue>>>,
         condvar: Arc<Condvar>,
     },
+}
+
+/// 通道状态（IR 版本，chan<T>：M:N 协程通信）
+#[derive(Debug)]
+pub struct ChanStateIr {
+    pub inner: Mutex<ChanInnerIr>,
+    pub send_cond: Condvar,
+    pub recv_cond: Condvar,
+    pub capacity: usize,
+}
+
+#[derive(Debug)]
+pub struct ChanInnerIr {
+    pub queue: VecDeque<IrValue>,
+    pub closed: bool,
 }
 
 /// 运行时堆：跨帧共享的 cell 池（指针可跨帧存活——如传入函数后写穿调用方槽）。
@@ -980,6 +998,7 @@ fn type_descr(v: &IrValue) -> String {
         IrValue::Fn(_) => "fn".into(),
         IrValue::Closure { .. } => "closure".into(),
         IrValue::Mutex(_) => "Mutex".into(),
+        IrValue::Chan(_) => "Chan".into(),
         IrValue::Void => "void".into(),
     }
 }
@@ -1570,6 +1589,11 @@ impl IrValue {
                 Ok(v) => format!("Mutex({})", v.display(ctx)),
                 Err(_) => "Mutex(<poisoned>)".to_string(),
             },
+            IrValue::Chan(ch) => format!(
+                "Chan({}/{})",
+                ch.inner.lock().unwrap().queue.len(),
+                ch.capacity
+            ),
             IrValue::Void => "void".into(),
         }
     }
@@ -1723,6 +1747,7 @@ impl IrValue {
                 (Ok(av), Ok(bv)) => av.value_eq(ctx, &bv),
                 _ => false,
             },
+            (IrValue::Chan(a), IrValue::Chan(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }

@@ -4,9 +4,9 @@
 //! 完整所有权（作用域销毁/唯一写者/悬垂标记）归 M2.4/M2.5/M4.1 后续里程碑。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Condvar, Mutex as StdMutex};
 
 /// 运行时值
 #[derive(Debug, Clone)]
@@ -73,6 +73,8 @@ pub enum Value {
     LazyIter(Rc<RefCell<LazyIterData>>),
     /// 互斥锁（E4：真 OS 并行——Mutex.init(v) 构造，.lock()/.try_lock() 访问）
     Mutex(Arc<StdMutex<Value>>),
+    /// 通道（E4：M:N 协程通信——chan<T> 替代 Pipe/Tee/Funnel/Hub）
+    Chan(Arc<ChanState>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -83,6 +85,21 @@ pub enum Value {
 pub struct ClassData {
     pub name: String,
     pub fields: HashMap<String, Value>,
+}
+
+/// 通道状态（M:N 协程通信）
+#[derive(Debug)]
+pub struct ChanState {
+    pub inner: StdMutex<ChanInner>,
+    pub send_cond: Condvar,
+    pub recv_cond: Condvar,
+    pub capacity: usize,
+}
+
+#[derive(Debug)]
+pub struct ChanInner {
+    pub queue: VecDeque<Value>,
+    pub closed: bool,
 }
 
 /// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
@@ -692,6 +709,11 @@ impl Value {
                     d.ops.len(),
                 )
             }
+            Value::Mutex(m) => match m.lock() {
+                Ok(v) => format!("Mutex({})", v.display()),
+                Err(_) => "Mutex(<poisoned>)".to_string(),
+            },
+            Value::Chan(ch) => format!("Chan({}/{})", ch.inner.lock().unwrap().queue.len(), ch.capacity),
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -823,6 +845,7 @@ impl Value {
                 (Ok(av), Ok(bv)) => av.value_eq(&bv),
                 _ => false,
             },
+            (Value::Chan(a), Value::Chan(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -885,6 +908,7 @@ impl Value {
             Value::Bytes(_) => "Bytes".into(),
             Value::LazyIter(_) => "LazyIter".into(),
             Value::Mutex(_) => "Mutex".into(),
+            Value::Chan(_) => "Chan".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }
