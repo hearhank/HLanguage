@@ -753,6 +753,149 @@ pub(crate) struct ThreadStateIr {
     done: Arc<AtomicBool>,
 }
 
+// ---------- 协程调度器（M:N 模型，IR 版本，Tasks 2+3+4）----------
+
+/// 协程（Goroutine）ID（IR 版本）
+pub(crate) type GIdIr = u64;
+
+/// 协程状态（IR 版本）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GStateIr {
+    Runnable,
+    Running,
+    Waiting,
+    Done,
+}
+
+/// 协程结果（IR 版本）
+#[derive(Debug, Clone)]
+pub(crate) enum GResultIr {
+    Ok(IrValue),
+    Err(IrError),
+}
+
+/// 协程（Goroutine）——轻量执行单元（IR 版本）
+#[derive(Debug)]
+pub(crate) struct GoroutineIr {
+    pub id: GIdIr,
+    pub state: GStateIr,
+    pub name: String,
+}
+
+/// 协程调度器（M:N 模型，IR 版本）
+///
+/// 管理 G 的生命周期：创建、调度、完成。实际 work-stealing 与 worker 循环
+/// 在 Task 4 中实现；本模块仅提供数据结构与基本方法。
+#[derive(Debug)]
+pub(crate) struct GoroutineSchedulerIr {
+    /// 全局就绪队列
+    global_queue: VecDeque<GIdIr>,
+    /// 所有 G 的映射表
+    goroutines: HashMap<GIdIr, GoroutineIr>,
+    /// G 结果表
+    results: HashMap<GIdIr, GResultIr>,
+    /// 下一 G ID（自增分配）
+    next_gid: GIdIr,
+    /// 工作线程数（GOMAXPROCS）
+    num_workers: usize,
+    /// 工作线程句柄
+    workers: Vec<thread::JoinHandle<()>>,
+    /// 是否已启动
+    started: bool,
+    /// 停止标志（共享给 worker 线程）
+    stop: Arc<AtomicBool>,
+}
+
+impl GoroutineSchedulerIr {
+    pub fn new() -> Self {
+        let n = std::thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(4);
+        GoroutineSchedulerIr {
+            global_queue: VecDeque::new(),
+            goroutines: HashMap::new(),
+            results: HashMap::new(),
+            next_gid: 1,
+            num_workers: n,
+            workers: Vec::new(),
+            started: false,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// 启动 worker 线程池
+    pub fn start(&mut self) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+        let n = self.num_workers;
+        for i in 0..n {
+            let stop = self.stop.clone();
+            let worker = thread::Builder::new()
+                .name(format!("hc-worker-{i}"))
+                .spawn(move || {
+                    Self::worker_loop(i, stop);
+                })
+                .expect("spawn scheduler worker");
+            self.workers.push(worker);
+        }
+    }
+
+    /// Worker 主循环（Task 4 中实现实际调度）
+    fn worker_loop(_worker_id: usize, stop: Arc<AtomicBool>) {
+        while !stop.load(Ordering::Relaxed) {
+            // 暂为空闲循环——实际 work-stealing 调度在 Task 4 中实现
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// 提交一个协程到调度器
+    pub fn submit(&mut self, name: String) -> GIdIr {
+        let id = self.next_gid;
+        self.next_gid += 1;
+        self.goroutines.insert(
+            id,
+            GoroutineIr {
+                id,
+                state: GStateIr::Runnable,
+                name,
+            },
+        );
+        self.global_queue.push_back(id);
+        id
+    }
+
+    /// 获取协程状态
+    pub fn get_state(&self, id: GIdIr) -> Option<GStateIr> {
+        self.goroutines.get(&id).map(|g| g.state)
+    }
+
+    /// 设置协程状态
+    pub fn set_state(&mut self, id: GIdIr, state: GStateIr) {
+        if let Some(g) = self.goroutines.get_mut(&id) {
+            g.state = state;
+        }
+    }
+
+    /// 设置协程结果并标记为 Done
+    pub fn set_result(&mut self, id: GIdIr, result: GResultIr) {
+        self.results.insert(id, result);
+        self.set_state(id, GStateIr::Done);
+    }
+
+    /// 获取协程结果
+    pub fn get_result(&self, id: GIdIr) -> Option<&GResultIr> {
+        self.results.get(&id)
+    }
+}
+
+impl Default for GoroutineSchedulerIr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 通道状态（IR 版本，E4：四模式容器真并行）
 #[derive(Debug)]
 pub(crate) enum ChannelStateIr {
@@ -860,6 +1003,8 @@ pub struct Ctx {
     pub next_channel_id: i64,
     /// E4：当前模块引用（供 spawn 新线程克隆以访问函数定义）
     pub module: Option<Arc<IrModule>>,
+    /// 协程调度器（M:N 模型，IR 版本）
+    pub scheduler: GoroutineSchedulerIr,
 }
 
 /// io.ipc 管道共享态（协作式：读写均不阻塞；writer_open=false 且空缓冲 = 读端空切片）

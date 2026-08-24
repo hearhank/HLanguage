@@ -52,6 +52,7 @@ impl Interp {
             next_tid: 1,
             channels: HashMap::new(),
             next_channel_id: 1,
+            scheduler: GoroutineScheduler::new(),
         }
     }
 
