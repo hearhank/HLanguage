@@ -60,8 +60,12 @@ impl Checker {
                 span,
                 ..
             } => {
-                // 命名规范（Q22）：类型名 PascalCase（首字母大写）
-                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                // 命名规范（Q22）：类型名 PascalCase（首字母大写或数字开头）
+                if !name
+                    .chars()
+                    .next()
+                    .map_or(true, |c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!(
@@ -106,8 +110,12 @@ impl Checker {
                 span,
                 ..
             } => {
-                // 命名规范：类型名 PascalCase（首字母大写）
-                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                // 命名规范：类型名 PascalCase（首字母大写或数字开头）
+                if !name
+                    .chars()
+                    .next()
+                    .map_or(true, |c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!(
@@ -325,8 +333,12 @@ impl Checker {
                 span,
                 ..
             } => {
-                // 命名规范（Q22）：命名空间名 PascalCase（首字母大写）
-                if !name.chars().next().map_or(true, |c| c.is_ascii_uppercase()) {
+                // 命名规范（Q22）：命名空间名 PascalCase（首字母大写或数字开头）
+                if !name
+                    .chars()
+                    .next()
+                    .map_or(true, |c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!(

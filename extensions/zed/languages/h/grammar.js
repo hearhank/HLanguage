@@ -54,6 +54,7 @@ module.exports = grammar({
       $.constant_declaration,
       $.global_declaration,
       $.class_declaration,
+      $.struct_declaration,
       $.enum_declaration,
       $.interface_declaration,
       $.namespace_declaration,
@@ -191,6 +192,21 @@ module.exports = grammar({
     enum_variant: $ => seq(
       field('name', $.identifier),
       optional(field('payload', $.type)),
+    ),
+
+    // Struct declaration
+    struct_declaration: $ => seq(
+      optional('pub'),
+      optional(field('attribute', $.attribute)),
+      'struct',
+      field('name', $.identifier),
+      field('body', $.struct_body),
+    ),
+
+    struct_body: $ => seq(
+      '{',
+      repeat($.field_declaration),
+      '}',
     ),
 
     // Interface declaration

@@ -5,6 +5,7 @@
   "const"
   "global"
   "class"
+  "struct"
   "enum"
   "interface"
   "namespace"

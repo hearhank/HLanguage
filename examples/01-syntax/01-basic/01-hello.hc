@@ -16,6 +16,7 @@ fn main() !void {
     io.print("x = {}, y = {}\n", 42, 3.14);
 }
 
-[test] fn hello_entry_runs() !void {
+[Test]
+fn hello_entry_runs() !void {
     try main();   // S2：smoke test（入口 !void 错误自动捕获）
 }

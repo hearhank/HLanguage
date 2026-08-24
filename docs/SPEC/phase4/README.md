@@ -24,8 +24,25 @@
 - 原始自举计划：[`docs/SPEC/phase1/07-bootstrap-plan.md`](../phase1/07-bootstrap-plan.md) §五 E7
 - 第三块执行细表（自举原始 K 组）：[`docs/SPEC/phase3/10-part3-execution.md`](../phase3/10-part3-execution.md)
 
-## 当前状态（2026-08-22）
+## 当前状态（2026-08-24）
 
-- `stage1/lexer.hc`（K1 H 版 lexer）**已完成**（git `12e8406`，自身源码 6621 token 零 diff + 对照语料全绿）
-- K2–K6：未动工
-- 1.x 项：全部未动工
+### 已完成（从 1.x 升级）
+- ✅ **E4 真 OS 并行 + mutex + 单写者无锁快路径**：spawn 使用 OS 线程 + `Mutex` 类型 + `Pipe` 使用 mpsc 无锁 SPSC
+- ✅ **E2 协程+通道模型**：M:N 协程调度器 + `chan<T>` 类型（send/recv/try_send/try_recv/close），替代四模式容器
+- ✅ **A3 通用压缩算法**：LZ77 滑动窗口压缩
+- ✅ **A4 时区完整**：`io.time.components`/`format`/`local_offset`
+- ✅ **A6 标准库数据结构**：bitmap / ringbuf / pagemem / intrlist / treemap
+- ✅ **A7 惰性迭代器**：`iter()` 返回 LazyIter，`filter`/`map` 链式延迟
+
+### 自举进度
+- **K1 H 版 lexer** ✅：`stage1/lexer.hc`，6621 token 零 diff
+- **K2 H 版 parser** 🔴：`stage1/parser.hc` 部分实现，测试超时
+- **K3–K6** 🔴：未动工
+
+### 1.x 延迟项（剩余）
+- ⏳ 包注册中心正式版
+- ⏳ 真 OS 进程/共享内存（跨进程）
+- ⏳ 数据库连接抽象
+- ⏳ 绑定级只读（C4）
+- ⏳ LLVM 原生内建子集扩展（C8）
+- ⏳ 自举（K2–K6）
