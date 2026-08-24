@@ -5,7 +5,7 @@ import H.std.{io};
 //   - 成功提交 / 失败回滚（errdefer 仅错误路径）
 //   - 多步写入的一致性（原子替换语义）
 
-fn transfer(io: *T, from: &[u8], to: &[u8], amount: i64) !void where T: Io {
+fn transfer<T>(io: *T, from: &[u8], to: &[u8], amount: i64) !void where T: Io {
     var log = try io.fs.open("journal.log");
     defer log.close();
     errdefer io.fs.append("journal.log", "ROLLBACK\n") catch |_| {};
@@ -25,7 +25,7 @@ fn transfer(io: *T, from: &[u8], to: &[u8], amount: i64) !void where T: Io {
     // 成功路径：errdefer 不执行
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     try transfer(&io, "alice.bal", "bob.bal", 10);
     io.print("done\n");
 }

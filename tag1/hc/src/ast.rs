@@ -29,6 +29,8 @@ pub enum Decl {
     },
     Fn {
         name: String,
+        /// 泛型参数表（`fn swap<T>(...)`）：显式声明的类型参数名（<T> 尖括号表）
+        type_params: Vec<String>,
         params: Vec<Param>,
         ret: Option<Type>,
         /// where 子句（M2.2：泛型约束）：(泛型参数名, 约束接口)
@@ -38,6 +40,10 @@ pub enum Decl {
         is_test: bool,
         /// `[test("名称")]` 特性：测试显示名（可省，省略时显示函数名）
         test_name: Option<String>,
+        /// D1：`[test(async)]` / `[test(thread)]` 测试模式
+        test_mode: TestMode,
+        /// D1：`[test(timeout=5)]` 测试超时（秒）
+        test_timeout: Option<u64>,
         /// 跨包导出（默认私有；`pub` 管包边界）
         pub_: bool,
         /// 组 E：`async fn`——调用点返回 `Future(R)`（R = 声明返回类型，含错误联合）
@@ -45,6 +51,11 @@ pub enum Decl {
         /// K5（ADR-0014）：`export fn`——原生符号级导出（链接器可见干净符号，
         /// 生成外部 thunk；`_start` 导出 = 入口钩子）。与 `pub_` 正交（语言可见性 vs 符号导出）。
         exported: bool,
+        /// A1（ADR-0020）：`extern fn`——纯声明（无 body，链接期解析外部 C 符号）。
+        /// 语义层应跳过 body 检查，注册为外部符号；解释器拒绝调用；LLVM 生成 `declare`。
+        is_extern: bool,
+        /// Q8：`[Extension(Type)]`——扩展方法，附着到指定类型上
+        extension_of: Option<String>,
     },
     Class {
         name: String,
@@ -52,6 +63,13 @@ pub enum Decl {
         traits: Vec<Trait>,
         fields: Vec<FieldDecl>,
         methods: Vec<Method>,
+        pub_: bool,
+        span: Span,
+    },
+    Struct {
+        name: String,
+        traits: Vec<Trait>,
+        fields: Vec<FieldDecl>,
         pub_: bool,
         span: Span,
     },
@@ -106,16 +124,16 @@ pub enum Decl {
         select: Option<Vec<(String, Option<String>)>>,
         span: Span,
     },
-    Script {
-        body: Block,
-        /// 块闭合 `}` 之后字节偏移（E1 script 装载期文本替换的替换终点）
-        close_end: usize,
-        span: Span,
-    },
     /// E1.2（组 D D2）：`comptime { ... }` 块——编译期求值（装载期受限 Interp，
     /// 结果丢弃、失败 = 编译错误）。仅编译期存在，不产生运行时代码、不替换源码。
-    Comptime {
-        body: Block,
+    Comptime { body: Block, span: Span },
+    /// `.hs` 脚本文件引用：`import "path/to/file.hc"`（B6-2：脚本用文件引用而非命名空间）。
+    /// 文件路径解析顺序：SDK 目录 → 当前项目目录。
+    Include {
+        /// 文件路径（相对或绝对；字符串字面量）
+        path: String,
+        /// 别名（可选，省略时用文件名）
+        alias: Option<String>,
         span: Span,
     },
 }
@@ -128,38 +146,69 @@ impl Decl {
             | Decl::Const { pub_, .. }
             | Decl::Fn { pub_, .. }
             | Decl::Class { pub_, .. }
+            | Decl::Struct { pub_, .. }
             | Decl::Enum { pub_, .. }
             | Decl::Union { pub_, .. }
             | Decl::Interface { pub_, .. }
             | Decl::Namespace { pub_, .. } => *pub_,
-            Decl::Using { .. } | Decl::Import { .. } | Decl::Script { .. } | Decl::Comptime { .. } => false,
+            Decl::Using { .. }
+            | Decl::Import { .. }
+            | Decl::Comptime { .. }
+            | Decl::Include { .. } => false,
         }
     }
 }
 
+/// D1 并发测试 runner：测试执行模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestMode {
+    Serial,
+    Async,
+    Thread,
+}
+
 pub enum Trait {
-    Continuous,
     Pad,
-    Align(String),
+    Align(u32),
     Test {
         name: Option<String>,
+        /// D1 测试模式：`[test]` = Serial（默认）、`[test(async)]` = Async、`[test(thread)]` = Thread
+        mode: TestMode,
+        /// D1 测试超时：`[test(timeout=5)]` = 5 秒（默认 None = 5s）
+        timeout: Option<u64>,
     },
     /// `[module]`（2026-08-17 定案）：命名空间 = 模块——内容与其它命名空间隔离
     /// （不参与同包共享命名空间），需要其它库的数据经上下文（init 参数列表）注入
     Module,
+    /// Q8：`[Extension(Type)]`——扩展方法，附着到指定类型上（Q15：不能访问私有字段）
+    Extension(String),
 }
 
 impl std::fmt::Debug for Trait {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Trait::Continuous => write!(f, "[continuous]"),
             Trait::Pad => write!(f, "[pad]"),
-            Trait::Align(s) => write!(f, "[align({s})]"),
+            Trait::Align(n) => write!(f, "[align({n})]"),
             Trait::Module => write!(f, "[module]"),
-            Trait::Test { name } => match name {
-                Some(n) => write!(f, "[test({n:?})]"),
-                None => write!(f, "[test]"),
-            },
+            Trait::Extension(ty) => write!(f, "[Extension({ty})]"),
+            Trait::Test {
+                name,
+                mode,
+                timeout,
+            } => {
+                let mut s = match name {
+                    Some(n) => format!("[test({n:?})"),
+                    None => format!("[test"),
+                };
+                if *mode != TestMode::Serial {
+                    s.push_str(&format!(", {mode:?}"));
+                }
+                if let Some(t) = timeout {
+                    s.push_str(&format!(", timeout={t}"));
+                }
+                s.push(']');
+                write!(f, "{s}")
+            }
         }
     }
 }
@@ -167,11 +216,19 @@ impl std::fmt::Debug for Trait {
 impl Clone for Trait {
     fn clone(&self) -> Self {
         match self {
-            Trait::Continuous => Trait::Continuous,
             Trait::Pad => Trait::Pad,
-            Trait::Align(s) => Trait::Align(s.clone()),
+            Trait::Align(n) => Trait::Align(*n),
             Trait::Module => Trait::Module,
-            Trait::Test { name } => Trait::Test { name: name.clone() },
+            Trait::Extension(ty) => Trait::Extension(ty.clone()),
+            Trait::Test {
+                name,
+                mode,
+                timeout,
+            } => Trait::Test {
+                name: name.clone(),
+                mode: *mode,
+                timeout: *timeout,
+            },
         }
     }
 }
@@ -190,12 +247,18 @@ pub struct FieldDecl {
     pub ty: Type,
     /// 跨包导出（Q3：属性默认私有，`pub` 显式导出）
     pub pub_: bool,
+    /// 字段级特性（如 `[Align(n)]`）
+    pub traits: Vec<Trait>,
+    /// 字段默认值（如 `x: i32 = 42`）
+    pub default: Option<Expr>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Method {
     pub name: String,
+    /// 泛型参数表（`fn save<T>(...)`）：显式声明的类型参数名
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     /// where 子句（M2.2：泛型约束）：(泛型参数名, 约束接口)
@@ -215,7 +278,7 @@ pub struct EnumVariant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    /// 简单命名类型：i32 / String / Point / Vec(i32) / I(T1,T2)
+    /// 简单命名类型：i32 / String / Point / Vec<i32> / I(T1,T2)
     Named(String, Vec<Type>),
     /// 只读指针 *T / 可写指针 *mut T
     Ptr(Box<Type>, bool),
@@ -341,6 +404,8 @@ pub struct SwitchStmt {
 #[derive(Debug, Clone)]
 pub struct SwitchArm {
     pub patterns: Vec<SwitchPattern>,
+    /// C3：switch 守卫——`pattern if guard => expr`，守卫失败继续下一分支
+    pub guard: Option<Expr>,
     pub capture: Option<(CaptureMode, String)>,
     pub body: Block,
     pub span: Span,
@@ -386,7 +451,7 @@ pub enum Expr {
     ArrayLit(Vec<Expr>, Span),
     TupleLit(Vec<Expr>, Span),
     /// Type{field = value, ...}（struct/enum 字面量）。
-    /// `ty_args` = 泛型实参（`Pair(i32){...}` 的 `[i32]`；E1.2 组 D comptime 类型应用，
+    /// `ty_args` = 泛型实参（`Pair<i32>{...}` 的 `[i32]`；E1.2 组 D comptime 类型应用，
     /// 无泛型 = 空）。类型函数名 + 实参 → 具体化（monomorphization）后登记具体类型。
     NamedLit {
         ty: String,
@@ -644,6 +709,9 @@ fn visit_stmt(s: &Stmt, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
         Stmt::Switch(SwitchStmt { subject, arms, .. }) => {
             visit_expr(subject, scopes, fv);
             for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    visit_expr(guard, scopes, fv);
+                }
                 match &arm.capture {
                     Some((_, name)) => visit_block_seeded(name, &arm.body, scopes, fv),
                     None => visit_block(&arm.body, scopes, fv),
@@ -698,9 +766,10 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
             visit_expr(a, scopes, fv);
             visit_expr(b, scopes, fv);
         }
-        Expr::Unwrap(inner, _) | Expr::Try(inner, _) | Expr::Move(inner, _) | Expr::Await(inner, _) => {
-            visit_expr(inner, scopes, fv)
-        }
+        Expr::Unwrap(inner, _)
+        | Expr::Try(inner, _)
+        | Expr::Move(inner, _)
+        | Expr::Await(inner, _) => visit_expr(inner, scopes, fv),
         Expr::Catch(e, kind, _) => {
             visit_expr(e, scopes, fv);
             match kind.as_ref() {
@@ -768,5 +837,46 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
         | Expr::VoidLit(..)
         | Expr::ErrorLit(..)
         | Expr::FnRef(..) => {}
+    }
+}
+
+/// K2：类型调试输出——返回类型名的简洁字符串表示（供 `hc parse` dump 使用）
+pub fn fmt_type_debug(t: &Type) -> String {
+    match t {
+        Type::Named(name, args) => {
+            if args.is_empty() {
+                name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(fmt_type_debug).collect();
+                format!("{}({})", name, args_str.join(", "))
+            }
+        }
+        Type::Ptr(inner, mut_) => {
+            if *mut_ {
+                format!("*mut {}", fmt_type_debug(inner))
+            } else {
+                format!("*{}", fmt_type_debug(inner))
+            }
+        }
+        Type::Slice(inner, mut_) => {
+            if *mut_ {
+                format!("&mut [{}]", fmt_type_debug(inner))
+            } else {
+                format!("&[{}]", fmt_type_debug(inner))
+            }
+        }
+        Type::Optional(inner) => format!("?{}", fmt_type_debug(inner)),
+        Type::ErrorUnion(e, t) => match e {
+            Some(e) => format!("{}!{}", fmt_type_debug(e), fmt_type_debug(t)),
+            None => format!("!{}", fmt_type_debug(t)),
+        },
+        Type::Tuple(items) => {
+            let items_str: Vec<String> = items.iter().map(fmt_type_debug).collect();
+            format!("({})", items_str.join(", "))
+        }
+        Type::Array(n, inner) => format!("[{}]{}", n, fmt_type_debug(inner)),
+        Type::ComptimeInt(n) => format!("comptime_int({})", n),
+        Type::Infer => "_infer_".to_string(),
+        Type::Owned(inner) => format!("o {}", fmt_type_debug(inner)),
     }
 }

@@ -7,8 +7,14 @@
 
 pub mod ast;
 pub mod bytecode;
+pub mod compress;
 pub mod comptime;
 pub mod diag;
+pub mod ds_bitmap;
+pub mod ds_intrlist;
+pub mod ds_pagemem;
+pub mod ds_ringbuf;
+pub mod ds_treemap;
 pub mod errorcodes;
 pub mod ir;
 pub mod lexer;
@@ -19,11 +25,13 @@ pub mod rle;
 pub mod rng;
 pub mod semantic;
 pub mod token;
+pub mod trait_registry;
 
 pub use ast::Program;
-pub use diag::Diagnostic;
+pub use diag::{Diagnostic, Severity};
 pub use errorcodes::{ErrorCodeTable, ErrorEntry};
 pub use semantic::InferredErrorSets;
+pub use token::Span;
 
 /// 语义检查（M2 静态 pass）：返回诊断列表（空 = 通过）
 pub fn check_semantics(program: &Program) -> Vec<Diagnostic> {
@@ -36,10 +44,7 @@ pub fn check_semantics_extern(program: &Program, externs: &[&Program]) -> Vec<Di
 }
 
 /// M7.2：主程序 + 依赖包联合语义检查（依赖包以包名前缀登记、仅 pub 可见）
-pub fn check_semantics_deps(
-    program: &Program,
-    deps: &[(&str, &Program)],
-) -> Vec<Diagnostic> {
+pub fn check_semantics_deps(program: &Program, deps: &[(&str, &Program)]) -> Vec<Diagnostic> {
     semantic::check_with_extern_deps(program, &[], deps)
 }
 

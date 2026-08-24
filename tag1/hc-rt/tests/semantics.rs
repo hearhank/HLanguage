@@ -66,8 +66,8 @@ fn reference_assignment_rejected() {
     run_compile_error(
         "class Foo { a: i32 }
 fn main(io: Io) !void {
-    var v: Vec(i32) = Vec(i32).init(alloc);
-    var w: Vec(i32) = v;
+    var v: Vec<i32> = Vec<i32>.init(alloc);
+    var w: Vec<i32> = v;
 }\n",
         "cannot assign",
     );
@@ -77,25 +77,24 @@ fn main(io: Io) !void {
 fn continuous_assignment_allowed() {
     // [continuous] 值类型：赋值即复制（允许）
     run_ok(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        r#"struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p1 = Point{ x = 1.0, y = 2.0 };
     var p2 = p1;
     p2.x = 99.0;
     try expect_eq(p1.x, 1.0);
-}\n",
+}"#,
     );
 }
 
 #[test]
 fn table_construct_and_index() {
-    // M8：Table(T).init(alloc, rows, cols, init) + t[i, j] 多参索引
+    // M8：Table<T>.init(alloc, rows, cols, init) + t[i, j] 多参索引
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table(i32).init(alloc, 3, 4, 0);
+    var tbl = Table<i32>.init(alloc, 3, 4, 0);
     try expect_eq(tbl[1, 2], 0);
-    var t2 = Table(i32).init(alloc, 2, 2, 7);
+    var t2 = Table<i32>.init(alloc, 2, 2, 7);
     try expect_eq(t2[0, 0], 7);
     try expect_eq(t2[1, 1], 7);
 }\n",
@@ -120,7 +119,7 @@ fn copy_shallow_mode() {
     // L1：copy(&x, .shallow) ≡ copy(&x, CopyMode.shallow)
     run_ok(
         "[test] fn t() !void {
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1, .shallow);
     try expect_eq(v2.len, 1);
@@ -132,7 +131,7 @@ fn copy_shallow_mode() {
 fn copy_deep_mode_default() {
     run_ok(
         "[test] fn t() !void {
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);
     v2.append(2);
@@ -179,12 +178,97 @@ fn make() Order {
 fn definite_assignment_ignores_continuous() {
     // [continuous] 值类型走字面量构造，无需字段跟踪
     run_ok(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        r#"struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0, y = 2.0 };
     try expect_eq(p.x, 1.0);
-}\n",
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_alloc_init() {
+    // Q13：字段默认值——alloc.init(T) 使用默认值初始化
+    run_ok(
+        r#"struct Point { x: f32 = 1.0, y: f32 = 2.0 }
+[test] fn t() !void {
+    var p = alloc.init(Point);
+    try expect_eq(p.x, 1.0);
+    try expect_eq(p.y, 2.0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_arena_init() {
+    // Q13：字段默认值——arena.init(T) 使用默认值初始化
+    run_ok(
+        r#"struct Point { x: f32 = 1.0, y: f32 = 2.0 }
+[test] fn t() !void {
+    var arena = Arena.init(alloc);
+    var p = arena.init(Point);
+    try expect_eq(p.x, 1.0);
+    try expect_eq(p.y, 2.0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_override() {
+    // Q13：字段默认值——字面量可覆盖默认值
+    run_ok(
+        r#"struct Point { x: f32 = 1.0, y: f32 = 2.0 }
+[test] fn t() !void {
+    var p = Point{ x = 99.0, y = 2.0 };
+    try expect_eq(p.x, 99.0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_defaults_mixed() {
+    // Q13：部分字段有默认值、部分无默认值——alloc.init 自动填充默认值
+    run_ok(
+        r#"struct Config { timeout: i32 = 5000, retries: i32 }
+[test] fn t() !void {
+    var c = alloc.init(Config);
+    try expect_eq(c.timeout, 5000);
+    try expect_eq(c.retries, 0);
+}"#,
+    );
+}
+
+#[test]
+fn struct_attr_syntax_test_basic() {
+    // 结构体字面量语法：`[test{name="x"}]` 等价于 `[test("x")]`
+    run_ok("[test{name=\"test_name\"}] fn t() !void {\n    try expect_eq(1, 1);\n}\n");
+}
+
+#[test]
+fn struct_attr_syntax_test_mode_async() {
+    // 结构体字面量语法：`[test{mode=async}]` 等价于 `[test(async)]`
+    run_ok("[test{mode=async}] fn t() !void {\n    try expect_eq(1, 1);\n}\n");
+}
+
+#[test]
+fn struct_attr_syntax_test_timeout() {
+    // 结构体字面量语法：`[test{timeout=5}]` 等价于 `[test(timeout=5)]`
+    run_ok("[test{timeout=5}] fn t() !void {\n    try expect_eq(1, 1);\n}\n");
+}
+
+#[test]
+fn struct_attr_syntax_align() {
+    // 结构体字面量语法：`[align{value=8}]` 等价于 `[align(8)]`
+    run_ok(
+        "[align{value=8}] struct Aligned { x: i32 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(Aligned), 8);\n}\n",
+    );
+}
+
+#[test]
+fn extension_method_struct() {
+    // 扩展方法：`[Extension(Point)] fn get_x(self) f64`
+    run_ok(
+        "struct Point { pub x: f64, pub y: f64 }\n[Extension(Point)] fn get_x(self: Point) f64 {\n    return self.x;\n}\n[test] fn t() !void {\n    var p = Point{ x = 3.0, y = 4.0 };\n    try expect_eq(p.get_x(), 3.0);\n}\n",
     );
 }
 
@@ -217,11 +301,10 @@ fn m22_return_ok() {
 fn m22_named_lit_unknown_field() {
     // NamedLit 构造：未知字段
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        r#"struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0, z = 2.0 };
-}\n",
+}"#,
         "unknown field",
     );
 }
@@ -230,11 +313,10 @@ class Point { x: f32, y: f32 }
 fn m22_named_lit_missing_field() {
     // NamedLit 构造：必填字段缺失
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        r#"struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0 };
-}\n",
+}"#,
         "missing field",
     );
 }
@@ -243,11 +325,10 @@ class Point { x: f32, y: f32 }
 fn m22_named_lit_field_type_mismatch() {
     // NamedLit 构造：字段类型不匹配
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        r#"struct Point { x: f32, y: f32 }
 [test] fn t() !void {
-    var p = Point{ x = \"s\", y = 2.0 };
-}\n",
+    var p = Point{ x = "s", y = 2.0 };
+}"#,
         "type mismatch in field",
     );
 }
@@ -256,12 +337,12 @@ class Point { x: f32, y: f32 }
 fn m22_field_access_unknown() {
     // 字段访问：不存在字段
     run_compile_error(
-        "[continuous]
-class Point { x: f32, y: f32 }
+        r#"struct Point { x: f32, y: f32 }
 [test] fn t() !void {
     var p = Point{ x = 1.0, y = 2.0 };
-    io.print(\"{}\n\", p.z);
-}\n",
+    io.print("{}
+", p.z);
+}"#,
         "has no field",
     );
 }
@@ -271,7 +352,7 @@ fn m22_field_access_len() {
     // 内建字段：容器 .len
     run_ok(
         "[test] fn t() !void {
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     try expect_eq(v.len, 2);
@@ -283,7 +364,7 @@ fn m22_field_access_len() {
 fn m22_table_double_index_ok() {
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table(i32).init(alloc, 2, 2, 0);
+    var tbl = Table<i32>.init(alloc, 2, 2, 0);
     try expect_eq(tbl[1, 0], 0);
 }\n",
     );
@@ -293,8 +374,7 @@ fn m22_table_double_index_ok() {
 fn m22_continuous_rejects_ref_field() {
     // 存储形态验证：[continuous] 含引用字段 → 编译错误
     run_compile_error(
-        "[continuous]
-class Bad { s: String }
+        "struct Bad { s: String }
 [test] fn t() !void {}\n",
         "non-value field",
     );
@@ -336,8 +416,7 @@ fn m22_binary_ok() {
 fn m22_condition_requires_bool() {
     // 条件表达式检查
     run_compile_error(
-        "[continuous]
-class Foo { a: i32 }
+        "struct Foo { a: i32 }
 [test] fn t() !void {
     var f = Foo{ a = 1 };
     if (f) { }
@@ -389,8 +468,7 @@ fn m22_where_constraint_satisfied() {
 fn m22_where_constraint_violated() {
     // 泛型 where 约束违反：Point 不实现 INumber → 编译错误
     run_compile_error(
-        "[continuous]
-class Point { x: f32 }
+        "struct Point { x: f32 }
 fn sum(items: &[T]) T where T: INumber {
     return items[0];
 }
@@ -480,7 +558,7 @@ fn m22_slice_range_index() {
 
 // ---------- M2.5 Debug 悬垂标记验收 ----------
 
-const DANGLING_SRC: &str = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
+const DANGLING_SRC: &str = "fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
 
 #[test]
 fn m25_dangling_access_rejected_debug() {
@@ -502,7 +580,7 @@ fn m25_dangling_access_rejected_debug() {
 #[test]
 fn m25_dangling_hold_not_accessed_ok() {
     // 取出/持有悬垂引用不抛错；只有解引用访问才触发（Q18：取指针不抛错）
-    let src = "fn fill(buf: *mut Vec(*i32), alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec(*i32).init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
+    let src = "fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
     run_ok(src);
 }
 
@@ -524,7 +602,7 @@ fn m25_dangling_release_bare_read() {
 fn m43_sizeof_scalars_and_continuous() {
     // @sizeOf：标量宽度 + 连续类型（与 to_bytes 布局一致）
     run_ok(
-        "[continuous]\nclass Point { x: f32, y: f64 }\n[test] fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
+        "struct Point { x: f32, y: f64 }\n[test] fn t() !void {\n    var p = Point{ x = 1.0, y = 2.0 };\n    try expect_eq(@sizeOf(i32), 4);\n    try expect_eq(@sizeOf(bool), 1);\n    try expect_eq(@sizeOf(f64), 8);\n    try expect_eq(@sizeOf(String), 8);\n    try expect_eq(@sizeOf(Point), 16);\n    try expect_eq(@sizeOf(Point), p.to_bytes().len);\n}\n",
     );
 }
 
@@ -532,7 +610,33 @@ fn m43_sizeof_scalars_and_continuous() {
 fn m43_alignof_and_offsetof() {
     // @alignOf / @offsetOf：自然对齐 + 字段偏移（含填充）
     run_ok(
-        "[continuous]\nclass Point { x: f32, y: f64 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
+        "struct Point { x: f32, y: f64 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(f64), 8);\n    try expect_eq(@offsetOf(Point, \"x\"), 0);\n    try expect_eq(@offsetOf(Point, \"y\"), 8);\n}\n",
+    );
+}
+
+#[test]
+fn m43_field_align_override() {
+    // 字段级 [align(8)] 覆盖自然对齐——i32 字段按 8 对齐
+    // 布局：a@0(4) + b@4(4) = 8，尾部圆整到 8
+    run_ok(
+        "struct Foo { [align(8)] a: i32, b: i32 }\n[test] fn t() !void {\n    try expect_eq(@offsetOf(Foo, \"a\"), 0);\n    try expect_eq(@offsetOf(Foo, \"b\"), 4);\n    try expect_eq(@sizeOf(Foo), 8);\n}\n",
+    );
+}
+
+#[test]
+fn m43_field_align_affects_struct_align() {
+    // 字段级 [align(8)] 提升 struct 整体对齐
+    run_ok(
+        "struct Bar { [align(8)] a: i32 }\n[test] fn t() !void {\n    try expect_eq(@alignOf(Bar), 8);\n}\n",
+    );
+}
+
+#[test]
+fn m43_field_align_padding() {
+    // 字段级 [align(8)] 导致字段前填充——y 对齐到 8 需跳过 4 字节
+    // 布局：x@0(4) + pad(4) + y@8(4) = 12，尾部圆整到 8 → 16
+    run_ok(
+        "struct Baz { x: i32, [align(8)] y: i32 }\n[test] fn t() !void {\n    try expect_eq(@offsetOf(Baz, \"x\"), 0);\n    try expect_eq(@offsetOf(Baz, \"y\"), 8);\n    try expect_eq(@sizeOf(Baz), 16);\n}\n",
     );
 }
 
@@ -580,5 +684,47 @@ fn m43_compile_error_rejected() {
     run_compile_error(
         "[test] fn t() !void {\n    @compileError(\"boom\");\n}\n",
         "compileError",
+    );
+}
+
+// ---------- Pool(T) 分配器测试（Phase 3） ----------
+
+#[test]
+/// Pool.init 创建 + alloc/free 基本操作
+fn pool_init_alloc_free() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 16);\n    var data = pool.alloc(16);\n    pool.free(data);\n}\n",
+    );
+}
+
+#[test]
+/// Pool.alloc() 无参——使用 item_size
+fn pool_alloc_no_args() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 8);\n    var data = pool.alloc();\n    pool.free(data);\n}\n",
+    );
+}
+
+#[test]
+/// Pool alloc → free → alloc 复用空闲块
+fn pool_alloc_free_reuse() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 16);\n    var a = pool.alloc(16);\n    pool.free(a);\n    var b = pool.alloc(16);\n    pool.free(b);\n}\n",
+    );
+}
+
+#[test]
+/// Pool 多次 alloc + free 循环
+fn pool_multiple_alloc_free() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 8);\n    var a = pool.alloc(8);\n    var b = pool.alloc(8);\n    var c = pool.alloc(8);\n    pool.free(a);\n    pool.free(b);\n    pool.free(c);\n    var r = pool.alloc(8);\n    pool.free(r);\n}\n",
+    );
+}
+
+#[test]
+/// Pool.deinit 释放所有资源
+fn pool_deinit() {
+    run_ok(
+        "[test] fn t() !void {\n    var pool = Pool.init(alloc, 16);\n    var a = pool.alloc(16);\n    var b = pool.alloc(16);\n    pool.free(a);\n    pool.free(b);\n    pool.deinit();\n}\n",
     );
 }

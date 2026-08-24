@@ -6,7 +6,7 @@ import H.std.{io};
 //   - 堆上 class ↔ JSON：内建 to_json()/from_json() + 脚本生成可定制（Q37）
 //   - Vec/Map/切片 → byte 数组（二进制序列化）
 
-[continuous] class Point {   // 连续内存值类型（H1 特性标注）
+struct Point {   // 连续内存值类型（H1 特性标注）
     x: f32,
     y: f32,
 }
@@ -16,7 +16,7 @@ class Order {
     mut amount: f64,
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     // 连续类型 → bytes：内建方法（零拷贝视图）
     var p = Point{x = 1.0, y = 2.0};
     var bytes: &[u8] = p.to_bytes();
@@ -27,7 +27,7 @@ fn main(args: o Vec(String)) !void {
     io.print("{} {}\n", p2.x, p2.y);
 
     // class → JSON：内建默认（零配置可用）
-    var mut order: o Order = alloc.init(Order);   // 无参构造（C1'）+ 字段赋值
+    var mut order: owned Order = alloc.init(Order);   // 无参构造（C1'）+ 字段赋值
     order.id = 42;
     var json = order.to_json();
     io.print("{}\n", json);
@@ -47,7 +47,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn class_to_json() !void {
-    var mut order: o Order = alloc.init(Order);   // 无参构造（C1'）
+    var mut order: owned Order = alloc.init(Order);   // 无参构造（C1'）
     order.id = 42;
     var json = order.to_json();
     var order2 = try Order.from_json(json);

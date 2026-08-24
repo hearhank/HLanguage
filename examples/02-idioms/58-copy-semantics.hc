@@ -6,12 +6,12 @@ import H.std.{io};
 //   - 数组/集合/复杂类型：引用类型——赋值 = 编译错误（Q1'），复制需显式 copy(&x)
 //   - String = u8[] 别名（Q3）：复制需显式 copy(&x)（默认深复制，浅复制需显式标注）
 
-[continuous] class Point {   // 连续内存值类型（H1 特性标注）
+struct Point {   // 连续内存值类型（H1 特性标注）
     mut x: f32,
     y: f32,
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     // 标量：赋值即复制
     var a: i32 = 5;
     var b = a;
@@ -25,7 +25,7 @@ fn main(args: o Vec(String)) !void {
     io.print("p1.x = {} (不受影响)\n", p1.x);
 
     // 集合：引用类型——显式 copy（B3）
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);              // 显式深拷贝
     v2.append(2);
@@ -51,7 +51,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn collection_explicit_copy() !void {
-    var v1 = Vec(i32).init(alloc);
+    var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);   // 显式深拷贝（B3）
     v2.append(2);

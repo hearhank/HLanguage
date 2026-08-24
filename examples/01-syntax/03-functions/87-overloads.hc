@@ -35,7 +35,7 @@ fn greet(name: &[u8], punct: &[u8] = "!") String {
 }
 
 // 重载 4：泛型重载（编译时约束验证；接口限制运行时拆除）
-fn sum(items: &[T]) T where T: INumber {
+fn sum<T>(items: &[T]) T where T: INumber {
     var total = items[0];
     for (items[1..]) |v| {
         total = total.add(v);
@@ -49,7 +49,7 @@ fn sum(items: &[i32]) i32 {   // 具体重载与泛型并存
     return total;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     io.print("{}\n", describe(42));         // int（i32 精确匹配）
     io.print("{}\n", describe("hi"));       // bytes
     io.print("{}\n", describe(1.5));        // float（f64 精确匹配）

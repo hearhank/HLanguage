@@ -40,7 +40,6 @@ fn implements_missing_method_rejected() {
         "interface IShape {
     fn area(self: *Self) f32;
 }
-[continuous]
 class Rect: IShape {
     w: f32,
 }
@@ -56,7 +55,6 @@ fn implements_wrong_return_type_rejected() {
         "interface IShape {
     fn area(self: *Self) f32;
 }
-[continuous]
 class Rect: IShape {
     w: f32,
     fn area(self: *Self) i32 { return 1; }
@@ -72,7 +70,6 @@ fn implements_wrong_arity_rejected() {
         "interface IShape {
     fn area(self: *Self) f32;
 }
-[continuous]
 class Rect: IShape {
     w: f32,
     fn area(self: *Self, extra: i32) f32 { return 1.0; }
@@ -92,7 +89,6 @@ fn implements_super_interface_missing_rejected() {
 interface IB: IA {
     fn y(self: *Self) void;
 }
-[continuous]
 class C: IB {
     fn x(self: *Self) void {}
 }
@@ -108,7 +104,6 @@ fn implements_full_contract_ok() {
 interface IShape {
     fn area(self: *Self) f32;
 }
-[continuous]
 class Rect: IShape {
     w: f32,
     h: f32,
@@ -132,7 +127,6 @@ interface IDrawable {
 interface ISaveable {
     fn save(self: *Self) void;
 }
-[continuous]
 class Document: IDrawable, ISaveable {
     title: i32,
     fn draw(self: *Self) void { var _ = self.title; }
@@ -158,7 +152,6 @@ fn where_constraint_static_dispatch_ok() {
 interface IShape {
     fn area(self: *Self) f32;
 }
-[continuous]
 class Rect: IShape {
     w: f32,
     h: f32,
@@ -205,7 +198,10 @@ fn test_attr_name_used_as_display() {
         interp.test_out
     );
     assert!(
-        !interp.test_out.iter().any(|l| l.contains("format_entry_runs")),
+        !interp
+            .test_out
+            .iter()
+            .any(|l| l.contains("format_entry_runs")),
         "函数名不应出现在显示名，got: {:?}",
         interp.test_out
     );

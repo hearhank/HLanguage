@@ -158,14 +158,17 @@ fn collect_decl(d: &Decl, table: &mut ErrorCodeTable) {
                 collect_block(&m.body, table);
             }
         }
+        Decl::Struct { .. } => {
+            // struct 无方法，无需收集
+        }
         Decl::Namespace { decls, .. } => {
             for inner in decls {
                 collect_decl(inner, table);
             }
         }
-        Decl::Script { body, .. } => {
+        Decl::Include { .. } => {
             // script 块 = 第三块 E1（tag1 不执行）——不收集
-            let _ = body;
+            // B6-2：.hs 文件引用——不收集
         }
         _ => {}
     }

@@ -10,8 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use hc::ast::{Decl, Method, Param, Type};
-use hc::token::Span;
 use hc::parse_source;
+use hc::token::Span;
 
 use crate::buildzon;
 
@@ -64,9 +64,8 @@ fn gap_is_doc_prefix(gap: &str) -> bool {
             return true;
         }
         if gap[pos..].starts_with("pub")
-            && b.get(pos + 3).map_or(true, |&c| {
-                !(c as char).is_alphanumeric() && c != b'_'
-            })
+            && b.get(pos + 3)
+                .map_or(true, |&c| !(c as char).is_alphanumeric() && c != b'_')
         {
             pos += 3;
             continue;
@@ -110,8 +109,8 @@ pub fn render_type(t: &Type) -> String {
     match t {
         Type::Named(n, args) if args.is_empty() => n.clone(),
         Type::Named(n, args) => format!(
-            "{n}({})",
-            args.iter().map(render_type).collect::<Vec<_>>().join(", ")
+            "{n}<{a}>",
+            a = args.iter().map(render_type).collect::<Vec<_>>().join(", ")
         ),
         Type::Ptr(inner, mut_) => format!(
             "*{} {}",
@@ -210,8 +209,9 @@ fn decl_span(d: &Decl) -> &Span {
         | Decl::Namespace { span, .. }
         | Decl::Using { span, .. }
         | Decl::Import { span, .. }
-        | Decl::Script { span, .. }
-        | Decl::Comptime { span, .. } => span,
+        | Decl::Struct { span, .. }
+        | Decl::Comptime { span, .. }
+        | Decl::Include { span, .. } => span,
     }
 }
 
@@ -249,10 +249,10 @@ fn decl_anchor(d: &Decl) -> String {
         }
         Decl::Const { name, .. } => format!("const {name}"),
         Decl::Global { name, .. } => format!("global {name}"),
-        Decl::Import { .. }
-        | Decl::Using { .. }
-        | Decl::Script { .. }
-        | Decl::Comptime { .. } => String::new(),
+        Decl::Struct { name, .. } => format!("struct {name}"),
+        Decl::Import { .. } | Decl::Using { .. } | Decl::Comptime { .. } | Decl::Include { .. } => {
+            String::new()
+        }
     }
 }
 
@@ -290,22 +290,12 @@ fn render_import(d: &Decl) -> String {
 }
 
 /// 递归渲染一个声明（`level` 控制标题层级：0 → `###`，1 → `####`，…）。
-fn render_decl(
-    d: &Decl,
-    src: &str,
-    runs: &mut Vec<DocRun>,
-    out: &mut String,
-    level: usize,
-) {
+fn render_decl(d: &Decl, src: &str, runs: &mut Vec<DocRun>, out: &mut String, level: usize) {
     let h = "#".repeat(3 + level);
     let doc = doc_before(src, runs, decl_span(d).start);
     match d {
         Decl::Import { .. } | Decl::Using { .. } => return, // 导入集中列出，不在此渲染
-        Decl::Script { .. } => {
-            if let Some(doc) = doc {
-                out.push_str(&format!("{h} `script`\n\n{doc}\n\n"));
-            }
-        }
+        Decl::Include { .. } => return,                     // 文件引用不在此渲染
         Decl::Comptime { .. } => {
             if let Some(doc) = doc {
                 out.push_str(&format!("{h} `comptime`\n\n{doc}\n\n"));
@@ -337,7 +327,10 @@ fn render_decl(
             if let Some(t) = ty {
                 sig.push_str(&format!(": {}", render_type(t)));
             }
-            out.push_str(&format!("{h} `{}`\n```hc\n{sig} = …\n```\n", decl_anchor(d)));
+            out.push_str(&format!(
+                "{h} `{}`\n```hc\n{sig} = …\n```\n",
+                decl_anchor(d)
+            ));
             if let Some(doc) = doc {
                 out.push_str(&format!("\n{doc}\n"));
             }
@@ -359,6 +352,35 @@ fn render_decl(
             }
             out.push('\n');
         }
+        Decl::Struct {
+            name,
+            traits,
+            fields,
+            pub_,
+            ..
+        } => {
+            let mut sig = String::new();
+            for t in traits {
+                sig.push_str(&format!("{t:?} "));
+            }
+            if *pub_ {
+                sig.push_str("pub ");
+            }
+            sig.push_str(&format!("struct {name}"));
+            sig.push_str(" { ");
+            sig.push_str(
+                &fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.name, render_type(&f.ty)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            sig.push_str(" }");
+            out.push_str(&format!("{h} `{}`\n```hc\n{sig}\n```\n", decl_anchor(d)));
+            if let Some(doc) = doc {
+                out.push_str(&format!("\n{doc}\n"));
+            }
+        }
         Decl::Class {
             name,
             ifaces,
@@ -379,7 +401,11 @@ fn render_decl(
             if !ifaces.is_empty() {
                 sig.push_str(&format!(
                     ": {}",
-                    ifaces.iter().map(render_type).collect::<Vec<_>>().join(", ")
+                    ifaces
+                        .iter()
+                        .map(render_type)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
             sig.push_str(" { ");
@@ -406,7 +432,11 @@ fn render_decl(
                     out.push_str(&format!(
                         "- `{}`{}",
                         render_method_sig(m),
-                        if let Some(md) = md { format!(" — {md}") } else { String::new() }
+                        if let Some(md) = md {
+                            format!(" — {md}")
+                        } else {
+                            String::new()
+                        }
                     ));
                     out.push('\n');
                 }
@@ -414,7 +444,10 @@ fn render_decl(
             }
         }
         Decl::Enum {
-            name, variants, pub_, ..
+            name,
+            variants,
+            pub_,
+            ..
         } => {
             let mut sig = String::new();
             if *pub_ {
@@ -439,10 +472,7 @@ fn render_decl(
             out.push('\n');
         }
         Decl::Union {
-            name,
-            fields,
-            pub_,
-            ..
+            name, fields, pub_, ..
         } => {
             let mut sig = String::new();
             if *pub_ {
@@ -478,7 +508,11 @@ fn render_decl(
             if !supers.is_empty() {
                 sig.push_str(&format!(
                     ": {}",
-                    supers.iter().map(render_type).collect::<Vec<_>>().join(", ")
+                    supers
+                        .iter()
+                        .map(render_type)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
             sig.push_str(" { … }");
@@ -493,7 +527,11 @@ fn render_decl(
                     out.push_str(&format!(
                         "- `{}`{}",
                         render_method_sig(m),
-                        if let Some(md) = md { format!(" — {md}") } else { String::new() }
+                        if let Some(md) = md {
+                            format!(" — {md}")
+                        } else {
+                            String::new()
+                        }
                     ));
                     out.push('\n');
                 }
@@ -613,8 +651,8 @@ fn write_page(out_dir: &Path, file_name: &str, text: &str) -> Result<PathBuf, St
 
 /// 生成单个文件的文档页 → `out_dir/<stem>.md`。
 pub fn generate_file(path: &Path, out_dir: &Path) -> Result<PathBuf, String> {
-    let src = std::fs::read_to_string(path)
-        .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let src =
+        std::fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
     let rel = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -637,7 +675,11 @@ pub fn generate_project(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, Stri
             } else {
                 m.name.clone()
             },
-            if m.version.is_empty() { "0.1.0".to_string() } else { m.version.clone() },
+            if m.version.is_empty() {
+                "0.1.0".to_string()
+            } else {
+                m.version.clone()
+            },
             match m.kind {
                 buildzon::Kind::Exe => "exe",
                 buildzon::Kind::Lib => "lib",
@@ -656,11 +698,7 @@ pub fn generate_project(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, Stri
     };
 
     let mut files = match &manifest {
-        Some(m) if !m.files.is_empty() => m
-            .files
-            .iter()
-            .map(|f| dir.join(f))
-            .collect::<Vec<_>>(),
+        Some(m) if !m.files.is_empty() => m.files.iter().map(|f| dir.join(f)).collect::<Vec<_>>(),
         _ => dir_hc_files(dir),
     };
     files.sort();
@@ -672,8 +710,8 @@ pub fn generate_project(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, Stri
     ));
     let mut generated = Vec::new();
     for f in &files {
-        let src = std::fs::read_to_string(f)
-            .map_err(|e| format!("读取 {} 失败: {e}", f.display()))?;
+        let src =
+            std::fs::read_to_string(f).map_err(|e| format!("读取 {} 失败: {e}", f.display()))?;
         let rel = f
             .file_name()
             .and_then(|n| n.to_str())
@@ -700,9 +738,7 @@ pub fn generate_project(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, Stri
         let stem = rel.trim_end_matches(".hc");
         let page_path = write_page(out_dir, &format!("{stem}.md"), &page)?;
         generated.push(page_path);
-        index.push_str(&format!(
-            "- [{rel}]({stem}.md){desc} · {decl_count} 声明\n"
-        ));
+        index.push_str(&format!("- [{rel}]({stem}.md){desc} · {decl_count} 声明\n"));
     }
     let index_path = write_page(out_dir, "index.md", &index)?;
     generated.push(index_path);
@@ -796,17 +832,18 @@ const STDLIB: &[(&str, &[(&str, &str)])] = &[
             ("alloc.free(ptr) !void", "释放"),
             ("mem.Arena.init(alloc) Arena", "Arena 分配器（typed 构造 arena.init(T)）"),
             ("mem.Allocator", "分配器抽象"),
+            ("mem.page_allocator", "全局无状态分配器（每 alloc 创建独立 Vec）"),
         ],
     ),
     (
         "collections（集合）",
         &[
-            ("Vec(T).init(alloc) Vec(T)", "动态数组"),
-            ("Vec(T).append(v: T)", "追加"),
+            ("Vec<T>.init(alloc) Vec<T>", "动态数组"),
+            ("Vec<T>.append(v: T)", "追加"),
             ("String.from(bytes: []const u8, alloc) String", "字节 → 字符串"),
             ("String 方法：concat / split / join / find ?usize / substring / replace / to_upper / to_lower / as_slice / to_bytes / == 内容比较", "G2：to_upper/to_lower 为 ASCII 大小写转换（非 ASCII 字节不变）"),
-            ("Map(K,V).init(alloc) Map", "哈希表"),
-            ("Deque(T).init(alloc) Deque", "双端队列"),
+            ("Map<K,V>.init(alloc) Map", "哈希表"),
+            ("Deque<T>.init(alloc) Deque", "双端队列"),
         ],
     ),
     (
@@ -853,7 +890,7 @@ const STDLIB: &[(&str, &[(&str, &str)])] = &[
     (
         "线程（组 G 生命周期）",
         &[
-            ("spawn(f, args...) o Thread(T)", "协作式延迟执行：立即返回句柄，join 时运行"),
+            ("spawn(f, args...) owned Thread(T)", "协作式延迟执行：立即返回句柄，join 时运行"),
             ("thread.join() !T", "运行到完成并取结果"),
             ("thread.cancel() !void", "协作取消（未运行 → join 返回 error.Cancelled）"),
             ("thread.is_done() bool", "完成查询"),
@@ -880,50 +917,4 @@ pub fn generate_stdlib(out_dir: &Path) -> Result<PathBuf, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn doc_run_extraction() {
-        let src = "/// 文件头\n/// 第二行\n\n/// fn 文档\nfn f() i32 { return 1; }\n";
-        let runs = collect_doc_runs(src);
-        assert_eq!(runs.len(), 2);
-        assert_eq!(runs[0].text, "文件头\n第二行");
-        assert_eq!(runs[1].text, "fn 文档");
-    }
-
-    #[test]
-    fn page_contains_sig_and_doc() {
-        let src = "import H.std.{io};\n\n/// 入口函数\nfn main(args: o Vec(String)) !void {\n    io.print(\"hi\\n\");\n}\n";
-        let page = render_file_page("main.hc", src).unwrap();
-        assert!(page.contains("# `main`"), "page: {page}");
-        assert!(page.contains("fn main(args: o Vec(String)) !void"));
-        assert!(page.contains("入口函数"));
-        assert!(page.contains("import H.std.{io};"));
-    }
-
-    #[test]
-    fn stdlib_page_has_modules() {
-        let mut out = String::new();
-        for (module, _) in STDLIB {
-            out.push_str(module);
-        }
-        assert!(out.contains("io（I/O）"));
-        assert!(out.contains("线程（组 G 生命周期）"));
-    }
-
-    #[test]
-    fn render_type_covers_forms() {
-        assert_eq!(render_type(&Type::Named("i32".into(), vec![])), "i32");
-        assert_eq!(
-            render_type(&Type::Named("Vec".into(), vec![Type::Named("i32".into(), vec![])])),
-            "Vec(i32)"
-        );
-        assert_eq!(render_type(&Type::Owned(Box::new(Type::Named("String".into(), vec![])))), "o String");
-        assert_eq!(
-            render_type(&Type::ErrorUnion(None, Box::new(Type::Named("void".into(), vec![])))),
-            "!void"
-        );
-        assert_eq!(render_type(&Type::Array(2, Box::new(Type::Named("i32".into(), vec![])))), "[2]i32");
-    }
-}
+mod tests;

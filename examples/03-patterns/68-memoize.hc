@@ -6,9 +6,9 @@ import H.std.{io};
 //   - 函数作计算器（Q43：函数自动满足 FnN）
 
 class Memo {
-    mut cache: Map(i32, i32),
+    mut cache: Map<i32, i32>,
 
-    fn get_or_compute(self: *mut Self, key: i32, compute: Fn1(i32) i32) i32 {
+    fn get_or_compute(self: *mut Self, key: i32, compute: Fn1<i32> i32) i32 {
         if (self.cache.get(key)) |v| {
             return v;                // 命中缓存
         }
@@ -22,8 +22,8 @@ fn slow_square(x: i32) i32 {
     return x * x;                    // 模拟慢计算（纯函数）
 }
 
-fn main(args: o Vec(String)) !void {
-    var memo: o Memo = alloc.init(Memo);   // 无参构造（C1'）
+fn main() !void {
+    var memo: owned Memo = alloc.init(Memo);   // 无参构造（C1'）
 
     var r1 = memo.get_or_compute(5, slow_square);
     var r2 = memo.get_or_compute(5, slow_square);   // 命中缓存
@@ -32,7 +32,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn memoized_cache() !void {
-    var memo: o Memo = alloc.init(Memo);
+    var memo: owned Memo = alloc.init(Memo);
     var r1 = memo.get_or_compute(5, slow_square);
     var r2 = memo.get_or_compute(5, slow_square);   // 命中缓存
     var r3 = memo.get_or_compute(7, slow_square);   // 未命中

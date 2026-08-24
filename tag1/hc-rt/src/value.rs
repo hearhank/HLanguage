@@ -4,8 +4,9 @@
 //! 完整所有权（作用域销毁/唯一写者/悬垂标记）归 M2.4/M2.5/M4.1 后续里程碑。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
+use std::sync::{Arc, Condvar, Mutex as StdMutex};
 
 /// 运行时值
 #[derive(Debug, Clone)]
@@ -45,7 +46,7 @@ pub enum Value {
     /// 装箱/接口胖指针（G3：data + vtbl + alloc 三字宽，设计文档 §6 定案落地）。
     /// tag1：data = 被装箱值的共享槽（拥有）；vtbl = 具体类型名（真实接口虚表归编译期，
     /// tag1 方法分派鸭子类型——deref 即达 pointee）；alloc = 装箱时显式传入的分配器
-    /// 引用（`box(v)` 未传回退全局 `alloc`）——销毁 `o *I` 时用携带的 alloc 释放 data。
+    /// 引用（`box(v)` 未传回退全局 `alloc`）——销毁  `owned *I` 时用携带的 alloc 释放 data。
     Boxed(Rc<RefCell<BoxedData>>),
     /// 集合句柄（G4：Vec/Deque 持有分配器引用，设计文档 §7 定案落地）。
     /// tag1：items = Arr 同款共享槽存储（外部形态即数组），alloc = 构造 `init(alloc)`
@@ -58,10 +59,22 @@ pub enum Value {
     Fn(String),
     /// 闭包（捕获环境 = 共享槽快照；tag1：捕获整个当前作用域链）
     Closure(ClosureData),
-    /// 分配器句柄（tag1：无状态哨兵）
+    /// 分配器句柄（tag1：无状态哨兵；Phase 1 向后兼容，Phase 3 移除）
     Alloc,
-    /// Arena 分配器句柄（G1：真实 bump + 块链表；deinit 批量归还 backing）
+    /// Arena 分配器句柄（G1：真实 bump + 块链表；deinit 批量归还 backing；Phase 1 向后兼容，Phase 3 移除）
     Arena(Rc<RefCell<ArenaState>>),
+    /// 统一分配器接口值（Phase 1 新增，替代 Value::Alloc / Value::Arena）
+    Allocator(Rc<RefCell<AllocatorImpl>>),
+    /// 原始内存块（Phase 1 新增；分配器返回的原始内存，与 Str 区分）
+    Bytes(Rc<RefCell<Vec<u8>>>),
+    /// 惰性迭代器（A7 惰性/组合子迭代器，2026-08-23）
+    /// 包装一个可迭代源 + 位置 + 可选的 filter/map 变换。
+    /// `next()` 按需求值，链式延迟计算。
+    LazyIter(Rc<RefCell<LazyIterData>>),
+    /// 互斥锁（E4：真 OS 并行——Mutex.init(v) 构造，.lock()/.try_lock() 访问）
+    Mutex(Arc<StdMutex<Value>>),
+    /// 通道（E4：M:N 协程通信——chan<T> 替代 Pipe/Tee/Funnel/Hub）
+    Chan(Arc<ChanState>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -74,6 +87,27 @@ pub struct ClassData {
     pub fields: HashMap<String, Value>,
 }
 
+/// 通道状态（M:N 协程通信）
+#[derive(Debug)]
+pub struct ChanState {
+    pub inner: StdMutex<ChanInner>,
+    pub send_cond: Condvar,
+    pub recv_cond: Condvar,
+    pub capacity: usize,
+}
+
+#[derive(Debug)]
+pub struct ChanInner {
+    pub queue: VecDeque<Value>,
+    pub closed: bool,
+}
+
+/// # Safety
+/// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，
+/// 原始线程和子线程操作各自副本，无数据竞争。
+unsafe impl Send for ClassData {}
+unsafe impl Send for Value {}
+
 /// 闭包数据（运行时表示；AST 部分由解释器填充）
 #[derive(Debug, Clone)]
 pub struct ClosureData {
@@ -84,8 +118,41 @@ pub struct ClosureData {
     pub env: Vec<std::collections::HashMap<String, Rc<RefCell<Value>>>>,
 }
 
+unsafe impl Send for ClosureData {}
+
 /// Arena 默认块大小（首块及新块下限；单块申请大于此值时按实际大小开块）
 pub const ARENA_BLOCK_SIZE: usize = 1024;
+
+/// 惰性迭代器操作类型（filter/map 按链式调用顺序存储）
+#[derive(Debug, Clone)]
+pub enum LazyOp {
+    /// 筛选闭包：返回 false 则跳过该元素
+    Filter(Value),
+    /// 变换闭包：变换元素值
+    Map(Value),
+}
+
+unsafe impl Send for LazyOp {}
+
+/// 惰性迭代器数据（A7：`next()` 按需求值，filter/map 链式延迟计算）
+/// 操作按链式调用顺序存储在 `ops` 中，`lazy_iter_next` 按序应用。
+/// 例如 `arr.map(g).filter(f)` → ops = [Map(g), Filter(f)]，
+/// 对每个源元素：先 Map(g) 变换，再 Filter(f) 筛选。
+#[derive(Debug, Clone)]
+pub struct LazyIterData {
+    /// 源数据（原始可迭代值：Arr/Slice/Str/Map/Vec/Class）
+    pub source: Value,
+    /// 当前位置（源的迭代索引）
+    pub index: usize,
+    /// 源类型名（"arr"/"slice"/"str"/"map"/"vec"/"class"）
+    pub source_type: String,
+    /// 操作列表（按链式调用顺序存储：filter/map 交错，按序应用）
+    pub ops: Vec<LazyOp>,
+    /// Map 遍历键缓存（非 Map 源时为空；构造时固定顺序保证确定性遍历）
+    pub keys_cache: Vec<String>,
+}
+
+unsafe impl Send for LazyIterData {}
 
 /// 分配器对齐下限（§2.3：H 值为 i128/f64 承载，对齐 ≥ 16 字节，与 tag1 `%Value` 盒一致）。
 /// bump 游标按此圆整，返回区域起始相对块起点恒为 16 的倍数。
@@ -109,6 +176,8 @@ pub struct ArenaState {
     pub live: bool,
 }
 
+unsafe impl Send for ArenaState {}
+
 /// 装箱状态（G3：data + vtbl + alloc 三字宽胖指针；对齐设计文档 §6）
 #[derive(Debug, Clone)]
 pub struct BoxedData {
@@ -116,9 +185,11 @@ pub struct BoxedData {
     pub data: Rc<RefCell<Value>>,
     /// vtbl 字：具体类型名（tag1 编译期静态标注；真实接口虚表归编译期）
     pub vtbl: String,
-    /// alloc 字：创建时携带的分配器引用（销毁 `o *I` 时用它释放 data）
+    /// alloc 字：创建时携带的分配器引用（销毁  `owned *I` 时用它释放 data）
     pub alloc: Value,
 }
+
+unsafe impl Send for BoxedData {}
 
 /// 集合状态（G4：Vec/Deque 共用；对齐设计文档 §7）
 #[derive(Debug, Clone)]
@@ -129,6 +200,8 @@ pub struct VecData {
     pub alloc: Value,
 }
 
+unsafe impl Send for VecData {}
+
 /// Map 状态（G4：对齐设计文档 §7；字段即键值）
 #[derive(Debug, Clone)]
 pub struct MapData {
@@ -137,6 +210,8 @@ pub struct MapData {
     /// alloc：构造 `Map(K,V).init(alloc)` 时携带的分配器引用
     pub alloc: Value,
 }
+
+unsafe impl Send for MapData {}
 
 /// 全局分配器 Debug 泄漏登记（§8.3：分配记录表；`weak` 持分配数据的弱引用——
 /// 值被销毁（作用域退出自动销毁）后升级失败，即视为已释放。退出时仍可升级者 = 泄漏）。
@@ -181,13 +256,15 @@ impl ArenaState {
             return Err(ArenaAllocErr::Deinit);
         }
         let aligned = align_up(self.cursor, ALLOC_ALIGN);
-        let need_new = self.blocks.is_empty()
-            || aligned + n > self.blocks.last().unwrap().borrow().len();
+        let need_new =
+            self.blocks.is_empty() || aligned + n > self.blocks.last().unwrap().borrow().len();
         if need_new {
             let size = n.max(ARENA_BLOCK_SIZE);
             let mut block = Vec::new();
             // 优雅失败（`vec![0u8; size]` 对超大 size 会中止进程）
-            block.try_reserve_exact(size).map_err(|_| ArenaAllocErr::Oom)?;
+            block
+                .try_reserve_exact(size)
+                .map_err(|_| ArenaAllocErr::Oom)?;
             block.resize(size, 0u8);
             self.blocks.push(Rc::new(RefCell::new(block)));
             self.cursor = 0;
@@ -205,6 +282,275 @@ impl ArenaState {
         self.cursor = 0;
         self.total = 0;
         self.live = false;
+    }
+}
+
+/// 分配器返回的内存块
+#[derive(Debug, Clone)]
+pub struct AllocBlock {
+    pub data: Rc<RefCell<Vec<u8>>>,
+    pub offset: usize,
+    pub len: usize,
+}
+
+/// 分配失败错误
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocErr {
+    OutOfMemory,
+    InvalidSize,
+}
+
+/// 自定义分配器接口（Rust 侧实现，供 Custom 变体使用）
+pub trait AllocatorTrait {
+    fn alloc(&mut self, n: usize) -> Result<AllocBlock, AllocErr>;
+    fn free(&mut self, block: &AllocBlock);
+    fn realloc(&mut self, block: &AllocBlock, n: usize) -> Result<AllocBlock, AllocErr> {
+        // 默认实现：alloc + copy + free（对不支持 realloc 的后端兜底）
+        let new_block = self.alloc(n)?;
+        let copy_len = block.len.min(n);
+        copy_alloc_block(block, &new_block, copy_len);
+        self.free(block);
+        Ok(new_block)
+    }
+    fn deinit(&mut self) {}
+    /// 克隆自身（用于 AllocatorImpl::Clone）
+    fn clone_box(&self) -> Box<dyn AllocatorTrait>;
+}
+
+/// 复制源数据到目标 AllocBlock（realloc 辅助，避免同时借用两个 RefCell）
+fn copy_alloc_block(src: &AllocBlock, dst: &AllocBlock, len: usize) {
+    let src_data = {
+        let s = src.data.borrow();
+        s[src.offset..src.offset + len].to_vec()
+    };
+    let mut d = dst.data.borrow_mut();
+    d[dst.offset..dst.offset + len].copy_from_slice(&src_data);
+}
+
+/// 固定大小对象池状态（空闲链表 + 后备分配器）
+pub struct PoolState {
+    pub item_size: usize,
+    pub free_list: Vec<AllocBlock>,
+    pub backing: Box<AllocatorImpl>,
+}
+
+unsafe impl Send for PoolState {}
+
+impl PoolState {
+    pub fn new(backing: AllocatorImpl, item_size: usize) -> Self {
+        Self {
+            item_size,
+            free_list: Vec::new(),
+            backing: Box::new(backing),
+        }
+    }
+}
+
+/// 分配器实现枚举（Phase 1：统一分配器接口，四变体）
+pub enum AllocatorImpl {
+    /// 无状态全局分配器（每 alloc 创建独立 Vec）
+    Page,
+    /// Arena bump 分配器（复用现有 ArenaState）
+    Arena(Rc<RefCell<ArenaState>>),
+    /// 固定大小对象池（空闲链表复用 + 后备分配器）
+    Pool(Rc<RefCell<PoolState>>),
+    /// 自定义分配器（Rust 侧实现，后续开放 H 侧）
+    Custom(Box<dyn AllocatorTrait>),
+}
+
+unsafe impl Send for AllocatorImpl {}
+
+impl std::fmt::Debug for AllocatorImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Page => write!(f, "PageAllocator"),
+            Self::Arena(a) => {
+                let d = a.borrow();
+                write!(
+                    f,
+                    "ArenaAllocator(bytes={}, blocks={})",
+                    d.total,
+                    d.blocks.len()
+                )
+            }
+            Self::Pool(p) => {
+                let d = p.borrow();
+                write!(
+                    f,
+                    "PoolAllocator(item_size={}, free={})",
+                    d.item_size,
+                    d.free_list.len()
+                )
+            }
+            Self::Custom(_) => write!(f, "CustomAllocator(...)"),
+        }
+    }
+}
+
+impl Clone for AllocatorImpl {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Page => Self::Page,
+            Self::Arena(a) => Self::Arena(a.clone()),
+            Self::Pool(p) => {
+                let d = p.borrow();
+                Self::Pool(Rc::new(RefCell::new(PoolState {
+                    item_size: d.item_size,
+                    free_list: d.free_list.clone(),
+                    backing: d.backing.clone(),
+                })))
+            }
+            Self::Custom(c) => Self::Custom(c.clone_box()),
+        }
+    }
+}
+
+impl AllocatorImpl {
+    /// 分配 n 字节零初始化内存
+    pub fn alloc(&mut self, n: usize) -> Result<AllocBlock, AllocErr> {
+        match self {
+            Self::Page => {
+                if n == 0 {
+                    return Ok(AllocBlock {
+                        data: Rc::new(RefCell::new(Vec::new())),
+                        offset: 0,
+                        len: 0,
+                    });
+                }
+                let mut v = Vec::new();
+                v.try_reserve_exact(n).map_err(|_| AllocErr::OutOfMemory)?;
+                v.resize(n, 0u8);
+                Ok(AllocBlock {
+                    data: Rc::new(RefCell::new(v)),
+                    offset: 0,
+                    len: n,
+                })
+            }
+            Self::Arena(arena) => {
+                let mut a = arena.borrow_mut();
+                let (data, offset) = a.bump(n).map_err(|e| match e {
+                    ArenaAllocErr::Deinit => AllocErr::InvalidSize,
+                    ArenaAllocErr::Oom => AllocErr::OutOfMemory,
+                })?;
+                Ok(AllocBlock {
+                    data,
+                    offset,
+                    len: n,
+                })
+            }
+            Self::Pool(pool) => {
+                let mut p = pool.borrow_mut();
+                if n > p.item_size {
+                    return Err(AllocErr::InvalidSize);
+                }
+                // 先从空闲链表取，没有再分配
+                if let Some(block) = p.free_list.pop() {
+                    Ok(block)
+                } else {
+                    let item_size = p.item_size;
+                    p.backing.alloc(item_size)
+                }
+            }
+            Self::Custom(impl_) => impl_.alloc(n),
+        }
+    }
+
+    /// 释放内存块
+    pub fn free(&mut self, block: &AllocBlock) {
+        match self {
+            Self::Page => {
+                // Page 分配器：Rc 引用归零时自动释放，此处空操作
+            }
+            Self::Arena(_) => {
+                // Arena：不逐对象 free，deinit 统一释放
+            }
+            Self::Pool(pool) => {
+                let mut p = pool.borrow_mut();
+                let item_size = p.item_size;
+                // 重置偏移并放回空闲链表复用
+                p.free_list.push(AllocBlock {
+                    data: block.data.clone(),
+                    offset: 0,
+                    len: item_size,
+                });
+            }
+            Self::Custom(impl_) => impl_.free(block),
+        }
+    }
+
+    /// 调整内存块大小
+    pub fn realloc(&mut self, block: &AllocBlock, n: usize) -> Result<AllocBlock, AllocErr> {
+        match self {
+            Self::Page => {
+                if n == 0 {
+                    return Ok(AllocBlock {
+                        data: Rc::new(RefCell::new(Vec::new())),
+                        offset: 0,
+                        len: 0,
+                    });
+                }
+                let mut v = block.data.borrow_mut();
+                let old_len = v.len();
+                if n <= old_len {
+                    v.truncate(n);
+                    return Ok(AllocBlock {
+                        data: block.data.clone(),
+                        offset: 0,
+                        len: n,
+                    });
+                }
+                v.try_reserve_exact(n - old_len)
+                    .map_err(|_| AllocErr::OutOfMemory)?;
+                v.resize(n, 0u8);
+                Ok(AllocBlock {
+                    data: block.data.clone(),
+                    offset: 0,
+                    len: n,
+                })
+            }
+            Self::Arena(_) => {
+                // Arena 不支持 realloc，走 alloc + copy + free
+                let new_block = self.alloc(n)?;
+                let copy_len = block.len.min(n);
+                copy_alloc_block(block, &new_block, copy_len);
+                self.free(block);
+                Ok(new_block)
+            }
+            Self::Pool(pool) => {
+                let p = pool.borrow_mut();
+                if n > p.item_size {
+                    return Err(AllocErr::InvalidSize);
+                }
+                let item_size = p.item_size;
+                // 相同大小直接返回原块
+                Ok(AllocBlock {
+                    data: block.data.clone(),
+                    offset: 0,
+                    len: item_size,
+                })
+            }
+            Self::Custom(impl_) => impl_.realloc(block, n),
+        }
+    }
+
+    /// 释放分配器持有的资源
+    pub fn deinit(&mut self) {
+        match self {
+            Self::Page => {}
+            Self::Arena(arena) => {
+                arena.borrow_mut().deinit();
+            }
+            Self::Pool(pool) => {
+                let mut p = pool.borrow_mut();
+                // 归还空闲链表所有块到后备分配器
+                let blocks: Vec<AllocBlock> = p.free_list.drain(..).collect();
+                for block in &blocks {
+                    p.backing.free(block);
+                }
+                p.backing.deinit();
+            }
+            Self::Custom(impl_) => impl_.deinit(),
+        }
     }
 }
 
@@ -323,6 +669,48 @@ impl Value {
                 let d = a.borrow();
                 format!("Arena(bytes={}, blocks={})", d.total, d.blocks.len())
             }
+            Value::Allocator(a) => match &*a.borrow() {
+                AllocatorImpl::Page => "allocator(page)".to_string(),
+                AllocatorImpl::Arena(ar) => {
+                    let d = ar.borrow();
+                    format!(
+                        "allocator(Arena(bytes={}, blocks={}))",
+                        d.total,
+                        d.blocks.len()
+                    )
+                }
+                AllocatorImpl::Pool(p) => {
+                    let d = p.borrow();
+                    format!(
+                        "allocator(Pool(item_size={}, free={}))",
+                        d.item_size,
+                        d.free_list.len()
+                    )
+                }
+                AllocatorImpl::Custom(_) => "allocator(custom)".to_string(),
+            },
+            Value::Bytes(b) => {
+                let d = b.borrow();
+                format!("Bytes({} bytes)", d.len())
+            }
+            Value::LazyIter(li) => {
+                let d = li.borrow();
+                format!(
+                    "LazyIter({} @{})({} ops)",
+                    d.source_type,
+                    d.index,
+                    d.ops.len(),
+                )
+            }
+            Value::Mutex(m) => match m.lock() {
+                Ok(v) => format!("Mutex({})", v.display()),
+                Err(_) => "Mutex(<poisoned>)".to_string(),
+            },
+            Value::Chan(ch) => format!(
+                "Chan({}/{})",
+                ch.inner.lock().unwrap().queue.len(),
+                ch.capacity
+            ),
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -410,6 +798,8 @@ impl Value {
             },
             (Value::Err { code: a, .. }, Value::Err { code: b, .. }) => a == b,
             (Value::Arena(a), Value::Arena(b)) => Rc::ptr_eq(a, b),
+            (Value::Allocator(a), Value::Allocator(b)) => Rc::ptr_eq(a, b),
+            (Value::Bytes(a), Value::Bytes(b)) => *a.borrow() == *b.borrow(),
             (Value::Ptr(a), Value::Ptr(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), b) => a.borrow().value_eq(b),
             (a, Value::Ptr(b)) => a.value_eq(&b.borrow()),
@@ -448,6 +838,11 @@ impl Value {
                     .all(|(k, v)| b.fields.get(k).map_or(false, |w| v.value_eq(w)))
             }
             (Value::Void, Value::Void) => true,
+            (Value::Mutex(a), Value::Mutex(b)) => match (a.lock(), b.lock()) {
+                (Ok(av), Ok(bv)) => av.value_eq(&bv),
+                _ => false,
+            },
+            (Value::Chan(a), Value::Chan(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -462,6 +857,8 @@ impl Value {
             (Value::Str(a), Value::Str(b)) => Some(*a.borrow() < *b.borrow()),
             (Value::Bool(a), Value::Bool(b)) => Some(a < b),
             (Value::Ptr(a), Value::Ptr(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
+            (Value::Allocator(a), Value::Allocator(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
+            (Value::Bytes(a), Value::Bytes(b)) => Some(*a.borrow() < *b.borrow()),
             _ => None,
         }
     }
@@ -478,6 +875,8 @@ impl Value {
             Value::Vec(_) => true,
             Value::Map(_) => true,
             Value::Str(s) => !s.borrow().is_empty(),
+            Value::Bytes(b) => !b.borrow().is_empty(),
+            Value::Allocator(_) => true,
             _ => true,
         }
     }
@@ -502,6 +901,11 @@ impl Value {
             Value::Closure(_) => "closure".into(),
             Value::Alloc => "alloc".into(),
             Value::Arena(_) => "Arena".into(),
+            Value::Allocator(_) => "allocator".into(),
+            Value::Bytes(_) => "Bytes".into(),
+            Value::LazyIter(_) => "LazyIter".into(),
+            Value::Mutex(_) => "Mutex".into(),
+            Value::Chan(_) => "Chan".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }

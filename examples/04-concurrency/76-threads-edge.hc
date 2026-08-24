@@ -1,63 +1,99 @@
 import H.std.{io};
 
-// 76-threads-edge.hc — 线程边缘语义（12.21/12.24）
+// 76-threads-edge.hc — 线程边缘语义（E4：协程 + 通道）
 //
-//   - Thread 接口：join（消耗所有权）/ cancel / is_done / detach
-//   - 四模式类型全演示：OneToOne / OneToMany / ManyToOne / ManyToMany
-//   - 线程捕获：值复制 / move / global；作用域绑定可捕获引用（Q18）
+//   - spawn(f, args...) 创建协程（goroutine），返回 Thread 句柄
+//   - Thread 接口：join / cancel / is_done / detach
+//   - chan 通道：init(alloc[, cap]) / send / recv / try_send / try_recv / close
+//   - 协程捕获：值复制安全逃逸；每协程独立 alloc（Q8）
 
 fn worker(x: i32) i32 {
     return x * x;
 }
 
-async fn async_add(b: *i32, n: i32) i32 {
-    return b.* + n;
+fn chan_sender(c: *chan) void {
+    c.send(42);
 }
 
-fn main(args: o Vec(String)) !void {
-    // Thread 接口：is_done / join（消耗所有权，返回 !T）
-    var t: o Thread(i32) = spawn(worker, 9);
-    io.print("is_done = {}\n", t.is_done());
+fn main() !void {
+    // Thread 接口：spawn / join（等待协程结束，返回 !T）
+    var t: owned Thread<i32> = spawn(worker, 9);
     var r = try t.join();
     io.print("result = {}\n", r);
 
-    // detach：显式放弃结果（线程继续，根作用域回收）
-    var t2: o Thread(i32) = spawn(worker, 3);
+    // detach：显式放弃结果（协程继续，程序结束时不等待）
+    var t2: owned Thread<i32> = spawn(worker, 3);
     t2.detach();
 
-    // 四模式类型（写者数量由类型名保证：单写者无锁、多写者互斥）
-    var s1 = OneToOne(i32).init(alloc);    // 单读单写
-    var s2 = OneToMany(i32).init(alloc);   // 单读多写
-    var s3 = ManyToOne(i32).init(alloc);   // 多读单写
-    var s4 = ManyToMany(i32).init(alloc);  // 多读多写（互斥）
-    s4.write(1);
-    io.print("shared = {}\n", s4.read());
+    // 通道（chan）：缓冲通道
+    var ch = chan.init(alloc, 1);
+    var sender: owned Thread<void> = spawn(chan_sender, &ch);
+    try sender.join();
+    var val = ch.recv();
+    io.print("chan recv = {}\n", val);
 
-    // 作用域绑定：async 任务可捕获引用（Q18，await 回到当前作用域）
-    var base = 5;
-    var fut: Future(i32) = async_add(&base, 10);
-    var total = await fut;
-    io.print("total = {}\n", total);
+    // 多值缓冲通道
+    var buf_ch = chan.init(alloc, 3);
+    buf_ch.send(1);
+    buf_ch.send(2);
+    buf_ch.send(3);
+    io.print("buf_ch recv = {}\n", buf_ch.recv());
+    buf_ch.close();
+
+    // is_done 状态：join 后为 true
+    var t3: owned Thread<i32> = spawn(worker, 5);
+    var r3 = try t3.join();
+    io.print("after join = {}, is_done = {}\n", r3, t3.is_done());
 }
 
-[test] fn thread_interface() !void {
-    var t: o Thread(i32) = spawn(worker, 9);
+[test] fn thread_join_value() !void {
+    var t: owned Thread<i32> = spawn(worker, 9);
     var r = try t.join();
     try expect_eq(r, 81);
+    try expect_eq(t.is_done(), true);
 }
 
-[test] fn four_mode_types() !void {
-    var s1 = OneToOne(i32).init(alloc);
-    s1.write(2);
-    try expect_eq(s1.read(), 2);
-    var s4 = ManyToMany(i32).init(alloc);
-    s4.write(1);
-    try expect_eq(s4.read(), 1);
+[test] fn channel_send_recv() !void {
+    var ch = chan.init(alloc, 1);
+    var sender: owned Thread<void> = spawn(chan_sender, &ch);
+    try sender.join();
+    var val = ch.recv();
+    try expect_eq(val, 42);
+    ch.close();
 }
 
-[test] fn async_scope_binding() !void {
-    var base = 5;
-    var fut: Future(i32) = async_add(&base, 10);
-    var total = await fut;   // 冻结窗口：await 前 base 不可写（Q19）
-    try expect_eq(total, 15);
+[test] fn buffered_channel() !void {
+    var ch = chan.init(alloc, 3);
+    ch.send(10);
+    ch.send(20);
+    ch.send(30);
+    try expect_eq(ch.recv(), 10);
+    try expect_eq(ch.recv(), 20);
+    try expect_eq(ch.recv(), 30);
+    ch.close();
+}
+
+[test] fn try_send_try_recv() !void {
+    var ch = chan.init(alloc, 1);
+    try expect_eq(ch.try_send(1), true);
+    try expect_eq(ch.try_send(2), false);   // 缓冲区满
+    try expect_eq(ch.try_recv().?, 1);
+    try expect_eq(ch.try_recv(), null);      // 缓冲区空
+}
+
+[test] fn channel_close() !void {
+    var ch = chan.init(alloc, 1);
+    ch.close();
+}
+
+[test] fn detach_runs() !void {
+    var t: owned Thread<i32> = spawn(worker, 3);
+    t.detach();
+}
+
+[test] fn cancel_then_join() !void {
+    var t = spawn(worker, 5);
+    t.cancel();
+    var r = t.join() catch 0;
+    try expect_eq(t.is_done(), true);
 }

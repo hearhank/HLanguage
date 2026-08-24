@@ -19,7 +19,7 @@ class Node {                     // AST 节点
     // left/right 扩展后启用（arena 持有）
 }
 
-fn parse(io: *T, data: &[u8], pos: *usize, arena: *Arena) ParseError!*Node where T: Io {
+fn parse<T>(io: *T, data: &[u8], pos: *usize, arena: *Arena) ParseError!*Node where T: Io {
     skip_space(data, pos);
     var c = peek(data, pos) orelse return error.UnexpectedEnd;
 
@@ -44,7 +44,7 @@ fn eval(n: *Node) i64 {
     };
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
 

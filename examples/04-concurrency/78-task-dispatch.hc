@@ -1,28 +1,35 @@
 import H.std.{io};
 
-// 78-task-dispatch.hc — 多线程任务分发（四模式类型）
+// 78-task-dispatch.hc — 多协程任务分发（通道 + 协程池）
 //
-//   - 任务队列：ManyToOne(i32)（单写者分发 + 多读者 worker）
-//   - 结果汇合：OneToMany(i32)（多写者 worker + 单读者主线程）
-//   - 容器方法取 *Self（内建共享特例，Q32）；作用域绑定可捕获引用（Q18）
+// E4：chan 替代原四模式类型
+//   - 任务队列：chan（分发者 send + 工作者 recv）
+//   - 结果汇合：chan（工作者 send + 分发者 recv）
+//   - 使用大缓冲队列避免 send 阻塞
 
-fn worker(tasks: *ManyToOne(i32), out: *OneToMany(i32)) void {
-    while (tasks.try_read()) |task| {
-        out.write(task * task);
+fn worker(tasks: *chan, out: *chan) void {
+    while (true) {
+        var task = tasks.try_recv();
+        if (task) |t| {
+            out.send(t * t);
+        } else {
+            break;
+        }
     }
 }
 
-fn main(args: o Vec(String)) !void {
-    var tasks = ManyToOne(i32).init(alloc);
-    var out = OneToMany(i32).init(alloc);
+fn main() !void {
+    var tasks = chan.init(alloc, 20);
+    var out = chan.init(alloc, 20);
 
-    // 分发（单写者）
-    for (0..20) |i| {
-        tasks.write(i);
+    // 先发送所有任务到缓冲通道
+    var i: i32 = 0;
+    while (i < 20) {
+        tasks.send(i);
+        i += 1;
     }
-    tasks.close();                     // 结束标志
 
-    // 3 个 worker（多读者，各持 &tasks/&out）
+    // 再启动工作者
     var t1 = spawn(worker, &tasks, &out);
     var t2 = spawn(worker, &tasks, &out);
     var t3 = spawn(worker, &tasks, &out);
@@ -30,21 +37,27 @@ fn main(args: o Vec(String)) !void {
     try t2.join();
     try t3.join();
 
-    // 汇合（单读者）
+    // 汇合结果
     var total = 0;
-    while (out.try_read()) |v| {
-        total += v;
+    while (true) {
+        var v = out.try_recv();
+        if (v) |val| {
+            total += val;
+        } else {
+            break;
+        }
     }
     io.print("total = {}\n", total);   // 0²+1²+…+19² = 2470
 }
 
 [test] fn task_dispatch() !void {
-    var tasks = ManyToOne(i32).init(alloc);
-    var out = OneToMany(i32).init(alloc);
-    for (0..20) |i| {
-        tasks.write(i);
+    var tasks = chan.init(alloc, 20);
+    var out = chan.init(alloc, 20);
+    var i: i32 = 0;
+    while (i < 20) {
+        tasks.send(i);
+        i += 1;
     }
-    tasks.close();
     var t1 = spawn(worker, &tasks, &out);
     var t2 = spawn(worker, &tasks, &out);
     var t3 = spawn(worker, &tasks, &out);
@@ -52,8 +65,13 @@ fn main(args: o Vec(String)) !void {
     try t2.join();
     try t3.join();
     var total = 0;
-    while (out.try_read()) |v| {
-        total += v;
+    while (true) {
+        var v = out.try_recv();
+        if (v) |val| {
+            total += val;
+        } else {
+            break;
+        }
     }
     try expect_eq(total, 2470);   // 0²+1²+…+19²
 }

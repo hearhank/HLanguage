@@ -6,7 +6,7 @@ import H.std.{io};
 //   - _ 数字分隔符；e 科学计数
 //   - 惰性宽度 + 后缀并存（Q39/Q40）
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var hex: u32 = 0xFF;          // 255
     var bin: u8 = 0b1010;         // 10
     var oct: i32 = 0o17;          // 15

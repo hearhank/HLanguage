@@ -8,7 +8,7 @@ import jsonlib.{parse};
 //     jsonlib.parse(...) 限定访问
 //   - jsonlib 的 fn secret（私有）跨包不可见
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var n = parse("{}");
     io.print("jsonlib.parse = {}\n", n);
 }

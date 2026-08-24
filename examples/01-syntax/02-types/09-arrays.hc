@@ -14,7 +14,7 @@ fn sum_row(row: &[i32]) i32 {
     return total;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     // 一维（推断式，Q4）
     var flat = [1, 2, 3];
 
@@ -29,7 +29,7 @@ fn main(args: o Vec(String)) !void {
     io.print("flat len = {}\n", flat.len);
     io.print("row sum = {}\n", sum_row(&flat));
 
-    // 锯齿：编译期报错（内层长度不一致；锯齿数据用 Vec(&[i32])）
+    // 锯齿：编译期报错（内层长度不一致；锯齿数据用 Vec<&[i32]>）
     // var bad = [[1, 2], [3, 4, 5]];  // 错误（Q42）
 }
 

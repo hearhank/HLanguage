@@ -1,0 +1,14 @@
+// build.zon — test 包清单（hc init 脚手架）
+//
+// 清单即数据：const build = Build{ ... }（H 数据字面量，Q26）
+//   - name/version/kind：包标识与形态（exe = 应用，含 main 入口）
+//   - files：包内文件清单（源码位于包根，见 06-13-project-structure.md）
+//   - deps：依赖声明（本地依赖带 path；`hc pkg add <name> --path <dir>` 写入）
+
+const build = Build{
+    name = "test",
+    version = "0.1.0",
+    kind = Kind.exe,
+    files = [ "main.hc", ],
+    deps = [],
+};

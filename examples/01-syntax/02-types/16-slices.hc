@@ -22,7 +22,7 @@ fn zero_out(s: &mut [i32]) void {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var arr = [1, 2, 3, 4, 5];
 
     // 只读切片视图（不拥有数据，无 o）

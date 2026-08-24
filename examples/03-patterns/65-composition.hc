@@ -10,7 +10,7 @@ interface IDrawable {
 }
 
 interface ISaveable {
-    fn save(self: *Self, io: *T) !void where T: Io;
+fn save<T>(self: *Self, io: *T) !void where T: Io;
 }
 
 class TextStyle {            // 样式（组合成员；缺此定义导致 UnknownType——示例缺陷修复）
@@ -29,7 +29,7 @@ class Paragraph {
 
 class Document: IDrawable, ISaveable {
     mut title: String,
-    mut body: Vec(Paragraph),    // 组合：文档 = 标题 + 段落列表
+    mut body: Vec<Paragraph>,    // 组合：文档 = 标题 + 段落列表
 
     fn draw(self: *Self) void {
         for (self.body) |p| {
@@ -37,20 +37,20 @@ class Document: IDrawable, ISaveable {
         }
     }
 
-    fn save(self: *Self, io: *T) !void where T: Io {
+fn save<T>(self: *Self, io: *T) !void where T: Io {
         // 保存逻辑（序列化 + 落盘）
     }
 }
 
-fn main(args: o Vec(String)) !void {
-    var doc: o Document = alloc.init(Document);   // 无参构造（C1'）
+fn main() !void {
+    var doc: owned Document = alloc.init(Document);   // 无参构造（C1'）
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));
     io.print("paragraphs = {}\n", doc.body.len);
 }
 
 [test] fn class_composition() !void {
-    var doc: o Document = alloc.init(Document);
+    var doc: owned Document = alloc.init(Document);
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));
     try expect_eq(doc.body.len, 1);

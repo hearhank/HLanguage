@@ -15,6 +15,12 @@ pub struct Manifest {
     pub kind: Kind,
     pub files: Vec<String>,
     pub deps: Vec<Dep>,
+    /// 项目元数据（2026-08-23 新增）
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub license: Option<String>,
+    pub homepage: Option<String>,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +35,7 @@ pub enum Kind {
 pub struct Dep {
     pub name: String,
     pub version: String,
-    pub fingerprint: Option<u64>,
+    pub fingerprint: Option<String>,
     pub path: Option<PathBuf>,
 }
 
@@ -60,6 +66,11 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
     let mut kind = Kind::Exe;
     let mut files = Vec::new();
     let mut deps = Vec::new();
+    let mut author = None;
+    let mut description = None;
+    let mut license = None;
+    let mut homepage = None;
+    let mut keywords = Vec::new();
     for (key, val) in fields {
         match key.as_str() {
             "name" => name = Some(expect_str(key, val)?),
@@ -67,7 +78,12 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
             "kind" => kind = parse_kind(val)?,
             "files" => files = expect_str_array(key, val)?,
             "deps" => deps = parse_deps(val)?,
-            _ => {} // 未知字段（作者/构建选项等）——tag1 忽略
+            "author" => author = Some(expect_str(key, val)?),
+            "description" => description = Some(expect_str(key, val)?),
+            "license" => license = Some(expect_str(key, val)?),
+            "homepage" => homepage = Some(expect_str(key, val)?),
+            "keywords" => keywords = expect_str_array(key, val)?,
+            _ => {} // 未知字段（构建选项等）——tag1 忽略
         }
     }
     Ok(Manifest {
@@ -76,6 +92,11 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
         kind,
         files,
         deps,
+        author,
+        description,
+        license,
+        homepage,
+        keywords,
     })
 }
 
@@ -153,79 +174,24 @@ fn parse_dep(e: &Expr) -> Result<Dep, String> {
     })
 }
 
-fn parse_fingerprint(e: &Expr) -> Result<u64, String> {
+fn parse_fingerprint(e: &Expr) -> Result<String, String> {
     match e {
+        // 新旧兼容：整数字面量（旧格式 `0xa1b2`）→ 十六进制小写
         Expr::IntLit { text, .. } => {
             let (n, _) = hc_rt::parse_int_text(text)
                 .map_err(|err| format!("build.zon: 指纹 `{text}` 非法: {}", err.message))?;
-            Ok(n as u64)
+            Ok(format!("{:x}", n))
         }
-        _ => Err("build.zon: 字段 `fingerprint` 应为整数字面量".into()),
+        // 新格式：SHA-256 十六进制字符串
+        Expr::StrLit { value, .. } => {
+            if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err("build.zon: 指纹应为 64 字符十六进制字符串（SHA-256）".into());
+            }
+            Ok(value.to_ascii_lowercase())
+        }
+        _ => Err("build.zon: 字段 `fingerprint` 应为 SHA-256 十六进制字符串或整数字面量".into()),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_full_manifest() {
-        let src = r#"
-const build = Build{
-    name = "orders",
-    version = "0.1.0",
-    kind = Kind.exe,
-    files = [ "main.hc", "math.hc", ],
-    deps = [
-        Pkg{ name = "json", version = "0.2.0", fingerprint = 0xa1b2, path = "../json" },
-    ],
-};
-"#;
-        let m = parse(src).unwrap();
-        assert_eq!(m.name, "orders");
-        assert_eq!(m.version, "0.1.0");
-        assert_eq!(m.kind, Kind::Exe);
-        assert_eq!(m.files, vec!["main.hc", "math.hc"]);
-        assert_eq!(m.deps.len(), 1);
-        let d = &m.deps[0];
-        assert_eq!(d.name, "json");
-        assert_eq!(d.version, "0.2.0");
-        assert_eq!(d.fingerprint, Some(0xa1b2));
-        assert_eq!(d.path.as_deref(), Some(Path::new("../json")));
-    }
-
-    #[test]
-    fn parse_dep_without_path_is_registry() {
-        let src = r#"
-const build = Build{ name = "a", version = "0.1.0", deps = [ Pkg{ name = "json", version = "0.2.0" } ] };
-"#;
-        let m = parse(src).unwrap();
-        assert_eq!(m.deps[0].path, None);
-        assert_eq!(m.deps[0].fingerprint, None);
-    }
-
-    #[test]
-    fn parse_kinds() {
-        for (kind, want) in [
-            ("Kind.exe", Kind::Exe),
-            ("Kind.lib", Kind::Lib),
-            ("Kind.script", Kind::Script),
-        ] {
-            let src = format!(
-                "const build = Build{{ name = \"a\", kind = {kind} }};"
-            );
-            assert_eq!(parse(&src).unwrap().kind, want);
-        }
-    }
-
-    #[test]
-    fn missing_build_const_errors() {
-        assert!(parse("const x = 1;").is_err());
-    }
-
-    #[test]
-    fn load_from_dir_none_when_absent() {
-        let m = load_from_dir(Path::new("/nonexistent/dir/xyz")).unwrap();
-        assert!(m.is_none());
-    }
-}
+mod tests;

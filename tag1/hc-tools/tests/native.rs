@@ -929,7 +929,7 @@ fn tree_vec_field_append_recursion_native() {
     let st = compile_tests_and_run(
         "tree Node {\n\
              value: i32,\n\
-             children: Vec(Node),\n\
+             children: Vec<Node>,
              fn total(self: *Self) i32 {\n\
                  var sum = self.value;\n\
                  for (self.children) |child| {\n\
@@ -939,7 +939,7 @@ fn tree_vec_field_append_recursion_native() {
              }\n\
          }\n\
          [test] fn tree_recursive_composition() !void {\n\
-             var root: o Node = Node.new(1, alloc);\n\
+             var root: owned Node = Node.new(1, alloc);\n\
              root.children.append(Node.new(2, alloc));\n\
              root.children.append(Node.new(3, alloc));\n\
              try expect_eq(root.total(), 6);\n\
@@ -969,11 +969,8 @@ fn fmt_int_float_native() {
 
 #[test]
 fn g4b_thread_spawn_aborts_notcallable() {
-    // G4b 定案 A：原生子集边界。spawn 的 callee 以 FnRef 传递 → 原生 ABI 无函数值
-    // 表示（Phase 8）→ 编译成功但运行时经 @hc_abort_notcallable 响亮中止
-    // （error.NotCallable），非零退出——不静默误编译。三后端（interp/IR/字节码）
-    // 线程一致（hc-rt/tests/thread.rs + hc/tests/ir.rs + bytecode.rs），native 记
-    // out-of-subset。
+    // C7（Phase 8）：FnRef 已实现（ptrtoint），spawn 内建在原生侧仍中止
+    // （error.NotBuiltin）。三后端（interp/IR/字节码）线程一致。
     if !zig_cc_available() {
         eprintln!("SKIP: zig cc 不可用");
         return;
@@ -985,9 +982,12 @@ fn g4b_thread_spawn_aborts_notcallable() {
              var r = th.join();\n\
          }\n",
     );
-    assert!(!st.success(), "原生线程程序应中止（error.NotCallable），实际退出 {st}");
     assert!(
-        stdout.contains("error.NotCallable"),
-        "应打印 error.NotCallable 边界消息，实际 stdout: {stdout:?}"
+        !st.success(),
+        "原生线程程序应中止（error.NotBuiltin），实际退出 {st}"
+    );
+    assert!(
+        stdout.contains("error.NotBuiltin"),
+        "C7：FnRef 已实现，spawn 内建仍中止 error.NotBuiltin，实际 stdout: {stdout:?}"
     );
 }

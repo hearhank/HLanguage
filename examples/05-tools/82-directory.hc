@@ -5,7 +5,7 @@ import H.std.{io};
 //   - io.fs.open_dir / list_dir（与文件 IO 双语一致，Q20）
 //   - 字节为中心；条目含 is_dir 标志
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var dir = try io.fs.open_dir(".");
     defer dir.close();
 

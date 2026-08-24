@@ -18,7 +18,7 @@ fn default_config() Config {
     return alloc.init(Config{host = String.from("localhost", alloc), port = 8080, timeout_ms = 1000});
 }
 
-fn load_config(io: *T, path: &[u8]) ConfigError!Config where T: Io {
+fn load_config<T>(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     var data = io.fs.read_file(path) catch return default_config();   // 缺失 → 默认
     var json = json.parse(data) catch return error.InvalidConfig;
 
@@ -29,7 +29,7 @@ fn load_config(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     });
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var cfg = try load_config(&io, "config.json");
     io.print("{}:{}\n", cfg.host, cfg.port);
 }

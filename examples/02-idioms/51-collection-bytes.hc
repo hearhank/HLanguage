@@ -6,8 +6,8 @@ import H.std.{io};
 //   - 字节序固定小端（LE，跨平台一致）；元素递归用内建转换
 //   - 定制格式（压缩/加密/版本化）走脚本生成覆盖（Q38 C）
 
-fn main(args: o Vec(String)) !void {
-    var v = Vec(i32).init(alloc);
+fn main() !void {
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     v.append(3);
@@ -17,7 +17,7 @@ fn main(args: o Vec(String)) !void {
     io.print("bytes len = {}\n", bytes.len);   // 8（u64 前缀）+ 12（3 × i32）
 
     // 反序列化
-    var v2 = try Vec(i32).from_bytes(bytes);
+    var v2 = try Vec<i32>.from_bytes(bytes);
     io.print("count = {}\n", v2.len);
 
     // String → bytes：[len][utf8]
@@ -27,13 +27,13 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn collection_to_bytes() !void {
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     v.append(3);
     var bytes = v.to_bytes();
     try expect_eq(bytes.len, 8 + 12);   // u64 前缀 + 3 × i32
-    var v2 = try Vec(i32).from_bytes(bytes);
+    var v2 = try Vec<i32>.from_bytes(bytes);
     try expect_eq(v2.len, 3);
 }
 

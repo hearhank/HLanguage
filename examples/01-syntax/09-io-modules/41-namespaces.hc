@@ -9,7 +9,7 @@ import H.std.{io};
 
 using Math;
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     io.print("{}\n", Math.square(5));   // 限定访问
     io.print("{}\n", square(5));        // using 后直接使用
 }

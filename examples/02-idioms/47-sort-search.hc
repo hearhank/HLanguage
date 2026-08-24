@@ -5,7 +5,7 @@ import H.std.{io};
 //   - 原地排序：sort(&mut arr)（可写切片）
 //   - 只读查找：binary_search(&arr, v) → ?usize
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var mut arr = [5, 2, 8, 1, 9, 3];
 
     sort(&mut arr);                    // 可写切片（唯一写者）

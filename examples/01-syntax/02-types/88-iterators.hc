@@ -2,13 +2,12 @@ import H.std.{io};
 
 // 88-iterators.hc — 迭代契约（IIterable 三态，2026-08-14 定案）
 //
-//   - for (x) |item| 走迭代接口：IIterable(*T) 只读 / IIterable(*mut T) 可写 / IIterable(o T) 拥有
+//   - for (x) |item| 走迭代接口：IIterable<*T> 只读 / IIterable<*mut T> 可写 / IIterable<o T> 拥有
 //   - 内建类型（数组/切片/Vec/Map/Table/String）编译器内建实现三态
 //   - 用户类型实现迭代接口即可参与 for；arr.iter() 迭代器 = 显式数据对象
 
 // 用户类型：斐波那契数列（一次性迭代器，next 消耗状态）
-[continuous]   // 全值字段 → 连续内存值类型（H1 特性标注）
-class Fib: IIterable(i32) {
+class Fib: IIterable<i32> {
     mut a: i32,
     mut b: i32,
     mut remaining: i32,
@@ -26,8 +25,8 @@ class Fib: IIterable(i32) {
     }
 }
 
-fn main(args: o Vec(String)) !void {
-    // 内建类型：只读迭代（IIterable(*T) 默认形态）
+fn main() !void {
+    // 内建类型：只读迭代（IIterable<*T> 默认形态）
     var nums = [1, 2, 3, 4, 5];
     var sum = 0;
     for (nums) |n| {
@@ -35,14 +34,14 @@ fn main(args: o Vec(String)) !void {
     }
     io.print("sum = {}\n", sum);   // 15
 
-    // 内建类型：可写迭代（IIterable(*mut T)，|mut item| 捕获）
+    // 内建类型：可写迭代（IIterable<*mut T>，|mut item| 捕获）
     var mut arr = [1, 2, 3];
     for (arr) |mut item| {
         item *= 10;
     }
     io.print("{} {} {}\n", arr[0], arr[1], arr[2]);   // 10 20 30
 
-    // 用户类型迭代（实现 IIterable(i32)）
+    // 用户类型迭代（实现 IIterable<i32>）
     var fib = Fib{a = 0, b = 1, remaining = 6};
     for (fib) |f| {
         io.print("{} ", f);        // 0 1 1 2 3 5
@@ -74,7 +73,7 @@ fn main(args: o Vec(String)) !void {
 
 [test] fn user_type_iteration() !void {
     var fib = Fib{a = 0, b = 1, remaining = 6};
-    var got = Vec(i32).init(alloc);
+    var got = Vec<i32>.init(alloc);
     for (fib) |f| {
         got.append(f);
     }

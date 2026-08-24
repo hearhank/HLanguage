@@ -5,7 +5,7 @@ import H.std.{io};
 //   - 57 目录遍历 + 行读取 + find（47）
 //   - 输出 文件名:行 格式
 
-fn search_file(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
+fn search_file<T>(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     var data = try io.fs.read_file(path, alloc);
     var text = String.from(data, alloc);
     var lines = text.split('\n');
@@ -20,7 +20,7 @@ fn search_file(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     return hits;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var needle = "fn ";
     var dir = try io.fs.open_dir(".");
     defer dir.close();

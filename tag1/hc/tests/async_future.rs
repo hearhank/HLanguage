@@ -57,7 +57,7 @@ fn parse_await_expr() {
         r#"
         async fn fetch() i32 { return 42; }
         fn main() void {
-            var fut: Future(i32) = fetch();
+            var fut: Future<i32> = fetch();
             var r = await fut;
             _ = r;
         }
@@ -75,12 +75,12 @@ fn parse_await_expr() {
 
 #[test]
 fn semantic_async_call_types_future() {
-    // async fn 调用点返回 `Future(R)`：赋给 `Future(i32)` 无诊断（类型精确）
+    // async fn 调用点返回 `Future(R)`：赋给 `Future<i32>` 无诊断（类型精确）
     let prog = parse_source(
         r#"
         async fn fetch() i32 { return 42; }
         fn main() void {
-            var fut: Future(i32) = fetch();
+            var fut: Future<i32> = fetch();
             _ = fut;
         }
         "#,
@@ -89,7 +89,7 @@ fn semantic_async_call_types_future() {
     let diags = check_semantics(&prog);
     assert!(
         diags.is_empty(),
-        "async 调用应定型为 Future(i32)：{:?}",
+        "async 调用应定型为 Future<i32>：{:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }
@@ -101,7 +101,7 @@ fn semantic_await_unpacks_future() {
         r#"
         async fn fetch() i32 { return 42; }
         fn main() void {
-            var fut: Future(i32) = fetch();
+            var fut: Future<i32> = fetch();
             var r: i32 = await fut;
             _ = r;
         }
@@ -111,20 +111,20 @@ fn semantic_await_unpacks_future() {
     let diags = check_semantics(&prog);
     assert!(
         diags.is_empty(),
-        "await 应解包 Future(i32) → i32：{:?}",
+        "await 应解包 Future<i32> → i32：{:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }
 
 #[test]
 fn semantic_async_error_union_future() {
-    // Q20：R = 完整返回类型含错误联合——`async fn fetch() !String` 调用点 = Future(!String)；
+    // Q20：R = 完整返回类型含错误联合——`async fn fetch() !String` 调用点 = Future<!String>；
     // `try await fut` → String
     let prog = parse_source(
         r#"
         async fn fetch() !String { return "ok"; }
         fn main() void {
-            var fut: Future(!String) = fetch();
+            var fut: Future<!String> = fetch();
             var s: String = try await fut;
             _ = s;
         }
@@ -134,7 +134,7 @@ fn semantic_async_error_union_future() {
     let diags = check_semantics(&prog);
     assert!(
         diags.is_empty(),
-        "Future(!String) + try await 应无诊断：{:?}",
+        "Future<!String> + try await 应无诊断：{:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }

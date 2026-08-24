@@ -12,9 +12,9 @@ import H.std.{io};
     kind: u8,
 }
 
-fn encode(m: *Message) o Vec(u8) {
+fn encode(m: *Message) owned Vec<u8> {
     var payload = m.to_bytes();
-    var frame = Vec(u8).init(alloc);
+    var frame = Vec<u8>.init(alloc);
     frame.append_u64(payload.len);     // 长度前缀（u64 LE，Q38）
     frame.extend(payload);
     return frame;
@@ -25,7 +25,7 @@ fn decode(data: &[u8]) !Message {
     return Message.from_bytes(data[8..8 + len]);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var msg = Message{id = 7, kind = 1};
     var frame = encode(&msg);
     io.print("frame len = {}\n", frame.len);   // 8 + 8 = 16

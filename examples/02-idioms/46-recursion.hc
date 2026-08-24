@@ -14,7 +14,7 @@ fn fib(n: i32) i32 {
 
 tree Node {
     value: i32,
-    children: Vec(Node),
+    children: Vec<Node>,
 
     fn depth(self: *Self) i32 {
         var max_depth = 0;
@@ -28,12 +28,12 @@ tree Node {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     io.print("fib(10) = {}\n", fib(10));
 
     // tree 构建：Node.new 构造样板 + move 进 Vec（Q23 调用点显式 move）
-    var root: o Node = Node.new(1, alloc);
-    var child: o Node = Node.new(2, alloc);
+    var root: owned Node = Node.new(1, alloc);
+    var child: owned Node = Node.new(2, alloc);
     child.children.append(Node.new(3, alloc));
     root.children.append(move child);
     io.print("depth = {}\n", root.depth());
@@ -44,8 +44,8 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn tree_depth() !void {
-    var root: o Node = Node.new(1, alloc);
-    var child: o Node = Node.new(2, alloc);
+    var root: owned Node = Node.new(1, alloc);
+    var child: owned Node = Node.new(2, alloc);
     child.children.append(Node.new(3, alloc));
     root.children.append(move child);
     try expect_eq(root.depth(), 3);

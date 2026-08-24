@@ -6,9 +6,9 @@ import H.std.{io};
 //   - 事件即数据：事件名 + 负载（&[u8]）
 
 class Subject {
-    mut subscribers: Vec(Fn1(&[u8], &[u8]) void),   // (事件, 负载)
+    mut subscribers: Vec<Fn1<&[u8], &[u8]> void>,   // (事件, 负载)
 
-    fn subscribe(self: *mut Self, handler: Fn1(&[u8], &[u8]) void) void {
+    fn subscribe(self: *mut Self, handler: Fn1<&[u8], &[u8]> void) void {
         self.subscribers.append(handler);
     }
 
@@ -19,8 +19,8 @@ class Subject {
     }
 }
 
-fn main(args: o Vec(String)) !void {
-    var subject: o Subject = alloc.init(Subject);   // 无参构造（C1'）
+fn main() !void {
+    var subject: owned Subject = alloc.init(Subject);   // 无参构造（C1'）
 
     subject.subscribe(|event, payload| io.print("[{}] {}\n", event, payload));
 
@@ -29,7 +29,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn publish_subscribe() !void {
-    var subject: o Subject = alloc.init(Subject);
+    var subject: owned Subject = alloc.init(Subject);
     var mut received = 0;
     subject.subscribe(mut |event, payload| { // 可写捕获（mut）
         received += 1;

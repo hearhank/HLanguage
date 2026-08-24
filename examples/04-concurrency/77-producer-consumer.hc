@@ -1,44 +1,77 @@
 import H.std.{io};
 
-// 77-producer-consumer.hc — 生产者-消费者（线程 + 四模式类型）
+// 77-producer-consumer.hc — 生产者-消费者（协程 + 通道）
 //
-// Q32 定案（2026-08-13）：四模式类型 = 内建共享特例
-//   - 容器方法取 *Self（只读引用）：read/write 通过 &ch 调用，内部同步
-//   - 不占用唯一写者槽；多线程可同时持 &ch
-//   - 作用域绑定（join 后回到当前作用域）→ 引用捕获允许（Q18）
-//   - 仅四模式类型可模拟（用户类型不可——需唯一写者）
+// E4：spawn 创建协程（goroutine），chan 通道通信
+//   - 生产者通过 chan.send() 发送数据
+//   - 消费者通过 chan.recv() 接收数据
+//   - 值复制捕获：协程安全逃逸，无共享数据
 
-fn producer(ch: *OneToOne(i32), n: i32) void {
-    for (0..n) |i| {
-        ch.write(i * i);
+fn producer(ch: *chan, n: i32) void {
+    var i: i32 = 0;
+    while (i < n) {
+        ch.send(i * i);
+        i += 1;
     }
+    ch.close();
 }
 
-fn consumer(ch: *OneToOne(i32), count: i32) i32 {
+fn consumer(ch: *chan, count: i32) i32 {
     var sum = 0;
-    for (0..count) |_| {
-        sum += ch.read();
+    var received = 0;
+    while (received < count) {
+        sum += ch.recv();
+        received += 1;
     }
     return sum;
 }
 
-fn main(args: o Vec(String)) !void {
-    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
+fn send_one(c: *chan) void {
+    c.send(1);
+}
 
-    // 两个线程共享同一容器：各持 &ch（内建共享特例，Q32）
-    var p_thread: o Thread(void) = spawn(producer, &ch, 10);
-    var c_thread: o Thread(i32) = spawn(consumer, &ch, 10);
+fn send_two(c: *chan) void {
+    c.send(2);
+}
+
+fn send_three(c: *chan) void {
+    c.send(3);
+}
+
+fn main() !void {
+    var ch = chan.init(alloc, 10);  // 有缓冲通道
+
+    // 生产者与消费者各持 &ch（通道内建线程安全）
+    var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
+    var c_thread: owned Thread<i32> = spawn(consumer, &ch, 10);
 
     try p_thread.join();
     var sum = try c_thread.join();
     io.print("sum = {}\n", sum);   // 0²+1²+…+9² = 285
 }
 
-[test] fn producer_consumer() !void {
-    var ch: o OneToOne(i32) = OneToOne(i32).init(alloc);
-    var p_thread: o Thread(void) = spawn(producer, &ch, 10);
-    var c_thread: o Thread(i32) = spawn(consumer, &ch, 10);
+[test] fn producer_consumer_sum() !void {
+    var ch = chan.init(alloc, 10);
+    var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
+    var c_thread: owned Thread<i32> = spawn(consumer, &ch, 10);
     try p_thread.join();
     var sum = try c_thread.join();
     try expect_eq(sum, 285);   // 0²+1²+…+9²
+}
+
+[test] fn multi_producer() !void {
+    var ch = chan.init(alloc, 10);
+    var t1 = spawn(send_one, &ch);
+    var t2 = spawn(send_two, &ch);
+    var t3 = spawn(send_three, &ch);
+    try t1.join();
+    try t2.join();
+    try t3.join();
+    var sum = 0;
+    var i: i32 = 0;
+    while (i < 3) {
+        sum += ch.recv();
+        i += 1;
+    }
+    try expect_eq(sum, 6);
 }

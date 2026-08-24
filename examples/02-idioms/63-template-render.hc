@@ -11,7 +11,7 @@ fn render(template: &[u8], name: &[u8], age: i32) String {
     return text;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var tmpl = "Hello, {{name}}! You are {{age}} years old.";
     var out = render(tmpl, "alice", 30);
     io.print("{}\n", out);

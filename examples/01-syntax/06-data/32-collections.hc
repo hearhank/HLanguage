@@ -3,16 +3,16 @@ import H.std.{io};
 // 32-collections.hc — 集合与字符串（修改数据）
 //
 // Q15 定案（2026-08-13）：集合/字符串构造
-//   - Vec(i32) 是 comptime 类型应用；构造 = 普通函数（12.20）
+//   - Vec<i32> 是 comptime 类型应用；构造 = 普通函数（12.20）
 //   - 字符串字面量保持 &[u8] 静态切片；String.from(&[u8]) 显式转换（分配是显式动作）
 //
 // Q16 定案（2026-08-13）：所有权默认 + String = u8[] 别名（Q3；Q1' 2026-08-14 修订赋值语义）
 //   - 复杂类型（分配器创建）除 Arena 外默认拥有——作用域退出自动销毁（无需显式 o/deinit）
 //   - String = u8[] 别名（Q3）：引用类型、赋值 = 编译错误（共享走指针、复制走显式 copy）
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     // Vec：构造 + 追加（非 arena 分配器 → 默认拥有，作用域退出自动销毁）
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     v.append(3);
@@ -25,7 +25,7 @@ fn main(args: o Vec(String)) !void {
     io.print("sum = {}\n", sum);
 
     // Map
-    var m = Map(&[u8], i32).init(alloc);
+    var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     io.print("apple = {}\n", m.get("apple").?);
 
@@ -36,7 +36,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn vec_append_and_iterate() !void {
-    var v = Vec(i32).init(alloc);
+    var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
     v.append(3);
@@ -48,7 +48,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn map_key_value_ops() !void {
-    var m = Map(&[u8], i32).init(alloc);
+    var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     try expect_eq(m.get("apple").?, 5);
     try expect(m.contains("apple"));

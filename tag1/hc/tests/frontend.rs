@@ -114,14 +114,14 @@ fn f(n: i32) i32 {
 #[test]
 fn parse_class_enum_interface() {
     let src = r#"
-[continuous]
-class Point { x: f32, y: f32, fn dist(a: *Point, b: *Point) f32 { return 0; } }
+struct Point { x: f32, y: f32 }
+fn dist(a: *Point, b: *Point) f32 { return 0; }
 enum Kind { player, enemy }
 interface IShape { fn area(self: *Self) f32; }
 class Rect: IShape { w: f32, h: f32, fn area(self: *Self) f32 { return self.w * self.h; } }
 "#;
     let program = parse_source(src).expect("parse types");
-    assert_eq!(program.decls.len(), 4);
+    assert_eq!(program.decls.len(), 5);
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn parse_error_reports_position() {
 #[test]
 fn parse_closures() {
     let src = r#"
-fn apply(f: Fn1(i32) i32, x: i32) i32 { return f(x); }
+fn apply(f: Fn1<i32> i32, x: i32) i32 { return f(x); }
 fn main(io: Io) !void {
     var a = 10;
     var add_a = |v| v + a;
@@ -191,6 +191,95 @@ const build = Build{
 };
 "#;
     parse_source(src).expect("parse array trailing comma");
+}
+
+// ---------- Struct 类型验收 ----------
+
+#[test]
+fn struct_decl_and_literal() {
+    // struct 声明 + 字面量初始化 + 字段访问
+    check_clean(
+        "struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 10, y = 3.14 }; return p.x; }\n",
+    );
+}
+
+#[test]
+fn struct_field_access() {
+    // struct 字段读取
+    check_clean(
+        "struct Vec3 { x: f32, y: f32, z: f32 }\n\
+         fn dot(a: *Vec3, b: *Vec3) f32 {\n\
+             return a.x * b.x + a.y * b.y + a.z * b.z;\n\
+         }\n",
+    );
+}
+
+#[test]
+fn struct_missing_field_error() {
+    // struct 字面量缺字段 → 错误
+    check_has_error(
+        "struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 10 }; return p.x; }\n",
+        "missing field",
+    );
+}
+
+#[test]
+fn struct_unknown_field_error() {
+    // struct 字面量未知字段 → 错误
+    check_has_error(
+        "struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 10, y = 3.14, z = 1 }; return p.x; }\n",
+        "unknown field",
+    );
+}
+
+#[test]
+fn struct_array_field() {
+    // struct 定长数组字段
+    check_clean(
+        "struct Matrix { data: [4]f32 }\n\
+         fn f() f32 { var m = Matrix{ data = [1.0, 0.0, 0.0, 1.0] }; return m.data[0]; }\n",
+    );
+}
+
+#[test]
+fn struct_pub_field_access() {
+    // struct 公有字段可正常访问
+    check_clean(
+        "struct Point { pub x: i32, y: f32 }\n\
+         fn f(p: *Point) i32 { return p.x; }\n",
+    );
+}
+
+#[test]
+fn struct_align_valid() {
+    // [align(N)] 合法值：2 的幂
+    check_clean(
+        "[align(8)] struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { var p = Point{ x = 1, y = 2.0 }; return p.x; }\n",
+    );
+}
+
+#[test]
+fn struct_align_invalid() {
+    // [align(3)] 不是 2 的幂 → 错误
+    check_has_error(
+        "[align(3)] struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { return 0; }\n",
+        "invalid alignment",
+    );
+}
+
+#[test]
+fn struct_align_zero() {
+    // [align(0)] 无效 → 错误
+    check_has_error(
+        "[align(0)] struct Point { x: i32, y: f32 }\n\
+         fn f() i32 { return 0; }\n",
+        "invalid alignment",
+    );
 }
 
 // ---------- M2.6 错误码表验收 ----------
@@ -381,7 +470,7 @@ fn check_clean(src: &str) {
 fn m24_move_arena_rejected() {
     // move Arena 分配对象 → 编译错误（所有权归 Arena）
     check_has_error(
-        "fn take(y: o String) void {}\n[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
+        "fn take(y: owned String) void {}\n[test] fn t() !void {\n    var arena = Arena.init(alloc);\n    var buf = arena.alloc(64);\n    take(move buf);\n}\n",
         "allocated by Arena",
     );
 }
@@ -390,7 +479,7 @@ fn m24_move_arena_rejected() {
 fn m24_move_global_rejected() {
     // move global → 编译错误（所有权归根作用域）
     check_has_error(
-        "global g: String = String.from(\"x\", alloc);\n[test] fn t() !void {\n    take(move g);\n}\nfn take(y: o String) void {}\n",
+        "global g: String = String.from(\"x\", alloc);\n[test] fn t() !void {\n    take(move g);\n}\nfn take(y: owned String) void {}\n",
         "cannot move global",
     );
 }
@@ -408,7 +497,7 @@ fn m24_move_value_type_rejected() {
 fn m24_move_owned_ok() {
     // move 有所有权对象（非 Arena 分配）→ 合法
     check_clean(
-        "fn make() o String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
+        "fn make() owned String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
     );
 }
 
@@ -425,11 +514,13 @@ fn m24_return_local_ref_rejected() {
 fn m24_return_owned_param_must_move() {
     // 带所有权参数：返回引用 → 错误；必须 `return move param`
     check_has_error(
-        "fn f(y: o String) *String {\n    return &y;\n}\n",
+        "fn f(y: owned String) *String {\n    return &y;\n}\n",
         "escapes function scope",
     );
     // move 返回所有权 → 合法
-    check_clean("fn f(y: o String) o String {\n    return move y;\n}\n[test] fn t() !void {}\n");
+    check_clean(
+        "fn f(y: owned String) owned String {\n    return move y;\n}\n[test] fn t() !void {}\n",
+    );
 }
 
 #[test]
@@ -448,7 +539,7 @@ fn k1_union_scalar_only_rejected() {
         "必须为标量类型",
     );
     check_has_error(
-        "union Bad { v: Vec(i32) }\n[test] fn t() !void {}\n",
+        "union Bad { v: Vec<i32> }\n[test] fn t() !void {}\n",
         "必须为标量类型",
     );
 }
@@ -554,9 +645,7 @@ fn k5_export_start_marks_entry() {
 #[test]
 fn k5_export_pub_composable() {
     // `pub export fn` 组合修饰（语言可见性 + 符号导出）——干净解析
-    check_clean(
-        "pub export fn f() i32 {\n    return 1;\n}\nfn main() i32 {\n    return f();\n}\n",
-    );
+    check_clean("pub export fn f() i32 {\n    return 1;\n}\nfn main() i32 {\n    return f();\n}\n");
 }
 
 #[test]
@@ -565,8 +654,9 @@ fn k5_export_non_fn_rejected() {
     let err = parse_source("export const X: i32 = 5;\nfn main() i32 {\n    return X;\n}\n")
         .expect_err("export const should be a parse error");
     assert!(
-        err.iter()
-            .any(|d| d.message.contains("`export` only applies to `fn`/`async fn` declarations")),
+        err.iter().any(|d| d
+            .message
+            .contains("`export` only applies to `fn`/`async fn` declarations")),
         "{err:?}"
     );
 }
@@ -577,7 +667,7 @@ fn k5_export_non_fn_rejected() {
 fn m14_extern_symbols_enable_crossfile_check() {
     // 外部（兄弟文件）namespace 符号并入语义检查——限定类型字段校验生效
     let ext =
-        parse_source("namespace Orders {\n    pub struct Line { item: String, price: f64 }\n}\n")
+        parse_source("namespace Orders {\n    pub class Line { item: String, price: f64 }\n}\n")
             .expect("parse ext");
     let main = parse_source(
         "using Orders;\n[test] fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
@@ -597,7 +687,7 @@ fn m14_extern_symbols_enable_crossfile_check() {
 fn m14_using_imports_type() {
     // using 导入类型：`Line` 不限定直接引用（扁平名）
     let ext =
-        parse_source("namespace Orders { pub struct Line { item: String } }\n").expect("parse ext");
+        parse_source("namespace Orders { pub class Line { item: String } }").expect("parse ext");
     let main = parse_source(
         "using Orders;\n[test] fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
     )
@@ -721,7 +811,7 @@ fn a1_parse_study_example() {
 import H.std.{io as my};
 import H.std.net.{http,tcp};
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     my.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
     http.print();
@@ -866,5 +956,84 @@ fn m14_sibling_top_level_fn_is_file_private() {
             .any(|d| d.is_error() && d.message.contains("ambiguous")),
         "兄弟文件同名顶层函数不应误报歧义: {:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+}
+
+// ---------- A1（ADR-0020）：extern fn — FFI 纯声明 ----------
+
+#[test]
+fn a1_parse_extern_fn() {
+    // `extern fn add(a: i32, b: i32) i32;` → is_extern: true, 无 body
+    let program = parse_source("extern fn add(a: i32, b: i32) i32;\n").expect("parse extern fn");
+    assert_eq!(program.decls.len(), 1);
+    match &program.decls[0] {
+        Decl::Fn {
+            name,
+            params,
+            ret,
+            is_extern,
+            body,
+            ..
+        } => {
+            assert_eq!(name, "add");
+            assert_eq!(params.len(), 2);
+            assert!(is_extern, "extern fn should have is_extern=true");
+            assert!(ret.is_some(), "extern fn should have return type");
+            assert!(body.stmts.is_empty(), "extern fn body should be empty");
+        }
+        other => panic!("expected Decl::Fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn a1_parse_extern_fn_no_return() {
+    // `extern fn foo();` → 无返回类型
+    let program = parse_source("extern fn foo();\n").expect("parse extern fn no return");
+    match &program.decls[0] {
+        Decl::Fn {
+            name,
+            ret,
+            is_extern,
+            ..
+        } => {
+            assert_eq!(name, "foo");
+            assert!(ret.is_none(), "extern fn without return type");
+            assert!(is_extern);
+        }
+        other => panic!("expected Decl::Fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn a1_parse_extern_fn_generic() {
+    // `extern fn swap<T>(a: *T, b: *mut T);` → 含泛型参数
+    let program =
+        parse_source("extern fn swap<T>(a: *T, b: *mut T);\n").expect("parse extern generic");
+    match &program.decls[0] {
+        Decl::Fn {
+            name,
+            type_params,
+            is_extern,
+            ..
+        } => {
+            assert_eq!(name, "swap");
+            assert_eq!(type_params.len(), 1);
+            assert_eq!(type_params[0], "T");
+            assert!(is_extern);
+        }
+        other => panic!("expected Decl::Fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn a1_sem_extern_fn_no_body_error() {
+    // extern fn 语义检查不应报错（无 body 是合法的）
+    let program = parse_source("extern fn add(a: i32, b: i32) i32;\n").expect("parse");
+    let diags = hc::check_semantics(&program);
+    let errors: Vec<_> = diags.iter().filter(|d| d.is_error()).collect();
+    assert!(
+        errors.is_empty(),
+        "extern fn 语义检查不应报错: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }

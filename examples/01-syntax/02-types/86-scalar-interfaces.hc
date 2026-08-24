@@ -8,7 +8,7 @@ import H.std.{io};
 //   - 泛型约束 where T: INumber 可作用于所有标量；元组 = 多值返回
 
 // 泛型约束：任意数字标量求和（IInt/IUint/IFloat 均满足 INumber）
-fn sum(items: &[T]) T where T: INumber {
+fn sum<T>(items: &[T]) T where T: INumber {
     var total = items[0];
     for (items[1..]) |v| {
         total = total.add(v);   // ≡ total + v
@@ -21,7 +21,7 @@ fn divmod(a: i32, b: i32) (i32, i32) {
     return (a / b, a % b);
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     // 方法形式（a.add(b) ≡ a + b，双向一致）
     var a: i32 = 7;
     var b: i32 = 5;
@@ -46,7 +46,7 @@ fn main(args: o Vec(String)) !void {
     io.print("{} {}\n", q, r);                              // 3 2
 
     // 标量装箱：接口 = 类型标注（*INumber 只读引用 / *mut INumber 可写引用）
-    var hp: o *INumber = box(a, alloc);
+    var hp: owned *INumber = box(a, alloc);
     io.print("{}\n", hp.add(b));                            // 12（动态分发）
 }
 

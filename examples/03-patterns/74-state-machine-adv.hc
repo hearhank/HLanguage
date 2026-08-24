@@ -23,7 +23,7 @@ fn describe(state: HttpState) &[u8] {
     };
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var state = HttpState{connecting = 3};
     io.print("{}\n", describe(state));
 

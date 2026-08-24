@@ -13,15 +13,15 @@ class Address {
 class Person {
     mut name: String,
     mut age: i32,
-    mut addr: o Address,     // 嵌套 class（默认拥有，Q16）
+    mut addr: owned Address,     // 嵌套 class（默认拥有，Q16）
 
     fn to_json(self: *Self) String {
         // 内建：递归嵌套字段序列化（{"name":...,"addr":{"city":...}}）
     }
 }
 
-fn main(args: o Vec(String)) !void {
-    var mut p: o Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
+fn main() !void {
+    var mut p: owned Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
     p.name = String.from("alice", alloc);
     p.addr.city = String.from("beijing", alloc);
 

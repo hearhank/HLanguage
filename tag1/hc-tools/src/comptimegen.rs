@@ -7,7 +7,7 @@
 //! 归组 D3/D4——本切片仅「求值 + 错误机制」。
 //!
 //! 求值在装载期完成（script 展开后、语义检查前），IR/字节码/native 对 comptime 块无感知
-//! （各后端跳过 `Decl::Comptime`，镜像 `Decl::Script`）。
+//! （各后端跳过 `Decl::Comptime`）。
 
 use hc::ast::{Block, Decl, Program};
 use hc::diag::{self, Diagnostic};
@@ -40,7 +40,11 @@ fn find_comptime_blocks(program: &Program) -> Vec<ComptimeSite<'_>> {
 
 fn collect_in_decl<'a>(d: &'a Decl, out: &mut Vec<ComptimeSite<'a>>) {
     match d {
-        Decl::Comptime { body, span } => out.push(ComptimeSite { body, span: span.clone() }),
+        Decl::Comptime { body, span } => out.push(ComptimeSite {
+            body,
+            span: span.clone(),
+        }),
+        Decl::Include { .. } => {}
         Decl::Namespace { decls, .. } => {
             for inner in decls {
                 collect_in_decl(inner, out);
@@ -54,12 +58,12 @@ fn collect_in_decl<'a>(d: &'a Decl, out: &mut Vec<ComptimeSite<'a>>) {
 fn eval_comptime(source: &str, program: &Program, site: &ComptimeSite) -> Result<(), String> {
     let mut interp = Interp::new(source);
     interp.set_script_mode(true);
-    interp.load(program).map_err(|e| {
-        format!("comptime 块装载失败: {}", e.render(source))
-    })?;
-    let v = interp.exec_fn_body(site.body, &[]).map_err(|e| {
-        format!("comptime 块求值失败: {}", e.render(source))
-    })?;
+    interp
+        .load(program)
+        .map_err(|e| format!("comptime 块装载失败: {}", e.render(source)))?;
+    let v = interp
+        .exec_fn_body(site.body, &[])
+        .map_err(|e| format!("comptime 块求值失败: {}", e.render(source)))?;
     match v {
         // `return error.X` = 块显式失败 → 编译错误（沿 06-09：comptime 块可返回错误）
         Value::Err { name, .. } => {

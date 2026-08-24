@@ -116,9 +116,8 @@ H.std 标准库为编译器内建（Rust 实现，无 .hc 源）；本页为目�
 
 ## 线程（组 G 生命周期）
 
-- `spawn(f, args...) o Thread(T)` — 协作式延迟执行：立即返回句柄，join 时运行
+- `spawn(f, args...) owned Thread(T)` — 协作式延迟执行：立即返回句柄，join 时运行
 - `thread.join() !T` — 运行到完成并取结果
 - `thread.cancel() !void` — 协作取消（未运行 → join 返回 error.Cancelled）
 - `thread.is_done() bool` — 完成查询
 - `thread.detach()` — 立即运行到完成并丢弃结果
-

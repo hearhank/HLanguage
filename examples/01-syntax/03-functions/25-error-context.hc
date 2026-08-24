@@ -7,12 +7,12 @@ import H.std.{io};
 
 const ConfigError = error{NotFound, InvalidFormat};
 
-fn load_config(io: *T, path: &[u8]) ConfigError!Config where T: Io {
+fn load_config<T>(io: *T, path: &[u8]) ConfigError!Config where T: Io {
     var data = io.fs.read_file(path) catch return error.NotFound;
     return Config.from_json(data) catch return error.InvalidFormat;
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var cfg = load_config(&io, "app.json") catch |err| {
         // Debug：err 携带返回追踪（各 try/catch 位置）
         io.print("config failed: {}\n", err);

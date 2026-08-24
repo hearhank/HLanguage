@@ -1,0 +1,49 @@
+{
+  "name": "tree-sitter-h",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for H language",
+  "main": "bindings/node",
+  "types": "bindings/node",
+  "keywords": [
+    "tree-sitter",
+    "h",
+    "h-language",
+    "parser",
+    "lexer"
+  ],
+  "author": "Hank",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/h-language/h"
+  },
+  "dependencies": {
+    "nan": "^2.18.0"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.8"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.h",
+      "file-types": [
+        "h"
+      ],
+      "highlights": [
+        "highlights.scm"
+      ],
+      "locals": [
+        "queries/locals.scm"
+      ],
+      "tags": [
+        "queries/tags.scm"
+      ]
+    }
+  ],
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse",
+    "install": "node-gyp rebuild"
+  }
+}

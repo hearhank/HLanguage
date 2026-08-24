@@ -20,8 +20,8 @@ class Query {
     }
 }
 
-fn main(args: o Vec(String)) !void {
-    var mut q: o Query = alloc.init(Query);   // 无参构造（C1'）
+fn main() !void {
+    var mut q: owned Query = alloc.init(Query);   // 无参构造（C1'）
 
     // 链式调用：where().limit()（*mut 链不复制——资格随链传递）
     q.where("age > 18").limit(10);
@@ -30,7 +30,7 @@ fn main(args: o Vec(String)) !void {
 }
 
 [test] fn builder_chaining() !void {
-    var mut q: o Query = alloc.init(Query);
+    var mut q: owned Query = alloc.init(Query);
     q.where("age > 18").limit(10);   // 链：*mut 资格延续（Q25）
     try expect_eq_slices(q.where_clause.as_slice(), "age > 18");
     try expect_eq(q.limit_n, 10);

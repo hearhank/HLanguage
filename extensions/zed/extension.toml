@@ -1,0 +1,35 @@
+id = "h-language"
+name = "H Language"
+version = "0.1.0"
+schema_version = 1
+description = "H language support for Zed"
+repository = "https://github.com/h-language/h"
+authors = ["Hank <baibib@163.com>"]
+themes = []
+icon_themes = []
+languages = ["languages/h"]
+capabilities = []
+
+[lib]
+kind = "Rust"
+version = "0.7.0"
+
+[grammars.h]
+# Local grammar. Zed clones the repository below and builds the parser from
+# `src/parser.c` (already generated and committed). The `path` points Zed at
+# the grammar subdirectory inside the repository.
+repository = "file:///C:/Users/Hank/Documents/works/AI/H2"
+rev = "feature/improv_code_v0.1.5"
+path = "extensions/zed/languages/h"
+
+[language_servers.hc-lsp]
+language = "H"
+languages = []
+
+[language_servers.hc-lsp.language_ids]
+
+[context_servers]
+
+[agent_servers]
+
+[slash_commands]

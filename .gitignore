@@ -23,6 +23,19 @@ target/
 *_tmp.*
 *.log
 
+# Zed 扩展部署产物（由 deploy-lsp.bat 重新生成）
+extensions/zed/extension.wasm
+setup-lsp.bat
+/zed-lsp-snippet.json
+# Zed 语法 grammar 运行时克隆/编译目录（grammars/h.wasm 与 grammars/h/）
+extensions/zed/grammars/
+
 # 编辑器/系统
 .DS_Store
 Thumbs.db
+nul
+
+# Tool
+# .claude/
+.Zed/
+.*/

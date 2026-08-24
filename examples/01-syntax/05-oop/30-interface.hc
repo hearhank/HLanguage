@@ -11,7 +11,7 @@ interface IShape {
     fn area(self: *Self) f32;
 }
 
-[continuous] class Rect: IShape {
+class Rect: IShape {
     w: f32,
     h: f32,
 
@@ -20,7 +20,7 @@ interface IShape {
     }
 }
 
-[continuous] class Circle: IShape {
+class Circle: IShape {
     r: f32,
 
     fn area(self: *Self) f32 {
@@ -28,7 +28,7 @@ interface IShape {
     }
 }
 
-fn main(args: o Vec(String)) !void {
+fn main() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
 

@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 
 use hc::ast::{Block, Decl, Expr, Param, Program, Stmt, Type};
+use hc::check_semantics;
 use hc::comptime::{
     concrete_name, expr_to_type, has_anytype, instantiate, is_comptime_value_fn, is_type_fn,
     map_type_apps, subst, type_key, Instantiated,
 };
-use hc::check_semantics;
 use hc::parse_source;
 use hc::token::Span;
 
@@ -125,7 +125,7 @@ fn is_comptime_value_fn_detects_type_params_but_not_type_fns() {
 
 #[test]
 fn expr_to_type_converts_type_exprs_only() {
-    // D4c：调用点实参表达式 → 类型（`i32` → Named；`Vec(i32)` → 嵌套应用；值 → None）
+    // D4c：调用点实参表达式 → 类型（`i32` → Named；`Vec<i32>` → 嵌套应用；值 → None）
     let sp = Span::new(0, 0, 0, 0);
     assert_eq!(
         expr_to_type(&Expr::Ident("i32".into(), sp.clone())),
@@ -138,14 +138,26 @@ fn expr_to_type_converts_type_exprs_only() {
     };
     assert_eq!(
         expr_to_type(&nested),
-        Some(Type::Named("Vec".into(), vec![Type::Named("i32".into(), vec![])]))
+        Some(Type::Named(
+            "Vec".into(),
+            vec![Type::Named("i32".into(), vec![])]
+        ))
     );
     // 值形态（整数字面量 / 算术）→ None
-    assert_eq!(expr_to_type(&Expr::IntLit { text: "3".into(), span: sp.clone() }), None);
+    assert_eq!(
+        expr_to_type(&Expr::IntLit {
+            text: "3".into(),
+            span: sp.clone()
+        }),
+        None
+    );
     let arith = Expr::Binary(
         hc::ast::BinOp::Add,
         Box::new(Expr::Ident("x".into(), sp.clone())),
-        Box::new(Expr::IntLit { text: "1".into(), span: sp.clone() }),
+        Box::new(Expr::IntLit {
+            text: "1".into(),
+            span: sp.clone(),
+        }),
         sp,
     );
     assert_eq!(expr_to_type(&arith), None);
@@ -154,7 +166,7 @@ fn expr_to_type_converts_type_exprs_only() {
 #[test]
 fn concrete_name_anytype_instance() {
     // anytype 调用点具体化键：`max_value(i32, i32)` → `max_value<@i32,i32>`
-    // （对齐类型函数 `Pair(i32)` → `Pair<@i32>`；ADR-0012 #5 调用点按实参类型实例化）
+    // （对齐类型函数 `Pair<i32>` → `Pair<@i32>`；ADR-0012 #5 调用点按实参类型实例化）
     assert_eq!(
         concrete_name("max_value", &[t_i32(), t_i32()]),
         "max_value<@i32,i32>"
@@ -186,13 +198,10 @@ fn concrete_name_single_and_multi() {
 
 #[test]
 fn concrete_name_nested_args() {
-    let args = vec![Type::Named(
-        "List".into(),
-        vec![t_str()],
-    )];
+    let args = vec![Type::Named("List".into(), vec![t_str()])];
     assert_eq!(
         concrete_name("Wrapper", &args),
-        "Wrapper<@List(String)>",
+        "Wrapper<@List<String>>",
         "嵌套泛型实参按 type_key 展开"
     );
 }
@@ -200,10 +209,7 @@ fn concrete_name_nested_args() {
 #[test]
 fn type_key_covers_shapes() {
     assert_eq!(type_key(&t_i32()), "i32");
-    assert_eq!(
-        type_key(&Type::Array(8, Box::new(t_i32()))),
-        "[8]i32"
-    );
+    assert_eq!(type_key(&Type::Array(8, Box::new(t_i32()))), "[8]i32");
     assert_eq!(type_key(&Type::Ptr(Box::new(t_i32()), false)), "*i32");
     assert_eq!(type_key(&Type::Ptr(Box::new(t_i32()), true)), "*mut i32");
     assert_eq!(type_key(&Type::Slice(Box::new(t_i32()), false)), "&[i32]");
@@ -217,8 +223,11 @@ fn subst_replaces_type_params() {
     // 裸类型参数 → 实参
     assert_eq!(subst(&Type::Named("T".into(), vec![]), &bindings), t_i32());
     // 非参数命名类型不受影响
-    assert_eq!(subst(&Type::Named("String".into(), vec![]), &bindings), t_str());
-    // 嵌套形态（Vec(T) → Vec(i32)；T 仅在内部替换）
+    assert_eq!(
+        subst(&Type::Named("String".into(), vec![]), &bindings),
+        t_str()
+    );
+    // 嵌套形态（Vec(T) → Vec<i32>；T 仅在内部替换）
     assert_eq!(
         subst(
             &Type::Named("Vec".into(), vec![Type::Named("T".into(), vec![])]),
@@ -228,29 +237,36 @@ fn subst_replaces_type_params() {
     );
     // 指针 / 可选 / 数组递推
     assert_eq!(
-        subst(&Type::Ptr(Box::new(Type::Named("T".into(), vec![])), false), &bindings),
+        subst(
+            &Type::Ptr(Box::new(Type::Named("T".into(), vec![])), false),
+            &bindings
+        ),
         Type::Ptr(Box::new(t_i32()), false)
     );
     assert_eq!(
-        subst(&Type::Optional(Box::new(Type::Named("T".into(), vec![]))), &bindings),
+        subst(
+            &Type::Optional(Box::new(Type::Named("T".into(), vec![]))),
+            &bindings
+        ),
         Type::Optional(Box::new(t_i32()))
     );
     assert_eq!(
-        subst(&Type::Array(4, Box::new(Type::Named("T".into(), vec![]))), &bindings),
+        subst(
+            &Type::Array(4, Box::new(Type::Named("T".into(), vec![]))),
+            &bindings
+        ),
         Type::Array(4, Box::new(t_i32()))
     );
 }
 
 #[test]
 fn instantiate_struct_returns_class() {
-    let prog = parse_source("fn Pair(T: type) type { return struct { first: T, second: T }; }")
-        .unwrap();
+    let prog =
+        parse_source("fn Pair(T: type) type { return struct { first: T, second: T }; }").unwrap();
     let (params, _, body) = find_fn(&prog, "Pair");
     let args = vec![t_i32()];
     match instantiate("Pair", params, body, &args).unwrap() {
-        Instantiated::Class(Decl::Class {
-            name, fields, ..
-        }) => {
+        Instantiated::Class(Decl::Class { name, fields, .. }) => {
             assert_eq!(name, "Pair<@i32>");
             assert_eq!(fields.len(), 2);
             assert_eq!(fields[0].name, "first");
@@ -294,7 +310,10 @@ fn instantiate_arity_mismatch_errors() {
     let prog = parse_source("fn Pair(T: type) type { return struct { a: T }; }").unwrap();
     let (params, _, body) = find_fn(&prog, "Pair");
     let err = instantiate("Pair", params, body, &[t_i32(), t_str()]).unwrap_err();
-    assert!(err.contains("需要 1 个类型实参"), "错误信息含个数说明：{err}");
+    assert!(
+        err.contains("需要 1 个类型实参"),
+        "错误信息含个数说明：{err}"
+    );
 }
 
 #[test]
@@ -448,12 +467,12 @@ fn instantiate_type_param_gets_comptime_int_errors() {
 
 #[test]
 fn parser_nested_type_application() {
-    // 组 D D3 parser 回归：`L(L(i32))` 嵌套类型实参按 `Named` 树保留
+    // 组 D D3 parser 回归：`L(L<i32>)` 嵌套类型实参按 `Named` 树保留
     // （内层先于外层——具体化键由后端在登记期递归计算，见 `map_type_apps`）。
     let prog = parse_source(
         r#"
         fn L(T: type) type { return struct { x: T }; }
-        fn main() void { var a: L(L(i32)); }
+        fn main() void { var a: L<L<i32>>; }
         "#,
     )
     .unwrap();
@@ -480,7 +499,7 @@ fn parser_nested_type_application() {
 fn map_type_apps_resolves_nested_apps() {
     // 组 D D3：`map_type_apps` 深度遍历，把嵌套类型函数应用替换为具体化键。
     // 假 resolver 模拟后端 `concrete_type_name` 的预解析实参步骤：内层类型函数
-    // 应用先具体化（`Pair(i32)` → `Pair<@i32>`），外层以已解析实参生成键。
+    // 应用先具体化（`Pair<i32>` → `Pair<@i32>`），外层以已解析实参生成键。
     fn fake_resolve(n: &str, args: &[Type]) -> Result<String, String> {
         let mut resolved: Vec<Type> = Vec::new();
         for a in args {
@@ -497,15 +516,18 @@ fn map_type_apps_resolves_nested_apps() {
         ))
     }
 
-    // `Pair(Pair(i32))` → 外层具体化键 `Pair<@Pair<@i32>>`
-    let root = Type::Named("Pair".into(), vec![Type::Named("Pair".into(), vec![t_i32()])]);
+    // `Pair(Pair<i32>)` → 外层具体化键 `Pair<@Pair<@i32>>`
+    let root = Type::Named(
+        "Pair".into(),
+        vec![Type::Named("Pair".into(), vec![t_i32()])],
+    );
     assert_eq!(
         map_type_apps(&root, &mut fake_resolve).unwrap(),
         Type::Named("Pair<@Pair<@i32>>".into(), vec![]),
         "嵌套类型函数应用 → 深层具体化键"
     );
 
-    // 复合形态递推：`?Pair(i32)` / `[2]Pair(i32)` / `*mut Pair(i32)` / `(Pair(i32), i32)`
+    // 复合形态递推：`?Pair<i32>` / `[2]Pair<i32>` / `*mut Pair<i32>` / `(Pair<i32>, i32)`
     let opt = Type::Optional(Box::new(Type::Named("Pair".into(), vec![t_i32()])));
     assert_eq!(
         map_type_apps(&opt, &mut fake_resolve).unwrap(),
@@ -524,10 +546,7 @@ fn map_type_apps_resolves_nested_apps() {
         Type::Ptr(Box::new(Type::Named("Pair<@i32>".into(), vec![])), true),
         "*mut T 递推"
     );
-    let tup = Type::Tuple(vec![
-        Type::Named("Pair".into(), vec![t_i32()]),
-        t_i32(),
-    ]);
+    let tup = Type::Tuple(vec![Type::Named("Pair".into(), vec![t_i32()]), t_i32()]);
     assert_eq!(
         map_type_apps(&tup, &mut fake_resolve).unwrap(),
         Type::Tuple(vec![Type::Named("Pair<@i32>".into(), vec![]), t_i32()]),
@@ -571,7 +590,10 @@ fn check_semantics_rejects_string_assigned_to_comptime_int() {
     )
     .unwrap();
     let diags = check_semantics(&prog);
-    let rendered: Vec<String> = diags.iter().map(|d| d.message.as_str().to_string()).collect();
+    let rendered: Vec<String> = diags
+        .iter()
+        .map(|d| d.message.as_str().to_string())
+        .collect();
     assert!(
         rendered.iter().any(|s| s.contains("cannot assign")),
         "comptime_int 应拒绝 String 初始化：{rendered:?}"
@@ -612,7 +634,10 @@ fn check_semantics_rejects_string_assigned_to_comptime_float() {
     )
     .unwrap();
     let diags = check_semantics(&prog);
-    let rendered: Vec<String> = diags.iter().map(|d| d.message.as_str().to_string()).collect();
+    let rendered: Vec<String> = diags
+        .iter()
+        .map(|d| d.message.as_str().to_string())
+        .collect();
     assert!(
         rendered.iter().any(|s| s.contains("cannot assign")),
         "comptime_float 应拒绝 String 初始化：{rendered:?}"
@@ -664,7 +689,10 @@ fn semantic_anytype_ret_mismatch_is_error() {
     )
     .unwrap();
     let diags = check_semantics(&prog);
-    let rendered: Vec<String> = diags.iter().map(|d| d.message.as_str().to_string()).collect();
+    let rendered: Vec<String> = diags
+        .iter()
+        .map(|d| d.message.as_str().to_string())
+        .collect();
     assert!(
         rendered.iter().any(|s| s.contains("cannot assign")),
         "f64 结果赋给 String 应报类型不匹配：{rendered:?}"
