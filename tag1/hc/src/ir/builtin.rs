@@ -3227,6 +3227,42 @@ pub(crate) fn call_builtin(
                 alloc: alloc_v,
             })))
         }
+        "unbox" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "unbox expects 1 arg"));
+            }
+            // 从 Boxed 胖指针中取出值，消费 Box（所有权转移）。
+            // 注意：不用 deref_value 因为后者会解引用 Boxed 到内部值。
+            let v = &args[0];
+            // 可能是 Ptr(Boxed) 或直接 Boxed
+            let boxed_cell = match v {
+                IrValue::Boxed(cell) => Some(*cell),
+                IrValue::Ptr(cell) => match &ctx.cells[*cell] {
+                    Cell::Value(IrValue::Boxed(bc)) => Some(*bc),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match boxed_cell {
+                Some(cell) => {
+                    let data = match &ctx.cells[cell] {
+                        Cell::Boxed { data, .. } => *data,
+                        _ => return Err(IrError::msg("TypeError", "unbox: corrupted boxed value")),
+                    };
+                    let inner = ctx.cell_value(data).clone();
+                    // 清空 data cell 防止双重释放
+                    ctx.cells[data] = Cell::Value(IrValue::Void);
+                    Ok(inner)
+                }
+                None => {
+                    let desc = type_descr(v);
+                    Err(IrError::msg(
+                        "TypeError",
+                        format!("unbox expects a boxed value, got {desc}"),
+                    ))
+                }
+            }
+        }
         "copy" => {
             if args.is_empty() {
                 return Err(IrError::msg("ArityMismatch", "copy"));

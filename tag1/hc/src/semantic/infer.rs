@@ -1149,6 +1149,14 @@ impl Checker {
                         let (t, _ts) = self.spawn_capture_info(args, span, scopes);
                         return Some(t);
                     }
+                    // G3（Q7/Q14）：box(v) 返回 `*mut T`，T 从参数推断
+                    if name == "box" {
+                        if let Some(arg) = args.first() {
+                            let arg_ty = self.expr_ty(arg, scopes, None).unwrap_or(SType::Unknown);
+                            return Some(SType::Ptr(Box::new(arg_ty), true));
+                        }
+                        return Some(SType::Ptr(Box::new(SType::Unknown), true));
+                    }
                     return Some(self.builtin_fn_ret(name));
                 }
                 // 函数值/闭包调用（参数是 FnN 调用接口类型）：放行

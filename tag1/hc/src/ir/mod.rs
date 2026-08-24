@@ -1322,6 +1322,10 @@ pub struct Frame {
     /// [`IrInst::Store`] 写这些槽 → ReadonlyCapture（对齐 oracle `readonly_caps`）。
     /// 普通函数/`mut` 闭包恒空。
     pub readonly: Vec<usize>,
+    /// Q14：Boxed 值 cell 索引集（`box(v)` 产生的 `Cell::Boxed` 索引）。
+    /// 离开作用域时自动释放（`Return`/`ReturnVoid`/`Err` 退出前清理）。
+    /// 返回值若为 Boxed，所有权转移至调用方（从本集移除），不释放。
+    pub boxed: HashSet<usize>,
 }
 
 #[derive(Debug, Clone)]

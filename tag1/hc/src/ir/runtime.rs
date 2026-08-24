@@ -338,6 +338,7 @@ pub(crate) fn exec_func(
         cells: Vec::with_capacity(func.n_slots),
         defers: Vec::new(),
         readonly: Vec::new(),
+        boxed: HashSet::new(),
     };
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
@@ -383,6 +384,7 @@ pub(crate) fn call_closure_ir(
         cells: Vec::with_capacity(func.n_slots),
         defers: Vec::new(),
         readonly,
+        boxed: HashSet::new(),
     };
     for _ in 0..func.n_slots {
         frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
@@ -550,6 +552,12 @@ pub(crate) fn exec_body(
                 let arg_vals: Vec<IrValue> =
                     args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
                 let v = call_builtin(ctx, module, name, &arg_vals, &mut fail)?;
+                // Q14：跟踪 Boxed 值，离开作用域时自动释放
+                if name == "box" {
+                    if let IrValue::Boxed(cell) = &v {
+                        frame.boxed.insert(*cell);
+                    }
+                }
                 ctx.set(&frame, *temp, v);
             }
             IrInst::Return { temp } => {
@@ -557,11 +565,45 @@ pub(crate) fn exec_body(
                 if let Some(f) = fail {
                     return Err(IrError::msg("AssertFailed", f));
                 }
+                // Q14：返回值若为 Boxed，所有权转移至调用方（不移除释放）
+                if let IrValue::Boxed(cell) = &v {
+                    frame.boxed.remove(cell);
+                }
+                // 释放当前作用域内其余 Boxed 值
+                let data_cells: Vec<usize> = frame
+                    .boxed
+                    .iter()
+                    .filter_map(|cell| {
+                        if let Cell::Boxed { data, .. } = &ctx.cells[*cell] {
+                            Some(*data)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for d in data_cells {
+                    ctx.cells[d] = Cell::Value(IrValue::Void);
+                }
                 return Ok(v);
             }
             IrInst::ReturnVoid => {
                 if let Some(f) = fail {
                     return Err(IrError::msg("AssertFailed", f));
+                }
+                // Q14：释放当前作用域内所有 Boxed 值
+                let data_cells: Vec<usize> = frame
+                    .boxed
+                    .iter()
+                    .filter_map(|cell| {
+                        if let Cell::Boxed { data, .. } = &ctx.cells[*cell] {
+                            Some(*data)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for d in data_cells {
+                    ctx.cells[d] = Cell::Value(IrValue::Void);
                 }
                 return Ok(IrValue::Void);
             }

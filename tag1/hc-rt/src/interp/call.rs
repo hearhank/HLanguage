@@ -29,6 +29,31 @@ impl Interp {
                     alloc: alloc_v,
                 })))))
             }
+            "unbox" => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                // 不用 deref_value——后者会解引用 Boxed 到内部值。
+                // 需要直接匹配 Boxed 或 Ptr(Boxed)。
+                let boxed = match v {
+                    Value::Boxed(b) => Some(b),
+                    Value::Ptr(c) => match &*c.borrow() {
+                        Value::Boxed(b) => Some(b.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match boxed {
+                    Some(b) => {
+                        let inner = b.borrow().data.borrow().clone();
+                        // 消费 Box，清空 data 防止双重释放
+                        *b.borrow_mut().data.borrow_mut() = Value::Void;
+                        Ok(Some(inner))
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
             "copy" => {
                 if args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));

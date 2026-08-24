@@ -88,7 +88,7 @@ pub(crate) fn is_free_builtin(name: &str) -> bool {
     matches!(
         name,
         // 内存/复制
-        "box" | "copy"
+        "box" | "unbox" | "copy"
             // 数值工具
             | "sqrt" | "min" | "max"
             // 格式辅助（M5.3 serialize）
