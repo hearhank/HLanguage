@@ -3425,10 +3425,36 @@ pub(crate) fn call_builtin(
         // ---------- 组 F：四模式类型实例化（OneToOne<i32> → 空容器标记） ----------
         // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
         "OneToOne" | "OneToMany" | "ManyToOne" | "ManyToMany" => {
-            Ok(IrValue::Class(ctx.alloc(Cell::Class {
-                name: name.into(),
-                fields: HashMap::new(),
-            })))
+            if name == "OneToOne" {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let cid = ctx.next_channel_id;
+                ctx.next_channel_id += 1;
+                ctx.channels.insert(
+                    cid,
+                    ChannelStateIr::OneToOne {
+                        sender: tx,
+                        receiver: rx,
+                    },
+                );
+                let mut fields = HashMap::new();
+                fields.insert(
+                    "_chan_id".to_string(),
+                    ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
+                );
+                fields.insert(
+                    "closed".to_string(),
+                    ctx.alloc(Cell::Value(IrValue::Bool(false))),
+                );
+                Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                    name: name.into(),
+                    fields,
+                })))
+            } else {
+                Ok(IrValue::Class(ctx.alloc(Cell::Class {
+                    name: name.into(),
+                    fields: HashMap::new(),
+                })))
+            }
         }
         // ---------- @ 内建 ----------
         "@intFromEnum" => {

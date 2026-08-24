@@ -50,6 +50,8 @@ impl Interp {
             program: None,
             thread_handles: HashMap::new(),
             next_tid: 1,
+            channels: HashMap::new(),
+            next_channel_id: 1,
         }
     }
 

@@ -34,6 +34,14 @@ struct ThreadState {
     done: Arc<AtomicBool>,
 }
 
+/// 通道状态（E4：四模式容器真并行）
+pub(crate) enum ChannelState {
+    OneToOne {
+        sender: mpsc::Sender<Value>,
+        receiver: mpsc::Receiver<Value>,
+    },
+}
+
 // ---------- 子模块 ----------
 mod call;
 mod eval;
@@ -397,6 +405,10 @@ pub struct Interp {
     thread_handles: HashMap<i64, ThreadState>,
     /// E4：下一线程 ID（自增分配）
     next_tid: i64,
+    /// E4：通道注册表（通道 ID → 通道状态）
+    channels: HashMap<i64, ChannelState>,
+    /// E4：下一通道 ID（自增分配）
+    next_channel_id: i64,
 }
 
 impl Flow {

@@ -503,9 +503,7 @@ pub(crate) fn make_four_mode_ir(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> 
         return Err(IrError::msg("ArityMismatch", format!("{name}.init")));
     }
     let alloc_v = deref_value(ctx, &args[0]).clone();
-    let queue_v = make_arr(ctx, vec![]);
     let mut f = HashMap::new();
-    f.insert("queue".to_string(), ctx.alloc(Cell::Value(queue_v)));
     f.insert(
         "closed".to_string(),
         ctx.alloc(Cell::Value(IrValue::Bool(false))),
@@ -521,6 +519,27 @@ pub(crate) fn make_four_mode_ir(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> 
             "cap".to_string(),
             ctx.alloc(Cell::Value(IrValue::Int(cap_i))),
         );
+    }
+    // E4：OneToOne 使用 mpsc 通道（无锁 SPSC）
+    if name == "OneToOne" {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cid = ctx.next_channel_id;
+        ctx.next_channel_id += 1;
+        ctx.channels.insert(
+            cid,
+            ChannelStateIr::OneToOne {
+                sender: tx,
+                receiver: rx,
+            },
+        );
+        f.insert(
+            "_chan_id".to_string(),
+            ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
+        );
+    } else {
+        // 其他模式保持 Vec 实现（后续升级）
+        let queue_v = make_arr(ctx, vec![]);
+        f.insert("queue".to_string(), ctx.alloc(Cell::Value(queue_v)));
     }
     Ok(IrValue::Class(ctx.alloc(Cell::Class {
         name: name.into(),
@@ -542,7 +561,34 @@ pub(crate) fn call_four_mode_method_ir(
         IrValue::Class(c) => *c,
         _ => return Err(IrError::msg("TypeError", "four-mode method on non-class")),
     };
-    // 只读一次类字段（克隆 fields，随后可变借用安全）
+    // 获取类名
+    let class_name = match &ctx.cells[c] {
+        Cell::Class { name, .. } => name.clone(),
+        _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
+    };
+    // E4：OneToOne 使用 mpsc 通道
+    if class_name == "OneToOne" {
+        let (closed, cid) = {
+            let fields = match &ctx.cells[c] {
+                Cell::Class { fields, .. } => fields.clone(),
+                _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
+            };
+            let closed = matches!(
+                fields.get("closed"),
+                Some(fc) if matches!(ctx.cell_value(*fc), IrValue::Bool(true))
+            );
+            let cid = match fields.get("_chan_id") {
+                Some(fc) => match ctx.cell_value(*fc) {
+                    IrValue::Int(id) => *id,
+                    _ => return Err(IrError::msg("TypeError", "bad _chan_id")),
+                },
+                _ => return Err(IrError::msg("TypeError", "missing _chan_id")),
+            };
+            (closed, cid)
+        };
+        return call_one_to_one_method_ir(ctx, module, cid, &class_name, m, args, closed, c);
+    }
+    // 原有 Vec 实现（其他模式）
     let (queue, closed, cap) = {
         let fields = match &ctx.cells[c] {
             Cell::Class { fields, .. } => fields.clone(),
@@ -566,7 +612,6 @@ pub(crate) fn call_four_mode_method_ir(
         (queue, closed, cap)
     };
     match m {
-        // write(v)：队尾追加；close 后报错
         "write" => {
             if args.len() != 1 {
                 return Err(IrError::msg("ArityMismatch", "write"));
@@ -585,7 +630,6 @@ pub(crate) fn call_four_mode_method_ir(
             }
             Ok(Some(IrValue::Void))
         }
-        // read()/recv() T：队首弹出。空读在协作式下不能阻塞 → 运行时错误
         "read" | "recv" => {
             if !args.is_empty() {
                 return Err(IrError::msg("ArityMismatch", "read"));
@@ -605,7 +649,6 @@ pub(crate) fn call_four_mode_method_ir(
             };
             Ok(Some(ctx.cell_value(popped).clone()))
         }
-        // try_read() ?T：队首弹出或 null（空/close 后空亦 null）
         "try_read" => {
             if !args.is_empty() {
                 return Err(IrError::msg("ArityMismatch", "try_read"));
@@ -625,7 +668,6 @@ pub(crate) fn call_four_mode_method_ir(
             };
             Ok(Some(opt_val(Some(ctx.cell_value(popped).clone()))))
         }
-        // send(v)：有界通道写；满（len >= cap）→ 报错（协作式不能阻塞）；close 后报错
         "send" => {
             if args.len() != 1 {
                 return Err(IrError::msg("ArityMismatch", "send"));
@@ -651,11 +693,92 @@ pub(crate) fn call_four_mode_method_ir(
             }
             Ok(Some(IrValue::Void))
         }
-        // close()：置结束标志；此后 write/send 报错、try_read 返回 null
         "close" => {
             if !args.is_empty() {
                 return Err(IrError::msg("ArityMismatch", "close"));
             }
+            match &mut ctx.cells[c] {
+                Cell::Class { fields, .. } => {
+                    if let Some(fc) = fields.get("closed").copied() {
+                        ctx.cells[fc] = Cell::Value(IrValue::Bool(true));
+                    }
+                }
+                _ => return Err(IrError::msg("TypeError", "bad four-mode container")),
+            }
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// E4：OneToOne 通道方法（IR 版本，使用 mpsc 无锁 SPSC 队列）
+fn call_one_to_one_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    cid: i128,
+    _name: &str,
+    m: &str,
+    args: &[IrValue],
+    closed: bool,
+    c: usize,
+) -> R<Option<IrValue>> {
+    // Map i128 channel ID to i64 key for HashMap<i64, ChannelStateIr>
+    let cid_i64 = cid as i64;
+    match m {
+        "write" => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "write"));
+            }
+            if closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            let state = ctx
+                .channels
+                .get_mut(&cid_i64)
+                .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
+            match state {
+                ChannelStateIr::OneToOne { sender, .. } => {
+                    let _ = sender.send(args[0].clone());
+                }
+            }
+            Ok(Some(IrValue::Void))
+        }
+        "read" | "recv" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "read"));
+            }
+            let state = ctx
+                .channels
+                .get_mut(&cid_i64)
+                .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
+            match state {
+                ChannelStateIr::OneToOne { receiver, .. } => match receiver.recv() {
+                    Ok(v) => Ok(Some(v)),
+                    Err(_) => Ok(Some(err_val(module, "Closed"))),
+                },
+            }
+        }
+        "try_read" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "try_read"));
+            }
+            let state = ctx
+                .channels
+                .get_mut(&cid_i64)
+                .ok_or_else(|| IrError::msg("TypeError", "bad channel id"))?;
+            match state {
+                ChannelStateIr::OneToOne { receiver, .. } => match receiver.try_recv() {
+                    Ok(v) => Ok(Some(opt_val(Some(v)))),
+                    Err(_) => Ok(Some(opt_val(None))),
+                },
+            }
+        }
+        "close" => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "close"));
+            }
+            // Drop the sender to signal close
+            ctx.channels.remove(&cid_i64);
             match &mut ctx.cells[c] {
                 Cell::Class { fields, .. } => {
                     if let Some(fc) = fields.get("closed").copied() {

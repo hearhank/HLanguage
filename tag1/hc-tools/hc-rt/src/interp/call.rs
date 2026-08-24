@@ -2187,7 +2187,6 @@ impl Interp {
             self.deref_value(a)
         };
         let mut f = HashMap::new();
-        f.insert("queue".to_string(), Value::arr(vec![]));
         f.insert("closed".to_string(), Value::Bool(false));
         f.insert("alloc".to_string(), alloc_v);
         if args.len() == 2 {
@@ -2198,6 +2197,23 @@ impl Interp {
                 _ => return Err(RtError::new("TypeError", Some(span.clone()))),
             };
             f.insert("cap".to_string(), Value::Int(cap_i));
+        }
+        // E4：OneToOne 使用 mpsc 通道（无锁 SPSC）
+        if name == "OneToOne" {
+            let (tx, rx) = mpsc::channel();
+            let cid = self.next_channel_id;
+            self.next_channel_id += 1;
+            self.channels.insert(
+                cid,
+                ChannelState::OneToOne {
+                    sender: tx,
+                    receiver: rx,
+                },
+            );
+            f.insert("_chan_id".to_string(), Value::Int(cid as i128));
+        } else {
+            // 其他模式保持 Vec 实现（后续升级）
+            f.insert("queue".to_string(), Value::arr(vec![]));
         }
         Ok(Value::class(name, f))
     }
@@ -2213,7 +2229,24 @@ impl Interp {
         span: &Span,
     ) -> Result<Option<Value>> {
         let tv = self.deref_value(self_v.clone());
-        let (queue, closed, cap, ccell) = match &tv {
+        let (name, closed, ccell) = match &tv {
+            Value::Class(c) => {
+                let d = c.borrow();
+                let closed = matches!(d.fields.get("closed"), Some(Value::Bool(true)));
+                (d.name.clone(), closed, c.clone())
+            }
+            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+        };
+        // E4：OneToOne 使用 mpsc 通道
+        if name == "OneToOne" {
+            let cid = match ccell.borrow().fields.get("_chan_id") {
+                Some(Value::Int(id)) => *id,
+                _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+            };
+            return self.call_one_to_one_method(cid, &name, m, args, span, closed, ccell);
+        }
+        // 原有 Vec 实现（其他模式）
+        let (queue, cap) = match &tv {
             Value::Class(c) => {
                 let d = c.borrow();
                 let queue = d
@@ -2221,17 +2254,15 @@ impl Interp {
                     .get("queue")
                     .cloned()
                     .unwrap_or_else(|| Value::arr(vec![]));
-                let closed = matches!(d.fields.get("closed"), Some(Value::Bool(true)));
                 let cap = match d.fields.get("cap") {
                     Some(Value::Int(i)) => Some(*i),
                     _ => None,
                 };
-                (queue, closed, cap, c.clone())
+                (queue, cap)
             }
             _ => return Err(RtError::new("TypeError", Some(span.clone()))),
         };
         match m {
-            // write(v)：队尾追加；close 后报错
             "write" => {
                 if args.len() != 1 {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -2245,8 +2276,6 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // read()/recv() T：队首弹出。空读在协作式下不能阻塞 → 运行时错误
-            // （文档化偏差：真实并发阻塞至有值；本模型报错）
             "read" | "recv" => {
                 if !args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -2265,7 +2294,6 @@ impl Interp {
                     Err(RtError::new("TypeError", Some(span.clone())))
                 }
             }
-            // try_read() ?T：队首弹出或 null（空；close 后空亦 null）
             "try_read" => {
                 if !args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -2284,7 +2312,6 @@ impl Interp {
                     Err(RtError::new("TypeError", Some(span.clone())))
                 }
             }
-            // send(v)：有界通道写；满（len >= cap）→ 报错（协作式不能阻塞）；close 后报错
             "send" => {
                 if args.len() != 1 {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -2304,11 +2331,89 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // close()：置结束标志；此后 write/send 报错、try_read 返回 null
             "close" => {
                 if !args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
                 }
+                ccell
+                    .borrow_mut()
+                    .fields
+                    .insert("closed".to_string(), Value::Bool(true));
+                Ok(Some(Value::Void))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// E4：OneToOne 通道方法（使用 mpsc 无锁 SPSC 队列）
+    fn call_one_to_one_method(
+        &mut self,
+        cid: i128,
+        _name: &str,
+        m: &str,
+        args: &[Expr],
+        span: &Span,
+        closed: bool,
+        ccell: Rc<RefCell<ClassData>>,
+    ) -> Result<Option<Value>> {
+        // Map i128 channel ID to i64 key for HashMap<i64, ChannelState>
+        let cid_i64 = cid as i64;
+        match m {
+            "write" => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                if closed {
+                    return Ok(Some(self.err_val("Closed")));
+                }
+                let v = self.eval(&args[0])?;
+                let state = self
+                    .channels
+                    .get_mut(&cid_i64)
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                match state {
+                    ChannelState::OneToOne { sender, .. } => {
+                        let _ = sender.send(v);
+                    }
+                }
+                Ok(Some(Value::Void))
+            }
+            "read" | "recv" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let state = self
+                    .channels
+                    .get_mut(&cid_i64)
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                match state {
+                    ChannelState::OneToOne { receiver, .. } => match receiver.recv() {
+                        Ok(v) => Ok(Some(v)),
+                        Err(_) => Ok(Some(self.err_val("Closed"))),
+                    },
+                }
+            }
+            "try_read" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let state = self
+                    .channels
+                    .get_mut(&cid_i64)
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                match state {
+                    ChannelState::OneToOne { receiver, .. } => match receiver.try_recv() {
+                        Ok(v) => Ok(Some(Value::Opt(Some(Rc::new(v))))),
+                        Err(_) => Ok(Some(Value::Opt(None))),
+                    },
+                }
+            }
+            "close" => {
+                if !args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                // Drop the sender to signal close
+                self.channels.remove(&cid_i64);
                 ccell
                     .borrow_mut()
                     .fields

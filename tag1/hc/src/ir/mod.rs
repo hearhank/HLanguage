@@ -750,6 +750,15 @@ pub(crate) struct ThreadStateIr {
     done: Arc<AtomicBool>,
 }
 
+/// 通道状态（IR 版本，E4：四模式容器真并行）
+#[derive(Debug)]
+pub(crate) enum ChannelStateIr {
+    OneToOne {
+        sender: std::sync::mpsc::Sender<IrValue>,
+        receiver: std::sync::mpsc::Receiver<IrValue>,
+    },
+}
+
 /// 运行时堆：跨帧共享的 cell 池（指针可跨帧存活——如传入函数后写穿调用方槽）。
 #[derive(Debug, Default)]
 pub struct Ctx {
@@ -812,6 +821,10 @@ pub struct Ctx {
     pub thread_handles: HashMap<i64, ThreadStateIr>,
     /// E4：下一线程 ID（自增分配）
     pub next_tid: i64,
+    /// E4：通道注册表（通道 ID → 通道状态，OneToOne 使用 mpsc）
+    pub channels: HashMap<i64, ChannelStateIr>,
+    /// E4：下一通道 ID（自增分配）
+    pub next_channel_id: i64,
     /// E4：当前模块引用（供 spawn 新线程克隆以访问函数定义）
     pub module: Option<Arc<IrModule>>,
 }
