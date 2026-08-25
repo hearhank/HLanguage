@@ -12,6 +12,54 @@ use crate::project::fsio::{collect_hc_files, link_exe, zig_cc_available};
 use crate::run::{load_manifest_deps_into, report_leaks};
 use crate::script;
 
+/// 收集 target 目录下的 .hc 文件，如果 target 是项目根目录则同时收集 tests/ 目录
+fn collect_test_files(target: &Path, files: &mut Vec<PathBuf>) {
+    // 如果 target 是项目根目录且有 tests/ 子目录，只收集 target 下非 tests/ 的文件
+    let tests_dir = target.join("tests");
+    if tests_dir.is_dir() && !target.ends_with("tests") {
+        // 收集 target 下非 tests/ 子目录的文件
+        let Ok(entries) = std::fs::read_dir(target) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // 跳过 tests/ 目录（后面单独收集）
+                if path.file_name().map_or(false, |n| n == "tests") {
+                    continue;
+                }
+                collect_hc_files(&path, files);
+            } else if path.extension().map_or(false, |e| e == "hc") {
+                if path.file_name().map_or(false, |n| n == "version.hc") {
+                    continue;
+                }
+                files.push(path);
+            }
+        }
+        // 单独收集 tests/ 目录
+        collect_hc_files(&tests_dir, files);
+    } else {
+        // 普通目录：直接递归收集
+        collect_hc_files(target, files);
+    }
+}
+
+/// 获取 src/ 目录下的 .hc 文件列表（用于 tests/ 文件的依赖加载）
+fn collect_src_files(target: &Path) -> Vec<PathBuf> {
+    let mut src_files = Vec::new();
+    // 如果 target 本身是 tests/ 目录，则项目根为 target/..
+    let project_root = if target.ends_with("tests") {
+        target.parent().unwrap_or(target)
+    } else {
+        target
+    };
+    let src_dir = project_root.join("src");
+    if src_dir.is_dir() {
+        collect_hc_files(&src_dir, &mut src_files);
+    }
+    src_files
+}
+
 /// Q-T5 编译模式交叉验证的临时产物目录序号（避免并行冲突）。
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -84,7 +132,7 @@ pub(crate) fn test_dir(target: &Path, mode: TestMode) -> ExitCode {
 pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode) -> ExitCode {
     let mut files: Vec<PathBuf> = Vec::new();
     if target.is_dir() {
-        collect_hc_files(target, &mut files);
+        collect_test_files(target, &mut files);
         files.sort();
     } else if target.extension().map_or(false, |e| e == "hc") {
         files.push(target.to_path_buf());
@@ -168,8 +216,28 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
                 .filter(|(i, _)| *i != idx)
                 .map(|(_, (_, _, p))| p)
                 .collect();
-            if !siblings.is_empty() {
-                if let Err(e) = interp.load_siblings(&siblings) {
+            // tests/ 目录下的文件额外加载 src/ 模块作为兄弟符号
+            let mut src_programs = Vec::new();
+            if f.parent().map_or(false, |p| p.ends_with("tests")) {
+                let src_files = collect_src_files(target);
+                for sf in &src_files {
+                    if let Ok(src) = std::fs::read_to_string(sf) {
+                        if let Ok((expanded, mut p)) = script::parse_with_scripts(&src) {
+                            let project_root = script::find_project_root(sf);
+                            let ns_name =
+                                script::compute_namespace_name(sf, project_root.as_deref());
+                            script::infer_namespace(&mut p, &ns_name);
+                            src_programs.push(p);
+                        }
+                    }
+                }
+            }
+            let mut all_siblings = siblings.clone();
+            for p in &src_programs {
+                all_siblings.push(p);
+            }
+            if !all_siblings.is_empty() {
+                if let Err(e) = interp.load_siblings(&all_siblings) {
                     eprintln!(
                         "{} {name} (sibling load: {} {})",
                         paint(err_color(), "31", "[FAIL]"),
