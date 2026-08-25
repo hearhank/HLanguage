@@ -441,7 +441,7 @@ fn m22_for_not_iterable() {
 fn m22_for_iterable_ok() {
     run_ok(
         "[test] fn t() !void {
-    var sum = 0;
+    var mut sum = 0;
     for ([1, 2, 3]) |x| { sum += x; }
     try expect_eq(sum, 6);
 }\n",
@@ -453,7 +453,7 @@ fn m22_where_constraint_satisfied() {
     // 泛型 where 约束：T=整数满足 INumber → 通过
     run_ok(
         "fn sum(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| { total = total + v; }
     return total;
 }

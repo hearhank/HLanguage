@@ -26,7 +26,7 @@ fn main() !void {
     var nums = try read_numbers(&io, "data.txt");
     var evens = transform(&nums);
 
-    var sum = 0;
+    var mut sum = 0;
     for (evens) |n| {
         sum += n;
     }
@@ -40,7 +40,7 @@ fn main() !void {
     nums.append(3);
     nums.append(4);
     var evens = transform(&nums);
-    var sum = 0;
+    var mut sum = 0;
     for (evens) |n| {
         sum += n;
     }

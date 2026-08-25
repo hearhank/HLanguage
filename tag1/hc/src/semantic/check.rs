@@ -856,7 +856,7 @@ impl Checker {
             for s in scopes.iter().rev() {
                 if let Some(info) = s.get(name) {
                     if !info.mut_ {
-                        self.diags.push(Diagnostic::warning(
+                        self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!(
                                 "cannot assign to `{name}` because it is not declared `mut`; \

@@ -25,7 +25,7 @@ fn main() !void {
     var rng: Rng = Rng.new(0x1234_5678_9abc_def0);
 
     // 骰子模拟（1..6）
-    var sum = 0;
+    var mut sum = 0;
     for (0..10) |_| {
         sum += rng.between(1, 7);
     }

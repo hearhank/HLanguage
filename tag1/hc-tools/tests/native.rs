@@ -796,7 +796,7 @@ global dlog: i32 = 0;
 fn bump() void { dlog += 1; }
 fn main() i32 {
     dlog = 0;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (true) {
         defer bump();
         i += 1;
@@ -804,7 +804,7 @@ fn main() i32 {
     }
     if (dlog != 3) { return 1; }
     dlog = 0;
-    var clog: i32 = 0;
+    var mut clog: i32 = 0;
     i = 0;
     while (i < 5) {
         defer bump();
@@ -839,7 +839,7 @@ fn maybe(ok: bool) !i32 {
 }
 fn main() i32 {
     g = 0;
-    var r = maybe(false) catch 0;
+    var mut r = maybe(false) catch 0;
     if (r != 0) { return 1; }
     if (g != 101) { return 2; }
     g = 0;
@@ -862,9 +862,9 @@ fn phase6_labeled_break_continue_native() {
     // 带标签 break/continue：标签跨多层循环定位（JumpIfNotDefer 守卫 + 目标 label）。
     let src = r#"
 fn main() i32 {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer while (true) {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 10) {
             j += 1;
             if (j == 2) { break :outer; }
@@ -880,7 +880,7 @@ fn main() i32 {
     if (s != 2) { return 2; }
     s = 0;
     :outer for (0..3) |i| {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 5) {
             j += 1;
             if (i == 1) { continue :outer; }
@@ -930,7 +930,7 @@ fn tree_vec_field_append_recursion_native() {
              value: i32,\n\
              children: Vec<Node>,
              fn total(self: *Self) i32 {\n\
-                 var sum = self.value;\n\
+                 var mut sum = self.value;\n\
                  for (self.children) |child| {\n\
                      sum += child.total();\n\
                  }\n\

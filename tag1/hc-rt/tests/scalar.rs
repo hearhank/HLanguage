@@ -40,7 +40,7 @@ fn generic_operator_plus() {
     run_ok(
         r#"
 fn sum_plus(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| {
         total = total + v;
     }

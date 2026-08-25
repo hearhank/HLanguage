@@ -82,7 +82,7 @@ fn deque_len_iter() {
     dq.append(2);
     dq.append(3);
     try expect_eq(dq.len, 3);
-    var sum = 0;
+    var mut sum = 0;
     for (dq) |v| {
         sum += v;
     }

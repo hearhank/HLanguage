@@ -32,7 +32,7 @@ fn describe<T>(shape: *T) f32 where T: IShape {
 
 // 异构集合：接口对象（显式装箱；*Rect → *IShape 收窄待细化）
 fn total_area(shapes: &Vec<*IShape>) f32 {
-    var total = 0.0;
+    var mut total = 0.0;
     for (shapes) |s| {
         total += s.area();
     }

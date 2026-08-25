@@ -18,7 +18,7 @@ fn main() !void {
     v.append(3);
 
     // 迭代（迭代契约，12.8）
-    var sum = 0;
+    var mut sum = 0;
     for (v) |item| {
         sum += item;
     }
@@ -40,7 +40,7 @@ fn main() !void {
     v.append(1);
     v.append(2);
     v.append(3);
-    var sum = 0;
+    var mut sum = 0;
     for (v) |item| {
         sum += item;
     }

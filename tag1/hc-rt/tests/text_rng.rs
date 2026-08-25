@@ -180,7 +180,7 @@ fn rng_int_bounds() {
     run_ok(
         r##"[test] fn t() !void {
     io.rng.seed(42);
-    var i = 0;
+    var mut i = 0;
     while (i < 100) {
         var v = io.rng.int(10);
         try expect(v >= 0);
@@ -201,7 +201,7 @@ fn rng_float_range() {
     run_ok(
         r##"[test] fn t() !void {
     io.rng.seed(7);
-    var i = 0;
+    var mut i = 0;
     while (i < 100) {
         var f = io.rng.float();
         try expect(f >= 0.0 and f < 1.0);

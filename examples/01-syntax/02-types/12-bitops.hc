@@ -11,7 +11,7 @@ const FLAG_EXEC = 0b100;
 
 fn main() !void {
     // 标志位组合
-    var flags = FLAG_READ | FLAG_WRITE;     // 0b011
+    var mut flags = FLAG_READ | FLAG_WRITE;     // 0b011
     io.print("readable = {}\n", (flags & FLAG_READ) != 0);
 
     // 置位 / 清除
@@ -30,13 +30,13 @@ fn main() !void {
 }
 
 [Test] fn flag_combination() !void {
-    var flags = FLAG_READ | FLAG_WRITE;
+    var mut flags = FLAG_READ | FLAG_WRITE;
     try expect((flags & FLAG_READ) != 0);
     try expect((flags & FLAG_EXEC) == 0);
 }
 
 [Test] fn set_clear_and_shift() !void {
-    var flags = FLAG_READ;
+    var mut flags = FLAG_READ;
     flags |= FLAG_EXEC;
     flags &= ~FLAG_WRITE;
     try expect((flags & FLAG_EXEC) != 0);

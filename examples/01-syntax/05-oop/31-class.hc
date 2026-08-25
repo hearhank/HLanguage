@@ -27,7 +27,7 @@ tree Node {                              // 递归组合
     children: Vec<Node>,                 // 组合：子节点
 
     fn total(self: *Self) i32 {
-        var sum = self.value;
+        var mut sum = self.value;
         for (self.children) |child| {
             sum += child.total();
         }

@@ -66,7 +66,7 @@ fn map_init_captures_arena() {
 fn map_iterates_kv_pairs() {
     // Map 句柄可遍历：`for (m) |kv|` → kv.key / kv.value（对齐 Class("Map") 遍历）
     run_ok(
-        "[test] fn t() !void {\n    var m = Map<i32, i32>.init(alloc);\n    m.put(10, 1);\n    m.put(20, 2);\n    var sum = 0;\n    for (m) |kv| {\n        sum += kv.value;\n    }\n    try expect_eq(sum, 3);\n}\n",
+        "[test] fn t() !void {\n    var m = Map<i32, i32>.init(alloc);\n    m.put(10, 1);\n    m.put(20, 2);\n    var mut sum = 0;\n    for (m) |kv| {\n        sum += kv.value;\n    }\n    try expect_eq(sum, 3);\n}\n",
     );
 }
 

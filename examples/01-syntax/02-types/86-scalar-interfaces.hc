@@ -9,7 +9,7 @@ import H.std.{io};
 
 // 泛型约束：任意数字标量求和（IInt/IUint/IFloat 均满足 INumber）
 fn sum<T>(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| {
         total = total.add(v);   // ≡ total + v
     }

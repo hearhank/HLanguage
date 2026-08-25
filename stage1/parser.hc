@@ -151,7 +151,7 @@ class Lexer {
 
     fn append_char(self: *mut Self, content: Vec<u8>) void {
         var w = utf8_width(self.src[self.pos]);
-        var k: i32 = 0;
+        var mut k: i32 = 0;
         while (k < w) {
             content.append(self.src[self.pos + k]);
             k += 1;
@@ -184,7 +184,7 @@ class Lexer {
                 self.push_simple("Eof", start);
                 return;
             }
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (is_ident_start(c)) {
                 self.lex_ident(start);
             } else if (is_digit(c)) {
@@ -208,7 +208,7 @@ class Lexer {
     fn skip_ws(self: *mut Self) void {
         while (true) {
             if (self.pos >= self.n) { return; }
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (is_ws(c)) {
                 self.bump();
             } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
@@ -246,9 +246,9 @@ class Lexer {
 
     fn lex_number(self: *mut Self, start: i32) void {
         var buf = Vec<u8>.init(alloc);
-        var is_float = false;
+        var mut is_float = false;
         if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
-            var c1 = self.src[self.pos + 1];
+            var mut c1 = self.src[self.pos + 1];
             if (c1 == 'x' or c1 == 'X') {
                 buf.append('0'); buf.append('x');
                 self.bump(); self.bump();
@@ -281,7 +281,7 @@ class Lexer {
             }
         }
         while (self.pos < self.n) {
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (is_digit(c) or c == '_') {
                 buf.append(c);
                 self.bump();
@@ -298,9 +298,9 @@ class Lexer {
             }
         }
         if (self.pos < self.n) {
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if ((c == 'e' or c == 'E') and self.pos + 1 < self.n) {
-                var c2 = self.src[self.pos + 1];
+                var mut c2 = self.src[self.pos + 1];
                 if (is_digit(c2) or c2 == '+' or c2 == '-') {
                     is_float = true;
                     buf.append('e');
@@ -326,11 +326,11 @@ class Lexer {
 
     fn detect_suffix(self: *mut Self) ?&[u8] {
         if (self.pos < self.n) {
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (c == 'i' or c == 'u' or c == 'f') {
-                var j = self.pos;
+                var mut j = self.pos;
                 while (j < self.n and self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
-                var suf = self.src[self.pos..j];
+                var mut suf = self.src[self.pos..j];
                 var slen: i32 = @intCast(i32, suf.len);
                 if (slen >= 2) {
                     var ok = is_digit(self.src[self.pos + 1]) or suf == "isize" or suf == "usize";
@@ -346,7 +346,7 @@ class Lexer {
             var suf = self.detect_suffix();
             if (suf) |s| {
                 var slen: i32 = @intCast(i32, s.len);
-                var k: i32 = 0;
+                var mut k: i32 = 0;
                 while (k < slen) {
                     buf.append(s[k]);
                     self.bump();
@@ -385,7 +385,7 @@ class Lexer {
             if (self.src[self.pos] == '\\') {
                 self.bump();
                 if (self.pos >= self.n) { return; }
-                var ec = self.src[self.pos];
+                var mut ec = self.src[self.pos];
                 self.bump();
                 if (ec == 'n') { content.append('\n'); }
                 else if (ec == 'r') { content.append('\r'); }
@@ -394,7 +394,7 @@ class Lexer {
                 else if (ec == '"') { content.append('"'); }
                 else if (ec == '\'') { content.append('\''); }
                 else if (ec == 'x') {
-                    var hi: i32 = -1; var lo: i32 = -1;
+                    var mut hi: i32 = -1; var mut lo: i32 = -1;
                     if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                     if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
                     if (hi >= 0 and lo >= 0) {
@@ -408,12 +408,12 @@ class Lexer {
                 }
                 else if (ec == 'u') {
                     if (self.pos >= self.n) { return; }
-                    var brace = self.src[self.pos]; self.bump();
+                    var mut brace = self.src[self.pos]; self.bump();
                     if (brace == '{') {
-                        var v: i64 = 0;
+                        var mut v: i64 = 0;
                         while (true) {
                             if (self.pos >= self.n) { break; }
-                            var ch = self.src[self.pos]; self.bump();
+                            var mut ch = self.src[self.pos]; self.bump();
                             if (ch == '}') break;
                             var d: i64 = @intCast(i64, hexval(@intCast(u8, ch)));
                             if (d < 0) break;
@@ -447,19 +447,19 @@ class Lexer {
 
     fn lex_char(self: *mut Self, start: i32) void {
         self.bump();
-        var val: i32 = -1;
+        var mut val: i32 = -1;
         if (self.pos >= self.n) { return; }
         if (self.src[self.pos] == '\\') {
             self.bump();
             if (self.pos >= self.n) { return; }
-            var c = self.src[self.pos]; self.bump();
+            var mut c = self.src[self.pos]; self.bump();
             if (c == 'n') { val = 0x0A; }
             else if (c == 'r') { val = 0x0D; }
             else if (c == 't') { val = 0x09; }
             else if (c == '\\') { val = 0x5C; }
             else if (c == '\'') { val = 0x27; }
             else if (c == 'x') {
-                var hi: i32 = -1; var lo: i32 = -1;
+                var mut hi: i32 = -1; var mut lo: i32 = -1;
                 if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                 if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
                 if (hi >= 0 and lo >= 0) { val = hi * 16 + lo; }
@@ -470,7 +470,7 @@ class Lexer {
             self.bump();
         }
         if (self.pos >= self.n) { return; }
-        var close = self.src[self.pos]; self.bump();
+        var mut close = self.src[self.pos]; self.bump();
         if (close == '\'') {
             var txt = Vec<u8>.init(alloc);
             txt.append(@intCast(u8, val));
@@ -479,7 +479,7 @@ class Lexer {
     }
 
     fn lex_punct(self: *mut Self, start: i32) void {
-        var c = self.src[self.pos];
+        var mut c = self.src[self.pos];
         self.bump();
         if (c == '{') { self.push_simple("LBrace", start); }
         else if (c == '}') { self.push_simple("RBrace", start); }
@@ -567,7 +567,7 @@ fn hexval(b: u8) i32 {
 
 fn vec_from_slice(s: &[u8]) Vec<u8> {
     var v = Vec<u8>.init(alloc);
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < @intCast(i32, s.len)) {
         v.append(s[i]);
         i += 1;
@@ -577,7 +577,7 @@ fn vec_from_slice(s: &[u8]) Vec<u8> {
 
 fn kind_eq(k: Vec<u8>, s: &[u8]) bool {
     if (k.len != @intCast(i32, s.len)) return false;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < @intCast(i32, k.len)) {
         if (k[@intCast(usize, i)] != s[i]) return false;
         i += 1;
@@ -617,7 +617,7 @@ fn make_node(kind: &[u8]) AstNode {
 fn node_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
     // encode: |key=value
     node.props.append('|');
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < @intCast(i32, key.len)) {
         node.props.append(key[i]);
         i += 1;
@@ -637,7 +637,7 @@ fn node_add_child(node: *mut AstNode, child: AstNode) void {
 fn quoted(s: &[u8]) Vec<u8> {
     var buf = Vec<u8>.init(alloc);
     buf.append('"');
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < @intCast(i32, s.len)) {
         buf.append(s[i]);
         i += 1;
@@ -661,7 +661,7 @@ class Parser {
     }
 
     fn peek_n(self: *mut Self, n: i32) Vec<u8> {
-        var idx = self.pos + n;
+        var mut idx = self.pos + n;
         if (idx >= self.n) { idx = self.n - 1; }
         var tok = self.tokens[@intCast(usize, idx)];
         return tok.kind;
@@ -675,7 +675,7 @@ class Parser {
     fn at(self: *mut Self, kind: &[u8]) bool {
         var k = self.peek();
         if (k.len != @intCast(i32, kind.len)) return false;
-        var i: i32 = 0;
+        var mut i: i32 = 0;
         while (i < @intCast(i32, k.len)) {
             if (k[@intCast(usize, i)] != kind[i]) return false;
             i += 1;
@@ -686,7 +686,7 @@ class Parser {
     fn text_eq(self: *mut Self, s: &[u8]) bool {
         var t = self.peek_text();
         if (t.len != @intCast(i32, s.len)) return false;
-        var i: i32 = 0;
+        var mut i: i32 = 0;
         while (i < @intCast(i32, t.len)) {
             if (t[@intCast(usize, i)] != s[i]) return false;
             i += 1;
@@ -696,7 +696,7 @@ class Parser {
 
     fn at_any(self: *mut Self, kinds: &[&[u8]]) bool {
         var k = self.peek();
-        var i: i32 = 0;
+        var mut i: i32 = 0;
         while (i < @intCast(i32, kinds.len)) {
             if (self.at(kinds[i])) return true;
             i += 1;
@@ -802,10 +802,10 @@ class Parser {
 
     fn parse_decl(self: *mut Self) AstNode {
         // pub
-        var is_pub = false;
+        var mut is_pub = false;
         if (self.at("KwPub")) { is_pub = true; self.advance(); }
         // export
-        var is_export = false;
+        var mut is_export = false;
         if (self.at("KwExport")) { is_export = true; self.advance(); }
         // [pad] [align(T)] [Test]
         var traits = Vec<&[u8]>.init(alloc);
@@ -869,7 +869,7 @@ class Parser {
         if (kind_eq(k, "KwUsing")) {
             self.advance();
             var path = self.parse_path();
-            var alias: ?Vec<u8> = null;
+            var mut alias: ?Vec<u8> = null;
             if (self.at("Ident") and kind_eq(self.peek_text(), "as")) {
                 self.advance();
                 alias = self.expect_ident();
@@ -883,14 +883,14 @@ class Parser {
         if (kind_eq(k, "KwImport")) {
             self.advance();
             var path = self.parse_import_path();
-            var select: ?Vec<AstNode> = null;
+            var mut select: ?Vec<AstNode> = null;
             if (self.at("Dot") and kind_eq(self.peek_n(1), "LBrace")) {
                 self.advance(); // .
                 self.advance(); // {
                 var syms = Vec<AstNode>.init(alloc);
                 while (true) {
                     var name = self.expect_ident();
-                    var alias: ?Vec<u8> = null;
+                    var mut alias: ?Vec<u8> = null;
                     if (self.at("Ident") and kind_eq(self.peek_text(), "as")) {
                         self.advance();
                         alias = self.expect_ident();
@@ -905,7 +905,7 @@ class Parser {
                 self.expect("RBrace");
                 select = syms;
             }
-            var alias: ?Vec<u8> = null;
+            var mut alias: ?Vec<u8> = null;
             if (select == null and self.at("Ident") and kind_eq(self.peek_text(), "as")) {
                 self.advance();
                 alias = self.expect_ident();
@@ -1008,7 +1008,7 @@ class Parser {
         if (is_async) { node_add_prop(&f, "async", "true"); }
         if (is_export) { node_add_prop(&f, "exported", "true"); }
         // 妫€鏌?test 鐗规€?
-        var i: i32 = 0;
+        var mut i: i32 = 0;
         while (i < @intCast(i32, traits.len)) {
             if (traits[@intCast(usize, i)] == "test") {
                 node_add_prop(&f, "test", "true");
@@ -1039,10 +1039,10 @@ class Parser {
         if (self.at("Bang")) {
             self.advance();
             if (self.at("Ident") or self.at("KwVoid")) {
-                var ret_ty = self.peek_text();
+                var mut ret_ty = self.peek_text();
                 self.advance();
                 var r = make_node("ret:");
-                var k: i32 = 0;
+                var mut k: i32 = 0;
                 while (k < @intCast(i32, ret_ty.len)) {
                     r.props.append(ret_ty[@intCast(usize, k)]);
                     k += 1;
@@ -1052,14 +1052,14 @@ class Parser {
                 self.parse_type();
             }
         } else if (self.at("KwVoid") or self.at("Ident")) {
-            var ret_ty = self.peek_text();
+            var mut ret_ty = self.peek_text();
             // 关键字（如 void）的 text 为空，直接用关键字名
             if (ret_ty.len == 0) {
                 if (self.at("KwVoid")) { ret_ty = vec_from_slice("void"); }
             }
             self.advance();
             var r = make_node("ret:");
-            var k: i32 = 0;
+            var mut k: i32 = 0;
             while (k < @intCast(i32, ret_ty.len)) {
                 r.props.append(ret_ty[@intCast(usize, k)]);
                 k += 1;
@@ -1109,7 +1109,7 @@ class Parser {
                 var ret_ty = self.peek_text();
                 self.advance();
                 var r = make_node("ret:");
-                var k: i32 = 0;
+                var mut k: i32 = 0;
                 while (k < @intCast(i32, ret_ty.len)) {
                     r.props.append(ret_ty[@intCast(usize, k)]);
                     k += 1;
@@ -1122,7 +1122,7 @@ class Parser {
             var ret_ty = self.peek_text();
             self.advance();
             var r = make_node("ret:");
-            var k: i32 = 0;
+            var mut k: i32 = 0;
             while (k < @intCast(i32, ret_ty.len)) {
                 r.props.append(ret_ty[@intCast(usize, k)]);
                 k += 1;
@@ -1192,7 +1192,7 @@ class Parser {
     }
 
     fn parse_field(self: *mut Self, cls: AstNode) void {
-        var is_fpub = false;
+        var mut is_fpub = false;
         if (self.at("KwPub")) { is_fpub = true; self.advance(); }
         var name = self.expect_ident();
         self.expect("Colon");
@@ -1203,7 +1203,7 @@ class Parser {
     fn parse_method(self: *mut Self, cls: AstNode) void {
         // traits
         while (self.at("LBracket")) { self.parse_trait(); }
-        var is_pub = false;
+        var mut is_pub = false;
         if (self.at("KwPub")) { is_pub = true; self.advance(); }
         self.expect("KwFn");
         var name = self.expect_ident();
@@ -1305,7 +1305,7 @@ class Parser {
     fn parse_path(self: *mut Self) Vec<u8> {
         var parts = Vec<u8>.init(alloc);
         var first = self.expect_ident();
-        var i: i32 = 0;
+        var mut i: i32 = 0;
         while (i < @intCast(i32, first.len)) {
             parts.append(first[@intCast(usize, i)]);
             i += 1;
@@ -1314,7 +1314,7 @@ class Parser {
             self.advance();
             parts.append('.');
             var seg = self.expect_name_or_keyword();
-            var j: i32 = 0;
+            var mut j: i32 = 0;
             while (j < @intCast(i32, seg.len)) {
                 parts.append(seg[@intCast(usize, j)]);
                 j += 1;
@@ -1539,7 +1539,7 @@ class Parser {
     }
 
     fn parse_var_decl(self: *mut Self) AstNode {
-        var is_mut = false;
+        var mut is_mut = false;
         if (self.at("KwMut")) { is_mut = true; self.advance(); }
         var name = self.expect_ident();
         var v = make_node("VarDecl");
@@ -1736,7 +1736,7 @@ class Parser {
     }
 
     fn parse_or(self: *mut Self) AstNode {
-        var l = self.parse_and();
+        var mut l = self.parse_and();
         while (self.at("KwOr") or self.at("PipePipe")) {
             self.advance();
             var r = self.parse_and();
@@ -1750,7 +1750,7 @@ class Parser {
     }
 
     fn parse_and(self: *mut Self) AstNode {
-        var l = self.parse_range();
+        var mut l = self.parse_range();
         while (self.at("KwAnd")) {
             self.advance();
             var r = self.parse_range();
@@ -1764,7 +1764,7 @@ class Parser {
     }
 
     fn parse_range(self: *mut Self) AstNode {
-        var l = self.parse_comparison();
+        var mut l = self.parse_comparison();
         if (self.at("DotDot")) {
             self.advance();
             var r = self.parse_comparison();
@@ -1778,7 +1778,7 @@ class Parser {
     }
 
     fn parse_comparison(self: *mut Self) AstNode {
-        var l = self.parse_bitor();
+        var mut l = self.parse_bitor();
         var cmp_op = self.peek();
         if (kind_eq(cmp_op, "EqEq") or kind_eq(cmp_op, "Ne") or kind_eq(cmp_op, "Lt") or kind_eq(cmp_op, "Le") or kind_eq(cmp_op, "Gt") or kind_eq(cmp_op, "Ge")) {
             self.advance();
@@ -1794,7 +1794,7 @@ class Parser {
     }
 
     fn parse_bitor(self: *mut Self) AstNode {
-        var l = self.parse_bitxor();
+        var mut l = self.parse_bitxor();
         while (self.at("Pipe")) {
             self.advance();
             var r = self.parse_bitxor();
@@ -1808,7 +1808,7 @@ class Parser {
     }
 
     fn parse_bitxor(self: *mut Self) AstNode {
-        var l = self.parse_bitand();
+        var mut l = self.parse_bitand();
         while (self.at("Caret")) {
             self.advance();
             var r = self.parse_bitand();
@@ -1822,7 +1822,7 @@ class Parser {
     }
 
     fn parse_bitand(self: *mut Self) AstNode {
-        var l = self.parse_shift();
+        var mut l = self.parse_shift();
         while (self.at("Amp")) {
             self.advance();
             var r = self.parse_shift();
@@ -1836,7 +1836,7 @@ class Parser {
     }
 
     fn parse_shift(self: *mut Self) AstNode {
-        var l = self.parse_addsub();
+        var mut l = self.parse_addsub();
         while (true) {
             var opname = self.peek();
             if (kind_eq(opname, "Shl") or kind_eq(opname, "Shr")) {
@@ -1853,7 +1853,7 @@ class Parser {
     }
 
     fn parse_addsub(self: *mut Self) AstNode {
-        var l = self.parse_muldiv();
+        var mut l = self.parse_muldiv();
         while (true) {
             var opname = self.peek();
             if (kind_eq(opname, "Plus") or kind_eq(opname, "Minus")) {
@@ -1871,7 +1871,7 @@ class Parser {
     }
 
     fn parse_muldiv(self: *mut Self) AstNode {
-        var l = self.parse_unary();
+        var mut l = self.parse_unary();
         while (true) {
             var opname = self.peek();
             if (kind_eq(opname, "Star") or kind_eq(opname, "Slash") or kind_eq(opname, "Percent") or kind_eq(opname, "PercentPercent")) {
@@ -1894,7 +1894,7 @@ class Parser {
         var k = self.peek();
         if (kind_eq(k, "Minus")) {
             self.advance();
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var u = make_node("Unary");
             node_add_prop(&u, "op", "Neg");
             node_add_child(&u, e);
@@ -1902,7 +1902,7 @@ class Parser {
         }
         if (kind_eq(k, "Bang")) {
             self.advance();
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var u = make_node("Unary");
             node_add_prop(&u, "op", "Not");
             node_add_child(&u, e);
@@ -1910,7 +1910,7 @@ class Parser {
         }
         if (kind_eq(k, "Tilde")) {
             self.advance();
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var u = make_node("Unary");
             node_add_prop(&u, "op", "BitNot");
             node_add_child(&u, e);
@@ -1918,9 +1918,9 @@ class Parser {
         }
         if (kind_eq(k, "Amp")) {
             self.advance();
-            var is_mut = false;
+            var mut is_mut = false;
             if (self.at("KwMut")) { is_mut = true; self.advance(); }
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var a = make_node("AddrOf");
             if (is_mut) { node_add_prop(&a, "mut", "true"); }
             node_add_child(&a, e);
@@ -1928,14 +1928,14 @@ class Parser {
         }
         if (kind_eq(k, "KwTry")) {
             self.advance();
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var t = make_node("Try");
             node_add_child(&t, e);
             return t;
         }
         if (kind_eq(k, "KwAwait")) {
             self.advance();
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var a = make_node("Await");
             node_add_child(&a, e);
             return a;
@@ -1947,7 +1947,7 @@ class Parser {
             var callee = make_node("Ident");
             node_add_prop(&callee, "name", "spawn");
             node_add_child(&c, callee);
-            var i: i32 = 0;
+            var mut i: i32 = 0;
             while (i < @intCast(i32, args.len)) {
                 node_add_child(&c, args[@intCast(usize, i)]);
                 i += 1;
@@ -1960,7 +1960,7 @@ class Parser {
             if (self.at("Pipe") or (self.at("KwMut") and kind_eq(self.peek_n(1), "Pipe"))) {
                 return self.parse_closure();
             }
-            var e = self.parse_unary();
+            var mut e = self.parse_unary();
             var m = make_node("Move");
             node_add_child(&m, e);
             return m;
@@ -1970,7 +1970,7 @@ class Parser {
 
     fn parse_closure(self: *mut Self) AstNode {
         var c = make_node("Closure");
-        var is_mut = false;
+        var mut is_mut = false;
         var is_move = false;
         if (self.at("KwMut")) { is_mut = true; self.advance(); }
         self.expect("Pipe");
@@ -1987,7 +1987,7 @@ class Parser {
             var body = self.parse_block();
             node_add_child(&c, body);
         } else {
-            var e = self.parse_expr();
+            var mut e = self.parse_expr();
             var es = make_node("ExprStmt");
             node_add_child(&es, e);
             node_add_child(&c, es);
@@ -1996,7 +1996,7 @@ class Parser {
     }
 
     fn parse_postfix(self: *mut Self) AstNode {
-        var e = self.parse_primary();
+        var mut e = self.parse_primary();
         while (true) {
             var kk = self.peek();
             if (kind_eq(kk, "Dot")) {
@@ -2017,7 +2017,7 @@ class Parser {
                         node_add_prop(&fe, "field", field);
                         node_add_child(&fe, e);
                         node_add_child(&call, fe);
-                        var i: i32 = 0;
+                        var mut i: i32 = 0;
                         while (i < @intCast(i32, args.len)) {
                             node_add_child(&call, args[@intCast(usize, i)]);
                             i += 1;
@@ -2053,7 +2053,7 @@ class Parser {
                 var args = self.parse_call_args();
                 var call = make_node("Call");
                 node_add_child(&call, e);
-                var i: i32 = 0;
+                var mut i: i32 = 0;
                 while (i < @intCast(i32, args.len)) {
                     node_add_child(&call, args[@intCast(usize, i)]);
                     i += 1;
@@ -2148,7 +2148,7 @@ class Parser {
             var callee = make_node("Ident");
             node_add_prop(&callee, "name", txt[0..txt.len]);
             node_add_child(&call, callee);
-            var i: i32 = 0;
+            var mut i: i32 = 0;
             while (i < @intCast(i32, args.len)) {
                 node_add_child(&call, args[@intCast(usize, i)]);
                 i += 1;
@@ -2181,14 +2181,14 @@ class Parser {
         if (kind_eq(k, "Int")) {
             var txt = self.peek_text();
             self.advance();
-            var n = make_node("IntLit");
+            var mut n = make_node("IntLit");
             node_add_prop(&n, "text", txt[0..txt.len]);
             return n;
         }
         if (kind_eq(k, "Float")) {
             var txt = self.peek_text();
             self.advance();
-            var n = make_node("FloatLit");
+            var mut n = make_node("FloatLit");
             node_add_prop(&n, "text", txt[0..txt.len]);
             return n;
         }
@@ -2318,12 +2318,12 @@ fn dump_props(props: Vec<u8>) void {
 }
 
 fn dump_ast(node: AstNode, depth: i32) void {
-    var i = 0;
+    var mut i = 0;
     while (i < depth * 2) {
         io.print(" ");
         i += 1;
     }
-    var kind_str = String.from_slice(node.kind, alloc);
+    var mut kind_str = String.from_slice(node.kind, alloc);
     // Handle ret: nodes specially
     if (kind_str == "ret:") {
         io.print("ret: ");
@@ -2337,7 +2337,7 @@ fn dump_ast(node: AstNode, depth: i32) void {
     io.print("{}", kind_str);
     dump_props(node.props);
     io.print("\n");
-    var ci = 0;
+    var mut ci = 0;
     while (ci < @intCast(i32, node.children.len)) {
         dump_ast(node.children[ci], depth + 1);
         ci += 1;
@@ -2349,9 +2349,9 @@ fn dump_ast(node: AstNode, depth: i32) void {
 // ============================================================
 
 fn main(args: Vec<String>) !void {
-    var path = args[0];
+    var mut path = args[0];
     if (args.len >= 2) { path = args[1]; }
-    var src = try io.fs.read_file(path, alloc);
+    var mut src = try io.fs.read_file(path, alloc);
     // 璇嶆硶鍒嗘瀽
     var lx: Lexer = alloc.init(Lexer{
         src = src, n = @intCast(i32, src.len),

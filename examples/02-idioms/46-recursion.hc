@@ -17,7 +17,7 @@ tree Node {
     children: Vec<Node>,
 
     fn depth(self: *Self) i32 {
-        var max_depth = 0;
+        var mut max_depth = 0;
         for (self.children) |child| {
             var d = child.depth();
             if (d > max_depth) {

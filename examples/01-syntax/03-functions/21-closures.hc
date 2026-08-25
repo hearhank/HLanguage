@@ -50,7 +50,7 @@ fn main() !void {
 [Test] fn iterator_chain_eager() !void {
     var arr = [1, 2, 3, 4, 5];
     var evens = arr.iter().filter(|v| v % 2 == 0).map(|v| v * v);
-    var sum = 0;
+    var mut sum = 0;
     for (evens) |item| {
         sum += item;
     }

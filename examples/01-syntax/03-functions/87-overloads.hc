@@ -36,7 +36,7 @@ fn greet(name: &[u8], punct: &[u8] = "!") String {
 
 // 重载 4：泛型重载（编译时约束验证；接口限制运行时拆除）
 fn sum<T>(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| {
         total = total.add(v);
     }
@@ -44,7 +44,7 @@ fn sum<T>(items: &[T]) T where T: INumber {
 }
 
 fn sum(items: &[i32]) i32 {   // 具体重载与泛型并存
-    var total: i32 = 0;
+    var mut total: i32 = 0;
     for (items) |v| total += v;
     return total;
 }

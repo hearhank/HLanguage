@@ -9,7 +9,7 @@ import H.std.{io};
 // 切片（Q6/R2）：&[T] 只读 / &mut [T] 可写；取段 &arr[1..3] / &mut arr[0..2]
 
 fn sum_slice(s: &[i32]) i32 {
-    var total = 0;
+    var mut total = 0;
     for (s) |item| {
         total += item;
     }

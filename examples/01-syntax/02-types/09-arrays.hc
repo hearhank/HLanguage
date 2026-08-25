@@ -7,7 +7,7 @@ import H.std.{io};
 //   - 数组 = 引用类型（B3）：传参走引用，复制需显式
 
 fn sum_row(row: &[i32]) i32 {
-    var total = 0;
+    var mut total = 0;
     for (row) |v| {
         total += v;
     }

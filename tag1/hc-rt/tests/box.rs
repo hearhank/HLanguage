@@ -50,7 +50,7 @@ fn box_auto_release_on_scope_exit() {
     // Q14：Boxed 值离开作用域自动释放（在块内装箱，块外不可用）
     run_ok(
         "[test] fn t() !void {\n\
-         var outer = 0;\n\
+         var mut outer = 0;\n\
          {\n\
              var p = box(42);\n\
              outer = p.*;\n\
@@ -89,7 +89,7 @@ fn box_interface_dispatch() {
              fn area(self: *Self) f32 { return pi * self.r * self.r; }\n\
          }\n\
          fn total_area(shapes: &Vec<*IShape>) f32 {\n\
-             var total = 0.0;\n\
+             var mut total = 0.0;\n\
              for (shapes) |s| {\n\
                  total += s.area();\n\
              }\n\

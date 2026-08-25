@@ -28,7 +28,7 @@ class Fib: IIterable<i32> {
 fn main() !void {
     // 内建类型：只读迭代（IIterable<*T> 默认形态）
     var nums = [1, 2, 3, 4, 5];
-    var sum = 0;
+    var mut sum = 0;
     for (nums) |n| {
         sum += n;
     }
@@ -55,7 +55,7 @@ fn main() !void {
 
 [Test] fn builtin_readonly_iteration() !void {
     var nums = [1, 2, 3, 4, 5];
-    var sum = 0;
+    var mut sum = 0;
     for (nums) |n| {
         sum += n;
     }

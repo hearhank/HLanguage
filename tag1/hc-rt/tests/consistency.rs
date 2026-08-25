@@ -1277,19 +1277,19 @@ fn closure_capture_consistency() {
     assert_all_pass(
         r#"
 [test] fn read_cap() void {
-    var a = 10;
+    var mut a = 10;
     var f = |v| v + a;
     a = 100;
     expect_eq(f(5), 105);
 }
 [test] fn move_cap() void {
-    var a = 10;
+    var mut a = 10;
     var f = move |v| v + a;
     a = 100;
     expect_eq(f(5), 15);
 }
 [test] fn mut_cap() void {
-    var total = 0;
+    var mut total = 0;
     var acc = mut |v| { total = total + v; return total; };
     expect_eq(acc(3), 3);
     expect_eq(acc(4), 7);
@@ -1309,7 +1309,7 @@ fn closure_precise_capture_consistency() {
     assert_all_pass(
         r#"
 [test] fn nested_transitive() void {
-    var a = 1;
+    var mut a = 1;
     var f = | | {
         var g = |v| v + a;      // 外层体只在内层闭包体内引用 a → 外层须捕获 a
         return g(10);
@@ -1318,14 +1318,14 @@ fn closure_precise_capture_consistency() {
     expect_eq(f(), 110);        // 共享捕获：外部变更对闭包可见
 }
 [test] fn move_deep_copy() void {
-    var x = 1;
+    var mut x = 1;
     var inner = |v| v + x;
     var outer_move = move | | inner(1);  // move 捕获闭包值 → 深拷贝其 env 副本
     x = 100;
     expect_eq(outer_move(), 2);          // 副本 x 仍为 1 → 1+1=2
 }
 [test] fn mut_cap_visible_to_nested_read() void {
-    var total = 0;
+    var mut total = 0;
     var acc = mut |v| { total = total + v; return total; };
     var read = |v| total + v;            // 嵌套只读闭包共享同一捕获 cell
     expect_eq(acc(3), 3);
@@ -1529,7 +1529,7 @@ fn defer_same_scope_capture_reads_final_value() {
 global sum: i32 = 0;
 fn add(v: i32) void { sum += v; }
 [test] fn defer_reads_final() void {
-    var x: i32 = 1;
+    var mut x: i32 = 1;
     defer add(x);
     x = 100;
 }
@@ -1589,7 +1589,7 @@ global clog: i32 = 0;
 fn bump() void { dlog += 1; }
 [test] fn defer_loop_break() void {
     dlog = 0;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (true) {
         defer bump();
         i += 1;
@@ -1600,7 +1600,7 @@ fn bump() void { dlog += 1; }
 [test] fn defer_loop_continue() void {
     dlog = 0;
     clog = 0;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < 5) {
         defer bump();
         i += 1;
@@ -1691,9 +1691,9 @@ fn labeled_break_continue() {
     assert_all_pass(
         r#"
 [test] fn labeled_break_outer() void {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer while (true) {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 10) {
             j += 1;
             if (j == 2) { break :outer; }
@@ -1703,7 +1703,7 @@ fn labeled_break_continue() {
     expect_eq(s, 1);
 }
 [test] fn labeled_continue_self() void {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer for (0..3) |i| {
         if (i == 1) { continue :outer; }
         s += i;
@@ -1711,9 +1711,9 @@ fn labeled_break_continue() {
     expect_eq(s, 2);
 }
 [test] fn labeled_continue_nested() void {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer for (0..3) |i| {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 5) {
             j += 1;
             if (i == 1) { continue :outer; }
@@ -1815,7 +1815,7 @@ fn p7_map_json_csv_and_string() {
     m.put("c", 3);
     try expect_eq(m.get("a").?, 1);
     try expect_eq(m.len(), 3);
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     for (m.iter()) |kv| { s += @intCast(i32, kv.value); }
     try expect_eq(s, 6);
 }
@@ -2448,7 +2448,7 @@ fn g5_rng_determinism_consistent() {
     io.rng.seed(1);
     try expect_eq(io.rng.next(), a1);
     try expect_eq(io.rng.next(), a2);
-    var i = 0;
+    var mut i = 0;
     while (i < 50) {
         var v = io.rng.int(10);
         try expect(v >= 0);
@@ -2486,7 +2486,7 @@ fn f_atomic_consistent() {
     var x: i64 = 42;
     @atomicStore(i64, &x, 7, .seq_cst);
     try expect_eq(@atomicLoad(i64, &x, .acquire), 7);
-    var old = @atomicRmw(i64, &x, .add, 5, .seq_cst);
+    var mut old = @atomicRmw(i64, &x, .add, 5, .seq_cst);
     try expect_eq(old, 7);
     try expect_eq(@atomicLoad(i64, &x, .seq_cst), 12);
     old = @atomicRmw(i64, &x, .sub, 2, .seq_cst);

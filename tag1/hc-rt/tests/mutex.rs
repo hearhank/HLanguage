@@ -49,7 +49,7 @@ fn mutex_lock_returns_clone() {
         r#"
 [test] fn t() !void {
     var m = Mutex.init(100);
-    var v = try m.lock();
+    var mut v = try m.lock();
     v = v + 1;
     // 重新加锁获取原始值（不受外部修改影响）
     var v2 = try m.lock();

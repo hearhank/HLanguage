@@ -14,7 +14,7 @@ struct Point {   // 连续内存值类型（H1 特性标注）
 fn main() !void {
     // 标量：赋值即复制
     var a: i32 = 5;
-    var b = a;
+    var mut b = a;
     b = 10;
     io.print("a = {} (不变)\n", a);
 
@@ -40,7 +40,7 @@ fn main() !void {
 
 [Test] fn scalar_and_continuous_copy() !void {
     var a: i32 = 5;
-    var b = a;
+    var mut b = a;
     b = 10;
     try expect_eq(a, 5);   // 原值不变
 

@@ -51,7 +51,7 @@ fn if_expression() !void {
 [Test]
 fn while_continue_step() !void {
     var mut i: i32 = 0;
-    var sum = 0;
+    var mut sum = 0;
     while (i < 5) : (i += 1) {
         sum += i;
     }

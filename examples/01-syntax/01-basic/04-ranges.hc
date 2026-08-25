@@ -7,7 +7,7 @@ import H.std.{io};
 
 fn main() !void {
     // for 区间糖
-    var sum = 0;
+    var mut sum = 0;
     for (0..10) |i| {
         sum += i;
     }
@@ -27,7 +27,7 @@ fn main() !void {
 }
 
 [Test] fn for_range_sum() !void {
-    var sum = 0;
+    var mut sum = 0;
     for (0..10) |i| {
         sum += i;
     }
@@ -36,7 +36,7 @@ fn main() !void {
 
 [Test] fn index_iteration() !void {
     var arr = [10, 20, 30];
-    var total = 0;
+    var mut total = 0;
     for (0..arr.len) |idx| {
         total += arr[idx];
     }
