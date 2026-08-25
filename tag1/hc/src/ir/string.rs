@@ -124,3 +124,10 @@ impl std::fmt::Display for StringDataIr {
         write!(f, "{}", String::from_utf8_lossy(self.as_slice()))
     }
 }
+
+impl Drop for StringDataIr {
+    /// 作用域退出时自动释放堆内存
+    fn drop(&mut self) {
+        self.deinit();
+    }
+}

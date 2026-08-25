@@ -132,6 +132,13 @@ impl std::fmt::Display for StringData {
     }
 }
 
+impl Drop for StringData {
+    /// 作用域退出时自动释放堆内存（`deinit()` 已调用则 `ptr == null`，安全跳过）
+    fn drop(&mut self) {
+        self.deinit();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
