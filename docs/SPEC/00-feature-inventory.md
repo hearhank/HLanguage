@@ -482,15 +482,15 @@
 | `export` | 导出标记 | ✅ |
 | 目录 = 包 | 同目录 `.hc` 文件自动组包 | ✅ |
 | 兄弟文件符号 | 同包文件间全可见 | ✅ |
-| `src/Modules/` 目录模块 | 子目录自动识别为模块，编译器自动发现 | ⏳ 待实现 |
+| `src/Modules/` 目录模块 | 子目录自动识别为模块，命名空间计算自动剥离 `Modules/` 前缀 | ✅ |
 | `context.hc` 文件约定 | 模块的 context 定义文件，编译器自动识别 | ⏳ 待实现 |
-| `IContext` 接口 | `H.std.ioc` 提供 IoC 容器接口（register/get/registerFactory） | ⏳ 待实现 |
-| `AppContext` 实现 | 应用级 context，背靠 Arena，支持层级委托 | ⏳ 待实现 |
-| Context 层级委托 | 子 context 持有父 context 引用，解析不到时向上委托 | ⏳ 待实现 |
+| `IContext` 接口 | `H.std.ioc` 提供 IoC 容器接口（register/get/registerFactory） | ✅ 运行时内建 |
+| `AppContext` 实现 | 应用级 context，背靠 Arena，支持层级委托 | ✅ |
+| Context 层级委托 | 子 context 持有父 context 引用，解析不到时向上委托 | ✅ |
 | 模块面向接口编程 | 模块只知接口，不知具体实现，通过 context 获取实例 | ⏳ 待实现 |
-| 命名注册 | 同一接口可注册多个实现，通过 name 区分 | ⏳ 待实现 |
-| 工厂方法注册 | `registerFactory<T>(name, factory)` 接收 context 参数 | ⏳ 待实现 |
-| `tests/` 目录 | 项目根目录，不参与命名空间，`hc test` 发现执行 | ⏳ 待实现 |
+| 命名注册 | 同一接口可注册多个实现，通过 name 区分 | ✅ |
+| 工厂方法注册 | `registerFactory<T>(name, factory)` 接收 context 参数，`make` 调用 | ✅ |
+| `tests/` 目录 | 项目根目录，不参与命名空间，`hc test` 发现执行 | ✅ |
 | 依赖包 pub 边界 | 跨包仅 pub 符号可见 | ✅ |
 | `build.zon` 清单 | 包名/版本/类型/文件/依赖声明 | ✅ |
 | 本地依赖 | 基于 path 的本地包依赖 | ✅ |
