@@ -2,6 +2,12 @@
 //!
 //! 验证值语义、复制、方法、生命周期
 
+[Test] fn string_type_annotation() !void {
+    var s: String = "hello";
+    try expect_eq(s.as_slice().len, 5);
+    try expect_eq_slices(s.as_slice(), "hello");
+}
+
 [Test] fn string_from_literal() !void {
     var s = String.from("hello");
     try expect_eq(s.as_slice().len, 5);

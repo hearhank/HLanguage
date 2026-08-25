@@ -90,6 +90,25 @@ impl Interp {
                     Some(e) => self.eval(e)?,
                     None => self.default_value(ty.as_ref())?,
                 };
+                // M3 语法糖：`var s: String = "hello"` → String.from("hello")
+                if init.is_some() {
+                    if let Some(t) = ty {
+                        if let Type::Named(tn, _) = t.strip() {
+                            if tn == "String" {
+                                v = match v {
+                                    Value::Str(s) => {
+                                        Value::String(StringData::from_slice(&s.borrow()))
+                                    }
+                                    Value::String(_) => v,
+                                    other => {
+                                        let bytes = other.display().as_bytes().to_vec();
+                                        Value::String(StringData::from_slice(&bytes))
+                                    }
+                                };
+                            }
+                        }
+                    }
+                }
                 self.expected_ret = prev_expected;
                 let _ = mut_;
                 // [continuous] 值语义：目标类型连续时赋值即复制（显式标注或源类型可查）

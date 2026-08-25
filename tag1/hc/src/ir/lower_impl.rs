@@ -2827,6 +2827,19 @@ impl<'a> LowerCtx<'a> {
                         }
                     },
                 };
+                // M3 语法糖：`var s: String = "hello"` → `String.from("hello")`
+                let t = if matches!(ty, Some(Type::Named(n, _)) if n == "String") && init.is_some()
+                {
+                    let t2 = self.alloc_slot();
+                    self.push(IrInst::Call {
+                        name: "String.from".into(),
+                        args: vec![t],
+                        temp: t2,
+                    });
+                    t2
+                } else {
+                    t
+                };
                 // [continuous] 值语义（P11d）：声明类型为连续类，或未标注类型且初始
                 // 值为标识符 → 赋值前 DeepCopy（后者由运行时门判定，仅连续类深拷贝）。
                 if self.needs_deep_copy(ty.as_ref(), init.as_ref()) {
