@@ -2032,9 +2032,24 @@ impl Interp {
                     Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
-                let impl_v = self.eval(&args[1])?;
-                let impl_v = self.deref_value(impl_v);
-                ctx.borrow_mut().register(&type_name_str, impl_v);
+                if args.len() >= 3 {
+                    // 命名注册：register(type_name, name, impl)
+                    let name = self.eval(&args[1])?;
+                    let name = self.deref_value(name);
+                    let name_str = match &name {
+                        Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                        _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                    };
+                    let impl_v = self.eval(&args[2])?;
+                    let impl_v = self.deref_value(impl_v);
+                    ctx.borrow_mut()
+                        .register_named(&type_name_str, &name_str, impl_v);
+                } else {
+                    // 普通注册：register(type_name, impl)
+                    let impl_v = self.eval(&args[1])?;
+                    let impl_v = self.deref_value(impl_v);
+                    ctx.borrow_mut().register(&type_name_str, impl_v);
+                }
                 Ok(Some(Value::Void))
             }
             (Value::Context(ctx), "get") => {
@@ -2047,9 +2062,24 @@ impl Interp {
                     Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
-                match ctx.borrow().get(&type_name_str) {
-                    Some(v) => Ok(Some(Value::Ptr(Rc::new(RefCell::new(v))))),
-                    None => Ok(Some(Value::Opt(None))),
+                if args.len() >= 2 {
+                    // 命名获取：get(type_name, name)
+                    let name = self.eval(&args[1])?;
+                    let name = self.deref_value(name);
+                    let name_str = match &name {
+                        Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                        _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                    };
+                    match ctx.borrow().get_named(&type_name_str, &name_str) {
+                        Some(v) => Ok(Some(Value::Ptr(Rc::new(RefCell::new(v))))),
+                        None => Ok(Some(Value::Opt(None))),
+                    }
+                } else {
+                    // 普通获取：get(type_name)
+                    match ctx.borrow().get(&type_name_str) {
+                        Some(v) => Ok(Some(Value::Ptr(Rc::new(RefCell::new(v))))),
+                        None => Ok(Some(Value::Opt(None))),
+                    }
                 }
             }
             (Value::Context(ctx), "registerFactory") => {
