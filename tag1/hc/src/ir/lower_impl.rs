@@ -757,6 +757,7 @@ pub(crate) fn lower_default_const(e: &Expr, errors: &ErrorCodeTable) -> Option<I
             name: name.clone(),
             code: errors.code_of(name).unwrap_or(0),
         }),
+        Expr::ContainerLit { .. } => None,
         _ => None,
     }
 }
@@ -1555,6 +1556,43 @@ impl<'a> LowerCtx<'a> {
                     temp: t,
                     items: item_ts,
                 });
+            }
+            Expr::ContainerLit {
+                ty,
+                ty_args,
+                items,
+                span,
+                ..
+            } => {
+                // ContainerLiteral: Vec<T>[1, 2, 3] → MakeArr(items) + Vec.init(alloc, arr)
+                if ty == "Vec" || ty == "Deque" {
+                    // Lower each item
+                    let mut item_temps = Vec::new();
+                    for it in items {
+                        item_temps.push(self.lower_expr(it));
+                    }
+                    // Create array of items
+                    let arr_t = self.alloc_slot();
+                    self.push(IrInst::MakeArr {
+                        temp: arr_t,
+                        items: item_temps,
+                    });
+                    // Create Vec from array: CallBuiltin("Vec.init", [alloc, arr])
+                    let alloc_t = self.alloc_slot();
+                    // Load alloc from implicit env
+                    self.push(IrInst::LoadGlobal {
+                        temp: alloc_t,
+                        name: "alloc".to_string(),
+                    });
+                    self.push(IrInst::CallBuiltin {
+                        name: "Vec.init".to_string(),
+                        args: vec![alloc_t, arr_t],
+                        temp: t,
+                    });
+                    return t;
+                }
+                self.fail_void(t, &format!("unknown container literal type `{ty}`"), span);
+                return t;
             }
             Expr::NamedLit {
                 ty,
@@ -2729,6 +2767,7 @@ impl<'a> LowerCtx<'a> {
                 let mut b2 = bindings.clone();
                 self.eval_const_block(b, &mut b2).ok().flatten()
             }
+            Expr::ContainerLit { .. } => None,
             _ => None,
         }
     }

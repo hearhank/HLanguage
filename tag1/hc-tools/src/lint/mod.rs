@@ -374,6 +374,14 @@ fn collect_refs_in_expr(expr: &Expr, refs: &mut Vec<String>) {
                 collect_refs_in_expr(e, refs);
             }
         }
+        Expr::ContainerLit { items, ty_args, .. } => {
+            for e in items {
+                collect_refs_in_expr(e, refs);
+            }
+            for t in ty_args {
+                collect_refs_in_type(t, refs);
+            }
+        }
         Expr::NamedLit {
             fields, ty_args, ..
         } => {
@@ -821,6 +829,14 @@ fn check_type_simplifiable_in_expr(
                 check_type_simplifiable_in_type(t, source, disabled, fix, rule, diags);
             }
             for (_, e) in fields {
+                check_type_simplifiable_in_expr(e, source, disabled, fix, rule, diags);
+            }
+        }
+        Expr::ContainerLit { items, ty_args, .. } => {
+            for t in ty_args {
+                check_type_simplifiable_in_type(t, source, disabled, fix, rule, diags);
+            }
+            for e in items {
                 check_type_simplifiable_in_expr(e, source, disabled, fix, rule, diags);
             }
         }
@@ -1281,6 +1297,11 @@ fn check_simplifiable_if_else_in_expr(
                 check_simplifiable_if_else_in_expr(e, source, disabled, fix, rule, diags);
             }
         }
+        Expr::ContainerLit { items, .. } => {
+            for e in items {
+                check_simplifiable_if_else_in_expr(e, source, disabled, fix, rule, diags);
+            }
+        }
         _ => {}
     }
 }
@@ -1531,6 +1552,11 @@ fn check_redundant_eq_false_in_expr(
         }
         Expr::NamedLit { fields, .. } => {
             for (_, e) in fields {
+                check_redundant_eq_false_in_expr(e, source, disabled, fix, rule, diags);
+            }
+        }
+        Expr::ContainerLit { items, .. } => {
+            for e in items {
                 check_redundant_eq_false_in_expr(e, source, disabled, fix, rule, diags);
             }
         }

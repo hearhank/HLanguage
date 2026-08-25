@@ -452,6 +452,13 @@ pub enum Expr {
     /// 数组/元组/struct/枚举字面量统一容器
     ArrayLit(Vec<Expr>, Span),
     TupleLit(Vec<Expr>, Span),
+    /// Type<T>[item, ...] — 容器字面量（Vec/Deque 等，ADR-0027）
+    ContainerLit {
+        ty: String,
+        ty_args: Vec<Type>,
+        items: Vec<Expr>,
+        span: Span,
+    },
     /// Type{field = value, ...}（struct/enum 字面量）。
     /// `ty_args` = 泛型实参（`Pair<i32>{...}` 的 `[i32]`；E1.2 组 D comptime 类型应用，
     /// 无泛型 = 空）。类型函数名 + 实参 → 具体化（monomorphization）后登记具体类型。
@@ -746,6 +753,11 @@ fn visit_expr(e: &Expr, scopes: &mut Vec<HashSet<String>>, fv: &mut HashSet<Stri
         Expr::NamedLit { fields, .. } => {
             for (_, v) in fields {
                 visit_expr(v, scopes, fv);
+            }
+        }
+        Expr::ContainerLit { items, .. } => {
+            for it in items {
+                visit_expr(it, scopes, fv);
             }
         }
         // struct 类型字面量：字段为类型标注（无运行时值/自由变量）

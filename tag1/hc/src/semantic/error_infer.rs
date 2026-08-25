@@ -140,6 +140,11 @@ fn collect_expr_errors(e: &Expr, out: &mut BodyErrors) {
                 collect_expr_errors(v, out);
             }
         }
+        Expr::ContainerLit { items, .. } => {
+            for it in items {
+                collect_expr_errors(it, out);
+            }
+        }
         Expr::Dot { base, .. } | Expr::Field { base, .. } | Expr::Deref(base, _) => {
             collect_expr_errors(base, out);
         }

@@ -366,6 +366,7 @@ fn expr_kind(e: &ast::Expr) -> &'static str {
         ast::Expr::NamedLit { .. } => "字面量构造",
         ast::Expr::Binary(..) => "二元运算",
         ast::Expr::Ident(..) => "标识符",
+        ast::Expr::ContainerLit { .. } => "容器字面量",
         _ => "表达式",
     }
 }

@@ -1325,7 +1325,7 @@ impl Interp {
                 }
                 Ok(Some(Value::Void))
             }
-            // Vec<i32>.init(alloc)：集合空容器（G4：捕获分配器引用，缺省回退全局）
+            // Vec<i32>.init(alloc[, arr])：集合空容器或从数组初始化（ADR-0027 容器字面量）
             (Value::Arr(_), "init") => {
                 let alloc_v = if !args.is_empty() {
                     let a = self.eval(&args[0])?;
@@ -1333,7 +1333,23 @@ impl Interp {
                 } else {
                     Value::Alloc
                 };
-                Ok(Some(Value::vec(vec![], alloc_v)))
+                let items = if args.len() >= 2 {
+                    let arr_v = self.eval(&args[1])?;
+                    let arr_v = self.deref_value(arr_v);
+                    match arr_v {
+                        Value::Arr(arr) => {
+                            let mut vals = Vec::new();
+                            for v in arr.borrow().iter() {
+                                vals.push(v.borrow().clone());
+                            }
+                            vals
+                        }
+                        _ => vec![],
+                    }
+                } else {
+                    vec![]
+                };
+                Ok(Some(Value::vec(items, alloc_v)))
             }
             // Vec<i32>.from_bytes 集合反序列化（u64 长度前缀 + i32 元素）
             (Value::Arr(_), "from_bytes") => {

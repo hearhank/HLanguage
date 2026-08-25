@@ -82,6 +82,29 @@ impl Checker {
                     .collect();
                 SType::Tuple(ts)
             }
+            Expr::ContainerLit {
+                ty, ty_args, items, ..
+            } => {
+                // 容器字面量：推断元素类型，返回容器类型
+                let elem_exp = match expected {
+                    Some(SType::Named(n, args)) if n == ty => args.first(),
+                    _ => None,
+                };
+                let mut et: Option<SType> = None;
+                for it in items {
+                    let it_ty = self.expr_ty(it, scopes, elem_exp);
+                    if let (Some(a), Some(b)) = (&et, &it_ty) {
+                        if !self.compatible(a, b) {
+                            let _ = it.span();
+                        }
+                    }
+                    if et.is_none() {
+                        et = it_ty;
+                    }
+                }
+                // 构建容器类型名（如 Vec<i32>）
+                SType::Named(ty.clone(), ty_args.iter().map(|a| self.ty_of(a)).collect())
+            }
             Expr::NamedLit {
                 ty, fields, span, ..
             } => {
@@ -2771,6 +2794,7 @@ impl Checker {
                 }
                 // 数组字面量 = 新建引用对象（作用域负责）
                 Expr::ArrayLit(..) => return AllocSource::NonArena,
+                Expr::ContainerLit { .. } => return AllocSource::NonArena,
                 _ => {}
             }
         }

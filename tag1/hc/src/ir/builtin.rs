@@ -2830,7 +2830,24 @@ pub(crate) fn call_builtin_method(
                 .first()
                 .cloned()
                 .unwrap_or_else(|| implicit_env_value(ctx, "alloc"));
-            Ok(Some(make_vec_with(ctx, Vec::new(), alloc_v)))
+            let items = if args.len() >= 2 {
+                match &args[1] {
+                    IrValue::Arr(cell) => match &ctx.cells[*cell] {
+                        Cell::Elems(elems) => elems
+                            .iter()
+                            .map(|e| match &ctx.cells[*e] {
+                                Cell::Value(v) => v.clone(),
+                                _ => IrValue::Int(0),
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    },
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            Ok(Some(make_vec_with(ctx, items, alloc_v)))
         }
         (IrValue::Arr(_), "from_bytes") => {
             let b = str_arg_ir(ctx, args, 0)?;

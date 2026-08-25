@@ -239,6 +239,11 @@ fn collect_expr(e: &Expr, table: &mut ErrorCodeTable) {
                 collect_expr(v, table);
             }
         }
+        Expr::ContainerLit { items, .. } => {
+            for it in items {
+                collect_expr(it, table);
+            }
+        }
         Expr::Dot { base, .. } | Expr::Field { base, .. } | Expr::Deref(base, _) => {
             collect_expr(base, table);
         }

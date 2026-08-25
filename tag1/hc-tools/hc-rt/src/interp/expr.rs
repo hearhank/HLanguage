@@ -99,6 +99,18 @@ impl Interp {
             Expr::TupleLit(items, _) => Ok(Value::arr(
                 items.iter().map(|e| self.eval(e)).collect::<Result<_>>()?,
             )),
+            Expr::ContainerLit {
+                ty, items, span, ..
+            } => {
+                let mut vals = Vec::new();
+                for it in items {
+                    vals.push(self.eval(it)?);
+                }
+                if ty == "Vec" || ty == "Deque" {
+                    return Ok(Value::vec(vals, Value::Alloc));
+                }
+                return Err(RtError::new("TypeError", Some(span.clone())));
+            }
             // struct 类型字面量（E1.2 组 D）：类型值——comptime 类型函数体内求值
             // （经 `hc::comptime` 具体化引擎），运行时表达式位置 = 用法错误
             Expr::StructType { span, .. } => Err(RtError::msg(

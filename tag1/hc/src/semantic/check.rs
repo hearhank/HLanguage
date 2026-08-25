@@ -764,6 +764,11 @@ impl Checker {
             | Expr::Await(inner, _) => {
                 Self::collect_move_targets(inner, out);
             }
+            Expr::ContainerLit { items, .. } => {
+                for it in items {
+                    Self::collect_move_targets(it, out);
+                }
+            }
             _ => {}
         }
     }
@@ -832,6 +837,11 @@ impl Checker {
                     if let Stmt::Expr(e) = stmt {
                         Self::collect_idents(e, out);
                     }
+                }
+            }
+            Expr::ContainerLit { items, .. } => {
+                for it in items {
+                    Self::collect_idents(it, out);
                 }
             }
             _ => {}

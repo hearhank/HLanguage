@@ -159,6 +159,7 @@ impl Expr {
             | Expr::ArrayLit(_, span)
             | Expr::TupleLit(_, span)
             | Expr::NamedLit { span, .. }
+            | Expr::ContainerLit { span, .. }
             | Expr::StructType { span, .. }
             | Expr::ArrayType { span, .. }
             | Expr::Dot { span, .. }

@@ -823,6 +823,22 @@ fn dump_expr(expr: &hc::ast::Expr, depth: usize) {
                 dump_expr(e, depth + 1);
             }
         }
+        hc::ast::Expr::ContainerLit { ty, ty_args, items, .. } => {
+            print!("{indent}ContainerLit|ty={ty}");
+            if !ty_args.is_empty() {
+                print!("|ty_args=[");
+                for (i, ta) in ty_args.iter().enumerate() {
+                    if i > 0 { print!(", "); }
+                    print!("{}", hc::ast::fmt_type_debug(ta));
+                }
+                print!("]");
+            }
+            println!();
+            let indent = format!("{indent}  ");
+            for item in items {
+                dump_expr(item, depth + 1);
+            }
+        }
         hc::ast::Expr::NamedLit {
             ty,
             ty_args,
