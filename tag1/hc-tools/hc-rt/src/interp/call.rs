@@ -1385,6 +1385,28 @@ impl Interp {
                 Ok(Some(Value::str_bytes(out)))
             }
             (Value::Alloc, "deinit") => Ok(Some(Value::Void)),
+            // G5/§8.3 Debug 泄漏检测：断言无泄漏
+            (Value::Alloc, "assert_no_leaks") => {
+                let leaks: Vec<String> = self
+                    .alloc_tracker
+                    .borrow()
+                    .iter()
+                    .filter(|r| r.weak.upgrade().is_some())
+                    .map(|r| format!("leak: line {}: {} bytes", r.line, r.size))
+                    .collect();
+                if leaks.is_empty() {
+                    Ok(Some(Value::Void))
+                } else {
+                    Err(RtError::msg(
+                        "LeakDetected",
+                        format!(
+                            "{} allocation(s) not freed:\n{}",
+                            leaks.len(),
+                            leaks.join("\n")
+                        ),
+                    ))
+                }
+            }
             // Arena 方法（G1：bump + 块链表 + deinit 批量归还 + 统计）
             (Value::Arena(a), m) => self.call_arena_method(a.clone(), m, args, span),
             // Allocator 方法（Phase 1：统一分配器接口，替代 Value::Alloc / Value::Arena）
@@ -1484,6 +1506,28 @@ impl Interp {
             (Value::Allocator(a), "deinit") => {
                 a.borrow_mut().deinit();
                 Ok(Some(Value::Void))
+            }
+            // G5/§8.3 Debug 泄漏检测：断言无泄漏
+            (Value::Allocator(_), "assert_no_leaks") => {
+                let leaks: Vec<String> = self
+                    .alloc_tracker
+                    .borrow()
+                    .iter()
+                    .filter(|r| r.weak.upgrade().is_some())
+                    .map(|r| format!("leak: line {}: {} bytes", r.line, r.size))
+                    .collect();
+                if leaks.is_empty() {
+                    Ok(Some(Value::Void))
+                } else {
+                    Err(RtError::msg(
+                        "LeakDetected",
+                        format!(
+                            "{} allocation(s) not freed:\n{}",
+                            leaks.len(),
+                            leaks.join("\n")
+                        ),
+                    ))
+                }
             }
             (Value::Allocator(a), "init") => {
                 // allocator.init(T) / allocator.init(T{...})
