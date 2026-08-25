@@ -22,6 +22,7 @@ fn main() !void {
 
     // 形态 2：Arena 分配无所有权（归 Arena；禁止 move）
     var arena = Arena.init(alloc);
+    defer arena.deinit();
     var buf: &[u8] = arena.alloc(256);
     io.print("buf len = {}\n", buf.len);
 
@@ -36,6 +37,7 @@ fn main() !void {
 
     // 形态 2：arena 分配（无所有权，归 Arena）
     var arena = Arena.init(alloc);
+    defer arena.deinit();
     var buf: &[u8] = arena.alloc(256);
     try expect_eq(buf.len, 256);
 
