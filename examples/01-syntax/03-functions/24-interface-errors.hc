@@ -40,7 +40,7 @@ fn main() !void {
     io.print("parsed2: {}\n", v2);
 }
 
-[test] fn interface_error_contract() !void {
+[Test] fn interface_error_contract() !void {
     var json_p = JsonParser{};
     var v = json_p.parse("{\"a\":1}") catch |err| {
         try expect(false);   // 合法 JSON 不应失败

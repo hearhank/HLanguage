@@ -18,7 +18,7 @@ fn main() !void {
     io.print("{b}\n", speed);
 }
 
-[test] fn base_literals() !void {
+[Test] fn base_literals() !void {
     var hex: u32 = 0xFF;
     var bin: u8 = 0b1010;
     var oct: i32 = 0o17;

@@ -28,7 +28,7 @@ fn main() !void {
     subject.publish("user.logout", "alice");
 }
 
-[test] fn publish_subscribe() !void {
+[Test] fn publish_subscribe() !void {
     var subject: Subject = alloc.init(Subject);
     var mut received = 0;
     subject.subscribe(mut |event, payload| { // 可写捕获（mut）

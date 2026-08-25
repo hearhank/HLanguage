@@ -27,7 +27,7 @@ fn main() !void {
     }
 }
 
-[test] fn filter_map_chain() !void {
+[Test] fn filter_map_chain() !void {
     var scores = [92, 45, 78, 61, 88, 30];
     var passed = scores.iter().filter(|s| s >= 60).map(|s| s + 10);
     try expect_eq(passed.len, 4);   // 92,78,61,88 通过

@@ -36,7 +36,7 @@ fn main() !void {
     }
 }
 
-[test] fn csv_parse() !void {
+[Test] fn csv_parse() !void {
     var csv = "alice,30\nbob,25";
     var rows = try parse_csv(csv);
     try expect_eq(rows.len, 2);
@@ -44,7 +44,7 @@ fn main() !void {
     try expect_eq(rows[0].age, 30);
 }
 
-[test] fn csv_format_error() !void {
+[Test] fn csv_format_error() !void {
     var bad = "alice,30,extra\n";
     try expect_error(error.BadRow, parse_csv(bad));
 }

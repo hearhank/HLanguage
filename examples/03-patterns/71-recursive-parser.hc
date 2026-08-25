@@ -52,14 +52,14 @@ fn main() !void {
     io.print("result = {}\n", eval(node));
 }
 
-[test] fn recursive_parser() !void {
+[Test] fn recursive_parser() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
     var node = try parse(&io, "(5)", &pos, &arena);
     try expect_eq(eval(node), 5);
 }
 
-[test] fn parse_error() !void {
+[Test] fn parse_error() !void {
     var arena = Arena.init(alloc);
     var pos = 0;
     try expect_error(error.UnexpectedToken, parse(&io, ")", &pos, &arena));

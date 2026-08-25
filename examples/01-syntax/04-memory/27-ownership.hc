@@ -38,17 +38,17 @@ fn main() !void {
     // take(io, move buf);  // 错误！Arena 来源无所有权，禁止 move（move 须对整个 arena）
 }
 
-[test] fn move_into_function() !void {
+[Test] fn move_into_function() !void {
     var s1 = String.from("hello", alloc);
     take(&io, move s1);   // 销毁责任转移；原绑定仍可访问（悬垂/冲突由用户负责）
 }
 
-[test] fn move_return() !void {
+[Test] fn move_return() !void {
     var s2 = make();
     try expect_eq(s2.len, 4);   // "made"
 }
 
-[test] fn borrow_keeps_ownership() !void {
+[Test] fn borrow_keeps_ownership() !void {
     var s2 = String.from("borrow", alloc);
     borrow(&io, &s2);
     try expect_eq(s2.len, 6);   // 借用后仍可用

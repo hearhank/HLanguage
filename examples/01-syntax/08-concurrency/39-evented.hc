@@ -24,7 +24,7 @@ fn main() !void {
     io.print("{} {}\n", r1.len, r2.len);
 }
 
-[test] fn evented_runtime_demo() !void {
+[Test] fn evented_runtime_demo() !void {
     // S4 演示型（Q-T6）：fetch 依赖真实网络（io.net.get），不在测试中执行；
     // 事件循环语义验证在 M5 运行时测试套件中覆盖
     try expect(true);

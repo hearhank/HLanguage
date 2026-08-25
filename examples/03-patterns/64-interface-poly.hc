@@ -55,14 +55,14 @@ fn main() !void {
     io.print("total = {}\n", total_area(&shapes));
 }
 
-[test] fn static_path_monomorphization() !void {
+[Test] fn static_path_monomorphization() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
     try expect(describe(&rect) > 11.99 and describe(&rect) < 12.01);
     try expect(describe(&circ) > 12.56 and describe(&circ) < 12.57);
 }
 
-[test] fn heterogeneous_boxing() !void {
+[Test] fn heterogeneous_boxing() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
     var shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);

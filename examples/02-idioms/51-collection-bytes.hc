@@ -26,7 +26,7 @@ fn main() !void {
     io.print("s bytes = {}\n", s_bytes.len);
 }
 
-[test] fn collection_to_bytes() !void {
+[Test] fn collection_to_bytes() !void {
     var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
@@ -37,7 +37,7 @@ fn main() !void {
     try expect_eq(v2.len, 3);
 }
 
-[test] fn string_to_bytes() !void {
+[Test] fn string_to_bytes() !void {
     var s = String.from("hello", alloc);
     try expect_eq(s.as_slice().len, 5);   // 内容视图无前缀
     try expect_eq(s.to_bytes().len, 13);  // 序列化格式：8（u64 前缀）+ 5

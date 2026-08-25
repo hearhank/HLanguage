@@ -49,7 +49,7 @@ fn main() !void {
     io.print("paragraphs = {}\n", doc.body.len);
 }
 
-[test] fn class_composition() !void {
+[Test] fn class_composition() !void {
     var doc: Document = alloc.init(Document);
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));

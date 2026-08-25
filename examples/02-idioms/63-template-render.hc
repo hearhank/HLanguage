@@ -17,7 +17,7 @@ fn main() !void {
     io.print("{}\n", out);
 }
 
-[test] fn template_render() !void {
+[Test] fn template_render() !void {
     var tmpl = "Hello, {{name}}! You are {{age}} years old.";
     var out = render(tmpl, "alice", 30);
     try expect(out.find("alice") != null);      // 值已替换进去

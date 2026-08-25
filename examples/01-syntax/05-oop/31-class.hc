@@ -48,14 +48,14 @@ fn main() !void {
     io.print("total = {}\n", root.total());
 }
 
-[test] fn class_methods_and_state() !void {
+[Test] fn class_methods_and_state() !void {
     var c: Counter = alloc.init(Counter);
     c.inc();
     c.inc();
     try expect_eq(c.get(), 2);
 }
 
-[test] fn tree_recursive_composition() !void {
+[Test] fn tree_recursive_composition() !void {
     var root: Node = Node.new(1, alloc);
     root.children.append(Node.new(2, alloc));
     root.children.append(Node.new(3, alloc));

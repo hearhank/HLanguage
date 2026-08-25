@@ -26,6 +26,6 @@ fn main() !void {
 }
 
 // S4 演示型（Q-T6）：统计逻辑等价断言见 32-collections / 53-map-deep
-[test] fn wordcount_demo() !void {
+[Test] fn wordcount_demo() !void {
     try expect(true);
 }

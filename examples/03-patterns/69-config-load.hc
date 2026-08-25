@@ -34,7 +34,7 @@ fn main() !void {
     io.print("{}:{}\n", cfg.host, cfg.port);
 }
 
-[test] fn config_load_defaults() !void {
+[Test] fn config_load_defaults() !void {
     // 真实 IO（Q-T4）：config 文件缺失 → catch 返回默认配置
     var cfg = try load_config(&io, "config_missing_42.json");
     try expect_eq(cfg.port, 8080);

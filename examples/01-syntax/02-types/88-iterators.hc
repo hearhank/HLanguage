@@ -53,7 +53,7 @@ fn main() !void {
     io.print("{}\n", it.next().?);   // 1
 }
 
-[test] fn builtin_readonly_iteration() !void {
+[Test] fn builtin_readonly_iteration() !void {
     var nums = [1, 2, 3, 4, 5];
     var sum = 0;
     for (nums) |n| {
@@ -62,7 +62,7 @@ fn main() !void {
     try expect_eq(sum, 15);
 }
 
-[test] fn builtin_mutable_iteration() !void {
+[Test] fn builtin_mutable_iteration() !void {
     var mut arr = [1, 2, 3];
     for (arr) |mut item| {
         item *= 10;
@@ -71,7 +71,7 @@ fn main() !void {
     try expect_eq(arr[2], 30);
 }
 
-[test] fn user_type_iteration() !void {
+[Test] fn user_type_iteration() !void {
     var fib = Fib{a = 0, b = 1, remaining = 6};
     var got = Vec<i32>.init(alloc);
     for (fib) |f| {

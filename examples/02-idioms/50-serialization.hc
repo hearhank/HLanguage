@@ -37,7 +37,7 @@ fn main() !void {
     io.print("id = {}\n", order2.id);
 }
 
-[test] fn continuous_to_bytes() !void {
+[Test] fn continuous_to_bytes() !void {
     var p = Point{x = 1.0, y = 2.0};
     var bytes: &[u8] = p.to_bytes();
     try expect_eq(bytes.len, 8);
@@ -46,7 +46,7 @@ fn main() !void {
     try expect_eq(p2.y, 2.0);
 }
 
-[test] fn class_to_json() !void {
+[Test] fn class_to_json() !void {
     var mut order: Order = alloc.init(Order);   // 无参构造（C1'）
     order.id = 42;
     var json = order.to_json();

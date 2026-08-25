@@ -33,7 +33,7 @@ fn main() !void {
     io.print("even*10 sum = {}\n", sum);
 }
 
-[test] fn data_pipeline_transform() !void {
+[Test] fn data_pipeline_transform() !void {
     var nums = Vec<i32>.init(alloc);
     nums.append(1);
     nums.append(2);

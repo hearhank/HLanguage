@@ -26,7 +26,7 @@ fn main() !void {
     io.print("person_field_count = {}\n", person_field_count());
 }
 
-[test] fn script_generation_demo() !void {
+[Test] fn script_generation_demo() !void {
     // S4 演示型（Q-T6）：person_field_count 由脚本生成（Q23 types 元数据），
     // 由本块的声明文本区间就地替换（Q17）
     try expect(person_field_count() == 2);

@@ -29,13 +29,13 @@ fn main() !void {
     io.print("{b}\n", parity);
 }
 
-[test] fn flag_combination() !void {
+[Test] fn flag_combination() !void {
     var flags = FLAG_READ | FLAG_WRITE;
     try expect((flags & FLAG_READ) != 0);
     try expect((flags & FLAG_EXEC) == 0);
 }
 
-[test] fn set_clear_and_shift() !void {
+[Test] fn set_clear_and_shift() !void {
     var flags = FLAG_READ;
     flags |= FLAG_EXEC;
     flags &= ~FLAG_WRITE;

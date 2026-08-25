@@ -40,7 +40,7 @@ fn main() !void {
     logger.log(&io, Level.error, "boom");
 }
 
-[test] fn log_levels() !void {
+[Test] fn log_levels() !void {
     var logger: Logger = alloc.init(Logger);
     logger.min_level = Level.info;
     try expect_eq(level_rank(Level.error), 3);

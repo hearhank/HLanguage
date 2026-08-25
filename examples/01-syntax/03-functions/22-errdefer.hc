@@ -23,7 +23,7 @@ fn main() !void {
     io.print("written\n");
 }
 
-[test] fn defer_errdefer_syntax_demo() !void {
+[Test] fn defer_errdefer_syntax_demo() !void {
     // S4 演示型（Q-T6）：write_config 有真实文件写副作用，不在测试中执行；
     // 文件行为断言留 M7 标准库测试（输出捕获 1.x）。
     try expect(true);

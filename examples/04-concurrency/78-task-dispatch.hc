@@ -50,7 +50,7 @@ fn main() !void {
     io.print("total = {}\n", total);   // 0²+1²+…+19² = 2470
 }
 
-[test] fn task_dispatch() !void {
+[Test] fn task_dispatch() !void {
     var tasks = chan.init(alloc, 20);
     var out = chan.init(alloc, 20);
     var i: i32 = 0;

@@ -35,7 +35,7 @@ fn main() !void {
     io.print("{}\n", name2);
 }
 
-[test] fn vec_append_and_iterate() !void {
+[Test] fn vec_append_and_iterate() !void {
     var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
@@ -47,7 +47,7 @@ fn main() !void {
     try expect_eq(sum, 6);
 }
 
-[test] fn map_key_value_ops() !void {
+[Test] fn map_key_value_ops() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     try expect_eq(m.get("apple").?, 5);
@@ -55,7 +55,7 @@ fn main() !void {
     try expect(!m.contains("pear"));
 }
 
-[test] fn string_copy_owns() !void {
+[Test] fn string_copy_owns() !void {
     var name = String.from("hello", alloc);
     var name2 = copy(&name);   // 深复制（Q1'）：新建内存、有所有权
     try expect_eq_slices(name2.as_slice(), "hello");

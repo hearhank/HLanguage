@@ -20,7 +20,7 @@ fn main() !void {
     try handle_request(&io, &arena);
 }
 
-[test] fn arena_unified_reclaim() !void {
+[Test] fn arena_unified_reclaim() !void {
     var arena = Arena.init(alloc);
     var buf = arena.alloc(1024);
     try expect_eq(buf.len, 1024);

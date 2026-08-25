@@ -50,7 +50,7 @@ fn main() !void {
     io.print("{}\n", hp.add(b));                            // 12（动态分发）
 }
 
-[test] fn scalar_methods() !void {
+[Test] fn scalar_methods() !void {
     var a: i32 = 7;
     var b: i32 = 5;
     try expect_eq(a.add(b), 12);
@@ -65,14 +65,14 @@ fn main() !void {
     try expect_eq((-7).abs(), 7);
 }
 
-[test] fn generic_sum_over_numbers() !void {
+[Test] fn generic_sum_over_numbers() !void {
     var ints = [10, 20, 30];
     try expect_eq(sum(&ints), 60);
     var floats = [1.5, 2.5, 3.0];
     try expect_eq(sum(&floats), 7.0);
 }
 
-[test] fn tuple_multi_return() !void {
+[Test] fn tuple_multi_return() !void {
     var (q, r) = divmod(17, 5);
     try expect_eq(q, 3);
     try expect_eq(r, 2);

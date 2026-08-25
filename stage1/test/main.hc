@@ -3,7 +3,7 @@ import H.std.{io};
 // test/main.hc — 项目入口（hc init 脚手架）
 //
 //   - 源码约定：`.hc` 文件位于包根（目录 = 包，M1.4）
-//   - 测试约定：`[test]` 标注函数与源码同文件（Q-T1）
+//   - 测试约定：`[Test]` 标注函数与源码同文件（Q-T1）
 //   - 运行：`hc run test`   测试：`hc test test`
 
 [module] namespace HP {
@@ -28,7 +28,7 @@ fn main() !void {
     //io.print(“{}”,100);
 }
 
-[test] fn scaffold_smoke() !void {
+[Test] fn scaffold_smoke() !void {
 
     try expect_eq(1 + 1, 2);
 }

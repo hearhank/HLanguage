@@ -192,7 +192,7 @@ fn cube(x: i32) i32 {
 // 1. 整数类型（i8–i128 / u8–u128 / isize / usize）
 // ============================================================
 
-[test] fn integer_type_bounds_i8() !void {
+[Test] fn integer_type_bounds_i8() !void {
     var min: i8 = -128;
     var max: i8 = 127;
     try expect_eq(min, -128);
@@ -201,7 +201,7 @@ fn cube(x: i32) i32 {
     try expect_eq(max - min, 255);
 }
 
-[test] fn integer_type_bounds_u8() !void {
+[Test] fn integer_type_bounds_u8() !void {
     var min: u8 = 0;
     var max: u8 = 255;
     try expect_eq(min, 0);
@@ -210,7 +210,7 @@ fn cube(x: i32) i32 {
     try expect_eq(min + 1, 1);
 }
 
-[test] fn integer_type_i16() !void {
+[Test] fn integer_type_i16() !void {
     var min: i16 = -32768;
     var max: i16 = 32767;
     try expect_eq(min, -32768);
@@ -218,14 +218,14 @@ fn cube(x: i32) i32 {
     try expect_eq(min / -1, 32768);
 }
 
-[test] fn integer_type_u16() !void {
+[Test] fn integer_type_u16() !void {
     var min: u16 = 0;
     var max: u16 = 65535;
     try expect_eq(max, 65535);
     try expect_eq(max / 2, 32767);
 }
 
-[test] fn integer_type_i32() !void {
+[Test] fn integer_type_i32() !void {
     var min: i32 = -2147483648;
     var max: i32 = 2147483647;
     try expect_eq(min, -2147483648);
@@ -233,14 +233,14 @@ fn cube(x: i32) i32 {
     try expect_eq(max - 1, 2147483646);
 }
 
-[test] fn integer_type_u32() !void {
+[Test] fn integer_type_u32() !void {
     var min: u32 = 0;
     var max: u32 = 4294967295;
     try expect_eq(max, 4294967295);
     try expect_eq(max / 2, 2147483647);
 }
 
-[test] fn integer_type_i64() !void {
+[Test] fn integer_type_i64() !void {
     var max: i64 = 9223372036854775807;
     var min: i64 = -9223372036854775808;
     try expect_eq(max, 9223372036854775807);
@@ -248,13 +248,13 @@ fn cube(x: i32) i32 {
     try expect_eq(max / 2, 4611686018427387903);
 }
 
-[test] fn integer_type_u64() !void {
+[Test] fn integer_type_u64() !void {
     var max: u64 = 18446744073709551615;
     try expect_eq(max, 18446744073709551615);
     try expect_eq(max - 1, 18446744073709551614);
 }
 
-[test] fn integer_type_isize_usize() !void {
+[Test] fn integer_type_isize_usize() !void {
     var pos: isize = 100;
     var neg: isize = -100;
     var size: usize = 100;
@@ -264,7 +264,7 @@ fn cube(x: i32) i32 {
     try expect_eq(pos + neg, 0);
 }
 
-[test] fn integer_suffix_literals() !void {
+[Test] fn integer_suffix_literals() !void {
     try expect_eq(42i8, 42);
     try expect_eq(255u8, 255);
     try expect_eq(-32768i16, -32768);
@@ -275,7 +275,7 @@ fn cube(x: i32) i32 {
     try expect_eq(1usize, 1);
 }
 
-[test] fn integer_arithmetic_chain() !void {
+[Test] fn integer_arithmetic_chain() !void {
     var a: i32 = 100;
     var b: i32 = 30;
     var c: i32 = 7;
@@ -287,14 +287,14 @@ fn cube(x: i32) i32 {
     try expect_eq(a % c, 2);
 }
 
-[test] fn integer_negation_and_abs() !void {
+[Test] fn integer_negation_and_abs() !void {
     try expect_eq(-42i32, -42);
     try expect_eq((-42).abs(), 42);
     try expect_eq(42i32.neg(), -42);
     try expect_eq(42.neg().abs(), 42);
 }
 
-[test] fn integer_comparison_chain() !void {
+[Test] fn integer_comparison_chain() !void {
     try expect(1 < 2 and 2 < 3 and 3 < 4);
     try expect(4 > 3 and 3 > 2 and 2 > 1);
     try expect(1 <= 1 and 2 <= 3);
@@ -303,7 +303,7 @@ fn cube(x: i32) i32 {
     try expect_eq(1 != 2, true);
 }
 
-[test] fn integer_mixed_operations() !void {
+[Test] fn integer_mixed_operations() !void {
     var a: i32 = 10;
     var b: i32 = 3;
     var sum = a + b;
@@ -322,7 +322,7 @@ fn cube(x: i32) i32 {
 // 2. 浮点类型（f32 / f64 / f128）
 // ============================================================
 
-[test] fn float_type_f32() !void {
+[Test] fn float_type_f32() !void {
     var pi: f32 = 3.14159;
     var half: f32 = 0.5;
     try expect(pi > 3.14 and pi < 3.15);
@@ -331,19 +331,19 @@ fn cube(x: i32) i32 {
     try expect(prod > 1.5707 and prod < 1.5709);
 }
 
-[test] fn float_type_f64() !void {
+[Test] fn float_type_f64() !void {
     var pi: f64 = 3.14159265358979;
     var area = pi * 2.0 * 2.0;
     try expect(area > 12.56 and area < 12.57);
     try expect_eq(pi + pi, 2.0 * pi);
 }
 
-[test] fn float_suffix_literals() !void {
+[Test] fn float_suffix_literals() !void {
     try expect(3.14 > 3.13 and 3.14 < 3.15);
     try expect(3.1415926535 > 3.14159 and 3.1415926535 < 3.14160);
 }
 
-[test] fn float_arithmetic_chain() !void {
+[Test] fn float_arithmetic_chain() !void {
     var a: f64 = 10.5;
     var b: f64 = 3.0;
     try expect_eq(a + b, 13.5);
@@ -352,7 +352,7 @@ fn cube(x: i32) i32 {
     try expect_eq(a / b, 3.5);
 }
 
-[test] fn float_special_values() !void {
+[Test] fn float_special_values() !void {
     var nan = math.nan(f64);
     try expect(nan != nan);  // NaN 不等于自身
     var inf = math.inf(f32);
@@ -361,14 +361,14 @@ fn cube(x: i32) i32 {
     try expect(inf_neg < -1.0e30);
 }
 
-[test] fn float_scientific_notation() !void {
+[Test] fn float_scientific_notation() !void {
     var big = 1.5e9;
     var small = 2.5e-4;
     try expect(big > 1.49e9 and big < 1.51e9);
     try expect(small > 2.4e-4 and small < 2.6e-4);
 }
 
-[test] fn float_comparison_with_tolerance() !void {
+[Test] fn float_comparison_with_tolerance() !void {
     var a: f64 = 1.0 / 3.0;
     var b: f64 = 0.3333333333333333;
     var diff = a - b;
@@ -379,7 +379,7 @@ fn cube(x: i32) i32 {
 // 3. 布尔类型（bool）
 // ============================================================
 
-[test] fn bool_basic_operations() !void {
+[Test] fn bool_basic_operations() !void {
     var t: bool = true;
     var f: bool = false;
     try expect(t);
@@ -390,19 +390,19 @@ fn cube(x: i32) i32 {
     try expect(!(f or f));
 }
 
-[test] fn bool_short_circuit_and() !void {
+[Test] fn bool_short_circuit_and() !void {
     try expect(safe_div(10, 2));
     try expect(!safe_div(10, 0));  // 短路保护
     try expect(!safe_div(-5, 2));
 }
 
-[test] fn bool_short_circuit_or() !void {
+[Test] fn bool_short_circuit_or() !void {
     try expect(early_return(10));   // 左边 true，短路
     try expect(!early_return(-5));  // 左边 false，不求值
     try expect(early_return(0));    // 0 ≥ 0 → true，短路
 }
 
-[test] fn bool_negation_and_comparison() !void {
+[Test] fn bool_negation_and_comparison() !void {
     try expect(!false);
     try expect(!true == false);
     try expect(!false == true);
@@ -416,14 +416,14 @@ fn cube(x: i32) i32 {
 // 4. 数组类型（[N]T）
 // ============================================================
 
-[test] fn array_one_dimensional() !void {
+[Test] fn array_one_dimensional() !void {
     var flat = [1, 2, 3, 4, 5];
     try expect_eq(flat.len, 5);
     try expect_eq(flat[0], 1);
     try expect_eq(flat[4], 5);
 }
 
-[test] fn array_multi_dimensional() !void {
+[Test] fn array_multi_dimensional() !void {
     var grid = [[1, 2], [3, 4], [5, 6]];
     try expect_eq(grid.len, 3);
     try expect_eq(grid[0][0], 1);
@@ -431,20 +431,20 @@ fn cube(x: i32) i32 {
     try expect_eq(grid[2][0], 5);
 }
 
-[test] fn array_explicit_type() !void {
+[Test] fn array_explicit_type() !void {
     var arr: [4]i32 = [10, 20, 30, 40];
     try expect_eq(arr[0], 10);
     try expect_eq(arr[3], 40);
     try expect_eq(arr.len, 4);
 }
 
-[test] fn array_2d_explicit_type() !void {
+[Test] fn array_2d_explicit_type() !void {
     var matrix: [2][3]i32 = [[1, 2, 3], [4, 5, 6]];
     try expect_eq(matrix[0][2], 3);
     try expect_eq(matrix[1][1], 5);
 }
 
-[test] fn array_iteration() !void {
+[Test] fn array_iteration() !void {
     var arr = [1, 2, 3, 4, 5];
     var sum = 0;
     for (arr) |v| {
@@ -453,7 +453,7 @@ fn cube(x: i32) i32 {
     try expect_eq(sum, 15);
 }
 
-[test] fn array_mutable_iteration() !void {
+[Test] fn array_mutable_iteration() !void {
     var mut arr = [1, 2, 3];
     for (arr) |mut item| {
         item *= 10;
@@ -463,14 +463,14 @@ fn cube(x: i32) i32 {
     try expect_eq(arr[2], 30);
 }
 
-[test] fn array_of_floats() !void {
+[Test] fn array_of_floats() !void {
     var arr = [1.5, 2.5, 3.5];
     try expect_eq(arr.len, 3);
     try expect(arr[0] > 1.4 and arr[0] < 1.6);
     try expect(arr[2] > 3.4 and arr[2] < 3.6);
 }
 
-[test] fn array_sum_helper() !void {
+[Test] fn array_sum_helper() !void {
     var arr = [5, 10, 15];
     try expect_eq(sum_arr(&arr), 30);
 }
@@ -479,7 +479,7 @@ fn cube(x: i32) i32 {
 // 5. 切片类型（&[T] / &mut [T]）
 // ============================================================
 
-[test] fn slice_readonly_view() !void {
+[Test] fn slice_readonly_view() !void {
     var arr = [10, 20, 30, 40, 50];
     var s: &[i32] = &arr[1..4];
     try expect_eq(s.len, 3);
@@ -487,7 +487,7 @@ fn cube(x: i32) i32 {
     try expect_eq(s[2], 40);
 }
 
-[test] fn slice_full_range() !void {
+[Test] fn slice_full_range() !void {
     var arr = [1, 2, 3];
     var s: &[i32] = &arr[0..3];
     try expect_eq(s.len, 3);
@@ -495,7 +495,7 @@ fn cube(x: i32) i32 {
     try expect_eq(s[2], 3);
 }
 
-[test] fn slice_writable() !void {
+[Test] fn slice_writable() !void {
     var mut arr = [1, 2, 3, 4, 5];
     var s: &mut [i32] = &mut arr[0..3];
     for (s) |mut item| {
@@ -508,7 +508,7 @@ fn cube(x: i32) i32 {
     try expect_eq(arr[4], 5);
 }
 
-[test] fn slice_sum_test() !void {
+[Test] fn slice_sum_test() !void {
     var arr = [2, 4, 6, 8];
     try expect_eq(sum_slice(&arr[0..2]), 6);
     try expect_eq(sum_slice(&arr[2..4]), 14);
@@ -519,13 +519,13 @@ fn cube(x: i32) i32 {
 // 6. 指针类型（*T / *mut T）
 // ============================================================
 
-[test] fn pointer_readonly() !void {
+[Test] fn pointer_readonly() !void {
     var x: i32 = 42;
     var p: *i32 = &x;
     try expect_eq(p.*, 42);
 }
 
-[test] fn pointer_writable() !void {
+[Test] fn pointer_writable() !void {
     var mut x: i32 = 42;
     var w: *mut i32 = &mut x;
     w.* = 100;
@@ -533,7 +533,7 @@ fn cube(x: i32) i32 {
     try expect_eq(w.*, 100);
 }
 
-[test] fn pointer_auto_deref_index() !void {
+[Test] fn pointer_auto_deref_index() !void {
     var arr = [1, 2, 3];
     var sp: *[3]i32 = &arr;
     try expect_eq(sp[0], 1);
@@ -541,14 +541,14 @@ fn cube(x: i32) i32 {
     try expect_eq(sp[2], 3);
 }
 
-[test] fn pointer_chain() !void {
+[Test] fn pointer_chain() !void {
     var mut x: i32 = 42;
     var p: *mut i32 = &mut x;
     p.* = 100;
     try expect_eq(x, 100);
 }
 
-[test] fn pointer_read_downgrade() !void {
+[Test] fn pointer_read_downgrade() !void {
     var mut x: i32 = 42;
     var p: *i32 = &x;
     var w: *mut i32 = &mut x;
@@ -560,36 +560,36 @@ fn cube(x: i32) i32 {
 // 7. 可选值类型（?T）
 // ============================================================
 
-[test] fn optional_orelse_default() !void {
+[Test] fn optional_orelse_default() !void {
     var maybe: ?i32 = null;
     var val = maybe orelse -1;
     try expect_eq(val, -1);
 }
 
-[test] fn optional_orelse_with_value() !void {
+[Test] fn optional_orelse_with_value() !void {
     var maybe: ?i32 = 42;
     var val = maybe orelse -1;
     try expect_eq(val, 42);
 }
 
-[test] fn optional_if_capture_some() !void {
+[Test] fn optional_if_capture_some() !void {
     var maybe: ?i32 = 42;
     var captured = if (maybe) |v| v else 0;
     try expect_eq(captured, 42);
 }
 
-[test] fn optional_if_capture_null() !void {
+[Test] fn optional_if_capture_null() !void {
     var maybe: ?i32 = null;
     var captured = if (maybe) |v| v else 0;
     try expect_eq(captured, 0);
 }
 
-[test] fn optional_unwrap_assert() !void {
+[Test] fn optional_unwrap_assert() !void {
     var maybe: ?i32 = 42;
     try expect_eq(maybe.?, 42);
 }
 
-[test] fn optional_chain_defaults() !void {
+[Test] fn optional_chain_defaults() !void {
     var a: ?i32 = null;
     var b: ?i32 = 10;
     var result = a orelse b orelse 0;
@@ -600,20 +600,20 @@ fn cube(x: i32) i32 {
 // 8. 结构体类型（struct）
 // ============================================================
 
-[test] fn struct_construction_and_access() !void {
+[Test] fn struct_construction_and_access() !void {
     var p = Point{x = 3.0, y = 4.0};
     try expect_eq(p.x, 3.0);
     try expect_eq(p.y, 4.0);
 }
 
-[test] fn struct_method_dual_call() !void {
+[Test] fn struct_method_dual_call() !void {
     var p = Point{x = 1.0, y = 2.0};
     var q = Point{x = 4.0, y = 6.0};
     var d = dist(p, q);
     try expect(d > 4.99 and d < 5.01);
 }
 
-[test] fn struct_value_copy() !void {
+[Test] fn struct_value_copy() !void {
     var p = Point{x = 1.0, y = 2.0};
     var p2 = copy(&p);
     p2.x = 99.0;
@@ -621,7 +621,7 @@ fn cube(x: i32) i32 {
     try expect_eq(p2.x, 99.0);
 }
 
-[test] fn struct_mutable_field() !void {
+[Test] fn struct_mutable_field() !void {
     var mut c = Counter{val = 0};
     c.val = 10;
     try expect_eq(c.val, 10);
@@ -629,7 +629,7 @@ fn cube(x: i32) i32 {
     try expect_eq(c.val, 15);
 }
 
-[test] fn struct_nested() !void {
+[Test] fn struct_nested() !void {
     var r = Rect{pos = Point{x = 1.0, y = 2.0}, w = 5.0, h = 3.0};
     try expect_eq(r.pos.x, 1.0);
     try expect_eq(r.pos.y, 2.0);
@@ -641,7 +641,7 @@ fn cube(x: i32) i32 {
 // 9. 枚举类型（enum）
 // ============================================================
 
-[test] fn enum_payloadless_constant() !void {
+[Test] fn enum_payloadless_constant() !void {
     var c = Color.red;
     var label = switch (c) {
         Color.red => "red",
@@ -651,7 +651,7 @@ fn cube(x: i32) i32 {
     try expect_eq_slices(label, "red");
 }
 
-[test] fn enum_switch_exhaustive() !void {
+[Test] fn enum_switch_exhaustive() !void {
     var c = Color.green;
     var code = switch (c) {
         Color.red => 0,
@@ -661,7 +661,7 @@ fn cube(x: i32) i32 {
     try expect_eq(code, 1);
 }
 
-[test] fn enum_with_payload() !void {
+[Test] fn enum_with_payload() !void {
     var v = Value{int = 42};
     var label = switch (v) {
         Value.int => |i| i,
@@ -671,7 +671,7 @@ fn cube(x: i32) i32 {
     try expect_eq(label, 42);
 }
 
-[test] fn enum_float_payload() !void {
+[Test] fn enum_float_payload() !void {
     var v = Value{float = 3.14};
     var label = switch (v) {
         Value.int => |i| 0.0,
@@ -681,7 +681,7 @@ fn cube(x: i32) i32 {
     try expect(label > 3.13 and label < 3.15);
 }
 
-[test] fn enum_payloadless_constant_form() !void {
+[Test] fn enum_payloadless_constant_form() !void {
     var n = Value.none;
     var is_none = switch (n) {
         Value.none => true,
@@ -694,7 +694,7 @@ fn cube(x: i32) i32 {
 // 10. 类类型（class）
 // ============================================================
 
-[test] fn class_construction_and_method() !void {
+[Test] fn class_construction_and_method() !void {
     var p = alloc.init(Person{
         name = String.from("alice", alloc),
         age = 30,
@@ -704,7 +704,7 @@ fn cube(x: i32) i32 {
     try expect(p.is_adult());
 }
 
-[test] fn class_method_greet() !void {
+[Test] fn class_method_greet() !void {
     var p = alloc.init(Person{
         name = String.from("bob", alloc),
         age = 25,
@@ -713,7 +713,7 @@ fn cube(x: i32) i32 {
     try expect_eq_slices(greeting.as_slice(), "hello, bob");
 }
 
-[test] fn class_boxing() !void {
+[Test] fn class_boxing() !void {
     var p = Point2{x = 1.0, y = 2.0};
     var hp: owned *mut Point2 = box(p, alloc);
     defer unbox(hp);
@@ -721,7 +721,7 @@ fn cube(x: i32) i32 {
     try expect_eq(hp.x, 100.0);
 }
 
-[test] fn class_mutable_state() !void {
+[Test] fn class_mutable_state() !void {
     var c = alloc.init(CounterClass{val = 0});
     try expect_eq(c.get(), 0);
     c.inc();
@@ -734,24 +734,24 @@ fn cube(x: i32) i32 {
 // 11. String 类型
 // ============================================================
 
-[test] fn string_from_literal() !void {
+[Test] fn string_from_literal() !void {
     var s = String.from("hello", alloc);
     try expect_eq_slices(s.as_slice(), "hello");
 }
 
-[test] fn string_concat_method() !void {
+[Test] fn string_concat_method() !void {
     var s = String.from("hello, ", alloc).concat(String.from("world", alloc));
     try expect_eq_slices(s.as_slice(), "hello, world");
 }
 
-[test] fn string_concat_function() !void {
+[Test] fn string_concat_function() !void {
     var a = String.from("abc", alloc);
     var b = String.from("def", alloc);
     var c = String.concat(a, b);
     try expect_eq_slices(c.as_slice(), "abcdef");
 }
 
-[test] fn string_content_equals() !void {
+[Test] fn string_content_equals() !void {
     var a = String.from("abc", alloc);
     var b = String.from("abc", alloc);
     try expect_eq(a == b, true);
@@ -759,7 +759,7 @@ fn cube(x: i32) i32 {
     try expect_eq(a == c, false);
 }
 
-[test] fn string_split() !void {
+[Test] fn string_split() !void {
     var csv = String.from("a,b,c,d", alloc);
     var parts = csv.split(',');
     try expect_eq(parts.len, 4);
@@ -767,7 +767,7 @@ fn cube(x: i32) i32 {
     try expect_eq_slices(parts[3].as_slice(), "d");
 }
 
-[test] fn string_join() !void {
+[Test] fn string_join() !void {
     var parts = Vec<String>.init(alloc);
     parts.append(String.from("x", alloc));
     parts.append(String.from("y", alloc));
@@ -776,7 +776,7 @@ fn cube(x: i32) i32 {
     try expect_eq_slices(joined.as_slice(), "x - y - z");
 }
 
-[test] fn string_find() !void {
+[Test] fn string_find() !void {
     var text = String.from("hello world", alloc);
     var pos = text.find("world");
     try expect_eq(pos.?, 6);
@@ -784,7 +784,7 @@ fn cube(x: i32) i32 {
     try expect_eq(not_found orelse -1, -1);
 }
 
-[test] fn string_substring() !void {
+[Test] fn string_substring() !void {
     var text = String.from("hello world", alloc);
     var sub = text.substring(0, 5);
     try expect_eq_slices(sub.as_slice(), "hello");
@@ -792,20 +792,20 @@ fn cube(x: i32) i32 {
     try expect_eq_slices(sub2.as_slice(), "world");
 }
 
-[test] fn string_replace() !void {
+[Test] fn string_replace() !void {
     var text = String.from("hello world", alloc);
     var replaced = text.replace("world", "h");
     try expect_eq_slices(replaced.as_slice(), "hello h");
 }
 
-[test] fn string_copy_owns() !void {
+[Test] fn string_copy_owns() !void {
     var s1 = String.from("original", alloc);
     var s2 = copy(&s1);
     try expect_eq_slices(s2.as_slice(), "original");
     try expect_eq_slices(s1.as_slice(), "original");
 }
 
-[test] fn string_compare() !void {
+[Test] fn string_compare() !void {
     var a = String.from("abc", alloc);
     var b = String.from("abd", alloc);
     var c = String.from("abc", alloc);
@@ -815,7 +815,7 @@ fn cube(x: i32) i32 {
     try expect(String.compare(b, a) > 0);
 }
 
-[test] fn string_empty() !void {
+[Test] fn string_empty() !void {
     var s = String.from("", alloc);
     try expect_eq(s.as_slice().len, 0);
 }
@@ -824,7 +824,7 @@ fn cube(x: i32) i32 {
 // 12. Vec<T> 类型
 // ============================================================
 
-[test] fn vec_init_and_append() !void {
+[Test] fn vec_init_and_append() !void {
     var v = Vec<i32>.init(alloc);
     try expect_eq(v.len, 0);
     v.append(1);
@@ -835,7 +835,7 @@ fn cube(x: i32) i32 {
     try expect_eq(v[2], 3);
 }
 
-[test] fn vec_iteration() !void {
+[Test] fn vec_iteration() !void {
     var v = Vec<i32>.init(alloc);
     v.append(10);
     v.append(20);
@@ -847,7 +847,7 @@ fn cube(x: i32) i32 {
     try expect_eq(sum, 60);
 }
 
-[test] fn vec_mutable_iteration() !void {
+[Test] fn vec_mutable_iteration() !void {
     var mut v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
@@ -860,7 +860,7 @@ fn cube(x: i32) i32 {
     try expect_eq(v[2], 30);
 }
 
-[test] fn vec_multiple_appends() !void {
+[Test] fn vec_multiple_appends() !void {
     var v = Vec<i32>.init(alloc);
     var i: i32 = 0;
     while (i < 100) {
@@ -872,7 +872,7 @@ fn cube(x: i32) i32 {
     try expect_eq(v[99], 99);
 }
 
-[test] fn vec_of_strings() !void {
+[Test] fn vec_of_strings() !void {
     var v = Vec<String>.init(alloc);
     v.append(String.from("a", alloc));
     v.append(String.from("b", alloc));
@@ -882,7 +882,7 @@ fn cube(x: i32) i32 {
     try expect_eq_slices(v[2].as_slice(), "c");
 }
 
-[test] fn vec_to_bytes_roundtrip() !void {
+[Test] fn vec_to_bytes_roundtrip() !void {
     var v = Vec<i32>.init(alloc);
     v.append(1);
     v.append(2);
@@ -895,7 +895,7 @@ fn cube(x: i32) i32 {
     try expect_eq(v2[2], 3);
 }
 
-[test] fn vec_sort() !void {
+[Test] fn vec_sort() !void {
     var mut v = Vec<i32>.init(alloc);
     v.append(5);
     v.append(2);
@@ -908,7 +908,7 @@ fn cube(x: i32) i32 {
     try expect_eq(v[3], 8);
 }
 
-[test] fn vec_explicit_copy() !void {
+[Test] fn vec_explicit_copy() !void {
     var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     v1.append(2);
@@ -922,7 +922,7 @@ fn cube(x: i32) i32 {
 // 13. Map<K, V> 类型
 // ============================================================
 
-[test] fn map_put_and_get() !void {
+[Test] fn map_put_and_get() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     m.put("banana", 7);
@@ -930,14 +930,14 @@ fn cube(x: i32) i32 {
     try expect_eq(m.get("banana").?, 7);
 }
 
-[test] fn map_contains() !void {
+[Test] fn map_contains() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     try expect(m.contains("apple"));
     try expect(!m.contains("pear"));
 }
 
-[test] fn map_remove() !void {
+[Test] fn map_remove() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     m.put("banana", 7);
@@ -948,7 +948,7 @@ fn cube(x: i32) i32 {
     try expect(m.contains("banana"));
 }
 
-[test] fn map_iterate() !void {
+[Test] fn map_iterate() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("a", 1);
     m.put("b", 2);
@@ -960,7 +960,7 @@ fn cube(x: i32) i32 {
     try expect_eq(total, 6);
 }
 
-[test] fn map_update_value() !void {
+[Test] fn map_update_value() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("key", 10);
     try expect_eq(m.get("key").?, 10);
@@ -968,7 +968,7 @@ fn cube(x: i32) i32 {
     try expect_eq(m.get("key").?, 20);
 }
 
-[test] fn map_multiple_entries() !void {
+[Test] fn map_multiple_entries() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("a", 1);
     m.put("b", 2);
@@ -982,25 +982,25 @@ fn cube(x: i32) i32 {
 // 14. 元组类型（tuple）
 // ============================================================
 
-[test] fn tuple_multi_return() !void {
+[Test] fn tuple_multi_return() !void {
     var (q, r) = divmod(17, 5);
     try expect_eq(q, 3);
     try expect_eq(r, 2);
 }
 
-[test] fn tuple_three_values() !void {
+[Test] fn tuple_three_values() !void {
     var (x, y, z) = triple(1, 2, 3);
     try expect_eq(x, 1);
     try expect_eq(y, 2);
     try expect_eq(z, 3);
 }
 
-[test] fn tuple_discard_with_underscore() !void {
+[Test] fn tuple_discard_with_underscore() !void {
     var (q, _) = divmod(17, 5);
     try expect_eq(q, 3);
 }
 
-[test] fn tuple_mixed_types() !void {
+[Test] fn tuple_mixed_types() !void {
     var (name, age, active) = lookup();
     try expect_eq_slices(name, "alice");
     try expect_eq(age, 30);
@@ -1011,24 +1011,24 @@ fn cube(x: i32) i32 {
 // 15. 函数类型（Fn1<T> R）
 // ============================================================
 
-[test] fn function_as_value() !void {
+[Test] fn function_as_value() !void {
     try expect_eq(apply(square, 5), 25);
     try expect_eq(apply(cube, 3), 27);
 }
 
-[test] fn function_variable() !void {
+[Test] fn function_variable() !void {
     var f: Fn1<i32> i32 = square;
     try expect_eq(f(4), 16);
     f = cube;
     try expect_eq(f(2), 8);
 }
 
-[test] fn function_composition() !void {
+[Test] fn function_composition() !void {
     try expect_eq(compose(square, cube, 2), 64);
     try expect_eq(compose(cube, square, 2), 64);
 }
 
-[test] fn closure_as_comparator() !void {
+[Test] fn closure_as_comparator() !void {
     var mut arr = [5, 2, 8, 1, 9];
     sort(&mut arr, |a, b| a - b);
     try expect_eq(arr[0], 1);
@@ -1039,26 +1039,26 @@ fn cube(x: i32) i32 {
 // 16. 错误联合类型（Error!T）
 // ============================================================
 
-[test] fn error_union_try_propagation() !void {
+[Test] fn error_union_try_propagation() !void {
     var val = try parse_ok("ok");
     try expect_eq(val, 42);
 }
 
-[test] fn error_union_catch_default() !void {
+[Test] fn error_union_catch_default() !void {
     var val = parse_ok("") catch 0;
     try expect_eq(val, 0);
 }
 
-[test] fn error_union_catch_with_err() !void {
+[Test] fn error_union_catch_with_err() !void {
     var val = parse_ok("") catch |err| 0;
     try expect_eq(val, 0);
 }
 
-[test] fn expect_error_assertion() !void {
+[Test] fn expect_error_assertion() !void {
     try expect_error(error.Invalid, parse_fail());
 }
 
-[test] fn error_set_switch() !void {
+[Test] fn error_set_switch() !void {
     try expect_eq_slices(classify(error.Empty), "empty");
     try expect_eq_slices(classify(error.Invalid), "invalid");
 }
@@ -1067,7 +1067,7 @@ fn cube(x: i32) i32 {
 // 17. 数值接口（INumber / ICompare / IInt / IUint / IFloat）
 // ============================================================
 
-[test] fn scalar_interface_methods_i32() !void {
+[Test] fn scalar_interface_methods_i32() !void {
     var a: i32 = 7;
     var b: i32 = 5;
     try expect_eq(a.add(b), 12);
@@ -1079,7 +1079,7 @@ fn cube(x: i32) i32 {
     try expect_eq((-7).abs(), 7);
 }
 
-[test] fn scalar_interface_compare() !void {
+[Test] fn scalar_interface_compare() !void {
     var a: i32 = 7;
     var b: i32 = 5;
     try expect_eq(a.eq(b), false);
@@ -1089,7 +1089,7 @@ fn cube(x: i32) i32 {
     try expect_eq(a > b, true);
 }
 
-[test] fn scalar_interface_methods_f64() !void {
+[Test] fn scalar_interface_methods_f64() !void {
     var a: f64 = 3.5;
     var b: f64 = 2.0;
     try expect_eq(a.add(b), 5.5);
@@ -1099,7 +1099,7 @@ fn cube(x: i32) i32 {
     try expect_eq(a.neg(), -3.5);
 }
 
-[test] fn scalar_interface_methods_u8() !void {
+[Test] fn scalar_interface_methods_u8() !void {
     var a: u8 = 10;
     var b: u8 = 3;
     try expect_eq(a.add(b), 13);
@@ -1109,14 +1109,14 @@ fn cube(x: i32) i32 {
     try expect_eq(a.mod(b), 1);
 }
 
-[test] fn generic_sum_over_numbers() !void {
+[Test] fn generic_sum_over_numbers() !void {
     var ints = [10, 20, 30];
     try expect_eq(sum(&ints), 60);
     var floats = [1.5, 2.5, 3.0];
     try expect_eq(sum(&floats), 7.0);
 }
 
-[test] fn scalar_interface_methods_u64() !void {
+[Test] fn scalar_interface_methods_u64() !void {
     var a: u64 = 100;
     var b: u64 = 25;
     try expect_eq(a.add(b), 125);
@@ -1130,7 +1130,7 @@ fn cube(x: i32) i32 {
 // 18. 迭代器接口（IIterable<T>）
 // ============================================================
 
-[test] fn builtin_for_loop_readonly() !void {
+[Test] fn builtin_for_loop_readonly() !void {
     var arr = [2, 4, 6, 8];
     var sum = 0;
     for (arr) |n| {
@@ -1139,7 +1139,7 @@ fn cube(x: i32) i32 {
     try expect_eq(sum, 20);
 }
 
-[test] fn builtin_for_loop_mutable() !void {
+[Test] fn builtin_for_loop_mutable() !void {
     var mut arr = [1, 2, 3];
     for (arr) |mut item| {
         item *= 10;
@@ -1149,7 +1149,7 @@ fn cube(x: i32) i32 {
     try expect_eq(arr[2], 30);
 }
 
-[test] fn for_loop_over_slice() !void {
+[Test] fn for_loop_over_slice() !void {
     var arr = [5, 10, 15];
     var s: &[i32] = &arr[0..3];
     var sum = 0;
@@ -1159,7 +1159,7 @@ fn cube(x: i32) i32 {
     try expect_eq(sum, 30);
 }
 
-[test] fn for_loop_over_vec() !void {
+[Test] fn for_loop_over_vec() !void {
     var v = Vec<i32>.init(alloc);
     v.append(3);
     v.append(6);
@@ -1171,7 +1171,7 @@ fn cube(x: i32) i32 {
     try expect_eq(sum, 18);
 }
 
-[test] fn for_loop_over_map() !void {
+[Test] fn for_loop_over_map() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("a", 1);
     m.put("b", 2);
@@ -1186,7 +1186,7 @@ fn cube(x: i32) i32 {
 // 19. 组合类型综合测试
 // ============================================================
 
-[test] fn vec_of_structs() !void {
+[Test] fn vec_of_structs() !void {
     var v = Vec<Item>.init(alloc);
     v.append(Item{id = 1});
     v.append(Item{id = 2});
@@ -1195,7 +1195,7 @@ fn cube(x: i32) i32 {
     try expect_eq(v[1].id, 2);
 }
 
-[test] fn map_of_vectors() !void {
+[Test] fn map_of_vectors() !void {
     var m = Map<&[u8], Vec<i32>>.init(alloc);
     var evens = Vec<i32>.init(alloc);
     evens.append(2);
@@ -1210,7 +1210,7 @@ fn cube(x: i32) i32 {
     try expect_eq(m.get("evens").?.len, 2);
 }
 
-[test] fn optional_enum_combined() !void {
+[Test] fn optional_enum_combined() !void {
     var r1 = try_parse("abc");
     var val1 = if (r1) |r| switch (r) {
         Result_.ok => |v| v,
@@ -1221,7 +1221,7 @@ fn cube(x: i32) i32 {
     try expect_eq(r2 orelse null, null);
 }
 
-[test] fn error_optional_nested() !void {
+[Test] fn error_optional_nested() !void {
     var data = [("a", 1), ("b", 2), ("c", 3)];
     var found = try lookup_kv("b", &data);
     try expect_eq(found.?, 2);

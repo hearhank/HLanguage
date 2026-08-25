@@ -807,7 +807,7 @@ class Parser {
         // export
         var is_export = false;
         if (self.at("KwExport")) { is_export = true; self.advance(); }
-        // [pad] [align(T)] [test]
+        // [pad] [align(T)] [Test]
         var traits = Vec<&[u8]>.init(alloc);
         while (self.at("LBracket")) {
             var t = self.parse_trait();

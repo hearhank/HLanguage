@@ -1,4 +1,4 @@
-import H.std.{io};
+//import H.std.{io};
 
 // 01-hello.hc — 程序入口与 Hello World
 //

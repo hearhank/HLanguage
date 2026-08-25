@@ -32,14 +32,14 @@ fn main() !void {
     io.print("dice sum = {}\n", sum);
 }
 
-[test] fn rng_deterministic() !void {
+[Test] fn rng_deterministic() !void {
     var rng: Rng = Rng.new(0x1234_5678_9abc_def0);
     var first = rng.next();
     var rng2: Rng = Rng.new(0x1234_5678_9abc_def0);
     try expect_eq(rng2.next(), first);   // 同种子同序列
 }
 
-[test] fn rng_range() !void {
+[Test] fn rng_range() !void {
     var rng: Rng = Rng.new(1);
     for (0..100) |_| {
         var v = rng.between(1, 7);

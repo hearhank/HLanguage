@@ -34,7 +34,7 @@ fn main() !void {
     io.print("id = {}\n", decoded.id);
 }
 
-[test] fn encode_decode_roundtrip() !void {
+[Test] fn encode_decode_roundtrip() !void {
     var msg = Message{id = 7, kind = 1};
     var frame = encode(&msg);
     try expect_eq(frame.len, 16);   // 8（u64 前缀）+ 8（POD 字节）

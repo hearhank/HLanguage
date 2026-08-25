@@ -24,7 +24,7 @@ fn main() !void {
     // var w2: *mut i32 = &mut x;  // 合法（无唯一写者限制）
 }
 
-[test] fn pointer_read_write_downgrade() !void {
+[Test] fn pointer_read_write_downgrade() !void {
     var mut x: i32 = 42;
     var p: *i32 = &x;
     var w: *mut i32 = &mut x;
@@ -33,7 +33,7 @@ fn main() !void {
     try expect_eq(x, 100);
 }
 
-[test] fn auto_deref_index() !void {
+[Test] fn auto_deref_index() !void {
     var arr = [1, 2, 3];
     var sp: *[3]i32 = &arr;
     try expect_eq(sp[1], 2);

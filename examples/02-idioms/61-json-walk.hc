@@ -56,7 +56,7 @@ fn main() !void {
     io.print("strings = {}\n", count_strings(&doc));   // 2
 }
 
-[test] fn json_walk_count() !void {
+[Test] fn json_walk_count() !void {
     var arr = Vec<JsonValue>.init(alloc);
     arr.append(JsonValue{number = 1.0});
     arr.append(JsonValue{string = String.from("y", alloc)});

@@ -50,7 +50,7 @@ fn main(args: owned Vec(String)) !void {
     io.print("{}\n", hp.x);
 }
 
-[test] fn dist_calc_and_dual_call() !void {
+[Test] fn dist_calc_and_dual_call() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var q: Point = Point{x = 4.0, y = 6.0};
     var d1 = p.dist(q);
@@ -59,14 +59,14 @@ fn main(args: owned Vec(String)) !void {
     try expect_eq(d1 == d2, true);         // 双语等价
 }
 
-[test] fn pure_value_copy() !void {
+[Test] fn pure_value_copy() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var p2: Point = p;
     p2.x = 99.0;
     try expect_eq(p.x, 1.0);               // 复制互不影响
 }
 
-[test] fn boxing() !void {
+[Test] fn boxing() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var hp: owned *mut Point = box(p, alloc);
     hp.x = 100.0;

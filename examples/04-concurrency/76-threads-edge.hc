@@ -46,14 +46,14 @@ fn main() !void {
     io.print("after join = {}, is_done = {}\n", r3, t3.is_done());
 }
 
-[test] fn thread_join_value() !void {
+[Test] fn thread_join_value() !void {
     var t: owned Thread<i32> = spawn(worker, 9);
     var r = try t.join();
     try expect_eq(r, 81);
     try expect_eq(t.is_done(), true);
 }
 
-[test] fn channel_send_recv() !void {
+[Test] fn channel_send_recv() !void {
     var ch = chan.init(alloc, 1);
     var sender: owned Thread<void> = spawn(chan_sender, &ch);
     try sender.join();
@@ -62,7 +62,7 @@ fn main() !void {
     ch.close();
 }
 
-[test] fn buffered_channel() !void {
+[Test] fn buffered_channel() !void {
     var ch = chan.init(alloc, 3);
     ch.send(10);
     ch.send(20);
@@ -73,7 +73,7 @@ fn main() !void {
     ch.close();
 }
 
-[test] fn try_send_try_recv() !void {
+[Test] fn try_send_try_recv() !void {
     var ch = chan.init(alloc, 1);
     try expect_eq(ch.try_send(1), true);
     try expect_eq(ch.try_send(2), false);   // 缓冲区满
@@ -81,17 +81,17 @@ fn main() !void {
     try expect_eq(ch.try_recv(), null);      // 缓冲区空
 }
 
-[test] fn channel_close() !void {
+[Test] fn channel_close() !void {
     var ch = chan.init(alloc, 1);
     ch.close();
 }
 
-[test] fn detach_runs() !void {
+[Test] fn detach_runs() !void {
     var t: owned Thread<i32> = spawn(worker, 3);
     t.detach();
 }
 
-[test] fn cancel_then_join() !void {
+[Test] fn cancel_then_join() !void {
     var t = spawn(worker, 5);
     t.cancel();
     var r = t.join() catch 0;

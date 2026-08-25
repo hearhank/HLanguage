@@ -41,13 +41,15 @@ fn main() !void {
     io.print("read {} bytes\n", data.len);
 }
 
-[test] fn if_expression() !void {
+[Test]
+fn if_expression() !void {
     var x: i32 = 7;
     var label: &[u8] = if (x > 5) "big" else "small";
     try expect_eq_slices(label, "big");
 }
 
-[test] fn while_continue_step() !void {
+[Test]
+fn while_continue_step() !void {
     var mut i: i32 = 0;
     var sum = 0;
     while (i < 5) : (i += 1) {
@@ -56,7 +58,7 @@ fn main() !void {
     try expect_eq(sum, 10);
 }
 
-[test] fn for_mutable_capture() !void {
+[Test] fn for_mutable_capture() !void {
     var mut arr2 = [10, 20, 30];
     for (arr2) |mut item| {
         item *= 2;

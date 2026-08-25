@@ -34,19 +34,19 @@ fn main() !void {
     io.print("total = {}\n", total);
 }
 
-[test] fn thread_join() !void {
+[Test] fn thread_join() !void {
     var t: owned Thread<i32> = spawn(compute, 6, 7);
     var result = try t.join();
     try expect_eq(result, 42);
 }
 
-[test] fn four_mode_shared_container() !void {
+[Test] fn four_mode_shared_container() !void {
     var shared = Hub<i32>.init(alloc);
     shared.write(42);
     try expect_eq(shared.read(), 42);
 }
 
-[test] fn async_scope_binding() !void {
+[Test] fn async_scope_binding() !void {
     var base = 10;
     var fut: Future<i32> = async_add(&base, 5);
     var total = await fut;   // 冻结窗口：await 前 base 不可写（Q19）

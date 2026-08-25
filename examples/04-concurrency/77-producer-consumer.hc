@@ -50,7 +50,7 @@ fn main() !void {
     io.print("sum = {}\n", sum);   // 0²+1²+…+9² = 285
 }
 
-[test] fn producer_consumer_sum() !void {
+[Test] fn producer_consumer_sum() !void {
     var ch = chan.init(alloc, 10);
     var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
     var c_thread: owned Thread<i32> = spawn(consumer, &ch, 10);
@@ -59,7 +59,7 @@ fn main() !void {
     try expect_eq(sum, 285);   // 0²+1²+…+9²
 }
 
-[test] fn multi_producer() !void {
+[Test] fn multi_producer() !void {
     var ch = chan.init(alloc, 10);
     var t1 = spawn(send_one, &ch);
     var t2 = spawn(send_two, &ch);

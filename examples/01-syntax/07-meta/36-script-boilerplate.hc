@@ -59,7 +59,7 @@ fn main() !void {
     io.print("json null = {}\n", user_to_json(&no_mail, alloc));   // ?String null → "null"
 }
 
-[test] fn script_custom_boilerplate_demo() !void {
+[Test] fn script_custom_boilerplate_demo() !void {
     // C1（Q37/Q38 定制通道）：脚本从 types.fields 生成校验 + 序列化样板，
     // 字段数随 User 定义联动（3 字段：name/age/email）
     try expect(user_field_count() == 3);

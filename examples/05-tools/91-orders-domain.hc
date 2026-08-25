@@ -47,7 +47,7 @@ import H.std.{io};
     }
 }
 
-[test] fn orders_domain_boundary_and_total() !void {
+[Test] fn orders_domain_boundary_and_total() !void {
     var ctx = Orders.init(10, 2);   // 税率 10%、最小起订 2 件
     var lines = [
         Orders.LineItem{sku = "A", qty = 2, price_cents = 300},   // 600 分
@@ -57,7 +57,7 @@ import H.std.{io};
     try expect_eq(Orders.total(ctx, lines), 660);
 }
 
-[test] fn orders_domain_context_parameterizes_behavior() !void {
+[Test] fn orders_domain_context_parameterizes_behavior() !void {
     // 同一批行，注入不同上下文 → 结果不同（行为由上下文参数化）
     var low_tax = Orders.init(0, 1);     // 无税、最小 1 件：两行全部计入
     var high_tax = Orders.init(20, 2);   // 20% 税、最小 2 件：仅 A 行计入

@@ -32,7 +32,7 @@ fn main() !void {
     io.print("{}\n", p2.addr.city);
 }
 
-[test] fn nested_class_json_demo() !void {
+[Test] fn nested_class_json_demo() !void {
     // S4 演示型（Q-T6）：Person.to_json 为内建默认语义（示例以空体标注），
     // 递归嵌套序列化实现在标准库内建；断言留 M7 标准库测试
     try expect(true);
