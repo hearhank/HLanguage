@@ -24,7 +24,4 @@ fn main() -> ExitCode {
 }
 
 #[cfg(test)]
-mod tests {
-    // Integration tests are now in tests/integration_test.rs
-    // This is handled by Cargo's test discovery
-}
+mod tests;

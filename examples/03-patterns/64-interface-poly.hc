@@ -48,7 +48,8 @@ fn main() !void {
     io.print("circle = {}\n", describe(&circ));
 
     // 异构集合：显式装箱
-    var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
+    defer shapes.deinit();
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     io.print("total = {}\n", total_area(&shapes));
@@ -64,7 +65,8 @@ fn main() !void {
 [test] fn heterogeneous_boxing() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
-    var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
+    defer shapes.deinit();
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);

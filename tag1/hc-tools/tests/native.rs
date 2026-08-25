@@ -937,11 +937,11 @@ fn tree_vec_field_append_recursion_native() {
                  return sum;\n\
              }\n\
          }\n\
-         [test] fn tree_recursive_composition() !void {\n\
-             var root: owned Node = Node.new(1, alloc);\n\
-             root.children.append(Node.new(2, alloc));\n\
-             root.children.append(Node.new(3, alloc));\n\
-             try expect_eq(root.total(), 6);\n\
+         [test] fn tree_recursive_composition() !void {
+             var root: Node = Node.new(1, alloc);
+             root.children.append(Node.new(2, alloc));
+             root.children.append(Node.new(3, alloc));
+             try expect_eq(root.total(), 6);
          }\n",
     );
     assert!(st.success(), "树 + Vec.append + 递归 total 原生应退出 0");

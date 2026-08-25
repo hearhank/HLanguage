@@ -2714,42 +2714,53 @@ impl Checker {
         None
     }
 
+    /// 提取 Dot 链的完整标识符路径（io.fs.open → ["io", "fs", "open"]）
+    fn extract_dot_path(expr: &Expr) -> Option<Vec<String>> {
+        match expr {
+            Expr::Ident(name, _) => Some(vec![name.clone()]),
+            Expr::Dot { base, field, .. } | Expr::Field { base, field, .. } => {
+                let mut path = Self::extract_dot_path(base)?;
+                path.push(field.clone());
+                Some(path)
+            }
+            _ => None,
+        }
+    }
+
     /// 初始化表达式 → 分配来源（形态优先，类型兜底）
     pub(crate) fn infer_source(&self, init: Option<&Expr>, init_ty: Option<&SType>) -> AllocSource {
         if let Some(e) = init {
             match e {
-                // alloc.init / alloc.alloc / arena.alloc / arena.init
                 Expr::Call { callee, .. } => {
-                    if let Expr::Dot { base, field, .. } = callee.as_ref() {
-                        if let Expr::Ident(b, _) = base.as_ref() {
-                            match (b.as_str(), field.as_str()) {
-                                ("alloc", _) => return AllocSource::NonArena,
-                                ("arena", _) => return AllocSource::Arena,
+                    // 提取 Dot 链完整路径，按模式匹配
+                    if let Some(path) = Self::extract_dot_path(callee) {
+                        if path.len() >= 2 {
+                            let base = path[0].as_str();
+                            let method = path[path.len() - 1].as_str();
+                            match (base, method) {
+                                // alloc.init / alloc.alloc → NonArena
+                                ("alloc", "init" | "alloc") => return AllocSource::NonArena,
+                                // arena.alloc / arena.init → Arena
+                                ("arena", "alloc" | "init") => return AllocSource::Arena,
                                 ("Arena", "init") => return AllocSource::Arena,
-                                // 内建类型构造（String.from / Vec.init 等，Dot 形态）→ 新建对象
-                                (b, f)
-                                    if is_builtin_type(b)
-                                        && matches!(f, "init" | "from" | "new") =>
-                                {
+                                // 内建类型构造（String.from / Vec.init 等）→ 新建对象
+                                (b, "init" | "from" | "new") if is_builtin_type(b) => {
                                     return AllocSource::NonArena;
                                 }
                                 _ => {}
                             }
                         }
-                    }
-                    // 集合/内建类型构造（Field 形态：Vec.init / Table.init）
-                    if let Expr::Field { base, field, .. } = callee.as_ref() {
-                        if let Expr::Ident(b, _) = base.as_ref() {
-                            if is_builtin_type(b)
-                                && matches!(field.as_str(), "init" | "from" | "new")
-                            {
+                        // 多层 Dot 链：io.fs.open → 检查最终方法名是否已知分配模式
+                        if path.len() >= 3 {
+                            let method = path[path.len() - 1].as_str();
+                            if matches!(method, "open" | "create" | "alloc" | "init") {
                                 return AllocSource::NonArena;
                             }
                         }
                     }
-                    // copy / box：新建对象归当前作用域
+                    // copy：新建对象归当前作用域
                     if let Expr::Ident(name, _) = callee.as_ref() {
-                        if matches!(name.as_str(), "copy" | "box") {
+                        if name == "copy" {
                             return AllocSource::NonArena;
                         }
                     }

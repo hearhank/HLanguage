@@ -22,7 +22,7 @@ class Rng {
 }
 
 fn main() !void {
-    var rng: owned Rng = Rng.new(0x1234_5678_9abc_def0);
+    var rng: Rng = Rng.new(0x1234_5678_9abc_def0);
 
     // 骰子模拟（1..6）
     var sum = 0;
@@ -33,14 +33,14 @@ fn main() !void {
 }
 
 [test] fn rng_deterministic() !void {
-    var rng: owned Rng = Rng.new(0x1234_5678_9abc_def0);
+    var rng: Rng = Rng.new(0x1234_5678_9abc_def0);
     var first = rng.next();
-    var rng2: owned Rng = Rng.new(0x1234_5678_9abc_def0);
+    var rng2: Rng = Rng.new(0x1234_5678_9abc_def0);
     try expect_eq(rng2.next(), first);   // 同种子同序列
 }
 
 [test] fn rng_range() !void {
-    var rng: owned Rng = Rng.new(1);
+    var rng: Rng = Rng.new(1);
     for (0..100) |_| {
         var v = rng.between(1, 7);
         try expect(v >= 1 and v <= 6);

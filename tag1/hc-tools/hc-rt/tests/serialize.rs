@@ -110,9 +110,9 @@ class Doc {
     mut nums: Vec<i32>,
 }
 [test] fn t() !void {
-    var mut tag: owned Tag = alloc.init(Tag);
+    var mut tag: Tag = alloc.init(Tag);
     tag.score = 5;
-    var mut doc: owned Doc = alloc.init(Doc);
+    var mut doc: Doc = alloc.init(Doc);
     doc.id = 1;
     doc.tag = tag;
     doc.nums.append(7);

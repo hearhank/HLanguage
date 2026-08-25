@@ -82,6 +82,7 @@
 | 多指针合法 | 多 `*mut`/`*T` 合法，无唯一写者约束 | ✅ |
 | 作用域销毁 | LIFO 销毁代码生成 | ✅ |
 | definite assignment (C7) | `alloc.init(T)` 无参构造后字段未全赋值即 return → 编译错误 | ✅ |
+| `owned` 变量检查 | `owned` 标注变量必须匹配 `defer` 或 `move`，否则编译错误 | ✅ |
 
 ### 2.5 错误集分析
 | 功能 | 描述 | 状态 |

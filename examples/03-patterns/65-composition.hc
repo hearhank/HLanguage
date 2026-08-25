@@ -43,14 +43,14 @@ fn save<T>(self: *Self, io: *T) !void where T: Io {
 }
 
 fn main() !void {
-    var doc: owned Document = alloc.init(Document);   // 无参构造（C1'）
+    var doc: Document = alloc.init(Document);   // 无参构造（C1'）
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));
     io.print("paragraphs = {}\n", doc.body.len);
 }
 
 [test] fn class_composition() !void {
-    var doc: owned Document = alloc.init(Document);
+    var doc: Document = alloc.init(Document);
     doc.title = String.from("组合示例", alloc);
     doc.body.append(alloc.init(Paragraph));
     try expect_eq(doc.body.len, 1);

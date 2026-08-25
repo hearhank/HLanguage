@@ -716,6 +716,7 @@ fn cube(x: i32) i32 {
 [test] fn class_boxing() !void {
     var p = Point2{x = 1.0, y = 2.0};
     var hp: owned *mut Point2 = box(p, alloc);
+    defer unbox(hp);
     hp.x = 100.0;
     try expect_eq(hp.x, 100.0);
 }

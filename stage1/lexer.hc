@@ -713,6 +713,6 @@ fn main(args:Vec<String>) !void {
     var path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var src = try io.fs.read_file(path, alloc);
-    var lx: owned Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
+    var lx: Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
     lx.run();
 }

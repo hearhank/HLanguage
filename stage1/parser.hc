@@ -807,7 +807,7 @@ class Parser {
         // export
         var is_export = false;
         if (self.at("KwExport")) { is_export = true; self.advance(); }
-        // 鐗规€ф爣娉?[continuous] [pad] [align(T)] [test]
+        // [pad] [align(T)] [test]
         var traits = Vec<&[u8]>.init(alloc);
         while (self.at("LBracket")) {
             var t = self.parse_trait();
@@ -982,7 +982,7 @@ class Parser {
         var c = make_node("Const");
         node_add_prop(&c, "name", name);
         if (is_pub) { node_add_prop(&c, "pub", "true"); }
-        // 閿欒闆嗗瓧闈㈤噺 error{...}
+        //  error{...}
         if (self.at("Ident") and kind_eq(self.peek_text(), "error") and kind_eq(self.peek_n(1), "LBrace")) {
             self.advance();
             self.advance();
@@ -2353,14 +2353,14 @@ fn main(args: Vec<String>) !void {
     if (args.len >= 2) { path = args[1]; }
     var src = try io.fs.read_file(path, alloc);
     // 璇嶆硶鍒嗘瀽
-    var lx: owned Lexer = alloc.init(Lexer{
+    var lx: Lexer = alloc.init(Lexer{
         src = src, n = @intCast(i32, src.len),
         pos = 0, line = 1, col = 1,
         tokens = Vec<Token>.init(alloc)
     });
     lx.run();
     // 璇硶鍒嗘瀽
-    var parser: owned Parser = alloc.init(Parser{
+    var parser: Parser = alloc.init(Parser{
         tokens = lx.tokens, pos = 0,
         n = @intCast(i32, lx.tokens.len)
     });

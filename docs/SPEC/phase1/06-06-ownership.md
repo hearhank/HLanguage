@@ -39,3 +39,17 @@
 - **o 默认规则**（Q16）：非 Arena 分配器创建的复杂类型默认由作用域负责销毁（退出自动销毁，无需显式 o/deinit）；Arena 例外（统一销毁）；`defer` 管非内存资源（文件等）
 - **defer/errdefer**：资源清理（不用隐式析构）；多 defer 按 LIFO（Q21）
 - **无 GC**：双模式同一套模型（Avoid: 引用计数）
+
+## 已知限制（2026-08-25）
+
+以下为当前 `owned` 变量检查的已知限制，将在后续版本逐步解决：
+
+1. **`alloc.init(T)` 无 `destroy` 方法**：`alloc.init(T)` 创建的值无法通过 `defer x.deinit()` 释放，因为分配器 API 尚无 `destroy` 方法。当前方案：移除 `alloc.init(T)` 变量上的 `owned` 标注，待分配器 API 添加 `destroy` 后恢复。
+
+2. **`Thread::join()` / `detach()` 未触发 `move` 标记**：`var t: owned Thread<i32> = spawn(f, args); t.join();` 中的 `join()` 方法消耗了 `Thread` 的所有权，但当前检查器不识别方法调用为所有权转移，会报错。当前方案：相关 `Thread` 示例在 `examples/` 中且不在测试套件内，暂不触发。后续需为 `join()`/`detach()` 添加特殊处理。
+
+3. **函数参数和返回类型中的 `owned` 不被跟踪**：如 `fn take(y: owned String) void` 和 `fn make() owned String` 中的 `owned` 标注仅用于文档和调用点约束，检查器不跟踪函数参数的作用域退出的 `defer`/`move` 检查。
+
+4. **赋值不触发 `move` 标记**：`doc.tag = tag;` 将 `tag` 的所有权转移给 `doc.tag`，但当前检查器不识别赋值操作为所有权转移。需显式 `move` 或 `defer`。
+
+5. **`NonArena` 来源自动跟踪已回退**：之前尝试自动跟踪所有 `NonArena` 来源的变量，但过于激进（包括了 `alloc.init(T)` 等无 `deinit` 方法的类型）。当前仅跟踪显式 `Type::Owned` 标注的变量。

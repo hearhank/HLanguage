@@ -21,7 +21,7 @@ class Person {
 }
 
 fn main() !void {
-    var mut p: owned Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
+    var mut p: Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
     p.name = String.from("alice", alloc);
     p.addr.city = String.from("beijing", alloc);
 

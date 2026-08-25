@@ -20,7 +20,7 @@ class Subject {
 }
 
 fn main() !void {
-    var subject: owned Subject = alloc.init(Subject);   // 无参构造（C1'）
+    var subject: Subject = alloc.init(Subject);   // 无参构造（C1'）
 
     subject.subscribe(|event, payload| io.print("[{}] {}\n", event, payload));
 
@@ -29,7 +29,7 @@ fn main() !void {
 }
 
 [test] fn publish_subscribe() !void {
-    var subject: owned Subject = alloc.init(Subject);
+    var subject: Subject = alloc.init(Subject);
     var mut received = 0;
     subject.subscribe(mut |event, payload| { // 可写捕获（mut）
         received += 1;

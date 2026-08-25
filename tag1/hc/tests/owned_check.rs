@@ -11,13 +11,6 @@ fn check(src: &str) -> Vec<hc::Diagnostic> {
     check_semantics(&program)
 }
 
-/// 检查是否包含指定消息片段的 warning
-fn has_warning_containing(diags: &[hc::Diagnostic], fragment: &str) -> bool {
-    diags
-        .iter()
-        .any(|d| d.severity == hc::Severity::Warning && d.message.contains(fragment))
-}
-
 /// 检查是否包含指定消息片段的 error
 fn has_error_containing(diags: &[hc::Diagnostic], fragment: &str) -> bool {
     diags
@@ -26,7 +19,7 @@ fn has_error_containing(diags: &[hc::Diagnostic], fragment: &str) -> bool {
 }
 
 #[test]
-fn owned_var_without_defer_or_move_warns() {
+fn owned_var_without_defer_or_move_errors() {
     let diags = check(
         "class Res { data: *mut i32, }
          fn test() void {
@@ -34,13 +27,13 @@ fn owned_var_without_defer_or_move_warns() {
         }",
     );
     assert!(
-        has_warning_containing(&diags, "owned"),
-        "expected warning about owned variable without defer/move, got: {diags:?}"
+        has_error_containing(&diags, "owned"),
+        "expected error about owned variable without defer/move, got: {diags:?}"
     );
 }
 
 #[test]
-fn owned_var_with_defer_no_warning() {
+fn owned_var_with_defer_no_error() {
     let diags = check(
         "class Res { data: *mut i32, }
          fn test() void {
@@ -49,26 +42,26 @@ fn owned_var_with_defer_no_warning() {
         }",
     );
     assert!(
-        !has_warning_containing(&diags, "owned"),
-        "expected no warning when owned variable has defer, got: {diags:?}"
+        !has_error_containing(&diags, "owned"),
+        "expected no error when owned variable has defer, got: {diags:?}"
     );
 }
 
 #[test]
-fn non_owned_var_no_warning() {
+fn non_owned_var_no_error() {
     let diags = check(
         "fn test() void {
             var x: i32 = 42;
         }",
     );
     assert!(
-        !has_warning_containing(&diags, "owned"),
-        "expected no warning for non-owned variable, got: {diags:?}"
+        !has_error_containing(&diags, "owned"),
+        "expected no error for non-owned variable, got: {diags:?}"
     );
 }
 
 #[test]
-fn only_uncovered_owned_var_warns() {
+fn only_uncovered_owned_var_errors() {
     let diags = check(
         "class Res { data: *mut i32, }
          fn test() void {
@@ -77,12 +70,12 @@ fn only_uncovered_owned_var_warns() {
             defer a;
         }",
     );
-    // `b` is uncovered → warning; `a` is covered by defer → no warning
-    let b_warns = has_warning_containing(&diags, "`b`");
-    let a_warns = has_warning_containing(&diags, "`a`");
+    // `b` is uncovered → error; `a` is covered by defer → no error
+    let b_errs = has_error_containing(&diags, "`b`");
+    let a_errs = has_error_containing(&diags, "`a`");
     assert!(
-        b_warns && !a_warns,
-        "expected warning only for 'b' (uncovered), got: {diags:?}"
+        b_errs && !a_errs,
+        "expected error only for 'b' (uncovered), got: {diags:?}"
     );
 }
 
@@ -100,8 +93,8 @@ fn owned_var_in_nested_block_covered() {
         }",
     );
     assert!(
-        !has_warning_containing(&diags, "owned"),
-        "expected no warning when both owned vars have defer in correct scopes, got: {diags:?}"
+        !has_error_containing(&diags, "owned"),
+        "expected no error when both owned vars have defer in correct scopes, got: {diags:?}"
     );
 }
 
@@ -117,10 +110,10 @@ fn owned_var_in_nested_block_uncovered() {
             defer x;
         }",
     );
-    let y_warns = has_warning_containing(&diags, "`y`");
-    let x_warns = has_warning_containing(&diags, "`x`");
+    let y_errs = has_error_containing(&diags, "`y`");
+    let x_errs = has_error_containing(&diags, "`x`");
     assert!(
-        y_warns && !x_warns,
-        "expected warning only for 'y' (uncovered in nested block), got: {diags:?}"
+        y_errs && !x_errs,
+        "expected error only for 'y' (uncovered in nested block), got: {diags:?}"
     );
 }

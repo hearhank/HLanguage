@@ -272,7 +272,7 @@ impl Checker {
         // 2026-08-25：检查未匹配 defer/move 的 owned 变量
         if let Some(remaining) = self.owned_stack.last() {
             for name in remaining {
-                self.diags.push(Diagnostic::warning(
+                self.diags.push(Diagnostic::error(
                     b.span.clone(),
                     format!(
                         "`{name}` is `owned` but has no matching `defer` or `move`;
@@ -363,10 +363,8 @@ impl Checker {
                         thread: spawn_thread,
                     },
                 );
-                // 2026-08-25：owned 或堆分配类型变量登记到 owned_stack
-                let is_owned = matches!(ty, Some(Type::Owned(_)));
-                let is_heap = source == AllocSource::NonArena || source == AllocSource::Unknown;
-                if is_owned || is_heap {
+                // 2026-08-25：owned 类型变量登记到 owned_stack
+                if let Some(Type::Owned(_)) = ty {
                     self.owned_stack.last_mut().unwrap().push(name.clone());
                 }
             }
@@ -420,11 +418,11 @@ impl Checker {
             Stmt::Expr(e) => {
                 // G3 Q18：线程 join/detach 语句位置跟踪
                 self.track_thread_method(e, scopes);
-                // 2026-08-25：move 表达式 → 标记对应 owned 变量
-                if let Expr::Move(inner, _) = &*e {
-                    if let Expr::Ident(name, _) = inner.as_ref() {
-                        self.mark_moved(name);
-                    }
+                // 2026-08-25：扫描表达式中的 move 操作 → 标记对应 owned 变量
+                let mut moved = Vec::new();
+                Self::collect_move_targets(e, &mut moved);
+                for name in &moved {
+                    self.mark_moved(name);
                 }
                 let _ = self.expr_ty(e, scopes, None);
             }
@@ -586,6 +584,12 @@ impl Checker {
                 self.conditional_depth -= 1;
             }
             Stmt::Return(e, span) => {
+                // 2026-08-25：`return move x` → 标记对应 owned 变量
+                if let Some(Expr::Move(inner, _)) = e {
+                    if let Expr::Ident(name, _) = inner.as_ref() {
+                        self.mark_moved(name);
+                    }
+                }
                 // M2.4 Q18：返回值引用被编译期禁止（引用逃逸到比目标更长寿的
                 // 作用域 = 悬垂唯一产生路径）——局部变量与参数均不可；
                 // 带所有权参数须 `return move param` 转移所有权
@@ -719,6 +723,34 @@ impl Checker {
         Self::collect_idents(expr, &mut refs);
         for name in &refs {
             self.mark_covered(name);
+        }
+    }
+
+    /// 收集表达式中的所有 move 目标（`move x` 中的 `x`）
+    fn collect_move_targets(expr: &Expr, out: &mut Vec<String>) {
+        match expr {
+            Expr::Move(inner, _) => {
+                if let Expr::Ident(name, _) = inner.as_ref() {
+                    out.push(name.clone());
+                }
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    Self::collect_move_targets(arg, out);
+                }
+            }
+            Expr::Binary(_, left, right, _) => {
+                Self::collect_move_targets(left, out);
+                Self::collect_move_targets(right, out);
+            }
+            Expr::Unary(_, inner, _)
+            | Expr::Deref(inner, _)
+            | Expr::AddrOf(inner, _, _)
+            | Expr::Try(inner, _)
+            | Expr::Await(inner, _) => {
+                Self::collect_move_targets(inner, out);
+            }
+            _ => {}
         }
     }
 

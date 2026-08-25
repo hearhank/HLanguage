@@ -29,14 +29,14 @@ fn allow<T>(self: *mut Self, io: *T) bool where T: Io {
 }
 
 fn main() !void {
-    var bucket: owned TokenBucket = TokenBucket.new(3, io.time.now());
+    var bucket: TokenBucket = TokenBucket.new(3, io.time.now());
     for (0..5) |_| {
         io.print("allowed = {}\n", bucket.allow(&io));
     }
 }
 
 [test] fn token_bucket() !void {
-    var bucket: owned TokenBucket = TokenBucket.new(3, io.time.now());
+    var bucket: TokenBucket = TokenBucket.new(3, io.time.now());
     var allowed = 0;
     for (0..5) |_| {
         if (bucket.allow(&io)) {

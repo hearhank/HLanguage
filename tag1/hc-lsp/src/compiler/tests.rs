@@ -95,7 +95,8 @@ fn test_to_lsp_diagnostic_warning() {
 
 #[test]
 fn test_to_lsp_diagnostic_note() {
-    use hc::{Severity, Span};
+    use hc::token::Span;
+    use hc::Severity;
 
     let span = Span::new(20, 25, 5, 10);
     let diag = Diagnostic {

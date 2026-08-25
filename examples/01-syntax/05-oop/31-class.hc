@@ -37,26 +37,26 @@ tree Node {                              // 递归组合
 
 fn main() !void {
     // class：堆上、默认拥有（非 arena 分配器，Q16）；构造 = alloc.init（C1'）
-    var c: owned Counter = alloc.init(Counter);
+    var c: Counter = alloc.init(Counter);
     c.inc();
     io.print("{}\n", c.get());
 
     // tree：递归组合
-    var root: owned Node = Node.new(1, alloc);
+    var root: Node = Node.new(1, alloc);
     root.children.append(Node.new(2, alloc));
     root.children.append(Node.new(3, alloc));
     io.print("total = {}\n", root.total());
 }
 
 [test] fn class_methods_and_state() !void {
-    var c: owned Counter = alloc.init(Counter);
+    var c: Counter = alloc.init(Counter);
     c.inc();
     c.inc();
     try expect_eq(c.get(), 2);
 }
 
 [test] fn tree_recursive_composition() !void {
-    var root: owned Node = Node.new(1, alloc);
+    var root: Node = Node.new(1, alloc);
     root.children.append(Node.new(2, alloc));
     root.children.append(Node.new(3, alloc));
     try expect_eq(root.total(), 6);
