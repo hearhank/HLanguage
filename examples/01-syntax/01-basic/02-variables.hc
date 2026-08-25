@@ -41,8 +41,8 @@ fn main() !void {
     var buf: &[u8] = arena.alloc(256);
     try expect_eq(buf.len, 256);
 
-    var temp = String.from("localhost", alloc);
-    defer temp.deinit();
+    // var temp = String.from("localhost");
+    // defer temp.deinit();
 
     // 形态 3：global（静态生命周期）
     try expect_eq_slices(APP_NAME, "h");

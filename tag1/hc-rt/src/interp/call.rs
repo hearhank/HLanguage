@@ -928,12 +928,22 @@ impl Interp {
             (Value::Str(s), "concat") => {
                 let other = self.eval(&args[0])?;
                 let other = self.deref_value(other);
-                if let Value::Str(os) = other {
-                    let mut bytes = s.borrow().clone();
-                    bytes.extend_from_slice(&os.borrow());
-                    return Ok(Some(Value::str_bytes(bytes)));
-                }
-                Err(RtError::new("TypeError", Some(span.clone())))
+                let other_bytes = other
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let mut bytes = s.borrow().clone();
+                bytes.extend_from_slice(&other_bytes);
+                return Ok(Some(Value::str_bytes(bytes)));
+            }
+            (Value::String(s), "concat") => {
+                let other = self.eval(&args[0])?;
+                let other = self.deref_value(other);
+                let other_bytes = other
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let mut bytes = s.as_slice().to_vec();
+                bytes.extend_from_slice(&other_bytes);
+                return Ok(Some(Value::str_bytes(bytes)));
             }
             (Value::Str(s), "as_slice") => Ok(Some(Value::Str(s.clone()))),
             (Value::String(s), "as_slice") => {
@@ -960,10 +970,39 @@ impl Interp {
                 let sep_v = self.deref_value(sep_v);
                 let sep = match sep_v {
                     Value::Int(i) => vec![i as u8],
-                    Value::Str(ss) => ss.borrow().clone(),
-                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                    _ => sep_v
+                        .extract_bytes()
+                        .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?,
                 };
                 let data = s.borrow().clone();
+                let mut out = Vec::new();
+                if sep.is_empty() {
+                    return Ok(Some(Value::arr(vec![Value::str_bytes(data)])));
+                }
+                let mut start = 0usize;
+                let mut i = 0usize;
+                while i + sep.len() <= data.len() {
+                    if &data[i..i + sep.len()] == sep.as_slice() {
+                        out.push(Value::str_bytes(data[start..i].to_vec()));
+                        i += sep.len();
+                        start = i;
+                    } else {
+                        i += 1;
+                    }
+                }
+                out.push(Value::str_bytes(data[start..].to_vec()));
+                Ok(Some(Value::arr(out)))
+            }
+            (Value::String(s), "split") => {
+                let sep_v = self.eval(&args[0])?;
+                let sep_v = self.deref_value(sep_v);
+                let sep = match sep_v {
+                    Value::Int(i) => vec![i as u8],
+                    _ => sep_v
+                        .extract_bytes()
+                        .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?,
+                };
+                let data = s.as_slice().to_vec();
                 let mut out = Vec::new();
                 if sep.is_empty() {
                     return Ok(Some(Value::arr(vec![Value::str_bytes(data)])));
@@ -989,15 +1028,43 @@ impl Interp {
                 out.extend_from_slice(&b);
                 Ok(Some(Value::str_bytes(out)))
             }
+            (Value::String(s), "to_bytes") => {
+                let b = s.as_slice();
+                let mut out = (b.len() as u64).to_le_bytes().to_vec();
+                out.extend_from_slice(b);
+                Ok(Some(Value::str_bytes(out)))
+            }
             (Value::Str(s), "find") => {
                 let needle = self.eval(&args[0])?;
                 let needle = self.deref_value(needle);
                 let needle_bytes: Vec<u8> = match &needle {
-                    Value::Str(n) => n.borrow().clone(),
                     Value::Int(i) => vec![*i as u8],
-                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                    _ => needle
+                        .extract_bytes()
+                        .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?,
                 };
                 let data = s.borrow().clone();
+                let pos = if needle_bytes.is_empty() {
+                    Some(0usize)
+                } else {
+                    data.windows(needle_bytes.len())
+                        .position(|w| w == needle_bytes.as_slice())
+                };
+                Ok(Some(match pos {
+                    Some(p) => Value::Opt(Some(Rc::new(Value::Int(p as i128)))),
+                    None => Value::Opt(None),
+                }))
+            }
+            (Value::String(s), "find") => {
+                let needle = self.eval(&args[0])?;
+                let needle = self.deref_value(needle);
+                let needle_bytes: Vec<u8> = match &needle {
+                    Value::Int(i) => vec![*i as u8],
+                    _ => needle
+                        .extract_bytes()
+                        .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?,
+                };
+                let data = s.as_slice().to_vec();
                 let pos = if needle_bytes.is_empty() {
                     Some(0usize)
                 } else {
@@ -1023,16 +1090,62 @@ impl Interp {
                 let sub = data[lo.min(hi)..hi].to_vec();
                 Ok(Some(Value::str_bytes(sub)))
             }
+            (Value::String(s), "substring") => {
+                let lo = self.eval(&args[0])?;
+                let hi = self.eval(&args[1])?;
+                let lo = self.deref_value(lo);
+                let hi = self.deref_value(hi);
+                let (lo, hi) = match (lo, hi) {
+                    (Value::Int(a), Value::Int(b)) => (a.max(0) as usize, b.max(0) as usize),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let data = s.as_slice();
+                let hi = hi.min(data.len());
+                let sub = data[lo.min(hi)..hi].to_vec();
+                Ok(Some(Value::str_bytes(sub)))
+            }
             (Value::Str(s), "replace") => {
                 let from = self.eval(&args[0])?;
                 let to = self.eval(&args[1])?;
                 let from = self.deref_value(from);
                 let to = self.deref_value(to);
-                let (from_b, to_b) = match (&from, &to) {
-                    (Value::Str(a), Value::Str(b)) => (a.borrow().clone(), b.borrow().clone()),
-                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
-                };
+                let from_b = from
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let to_b = to
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
                 let data = s.borrow().clone();
+                let mut out = Vec::new();
+                let mut i = 0usize;
+                while i < data.len() {
+                    if from_b.is_empty() {
+                        out.push(data[i]);
+                        i += 1;
+                    } else if i + from_b.len() <= data.len()
+                        && &data[i..i + from_b.len()] == from_b.as_slice()
+                    {
+                        out.extend_from_slice(&to_b);
+                        i += from_b.len();
+                    } else {
+                        out.push(data[i]);
+                        i += 1;
+                    }
+                }
+                Ok(Some(Value::str_bytes(out)))
+            }
+            (Value::String(s), "replace") => {
+                let from = self.eval(&args[0])?;
+                let to = self.eval(&args[1])?;
+                let from = self.deref_value(from);
+                let to = self.deref_value(to);
+                let from_b = from
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let to_b = to
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let data = s.as_slice().to_vec();
                 let mut out = Vec::new();
                 let mut i = 0usize;
                 while i < data.len() {
@@ -1057,6 +1170,21 @@ impl Interp {
             (Value::Str(s), "to_upper") | (Value::Str(s), "to_lower") => {
                 let upper = field == "to_upper";
                 let data = s.borrow();
+                let out: Vec<u8> = data
+                    .iter()
+                    .map(|&b| {
+                        if upper {
+                            b.to_ascii_uppercase()
+                        } else {
+                            b.to_ascii_lowercase()
+                        }
+                    })
+                    .collect();
+                Ok(Some(Value::str_bytes(out)))
+            }
+            (Value::String(s), "to_upper") | (Value::String(s), "to_lower") => {
+                let upper = field == "to_upper";
+                let data = s.as_slice();
                 let out: Vec<u8> = data
                     .iter()
                     .map(|&b| {
@@ -1168,6 +1296,13 @@ impl Interp {
                     }
                     Value::Str(b) => {
                         for byte in b.borrow().iter() {
+                            a.borrow_mut()
+                                .push(Rc::new(RefCell::new(Value::Int(*byte as i128))));
+                        }
+                        Ok(Some(Value::Void))
+                    }
+                    Value::String(s) => {
+                        for byte in s.as_slice().iter() {
                             a.borrow_mut()
                                 .push(Rc::new(RefCell::new(Value::Int(*byte as i128))));
                         }
