@@ -492,6 +492,7 @@ impl Checker {
                                     pending_fields: pending,
                                     source,
                                     thread: None,
+                                    mut_: false,
                                 },
                             );
                             last = None;
@@ -510,6 +511,8 @@ impl Checker {
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
+                // 2026-08-25：写只读变量 → 编译错误
+                self.check_mut_write(target, scopes, span);
                 target_ty.unwrap_or(SType::Unknown)
             }
             Expr::ErrorLit(_, _) => SType::ErrorUnion(None, Box::new(SType::Unknown)),
@@ -1933,6 +1936,7 @@ impl Checker {
                         pending_fields: None,
                         source: AllocSource::Unknown,
                         thread: None,
+                        mut_: false,
                     },
                 )
             })

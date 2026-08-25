@@ -185,6 +185,8 @@ struct VarInfo {
     source: AllocSource,
     /// 组 G：`spawn(...)` 线程句柄状态（Q18 绑定/逃逸 + Q19 冻结窗口）
     thread: Option<ThreadState>,
+    /// 2026-08-25：变量是否声明为 `mut`（可写）
+    mut_: bool,
 }
 
 /// 线程句柄静态跟踪（协作式延迟执行：spawn 立即返回、join/detach/程序结束运行）

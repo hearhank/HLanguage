@@ -54,6 +54,7 @@ impl Checker {
                             // 参数来源由调用点决定（o T 拥有 / 借用）——保守放行
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: false,
                         },
                     );
                 }
@@ -157,6 +158,7 @@ impl Checker {
                             pending_fields: None,
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: false,
                         },
                     );
                     // 方法参数（self 显式声明时已含；此处避免重复登记由 check_block 内 params
@@ -227,6 +229,7 @@ impl Checker {
                     pending_fields: None,
                     source: AllocSource::Unknown,
                     thread: None,
+                    mut_: false,
                 },
             );
         }
@@ -299,6 +302,7 @@ impl Checker {
                 ty,
                 init,
                 span,
+                mut_: var_mut,
                 ..
             } => {
                 let declared = ty.as_ref().map(|t| self.ty_of(t));
@@ -361,6 +365,7 @@ impl Checker {
                         pending_fields: pending,
                         source,
                         thread: spawn_thread,
+                        mut_: *var_mut,
                     },
                 );
                 // 2026-08-25：owned 类型变量登记到 owned_stack
@@ -378,6 +383,7 @@ impl Checker {
                         pending_fields: None,
                         source,
                         thread: None,
+                        mut_: false,
                     },
                 );
             }
@@ -390,6 +396,8 @@ impl Checker {
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
+                // 2026-08-25：写只读变量 → 编译错误（须 `mut` 声明）
+                self.check_mut_write(target, scopes, span);
                 // M2.3 指针形态：写只读指针 → 编译错误
                 self.check_ptr_write(target, scopes, span);
                 // G3 Q19：spawn→join 冻结窗口——写入被引用捕获目标 → 编译错误
@@ -432,7 +440,7 @@ impl Checker {
                 // G3 Q18：条件体内 join 不保证执行 → 非直线路径（不视为绑定）
                 self.conditional_depth += 1;
                 // 捕获：if (maybe) |v|——optional → 内层类型；错误联合 → 成功负载类型
-                if let Some((_, n)) = &ifs.capture {
+                if let Some((cap_mode, n)) = &ifs.capture {
                     let cap_ty = match &ct {
                         Some(SType::Optional(inner)) => Some(inner.as_ref().clone()),
                         Some(SType::ErrorUnion(_, inner)) => Some(inner.as_ref().clone()),
@@ -446,6 +454,7 @@ impl Checker {
                             pending_fields: None,
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: *cap_mode == CaptureMode::Mut,
                         },
                     );
                     self.check_block(&ifs.then_b, scopes, err_constraint.clone(), ret_ty.clone());
@@ -456,6 +465,7 @@ impl Checker {
                 if let Some(else_b) = &ifs.else_b {
                     // 错误捕获：else |err|——err 绑定为错误联合值（错误值，无负载）
                     if let Some((_, en)) = &ifs.err_capture {
+                        // err_capture always read-only
                         let err_ty = match &ct {
                             Some(SType::ErrorUnion(e, _)) => {
                                 Some(SType::ErrorUnion(e.clone(), Box::new(SType::Unknown)))
@@ -470,6 +480,7 @@ impl Checker {
                                 pending_fields: None,
                                 source: AllocSource::Unknown,
                                 thread: None,
+                                mut_: false,
                             },
                         );
                         self.check_stmt(else_b, scopes, err_constraint, ret_ty);
@@ -485,7 +496,7 @@ impl Checker {
                 self.check_condition(ct.as_ref(), &w.cond.span());
                 self.conditional_depth += 1;
                 // optional 捕获：while (maybe) |v|——Some 绑定 v 并循环
-                if let Some((_, n)) = &w.capture {
+                if let Some((cap_mode, n)) = &w.capture {
                     let cap_ty = match &ct {
                         Some(SType::Optional(inner)) => Some(inner.as_ref().clone()),
                         Some(SType::ErrorUnion(_, inner)) => Some(inner.as_ref().clone()),
@@ -499,6 +510,7 @@ impl Checker {
                             pending_fields: None,
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: *cap_mode == CaptureMode::Mut,
                         },
                     );
                     self.check_block(&w.body, scopes, err_constraint, ret_ty);
@@ -519,6 +531,7 @@ impl Checker {
                         pending_fields: None,
                         source: AllocSource::Unknown,
                         thread: None,
+                        mut_: f.capture == CaptureMode::Mut,
                     },
                 );
                 // G3 Q18：循环体内 join 非直线路径
@@ -564,7 +577,7 @@ impl Checker {
                 self.conditional_depth += 1;
                 for arm in &sw.arms {
                     scopes.push(HashMap::new());
-                    if let Some((_, n)) = &arm.capture {
+                    if let Some((cap_mode, n)) = &arm.capture {
                         scopes.last_mut().unwrap().insert(
                             n.clone(),
                             VarInfo {
@@ -575,6 +588,7 @@ impl Checker {
                                 pending_fields: None,
                                 source: AllocSource::Unknown,
                                 thread: None,
+                                mut_: *cap_mode == CaptureMode::Mut,
                             },
                         );
                     }
@@ -828,6 +842,31 @@ impl Checker {
     fn mark_covered(&mut self, name: &str) {
         for scope in self.owned_stack.iter_mut().rev() {
             scope.retain(|v| v != name);
+        }
+    }
+
+    /// 2026-08-25：检查写目标是否为只读变量（缺少 `mut` 声明）
+    pub(crate) fn check_mut_write(
+        &mut self,
+        target: &Expr,
+        scopes: &[HashMap<String, VarInfo>],
+        span: &Span,
+    ) {
+        if let Expr::Ident(name, _) = target {
+            for s in scopes.iter().rev() {
+                if let Some(info) = s.get(name) {
+                    if !info.mut_ {
+                        self.diags.push(Diagnostic::warning(
+                            span.clone(),
+                            format!(
+                                "cannot assign to `{name}` because it is not declared `mut`; \
+                                 use `var mut {name}` to make it mutable"
+                            ),
+                        ));
+                    }
+                    break;
+                }
+            }
         }
     }
 

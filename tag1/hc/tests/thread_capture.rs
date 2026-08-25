@@ -20,7 +20,9 @@ fn check_err(src: &str, frag: &str) {
     let program = parse_source(src).unwrap_or_else(|d| panic!("parse: {:?}", d));
     let diags = check_semantics(&program);
     assert!(
-        diags.iter().any(|d| d.is_error() && d.message.contains(frag)),
+        diags
+            .iter()
+            .any(|d| d.is_error() && d.message.contains(frag)),
         "expected an error containing `{frag}`, got: {:?}",
         diags
     );
@@ -157,10 +159,10 @@ fn write_after_join_ok() {
         r#"
 fn touch(x: *i32) i32 { return 0; }
 fn main() {
-    var v: i32 = 1;
-    var th = spawn(touch, &v);
-    var r = th.join();
-    v = 2;
+    	var mut v: i32 = 1;
+	    var th = spawn(touch, &v);
+	    var r = th.join();
+	    v = 2;
 }
 "#,
     );
