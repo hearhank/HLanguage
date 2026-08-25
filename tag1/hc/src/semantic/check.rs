@@ -261,6 +261,7 @@ impl Checker {
         ret_ty: Option<SType>,
     ) {
         scopes.push(HashMap::new());
+        self.owned_stack.push(Vec::new());
         for stmt in &b.stmts {
             self.check_stmt(stmt, scopes, err_constraint.clone(), ret_ty.clone());
         }
@@ -268,6 +269,19 @@ impl Checker {
         if let Some(scope) = scopes.last() {
             self.thread_escape_sweep(scope);
         }
+        // 2026-08-25：检查未匹配 defer/move 的 owned 变量
+        if let Some(remaining) = self.owned_stack.last() {
+            for name in remaining {
+                self.diags.push(Diagnostic::warning(
+                    b.span.clone(),
+                    format!(
+                        "`{name}` is `owned` but has no matching `defer` or `move`;
+                         use `defer {name}.deinit()` or `move {name}` to transfer ownership"
+                    ),
+                ));
+            }
+        }
+        self.owned_stack.pop();
         scopes.pop();
     }
 
@@ -349,6 +363,10 @@ impl Checker {
                         thread: spawn_thread,
                     },
                 );
+                // 2026-08-25：owned 类型变量登记到 owned_stack
+                if let Some(Type::Owned(_)) = ty {
+                    self.owned_stack.last_mut().unwrap().push(name.clone());
+                }
             }
             Stmt::ConstDecl { name, init, .. } => {
                 let t = self.expr_ty(init, scopes, None);
@@ -400,6 +418,12 @@ impl Checker {
             Stmt::Expr(e) => {
                 // G3 Q18：线程 join/detach 语句位置跟踪
                 self.track_thread_method(e, scopes);
+                // 2026-08-25：move 表达式 → 标记对应 owned 变量
+                if let Expr::Move(inner, _) = &*e {
+                    if let Expr::Ident(name, _) = inner.as_ref() {
+                        self.mark_moved(name);
+                    }
+                }
                 let _ = self.expr_ty(e, scopes, None);
             }
             Stmt::If(ifs) => {
@@ -677,11 +701,106 @@ impl Checker {
             }
             Stmt::Defer(expr, _) => {
                 let _ = self.expr_ty(expr, scopes, None);
+                self.covered_by_defer(expr);
             }
             Stmt::Errdefer(expr, _) => {
                 let _ = self.expr_ty(expr, scopes, None);
+                self.covered_by_defer(expr);
             }
             _ => {}
+        }
+    }
+
+    /// 2026-08-25：defer/errdefer 表达式中引用的 owned 变量标记为已覆盖
+    fn covered_by_defer(&mut self, expr: &Expr) {
+        let mut refs = Vec::new();
+        Self::collect_idents(expr, &mut refs);
+        for name in &refs {
+            self.mark_covered(name);
+        }
+    }
+
+    /// 收集表达式中的所有标识符引用
+    fn collect_idents(expr: &Expr, out: &mut Vec<String>) {
+        match expr {
+            Expr::Ident(name, _) => out.push(name.clone()),
+            Expr::Call { callee, args, .. } => {
+                Self::collect_idents(callee, out);
+                for arg in args {
+                    Self::collect_idents(arg, out);
+                }
+            }
+            Expr::Dot { base, .. } | Expr::Field { base, .. } => Self::collect_idents(base, out),
+            Expr::Index { base, indices, .. } => {
+                Self::collect_idents(base, out);
+                for idx in indices {
+                    Self::collect_idents(idx, out);
+                }
+            }
+            Expr::Unary(_, inner, _)
+            | Expr::Deref(inner, _)
+            | Expr::AddrOf(inner, _, _)
+            | Expr::Try(inner, _)
+            | Expr::Await(inner, _)
+            | Expr::Move(inner, _) => {
+                Self::collect_idents(inner, out);
+            }
+            Expr::Binary(_, left, right, _) | Expr::Orelse(left, right, _) => {
+                Self::collect_idents(left, out);
+                Self::collect_idents(right, out);
+            }
+            Expr::Catch(expr, kind, _) => {
+                Self::collect_idents(expr, out);
+                match kind.as_ref() {
+                    CatchKind::Default(e) => Self::collect_idents(e, out),
+                    CatchKind::Bind { name: _, body } => {
+                        for stmt in &body.stmts {
+                            if let Stmt::Expr(e) = stmt {
+                                Self::collect_idents(e, out);
+                            }
+                        }
+                    }
+                }
+            }
+            Expr::IfExpr {
+                cond,
+                then_e,
+                else_e,
+                ..
+            } => {
+                Self::collect_idents(cond, out);
+                Self::collect_idents(then_e, out);
+                Self::collect_idents(else_e, out);
+            }
+            Expr::Block(inner, _) => {
+                for stmt in &inner.stmts {
+                    if let Stmt::Expr(e) = stmt {
+                        Self::collect_idents(e, out);
+                    }
+                }
+            }
+            Expr::Closure { body, .. } => {
+                for stmt in &body.stmts {
+                    if let Stmt::Expr(e) = stmt {
+                        Self::collect_idents(e, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 2026-08-25：标记 owned 变量已被 defer 覆盖
+    fn mark_covered(&mut self, name: &str) {
+        for scope in self.owned_stack.iter_mut().rev() {
+            scope.retain(|v| v != name);
+        }
+    }
+
+    /// 2026-08-25：标记 owned 变量已被 move 转移
+    fn mark_moved(&mut self, name: &str) {
+        for scope in self.owned_stack.iter_mut().rev() {
+            scope.retain(|v| v != name);
         }
     }
 

@@ -3,7 +3,7 @@
 use super::*;
 use crate::ast::*;
 use crate::diag::Diagnostic;
-use crate::parser::test_attribute::TestAttributeExt;
+use crate::parser::test_attribute::TestExt;
 use crate::semantic::trait_registry::TraitRegistry;
 use crate::token::TokenKind;
 

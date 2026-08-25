@@ -246,6 +246,7 @@ pub fn check_with_extern_deps(
         anytype_ret_cache: HashMap::new(),
         anytype_resolving: HashSet::new(),
         extension_of: None,
+        owned_stack: Vec::new(),
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -312,6 +313,9 @@ struct Checker {
     anytype_resolving: HashSet<(String, String)>,
     /// Q15：当前正在检查的扩展方法的目标类型名（None = 普通函数或类方法）
     extension_of: Option<String>,
+    /// 2026-08-25：当前作用域中 `owned` 变量名列表（平行于 scopes）
+    /// 进入作用域 push，退出时检查未匹配的 owned 变量 → warining
+    owned_stack: Vec<Vec<String>>,
     diags: Vec<Diagnostic>,
 }
 

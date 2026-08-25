@@ -1,7 +1,7 @@
 //! 测试属性扩展：`[test]` / `[test("name")]` / `[test(async)]` / `[test(thread)]` / `[test(timeout=N)]` 的解析与构建
 //!
-//! 通过 `TestAttributeExt` 扩展 trait 为 `Parser` 添加测试属性解析方法。
-//! 定义：结构体：TestAttribute
+//! 通过 `TestExt` 扩展 trait 为 `Parser` 添加测试属性解析方法。
+//! 定义：结构体：Test
 
 use crate::ast::*;
 use crate::diag::Diagnostic;
@@ -10,7 +10,7 @@ use crate::parser::Parser;
 
 /// 测试属性数据模型
 #[derive(Debug, Clone, Default)]
-pub struct TestAttribute {
+pub struct Test {
     /// 测试显示名称
     pub name: Option<String>,
     /// 测试执行模式（Serial / Async / Thread）
@@ -20,7 +20,7 @@ pub struct TestAttribute {
 }
 
 /// Parser 扩展 trait：为 `Parser` 添加测试属性解析方法
-pub trait TestAttributeExt {
+pub trait TestExt {
     /// 解析 `[test(...)]` 括号风格语法
     ///
     /// 支持形式：
@@ -36,9 +36,9 @@ pub trait TestAttributeExt {
     fn build_test_from_attr(&self, fields: Vec<(String, Expr)>) -> Result<Trait, Diagnostic>;
 }
 
-impl TestAttributeExt for Parser {
+impl TestExt for Parser {
     fn parse_test_attr(&mut self) -> Result<Trait, Diagnostic> {
-        let mut attr = TestAttribute::default();
+        let mut attr = Test::default();
 
         if self.at(&TokenKind::LParen) {
             self.advance();
@@ -92,7 +92,7 @@ impl TestAttributeExt for Parser {
     }
 
     fn build_test_from_attr(&self, fields: Vec<(String, Expr)>) -> Result<Trait, Diagnostic> {
-        let mut attr = TestAttribute::default();
+        let mut attr = Test::default();
 
         for (fname, fval) in &fields {
             match fname.as_str() {
@@ -132,7 +132,7 @@ impl TestAttributeExt for Parser {
     }
 }
 
-impl TestAttribute {
+impl Test {
     /// 转换为 `Trait::Test` 枚举值
     fn into_trait(self) -> Trait {
         Trait::Test {
@@ -145,8 +145,9 @@ impl TestAttribute {
 
 // Helper: 解析超时值（供 Parser 内部使用）
 impl Parser {
-    fn parse_timeout_value(&self) -> Result<Option<u64>, Diagnostic> {
+    fn parse_timeout_value(&mut self) -> Result<Option<u64>, Diagnostic> {
         if let TokenKind::Int(n) = self.peek().clone() {
+            self.advance();
             let value = n
                 .trim_end_matches(|c: char| c.is_alphabetic())
                 .replace('_', "")
@@ -168,7 +169,8 @@ mod tests {
     fn parse_test_attr(source: &str) -> Result<Trait, Diagnostic> {
         let tokens = lex(source);
         let mut parser = Parser::new(source, tokens);
-        parser.advance(); // skip `[test`
+        parser.advance(); // skip `[`
+        parser.advance(); // skip `test`
         parser.parse_test_attr()
     }
 
