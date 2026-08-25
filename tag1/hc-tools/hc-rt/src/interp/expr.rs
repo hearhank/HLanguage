@@ -1202,7 +1202,9 @@ impl Interp {
                     }
                     // Arena.init(alloc) 内建：真实 arena 句柄（G1：bump + 块链表）
                     if bname == "Arena" && field == "init" {
-                        return Ok(Value::Arena(Rc::new(RefCell::new(ArenaState::new()))));
+                        let mut arena = ArenaState::new();
+                        arena.alloc_tracker = Some(self.alloc_tracker.clone());
+                        return Ok(Value::Arena(Rc::new(RefCell::new(arena))));
                     }
                     // Pool.init(backing, item_size) 内建：固定大小对象池（Phase 3）
                     if bname == "Pool" && field == "init" {

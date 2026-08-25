@@ -1,0 +1,1824 @@
+
+running 143 tests
+test codegen::bytecode::tests::decode_rejects_bad_magic ... ok
+test codegen::bytecode::tests::decode_rejects_unknown_binop_tag ... ok
+test codegen::bytecode::tests::round_trip_is_identity ... ok
+test codegen::llvm::tests::tests::add_emits_overflow_intrinsic ... ok
+test codegen::bytecode::tests::decode_rejects_unknown_opcode ... ok
+test codegen::bytecode::tests::decode_rejects_truncation ... ok
+test codegen::bytecode::tests::decode_round_trip_reconstructs_structure ... ok
+test codegen::llvm::tests::tests::aggregate_deep_eq_emits_hc_eq_agg ... ok
+test codegen::bytecode::tests::decode_rejects_bad_version ... ok
+test codegen::llvm::tests::tests::a1_extern_fn_emits_declare ... ok
+test codegen::llvm::tests::tests::aggregate_enum_emits_make_enum ... ok
+test codegen::llvm::tests::tests::a1_extern_fn_with_normal_fn ... ok
+test codegen::llvm::tests::tests::aggregate_slice_emits_slice_helpers ... ok
+test codegen::llvm::tests::tests::aggregate_field_emits_class_helpers ... ok
+test codegen::llvm::tests::tests::aggregate_append_emits_coll_helpers ... ok
+test codegen::llvm::tests::tests::aggregate_array_index_emits_arr_helpers ... ok
+test codegen::llvm::tests::tests::aggregate_unwrap_emits_hc_unwrap ... ok
+test codegen::llvm::tests::tests::g4b_thread_spawn_aborts_notcallable ... ok
+test codegen::llvm::tests::tests::align_of_various_types ... ok
+test codegen::llvm::tests::tests::export_start_marks_entry_hook ... ok
+test codegen::llvm::tests::tests::aggregate_tuple_destructure_emits_split ... ok
+test codegen::llvm::tests::tests::err_literal_uses_error_code ... ok
+test codegen::llvm::tests::tests::continuous_class_copy_emits_deep_copy_gate ... ok
+test codegen::llvm::tests::tests::export_fn_emits_thunk_and_manifest ... ok
+test codegen::llvm::tests::tests::jump_if_null_inline_no_helper_call ... ok
+test codegen::llvm::tests::tests::non_continuous_class_no_deep_copy_inst ... ok
+test codegen::llvm::tests::tests::implicit_env_pi_seeded_in_entry ... ok
+test codegen::llvm::tests::tests::if_while_emit_labels_and_branches ... ok
+test codegen::llvm::tests::tests::phase3_enum_payload_emits_helper ... ok
+test codegen::llvm::tests::tests::phase3_iter_notiter_message_present ... ok
+test codegen::llvm::tests::tests::phase3_make_range_emits_helper ... ok
+test codegen::llvm::tests::tests::math_abs_floor_ceil_round_inline ... ok
+test codegen::llvm::tests::tests::phase3_switch_string_pattern_collected ... ok
+test codegen::llvm::tests::tests::no_inline_constant_expr_gep ... ok
+test codegen::llvm::tests::tests::phase7_user_method_dispatch_emits_strcmp_chain ... ok
+test codegen::llvm::tests::tests::pointer_bad_assign_has_message ... ok
+test codegen::llvm::tests::tests::phase7_scalar_builtins_emit_helpers ... ok
+test codegen::llvm::tests::tests::phase7_alloc_init_emits_make_class ... ok
+test codegen::llvm::tests::tests::pointer_eq_uses_identity_dispatch ... ok
+test codegen::llvm::tests::tests::phase3_iter_emits_iter_helpers ... ok
+test codegen::llvm::tests::tests::pointer_addr_of_deref_store_emit_helpers ... ok
+test codegen::llvm::tests::tests::pointer_write_through_deref_value ... ok
+test codegen::llvm::tests::tests::scalar_main_defines_and_wrapper ... ok
+test codegen::llvm::tests::tests::phase7_io_print_emits_write_helpers ... ok
+test codegen::llvm::tests::tests::ptr_from_int_int_from_ptr_emit_tag_swaps ... ok
+test codegen::llvm::tests::tests::type_slot_map_bin_propagates_operand_type ... ok
+test codegen::llvm::tests::tests::phase7_fmt_builtins_emit_str_helpers ... ok
+test codegen::llvm::tests::tests::string_literal_emits_global ... ok
+test codegen::llvm::tests::tests::type_slot_map_addr_slot_emits_ptr ... ok
+test codegen::llvm::tests::tests::type_slot_map_call_builtin_eq_returns_bool ... ok
+test codegen::llvm::tests::tests::type_slot_map_bool_const ... ok
+test codegen::llvm::tests::tests::phase3_switch_emits_match_test_helper ... ok
+test codegen::llvm::tests::tests::type_slot_map_load_propagates_slot_type ... ok
+test codegen::llvm::tests::tests::try_catch_uses_err_channel ... ok
+test codegen::llvm::tests::tests::type_slot_map_float_const ... ok
+test codegen::llvm::tests::tests::phase7_math_builtins_emit_nan_and_inline ... ok
+test codegen::llvm::tests::tests::type_slot_map_make_arr_emits_array ... ok
+test codegen::llvm::tests::tests::type_slot_map_populates_params ... ok
+test codegen::llvm::tests::tests::type_slot_map_populates_consts ... ok
+test codegen::llvm::tests::tests::type_slot_map_make_class_emits_type_name ... ok
+test codegen::llvm::tests::tests::type_slot_map_make_enum_emits_enum_name ... ok
+test codegen::llvm::tests::tests::type_slot_map_string_const ... ok
+test codegen::llvm::tests::tests::type_slot_map_store_propagates_type ... ok
+test codegen::llvm::tests::tests::type_slot_map_un_propagates_operand_type ... ok
+test codegen::llvm::tests::tests::type_slot_map_void_fn ... ok
+test parser::test_attribute::tests::test_bare_test ... ok
+test parser::test_attribute::tests::test_test_combined ... ok
+test parser::test_attribute::tests::test_test_thread ... ok
+test codegen::llvm::tests::tests::size_of_various_types ... ok
+test parser::test_attribute::tests::test_test_async ... ok
+test runtime::compress::tests::compress_improves_on_rle ... ok
+test runtime::compress::tests::decompress_invalid_distance ... ok
+test parser::test_attribute::tests::test_test_timeout ... ok
+test runtime::compress::tests::decompress_invalid_token ... ok
+test parser::test_attribute::tests::test_test_with_name ... ok
+test runtime::compress::tests::decompress_invalid_short ... ok
+test runtime::compress::tests::roundtrip_binary ... ok
+test runtime::compress::tests::roundtrip_empty ... ok
+test runtime::compress::tests::roundtrip_long_repetition ... ok
+test runtime::compress::tests::roundtrip_repeated ... ok
+test runtime::compress::tests::roundtrip_short_runs ... ok
+test runtime::compress::tests::roundtrip_mixed ... ok
+test runtime::compress::tests::roundtrip_token_bytes ... ok
+test runtime::compress::tests::roundtrip_small ... ok
+test runtime::ds_bitmap::tests::all_bits ... ok
+test runtime::ds_bitmap::tests::count_ones ... ok
+test runtime::ds_bitmap::tests::new_64 ... ok
+test runtime::ds_bitmap::tests::new_65 ... ok
+test runtime::ds_bitmap::tests::new_small ... ok
+test runtime::ds_bitmap::tests::out_of_bounds_safe ... ok
+test runtime::ds_bitmap::tests::new_zero ... ok
+test codegen::llvm::tests::tests::volatile_load_store_emit_volatile_ops ... ok
+test runtime::ds_bitmap::tests::set_get_single ... ok
+test runtime::ds_bitmap::tests::set_clear_cycle ... ok
+test runtime::ds_intrlist::tests::node_reuse ... ok
+test runtime::ds_intrlist::tests::clear ... ok
+test runtime::ds_intrlist::tests::new_empty ... ok
+test runtime::ds_intrlist::tests::push_back_pop_back ... ok
+test runtime::ds_intrlist::tests::push_front_pop_back ... ok
+test runtime::ds_intrlist::tests::push_back_pop_front ... ok
+test runtime::ds_intrlist::tests::push_front_pop_front ... ok
+test runtime::ds_intrlist::tests::remove_head ... ok
+test runtime::ds_intrlist::tests::remove_invalid ... ok
+test runtime::ds_intrlist::tests::remove_middle ... ok
+test runtime::ds_intrlist::tests::remove_tail ... ok
+test runtime::ds_pagemem::tests::alloc_all ... ok
+test runtime::ds_pagemem::tests::alloc_free_cycle ... ok
+test runtime::ds_pagemem::tests::alloc_free_reuse ... ok
+test runtime::ds_pagemem::tests::free_invalid_ignored ... ok
+test runtime::ds_pagemem::tests::is_allocated ... ok
+test runtime::ds_pagemem::tests::new_with_pages ... ok
+test runtime::ds_pagemem::tests::new_zero ... ok
+test runtime::ds_ringbuf::tests::fifo_order ... ok
+test runtime::ds_ringbuf::tests::large_values ... ok
+test runtime::ds_ringbuf::tests::clear ... ok
+test runtime::ds_ringbuf::tests::negative_values ... ok
+test runtime::ds_ringbuf::tests::new_empty ... ok
+test runtime::ds_ringbuf::tests::new_with_capacity ... ok
+test runtime::ds_ringbuf::tests::pop_empty_returns_none ... ok
+test runtime::ds_ringbuf::tests::peek ... ok
+test runtime::ds_ringbuf::tests::push_pop_basic ... ok
+test runtime::ds_ringbuf::tests::push_when_full_returns_false ... ok
+test runtime::ds_ringbuf::tests::wrap_around ... ok
+test runtime::ds_treemap::tests::clear ... ok
+test runtime::ds_treemap::tests::contains ... ok
+test runtime::ds_treemap::tests::insert_and_get ... ok
+test runtime::ds_treemap::tests::insert_many_ascending ... ok
+test runtime::ds_treemap::tests::negative_keys ... ok
+test runtime::ds_treemap::tests::insert_many_descending ... ok
+test runtime::ds_treemap::tests::remove_all ... ok
+test runtime::ds_treemap::tests::new_empty ... ok
+test runtime::ds_treemap::tests::remove_nonexistent ... ok
+test runtime::ds_treemap::tests::remove_middle_with_two_children ... ok
+test runtime::ds_treemap::tests::remove_leaf ... ok
+test runtime::ds_treemap::tests::remove_root_with_one_child ... ok
+test runtime::ds_treemap::tests::remove_with_successor_as_right_child ... ok
+test runtime::ds_treemap::tests::remove_with_deep_successor ... ok
+test runtime::ds_treemap::tests::remove_root_with_two_children ... ok
+test runtime::ds_treemap::tests::update_existing_key ... ok
+test semantic::trait_registry::tests::test_handler_registration_and_lookup ... ok
+test semantic::trait_registry::tests::test_lookup_returns_info ... ok
+test semantic::trait_registry::tests::test_system_traits_registered ... ok
+test semantic::trait_registry::tests::test_user_attribute_registration ... ok
+
+test result: ok. 143 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 8 tests
+test lex_async_await_keywords ... ok
+test semantic_async_missing_ret_is_error ... ok
+test semantic_await_non_future_is_error ... ok
+test semantic_async_call_types_future ... ok
+test semantic_async_error_union_future ... ok
+test semantic_await_unpacks_future ... ok
+test parse_async_fn_decl ... ok
+test parse_await_expr ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 32 tests
+test func_index_round_trips_flat_and_qualified ... ok
+test nested_namespace_qualified_call ... ok
+test int_overflow_error ... ok
+test missing_entry_and_unknown_call ... ok
+test phase3_enum_payload_round_trip ... ok
+test phase3_iter_str_bytes_round_trip ... ok
+test phase3_make_range_round_trip ... ok
+test namespace_qualified_call ... ok
+test phase3_iter_make_next_writeback_round_trip ... ok
+test if_stmt_else_if_and_expr ... ok
+test div_zero_and_float_ieee ... ok
+test phase3_switch_round_trip ... ok
+test phase4_fnref_and_indirect_round_trip ... ok
+test phase4_method_round_trip ... ok
+test phase5_global_const_decl_order_round_trip ... ok
+test phase4_closure_round_trip ... ok
+test scalar_arith_and_compare ... ok
+test phase4_overload_round_trip ... ok
+test pointer_write_through_bytecode ... ok
+test phase5_global_addr_round_trip ... ok
+test error_value_and_assert_builtins ... ok
+test pointer_eq_and_deref_bytecode ... ok
+test phase3_switch_pattern_kinds_round_trip ... ok
+test phase5_global_const_round_trip ... ok
+test short_circuit_and_or ... ok
+test try_catch_and_orelse ... ok
+test while_loop_with_step ... ok
+test union_round_trip ... ok
+test cancel_join_round_trip ... ok
+test thread_is_done_round_trip ... ok
+test spawn_join_round_trip ... ok
+test thread_own_alloc_round_trip ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 32 tests
+test concrete_name_anytype_instance ... ok
+test concrete_name_nested_args ... ok
+test concrete_name_single_and_multi ... ok
+test expr_to_type_converts_type_exprs_only ... ok
+test check_semantics_recognizes_comptime_int_type ... ok
+test check_semantics_rejects_string_assigned_to_comptime_float ... ok
+test check_semantics_recognizes_comptime_float_type ... ok
+test check_semantics_rejects_string_assigned_to_comptime_int ... ok
+test instantiate_array_len_literal ... ok
+test concrete_name_with_comptime_int ... ok
+test instantiate_array_nested_elem ... ok
+test instantiate_array_type_returns_array ... ok
+test instantiate_passthrough_returns_arg_type ... ok
+test has_anytype_detects_infer_params ... ok
+test instantiate_arity_mismatch_errors ... ok
+test instantiate_struct_returns_class ... ok
+test instantiate_no_return_errors ... ok
+test instantiate_struct_substs_multiple_params ... ok
+test instantiate_type_param_gets_comptime_int_errors ... ok
+test instantiate_unsupported_body_errors ... ok
+test instantiate_value_arity_mismatch_errors ... ok
+test instantiate_value_type_mismatch_errors ... ok
+test is_type_fn_returns_type_only ... ok
+test map_type_apps_resolves_nested_apps ... ok
+test is_comptime_value_fn_detects_type_params_but_not_type_fns ... ok
+test parser_nested_type_application ... ok
+test semantic_anytype_int_args_resolve_comptime_width ... ok
+test semantic_anytype_ret_mismatch_is_error ... ok
+test semantic_anytype_ret_resolves_concrete ... ok
+test subst_replaces_type_params ... ok
+test type_key_covers_shapes ... ok
+test type_key_comptime_int ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 78 tests
+test a1_lex_import_keyword ... ok
+test a1_parse_extern_fn_generic ... ok
+test a1_parse_extern_fn_no_return ... ok
+test a1_parse_import_symbol_selection ... ok
+test a1_parse_import_multi_symbol_no_alias ... ok
+test a1_parse_import_whole_module ... ok
+test a1_parse_import_whole_module_alias ... ok
+test a1_parse_study_example ... ok
+test a1_sem_extern_fn_no_body_error ... ok
+test a2_sem_import_io_alias_no_error ... ok
+test a1_parse_import_missing_semi_is_error ... ok
+test a2b_parse_module_trait ... ok
+test a2_sem_import_user_pkg_selection ... ok
+test a1_parse_extern_fn ... ok
+test a2_sem_import_user_pkg_whole_module ... ok
+test a2b_sem_pascal_case_enum_error ... ok
+test a2b_sem_pascal_case_namespace_error ... ok
+test k1_union_field_access_clean ... ok
+test a2b_sem_pascal_case_ok ... ok
+test a2b_sem_pascal_case_class_error ... ok
+test k1_union_literal_single_field ... ok
+test k1_union_scalar_only_rejected ... ok
+test k1_union_literal_unknown_field ... ok
+test a2_sem_import_whole_module_no_error ... ok
+test k2_volatile_load_non_pointer_rejected ... ok
+test k2_volatile_load_returns_pointee ... ok
+test k4_int_from_ptr_non_pointer_rejected ... ok
+test k4_ptr_from_int_int_from_ptr_roundtrip_clean ... ok
+test k4_ptr_from_int_non_integer_rejected ... ok
+test k5_export_fn_clean ... ok
+test k5_export_pub_composable ... ok
+test k5_export_non_fn_rejected ... ok
+test lex_strings_and_comments ... ok
+test lex_keywords_and_punct ... ok
+test lex_at_builtin ... ok
+test k5_export_start_marks_entry ... ok
+test lex_number_bases_and_suffix ... ok
+test lex_errors_unterminated ... ok
+test m14_sibling_top_level_fn_is_file_private ... ok
+test m14_single_file_unchanged ... ok
+test m14_extern_symbols_enable_crossfile_check ... ok
+test m14_using_alias_qualified_call ... ok
+test m24_move_global_rejected ... ok
+test m24_move_arena_rejected ... ok
+test m24_return_owned_param_must_move ... ok
+test m26_encode_decode_roundtrip ... ok
+test m24_move_value_type_rejected ... ok
+test m14_using_imports_type ... ok
+test m26_package_id_encoded ... ok
+test m24_move_owned_ok ... ok
+test m24_return_local_ref_rejected ... ok
+test m26_distinct_names_distinct_codes ... ok
+test m24_return_global_ref_ok ... ok
+test m26_reverse_lookup ... ok
+test m26_collects_all_three_sources ... ok
+test m26_same_name_same_code ... ok
+test m26_span_recorded ... ok
+test m26_stable_order_across_visits ... ok
+test parse_alloc_init_forms ... ok
+test m26_span_uses_first_occurrence ... ok
+test parse_class_enum_interface ... ok
+test parse_array_trailing_comma ... ok
+test parse_error_reports_position ... ok
+test parse_control_flow ... ok
+test parse_hello_program ... ok
+test parse_union_decl ... ok
+test parse_test_fn_and_assertions ... ok
+test parse_closures ... ok
+test parse_variables_and_ops ... ok
+test struct_align_invalid ... ok
+test struct_align_valid ... ok
+test struct_align_zero ... ok
+test struct_field_access ... ok
+test struct_decl_and_literal ... ok
+test struct_array_field ... ok
+test struct_pub_field_access ... ok
+test struct_missing_field_error ... ok
+test struct_unknown_field_error ... ok
+
+test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test generics_angle_parse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test infer_propagation_from_explicit_set ... ok
+test infer_propagation_try_and_return ... ok
+test infer_direct_error_literals ... ok
+test infer_skips_explicit_anyerror_and_plain ... ok
+test infer_mutual_recursion_detected ... ok
+test infer_recursive_incomplete_and_warning ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 14 tests
+test array_with_ptr_ok ... ok
+test collection_indirection ... ok
+test direct_self_ref ... ok
+test array_self_ref ... ok
+test linked_list_ok ... ok
+test mutual_recursion ... ok
+test field_type_has_cycle ... ok
+test optional_indirection ... ok
+test pointer_indirection ... ok
+test three_way_recursion ... ok
+test multi_ptr_fields_ok ... ok
+test mut_ptr_indirection ... ok
+test nested_collection_ok ... ok
+test non_recursive_ok ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 108 tests
+test alloc_leaks_tracks_allocations_ir ... ok
+test alloc_leak_report_ir ... ok
+test arena_alloc_after_deinit_errors_ir ... ok
+test arena_bump_reuses_block_ir ... ok
+test arena_deinit_releases_ir ... ok
+test arena_zero_init_and_len_ir ... ok
+test alloc_init_on_struct_ir ... ok
+test arena_oom_catchable_ir ... ok
+test arena_grows_block_list_ir ... ok
+test arena_bump_aligned_to_16_ir ... ok
+test alloc_init_default_on_struct_ir ... ok
+test block_scope_shadowing_restores ... ok
+test assert_builtins_ok_and_fail ... ok
+test box_carries_arena_ir ... ok
+test arena_aligned_region_distinct_ir ... ok
+test box_carries_explicit_alloc_ir ... ok
+test call_unknown_function ... ok
+test box_compare_with_plain_value_ir ... ok
+test box_single_arg_falls_back_global_alloc_ir ... ok
+test box_interface_dispatch_ir ... ok
+test box_deref_read_write_ir ... ok
+test closure_capture_ignores_shadowed_local ... ok
+test closure_captures_only_free_vars ... ok
+test bound_ref_capture_join_ir ... ok
+test catch_passes_non_error ... ok
+test closure_move_deep_copies_closure_value ... ok
+test closure_move_capture_copies ... ok
+test closure_non_mut_rebind_capture_fails ... ok
+test closure_read_capture_shares_slot ... ok
+test closure_mut_capture_writes_through ... ok
+test catch_default_bind_and_block_value ... ok
+test closure_returned_from_function ... ok
+test defer_runs_on_loop_break ... ok
+test const_init_order_is_declaration_order ... ok
+test defer_runs_on_return ... ok
+test defer_runs_on_loop_continue ... ok
+test closure_transitive_capture_through_nested ... ok
+test compound_assign ... ok
+test defer_same_scope_capture_reads_final_value ... ok
+test errdefer_runs_only_on_error_path ... ok
+test errdefer_runs_on_try_propagation ... ok
+test error_values_carry_ordered_codes ... ok
+test defer_nested_block_runs_at_block_close ... ok
+test expect_error_distinguishes_error_names ... ok
+test cancel_then_join_returns_cancelled_ir ... ok
+test defer_lifo_at_scope_exit ... ok
+test div_zero_errors ... ok
+test continuous_class_copy_on_var_decl ... ok
+test extension_method_on_class_with_extra_args ... ok
+test fnref_and_indirect_call ... ok
+test for_arr_mut_writeback ... ok
+test func_index_registers_flat_and_qualified ... ok
+test extension_method_on_class ... ok
+test for_range_loop_lowers_and_runs ... ok
+test global_unknown_name_is_hard_error ... ok
+test global_address_of_shared_runtime_persists ... ok
+test for_arr_read_only_loop ... ok
+test extension_method_on_struct_with_extra_args_ir ... ok
+test global_const_init_and_mutation ... ok
+test global_address_of_writes_through ... ok
+test global_runtime_shares_state_across_calls ... ok
+test extension_method_on_struct_ir ... ok
+test if_expr_value ... ok
+test int_overflow_errors ... ok
+test if_optional_capture ... ok
+test if_stmt_and_else_if ... ok
+test map_init_captures_arena_ir ... ok
+test labeled_break_runs_loop_defers ... ok
+test map_init_captures_alloc_ir ... ok
+test method_instance_dispatch ... ok
+test labeled_break_continue ... ok
+test map_iterates_kv_pairs_ir ... ok
+test method_static_call_passes_self ... ok
+test method_takes_extra_args ... ok
+test namespace_qualified_call ... ok
+test nested_namespace_qualified_call ... ok
+test null_equals_null ... ok
+test null_literal_is_opt_none ... ok
+test missing_entry_error ... ok
+test orelse_null_default ... ok
+test out_of_slice_constructs_are_hard_errors ... ok
+test pointer_compound_assign_through_alias ... ok
+test pointer_cross_function_alias ... ok
+test overload_dispatch_by_arity ... ok
+test pointer_addr_value_snapshot ... ok
+test pointer_eq_identity_and_deref ... ok
+test pointer_write_through_alias ... ok
+test scalar_arith_and_compare ... ok
+test struct_field_access_through_pointer_ir ... ok
+test struct_literal_and_field_ir ... ok
+test switch_no_else_falls_to_void ... ok
+test short_circuit_and_or ... ok
+test table_init_captures_alloc_ir ... ok
+test recursion_fib ... ok
+test vec_init_captures_global_alloc_ir ... ok
+test vec_default_carries_global_alloc_ir ... ok
+test join_waits_and_returns_value_ir ... ok
+test test_fn_is_registered ... ok
+test switch_enum_and_string_patterns ... ok
+test try_propagates_error_value ... ok
+test vec_stores_and_grows_with_stored_alloc_ir ... ok
+test switch_first_match_semantics ... ok
+test join_error_propagates_ir ... ok
+test while_with_step_sum ... ok
+test thread_own_alloc_isolation_ir ... ok
+test spawn_join_returns_value_ir ... ok
+test thread_is_done_transitions_ir ... ok
+test vec_init_captures_arena_ir ... ok
+
+test result: ok. 108 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 6 tests
+test non_owned_var_no_error ... ok
+test owned_var_in_nested_block_covered ... ok
+test owned_var_in_nested_block_uncovered ... ok
+test only_uncovered_owned_var_errors ... ok
+test owned_var_without_defer_or_move_errors ... ok
+test owned_var_with_defer_no_error ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test mut_ptr_is_send ... ok
+test class_without_send_interface_ok ... ok
+test immut_ptr_send ... ok
+test collection_send_element ... ok
+test immut_ptr_sync ... ok
+test collection_sync_element ... ok
+test nested_send_chain ... ok
+test optional_send ... ok
+test scalars_send_sync ... ok
+test slice_send_sync ... ok
+test mut_ptr_not_sync ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test bound_ref_capture_ok ... ok
+test freeze_write_before_join_rejected ... ok
+test escaping_ref_capture_rejected_nested_block ... ok
+test conditional_join_still_escaping ... ok
+test value_capture_escaping_ok ... ok
+test write_after_join_ok ... ok
+test detach_ref_capture_ok ... ok
+test global_ref_capture_escaping_ok ... ok
+test escaping_ref_capture_rejected ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 21 tests
+test compiler::tests::test_to_lsp_diagnostic_error ... ok
+test completion::tests::test_keyword_completions_no_match ... ok
+test document::tests::test_update_document ... ok
+test document::tests::test_open_document ... ok
+test compiler::tests::test_compile_syntax_error ... ok
+test project::tests::test_new_project_context ... ok
+test document::tests::test_close_document ... ok
+test compiler::tests::test_to_lsp_diagnostic_warning ... ok
+test compiler::tests::test_compile_valid_document ... ok
+test compiler::tests::test_compile_type_error ... ok
+test project::tests::test_set_root_uri ... ok
+test completion::tests::test_keyword_completions_empty_prefix ... ok
+test compiler::tests::test_to_lsp_diagnostic_note ... ok
+test project::tests::test_find_build_zon ... ok
+test completion::tests::test_keyword_completions ... ok
+test document::tests::test_multiple_documents ... ok
+test document::tests::test_update_nonexistent_document ... ok
+test symbol::tests::test_symbol_table_class ... ok
+test symbol::tests::test_symbol_table_function ... ok
+test symbol::tests::test_symbol_table_enum ... ok
+test symbol::tests::test_symbol_table_namespace ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test test_diagnostics_syntax_error ... ok
+test test_initialize ... ok
+test test_diagnostics_valid_code ... ok
+test test_diagnostics_type_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test interp::scheduler_tests::scheduler_get_state_unknown ... ok
+test interp::scheduler_tests::scheduler_submit_and_complete ... ok
+test interp::scheduler_tests::scheduler_multiple_goroutines ... ok
+test interp::scheduler_tests::scheduler_state_transitions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test arena_init_after_deinit_errors ... ok
+test arena_init_unknown_type_errors ... ok
+test arena_init_continuous_size ... ok
+test arena_alloc_after_deinit_errors ... ok
+test arena_grows_block_list ... ok
+test arena_bump_reuses_block ... ok
+test arena_alloc_zero_init_and_len ... ok
+test arena_deinit_idempotent ... ok
+test arena_oom_still_catchable ... ok
+test arena_init_typed_literal ... ok
+test arena_distinct_regions ... ok
+test arena_deinit_releases ... ok
+test arena_init_typed_default ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 11 tests
+test runtime_field_reflects_constructor ... ok
+test nested_await_in_async_body ... ok
+test inline_await ... ok
+test async_body_runs_lazily ... ok
+test cancel_before_await_returns_cancelled ... ok
+test async_under_evented_io ... ok
+test io_runtime_constructors ... ok
+test await_after_await_is_cached ... ok
+test await_propagates_error_union ... ok
+test await_returns_value ... ok
+test evented_poll_drains_pending_tasks ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 5 tests
+test bitmap_set_get_clear ... ok
+test bitmap_count ... ok
+test bitmap_multi_word ... ok
+test bitmap_set_edge ... ok
+test bitmap_init_len ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test box_auto_release_on_scope_exit ... FAILED
+test box_carries_explicit_alloc ... ok
+test box_carries_arena ... ok
+test box_compare_with_plain_value ... ok
+test box_single_arg_falls_back_global_alloc ... ok
+test box_unbox_returns_inner_value ... ok
+test box_deref_read_write ... ok
+test box_interface_dispatch ... FAILED
+
+failures:
+
+---- box_auto_release_on_scope_exit stdout ----
+
+thread 'box_auto_release_on_scope_exit' (7640) panicked at hc-rt\tests\box.rs:11:29:
+load: CompileError 5:6: cannot assign to `outer` because it is not declared `mut`; use `var mut outer` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- box_interface_dispatch stdout ----
+
+thread 'box_interface_dispatch' (23032) panicked at hc-rt\tests\box.rs:11:29:
+load: CompileError 14:6: cannot assign to `total` because it is not declared `mut`; use `var mut total` to make it mutable
+
+
+failures:
+    box_auto_release_on_scope_exit
+    box_interface_dispatch
+
+test result: FAILED. 6 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test chan_close ... ok
+test chan_close_wakes_receiver ... ok
+test chan_try_recv ... ok
+test chan_init_unbuffered ... ok
+test chan_send_recv_buffered ... ok
+test chan_init_buffered ... ok
+test chan_spawn_send_recv ... ok
+test chan_spawn_multiple_sends ... ok
+test chan_spawn_recv_from_child ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 12 tests
+test move_closure_captures_copy ... FAILED
+test read_closure_shared_capture_visible_to_nested ... FAILED
+test read_closure_shares_slot ... FAILED
+test move_closure_deep_copies_closure_capture ... FAILED
+test nested_closure_transitive_capture ... FAILED
+test move_closure_isolation_after_external_change ... FAILED
+test non_mut_closure_can_rebind_shadowed_local ... ok
+test non_mut_closure_cannot_compound_assign_capture ... ok
+test non_mut_closure_cannot_rebind_capture ... ok
+test move_closure_returns_by_value ... ok
+test mut_closure_writes_captured ... ok
+test mut_closure_writes_shared_capture_visible_to_nested ... ok
+
+failures:
+
+---- move_closure_captures_copy stdout ----
+
+thread 'move_closure_captures_copy' (6652) panicked at hc-rt\tests\closures.rs:10:29:
+load: CompileError 5:6: cannot assign to `a` because it is not declared `mut`; use `var mut a` to make it mutable
+
+---- read_closure_shared_capture_visible_to_nested stdout ----
+
+thread 'read_closure_shared_capture_visible_to_nested' (16512) panicked at hc-rt\tests\closures.rs:10:29:
+load: CompileError 6:6: cannot assign to `x` because it is not declared `mut`; use `var mut x` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- read_closure_shares_slot stdout ----
+
+thread 'read_closure_shares_slot' (9428) panicked at hc-rt\tests\closures.rs:10:29:
+load: CompileError 5:6: cannot assign to `a` because it is not declared `mut`; use `var mut a` to make it mutable
+
+---- move_closure_deep_copies_closure_capture stdout ----
+
+thread 'move_closure_deep_copies_closure_capture' (25488) panicked at hc-rt\tests\closures.rs:10:29:
+load: CompileError 6:6: cannot assign to `x` because it is not declared `mut`; use `var mut x` to make it mutable
+
+---- nested_closure_transitive_capture stdout ----
+
+thread 'nested_closure_transitive_capture' (16960) panicked at hc-rt\tests\closures.rs:10:29:
+load: CompileError 9:6: cannot assign to `a` because it is not declared `mut`; use `var mut a` to make it mutable
+
+---- move_closure_isolation_after_external_change stdout ----
+
+thread 'move_closure_isolation_after_external_change' (40456) panicked at hc-rt\tests\closures.rs:10:29:
+load: CompileError 6:6: cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable
+
+
+failures:
+    move_closure_captures_copy
+    move_closure_deep_copies_closure_capture
+    move_closure_isolation_after_external_change
+    nested_closure_transitive_capture
+    read_closure_shared_capture_visible_to_nested
+    read_closure_shares_slot
+
+test result: FAILED. 6 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test map_iterates_kv_pairs ... FAILED
+test vec_init_captures_global_alloc ... ok
+test map_init_captures_alloc ... ok
+test table_init_captures_alloc ... ok
+test vec_default_carries_global_alloc ... ok
+test vec_init_captures_arena ... ok
+test map_init_captures_arena ... ok
+test vec_stores_and_grows_with_stored_alloc ... ok
+
+failures:
+
+---- map_iterates_kv_pairs stdout ----
+
+thread 'map_iterates_kv_pairs' (18680) panicked at hc-rt\tests\collection.rs:11:29:
+load: CompileError 7:12: cannot assign to `sum` because it is not declared `mut`; use `var mut sum` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    map_iterates_kv_pairs
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 121 tests
+test agg_enum_literal_and_eq ... ok
+test agg_move_expr ... ok
+test agg_index_out_of_bounds_fails ... ok
+test agg_len_fields ... ok
+test agg_array_index_and_store ... ok
+test agg_class_with_array_field ... ok
+test agg_ptr_from_int_unknown_addr_idempotent ... ok
+test agg_array_deep_eq ... ok
+test agg_export_fn_transparent_at_runtime ... ok
+test a6_bitmap_consistent ... ok
+test agg_ptr_from_int_uninit_slot_read_fails ... ok
+test agg_ptr_from_int_roundtrip_write_through ... ok
+test a6_pagemem_consistent ... ok
+test a6_ringbuf_consistent ... ok
+test agg_tuple_destructure ... ok
+test agg_slice_view_and_alias ... ok
+test agg_union_bool_int_narrow ... ok
+test a6_intrlist_consistent ... ok
+test agg_union_equality ... ok
+test agg_struct_literal_and_field ... ok
+test agg_union_truncated_read_fails ... ok
+test agg_volatile_load_store_roundtrip ... ok
+test agg_unwrap_opt ... ok
+test agg_volatile_load_sees_plain_writes ... ok
+test agg_union_float_int_reinterpret ... ok
+test a6_treemap_consistent ... ok
+test agg_union_int_wider_to_narrower ... ok
+test agg_unwrap_null_fails ... ok
+test agg_slice_store_write_through ... ok
+test agg_union_write_syncs_others ... ok
+test closure_capture_consistency ... FAILED
+test b2_unknown_format_specifier_fails_both ... ok
+test agg_volatile_store_non_pointer_fails ... ok
+test block_scope_shadowing ... ok
+test closure_precise_capture_consistency ... FAILED
+test closure_non_mut_cannot_rebind_capture_consistency ... ok
+test arith_and_compare ... ok
+test b1_print_format_specifiers ... ok
+test d1_serial_timeout_test ... ok
+test d2_deque_operations_consistent ... ok
+test d2_map_operations_consistent ... ok
+test d1_comptime_type_application_consistent ... ok
+test compound_assign ... ok
+test d1_async_test_runner ... ok
+test continuous_class_value_semantics_consistency ... ok
+test d2_string_operations_consistent ... ok
+test d3_nested_instantiation_consistent ... ok
+test d1_thread_test_runner ... ok
+test d3_recursive_instantiation_consistent ... ok
+test d2_table_multi_index_consistent ... ok
+test d35_comptime_array_type_fn_consistent ... ok
+test defer_same_scope_capture_reads_final_value ... FAILED
+test defer_runs_on_return ... ok
+test d4b_anytype_concrete_consistent ... ok
+test defer_nested_block_runs_at_block_close ... ok
+test d2_vec_operations_consistent ... ok
+test defer_runs_on_loop_break_and_continue ... FAILED
+test e2_arena_init_after_deinit_fails_both ... ok
+test div_zero_and_overflow_both_error ... ok
+test d5_comptime_value_fn_consistent ... ok
+test defer_runs_lifo_at_scope_exit ... ok
+test e4_async_pointer_capture_consistent ... ok
+test errdefer_runs_on_try_propagation ... ok
+test e1_arena_init_typed ... ok
+test e2_async_await_consistent ... ok
+test for_arr_read_only ... ok
+test expect_error_and_unhandled_root ... ok
+test errdefer_runs_only_on_error_path ... ok
+test for_arr_mut_writeback ... ok
+test f_atomic_consistent ... FAILED
+test for_break_and_continue ... ok
+test for_range_sugar ... ok
+test for_empty_range_is_empty ... ok
+test for_slice_view_write_through ... ok
+test g2_str_upper_lower_consistent ... ok
+test g5_rng_determinism_consistent ... FAILED
+test for_str_bytes ... ok
+test g3_pipe_write_read_consistent ... ok
+test g4_archive_roundtrip_consistent ... ok
+test global_mutation_between_plain_fns ... ok
+test g5_text_ops_consistent ... ok
+test g1_tcp_echo_consistent ... ok
+test g5_time_monotonic_consistent ... ok
+test g3_shm_write_read_consistent ... ok
+test if_else_chain ... ok
+test global_const_init_and_cross_test_mutation ... ok
+test g2_fs_list_dir_and_open_dir_consistent ... ok
+test global_address_of_writes_through ... ok
+test g1_udp_loopback_consistent ... ok
+test if_error_union_capture ... ok
+test labeled_break_runs_loop_defers ... ok
+test if_expr_and_optional_capture ... ok
+test labeled_break_continue ... FAILED
+test orelse ... ok
+test method_dispatch_consistency ... ok
+test g4_storage_kv_consistent ... ok
+test overload_consistency ... ok
+test p7_alloc_and_at_builtins ... ok
+test p7_serialize_namespace ... ok
+test p7_map_json_csv_and_string ... FAILED
+test pointer_write_through_alias ... ok
+test p7_sort_binary_search_and_scalar ... ok
+test g4b_thread_lifecycle_consistent ... ok
+test qualified_namespace_calls ... ok
+test switch_enum_variant_and_capture ... ok
+test p7_math_builtins ... ok
+test switch_bool_and_null_patterns ... ok
+test switch_guard_basic ... ok
+test switch_error_pattern ... ok
+test switch_guard_exhaustiveness ... ok
+test switch_guard_in_statement ... ok
+test short_circuit_and_or ... ok
+test switch_int_and_else ... ok
+test switch_guard_with_enum ... ok
+test while_optional_capture ... ok
+test try_propagates_to_root ... ok
+test switch_string_pattern ... ok
+test try_catch_error_channel ... ok
+test while_with_step ... ok
+test switch_no_else_falls_through ... ok
+test recursion ... ok
+
+failures:
+
+---- closure_capture_consistency stdout ----
+
+thread '<unnamed>' (37796) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 5:6: cannot assign to `a` because it is not declared `mut`; use `var mut a` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'closure_capture_consistency' (26824) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- closure_precise_capture_consistency stdout ----
+
+thread '<unnamed>' (38640) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 8:6: cannot assign to `a` because it is not declared `mut`; use `var mut a` to make it mutable
+
+thread 'closure_precise_capture_consistency' (22948) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- defer_same_scope_capture_reads_final_value stdout ----
+
+thread '<unnamed>' (36280) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 7:6: cannot assign to `x` because it is not declared `mut`; use `var mut x` to make it mutable
+
+thread 'defer_same_scope_capture_reads_final_value' (4768) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- defer_runs_on_loop_break_and_continue stdout ----
+
+thread '<unnamed>' (38244) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 10:10: cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable
+
+thread 'defer_runs_on_loop_break_and_continue' (37376) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- f_atomic_consistent stdout ----
+
+thread '<unnamed>' (45052) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 9:8: cannot assign to `old` because it is not declared `mut`; use `var mut old` to make it mutable
+
+thread 'f_atomic_consistent' (15556) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- g5_rng_determinism_consistent stdout ----
+
+thread '<unnamed>' (32196) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 15:10: cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable
+
+thread 'g5_rng_determinism_consistent' (32272) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- labeled_break_continue stdout ----
+
+thread '<unnamed>' (37612) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 7:14: cannot assign to `j` because it is not declared `mut`; use `var mut j` to make it mutable
+
+thread 'labeled_break_continue' (23684) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+---- p7_map_json_csv_and_string stdout ----
+
+thread '<unnamed>' (34820) panicked at hc-rt\tests\consistency.rs:34:29:
+load failed: CompileError: 8:28: cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable
+
+thread 'p7_map_json_csv_and_string' (20344) panicked at hc-rt\tests\consistency.rs:24:10:
+consistency thread panicked: Any { .. }
+
+
+failures:
+    closure_capture_consistency
+    closure_precise_capture_consistency
+    defer_runs_on_loop_break_and_continue
+    defer_same_scope_capture_reads_final_value
+    f_atomic_consistent
+    g5_rng_determinism_consistent
+    labeled_break_continue
+    p7_map_json_csv_and_string
+
+test result: FAILED. 113 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 3 tests
+test dep_non_pub_fn_not_visible ... ok
+test dep_pub_fn_in_namespace_via_prefix ... ok
+test dep_pub_fn_accessible_via_qualified_and_using ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test deque_len_iter ... FAILED
+test deque_push_pop_order ... ok
+test deque_empty_returns_null ... ok
+test deque_get_put_remove ... ok
+
+failures:
+
+---- deque_len_iter stdout ----
+
+thread 'deque_len_iter' (20652) panicked at hc-rt\tests\deque.rs:10:29:
+load: CompileError 10:12: cannot assign to `sum` because it is not declared `mut`; use `var mut sum` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    deque_len_iter
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 22 tests
+test error_set_member_rejected ... ok
+test io_exit_args_arity_checked ... ok
+test io_exit_error_code ... ok
+test dynamic_error_name_allocated ... ok
+test io_exit_exit_nonzero_sets_code ... ok
+test io_exit_success ... ok
+test error_code_matches_compile_table ... ok
+test marked_error_payload_ok_path ... ok
+test panic_aborts ... ok
+test exit_type_variants ... ok
+test error_set_member_ok ... ok
+test allocator_oom_catchable ... ok
+test zero_arg_main_runs ... ok
+test arena_oom_catchable ... ok
+test marked_error_catch_binds_name ... ok
+test marked_error_propagates_to_catch ... ok
+test unmarked_error_return_rejected ... ok
+test anyerror_not_checked ... ok
+test root_error_carries_code ... ok
+test unmarked_error_return_rejected_void ... ok
+test root_error_reports_location ... ok
+test root_error_location_prefers_decl ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 43 tests
+test ex03_control_flow ... FAILED
+test ex09_arrays ... FAILED
+test ex01_hello ... ok
+test ex12_bitops ... FAILED
+test ex04_ranges ... FAILED
+test ex06_integers ... ok
+test ex17_optional ... ok
+test ex21_closures ... FAILED
+test ex16_slices ... FAILED
+test ex14_enum ... ok
+test ex13_struct ... ok
+test ex08_bool_void ... ok
+test ex19_nested_data ... ok
+test ex15_pointers ... ok
+test ex31_class ... FAILED
+test ex02_variables ... ok
+test ex29_globals ... ok
+test ex46_recursion ... FAILED
+test ex45_strings ... ok
+test ex34_generics ... ok
+test ex27_ownership ... ok
+test ex32_collections ... FAILED
+test ex30_interface ... ok
+test ex53_map_deep ... FAILED
+test ex23_tests ... ok
+test ex52_string_deep ... ok
+test ex59_pipeline ... FAILED
+test ex47_sort_search ... ok
+test ex58_copy_semantics ... FAILED
+test ex64_interface_poly ... FAILED
+test ex63_template_render ... FAILED
+test ex50_serialization ... ok
+test ex51_collection_bytes ... ok
+test ex56_csv_parse ... ok
+test ex66_builder_chain ... ok
+test ex62_custom_sort ... ok
+test ex86_scalar_interfaces ... FAILED
+test ex84_rng ... FAILED
+test ex71_recursive_parser ... ok
+test ex88_iterators ... FAILED
+test ex87_overloads ... FAILED
+test ex61_json_walk ... ok
+test ex90_thread_lifecycle ... ok
+
+failures:
+
+---- ex03_control_flow stdout ----
+
+thread '<unnamed>' (41916) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/01-basic/03-control-flow.hc: CompileError
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'ex03_control_flow' (40072) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex09_arrays stdout ----
+
+thread '<unnamed>' (16296) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/02-types/09-arrays.hc: CompileError
+
+thread 'ex09_arrays' (34624) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex12_bitops stdout ----
+
+thread '<unnamed>' (9724) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/02-types/12-bitops.hc: CompileError
+
+thread 'ex12_bitops' (26140) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex04_ranges stdout ----
+
+thread '<unnamed>' (36156) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/01-basic/04-ranges.hc: CompileError
+
+thread 'ex04_ranges' (26056) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex21_closures stdout ----
+
+thread '<unnamed>' (23872) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/03-functions/21-closures.hc: CompileError
+
+thread 'ex21_closures' (41212) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex16_slices stdout ----
+
+thread '<unnamed>' (28900) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/02-types/16-slices.hc: CompileError
+
+thread 'ex16_slices' (40708) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex31_class stdout ----
+
+thread '<unnamed>' (10420) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/05-oop/31-class.hc: CompileError
+
+thread 'ex31_class' (20636) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex46_recursion stdout ----
+
+thread '<unnamed>' (33244) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/02-idioms/46-recursion.hc: CompileError
+
+thread 'ex46_recursion' (22296) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex32_collections stdout ----
+
+thread '<unnamed>' (29128) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/06-data/32-collections.hc: CompileError
+
+thread 'ex32_collections' (34648) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex53_map_deep stdout ----
+
+thread '<unnamed>' (4104) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/02-idioms/53-map-deep.hc: CompileError
+
+thread 'ex53_map_deep' (21216) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex59_pipeline stdout ----
+
+thread '<unnamed>' (32184) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/02-idioms/59-pipeline.hc: CompileError
+
+thread 'ex59_pipeline' (29832) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex58_copy_semantics stdout ----
+
+thread '<unnamed>' (37680) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/02-idioms/58-copy-semantics.hc: CompileError
+
+thread 'ex58_copy_semantics' (37016) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex64_interface_poly stdout ----
+
+thread '<unnamed>' (5176) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/03-patterns/64-interface-poly.hc: CompileError
+
+thread 'ex64_interface_poly' (35812) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex63_template_render stdout ----
+
+thread '<unnamed>' (10044) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/02-idioms/63-template-render.hc: CompileError
+
+thread 'ex63_template_render' (44760) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex86_scalar_interfaces stdout ----
+
+thread '<unnamed>' (20964) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/02-types/86-scalar-interfaces.hc: CompileError
+
+thread 'ex86_scalar_interfaces' (5876) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex84_rng stdout ----
+
+thread '<unnamed>' (23504) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/05-tools/84-rng.hc: CompileError
+
+thread 'ex84_rng' (22264) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex88_iterators stdout ----
+
+thread '<unnamed>' (42860) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/02-types/88-iterators.hc: CompileError
+
+thread 'ex88_iterators' (38968) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+---- ex87_overloads stdout ----
+
+thread '<unnamed>' (32348) panicked at hc-rt\tests\examples.rs:21:37:
+load C:\Users\Hank\Documents\works\AI\H2\tag1\hc-rt/../../examples/01-syntax/03-functions/87-overloads.hc: CompileError
+
+thread 'ex87_overloads' (19588) panicked at hc-rt\tests\examples.rs:32:10:
+example test thread panicked: Any { .. }
+
+
+failures:
+    ex03_control_flow
+    ex04_ranges
+    ex09_arrays
+    ex12_bitops
+    ex16_slices
+    ex21_closures
+    ex31_class
+    ex32_collections
+    ex46_recursion
+    ex53_map_deep
+    ex58_copy_semantics
+    ex59_pipeline
+    ex63_template_render
+    ex64_interface_poly
+    ex84_rng
+    ex86_scalar_interfaces
+    ex87_overloads
+    ex88_iterators
+
+test result: FAILED. 25 passed; 18 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 11 tests
+test import_io_whole_module_alias ... ok
+test import_io_symbol_selection_alias ... ok
+test import_user_pkg_symbol_selection_no_alias ... ok
+test a2b_module_qualified_access_works ... ok
+test import_user_pkg_whole_module_no_alias ... ok
+test import_user_pkg_symbol_selection_alias ... ok
+test import_io_whole_module_no_alias ... ok
+test import_user_pkg_whole_module_alias ... ok
+test a2b_module_member_not_flat ... ok
+test import_own_def_wins ... ok
+test a2b_non_module_namespace_flat_access_works ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test infer_return_int_vs_float_conflict ... ok
+test infer_return_multi_path_conflict ... ok
+test overload_ambiguous_literal ... ok
+test pointer_write_read_only_rejected ... ok
+test overload_int_literal_prefers_int_over_float ... ok
+test pointer_write_mut_ok ... ok
+test infer_return_single_path ... ok
+test infer_return_multi_path_consistent ... ok
+test overload_disambiguated_by_expected_return ... ok
+test overload_concrete_beats_generic ... ok
+test generic_t_through_pointer_param ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 10 tests
+test interface_name_must_start_with_i ... ok
+test implements_wrong_return_type_rejected ... ok
+test implements_wrong_arity_rejected ... ok
+test implements_missing_method_rejected ... ok
+test implements_super_interface_missing_rejected ... ok
+test test_attr_name_used_as_display ... ok
+test test_attr_no_name_falls_back_to_fn_name ... ok
+test implements_multiple_interfaces_ok ... ok
+test where_constraint_static_dispatch_ok ... ok
+test implements_full_contract_ok ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test intrlist_push_front_pop_back ... ok
+test intrlist_node_reuse ... ok
+test intrlist_remove_tail ... ok
+test intrlist_clear ... ok
+test intrlist_remove_invalid ... ok
+test intrlist_push_back_pop_back ... ok
+test intrlist_remove_middle ... ok
+test intrlist_remove_head ... ok
+test intrlist_push_front_pop_front ... ok
+test intrlist_push_back_pop_front ... ok
+test intrlist_init_empty ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 13 tests
+G2-stdout
+test io_stdout_stderr_streams ... ok
+test io_env_and_args ... ok
+test io_str_to_upper_lower ... ok
+test io_net_frame_u32 ... ok
+test io_time_now_and_sleep ... ok
+test io_net_tcp_echo ... ok
+test io_fs_list_dir ... ok
+test io_fs_open_dir ... ok
+test io_fs_list_dir_subdir_is_dir ... ok
+test io_fs_seek_pos_read_at_write_at ... ok
+test io_fs_read_int_write_int ... ok
+test io_fs_append_rename_remove ... ok
+test io_net_connect_refused ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.05s
+
+
+running 6 tests
+test ipc_shm_write_read ... ok
+test ipc_pipe_thread_producer ... ok
+test ipc_pipe_accumulates_and_drains ... ok
+test ipc_shm_truncates_to_size ... ok
+test ipc_pipe_close_is_closed ... ok
+test ipc_pipe_write_read ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 12 tests
+test lazy_next_str ... ok
+test lazy_to_array ... ok
+test lazy_next_arr ... ok
+test map_iter_entries ... ok
+test lazy_map_next ... ok
+test slice_filter_map ... ok
+test lazy_map_filter_chain_to_array ... ok
+test str_iter_bytes ... ok
+test str_filter_map ... ok
+test lazy_filter_next ... ok
+test lazy_filter_map_chain ... ok
+test lazy_iter_filter_chain ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 5 tests
+test arena_bump_aligned_to_16 ... ok
+test alloc_leaks_tracks_active_and_release ... ok
+test alloc_multiple_leaks_tracked ... ok
+test alloc_leak_report_lists_size_and_line ... ok
+test arena_aligned_region_distinct ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test mutex_lock_returns_clone ... FAILED
+test mutex_try_lock_acquires ... ok
+test mutex_init_and_lock ... ok
+test mutex_spawn_shared_access ... ok
+
+failures:
+
+---- mutex_lock_returns_clone stdout ----
+
+thread 'mutex_lock_returns_clone' (31024) panicked at hc-rt\tests\mutex.rs:11:29:
+load: CompileError 5:6: cannot assign to `v` because it is not declared `mut`; use `var mut v` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mutex_lock_returns_clone
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test tcp_namespace_form_q20 ... ok
+test udp_bind_send_recv_loopback ... ok
+test http_get_loopback ... ok
+test udp_namespace_form ... ok
+test udp_recv_timed_out ... ok
+test http_server_responds ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+
+running 6 tests
+test pagemem_free_invalid ... ok
+test pagemem_alloc ... ok
+test pagemem_alloc_all ... ok
+test pagemem_init ... ok
+test pagemem_free ... ok
+test pagemem_double_free_safe ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test ringbuf_clear ... ok
+test ringbuf_pop_empty ... ok
+test ringbuf_init_len ... ok
+test ringbuf_push_when_full ... ok
+test ringbuf_push_pop ... ok
+test ringbuf_fifo_order ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 2 tests
+test generic_operator_plus ... FAILED
+test float_method_family ... ok
+
+failures:
+
+---- generic_operator_plus stdout ----
+
+thread 'generic_operator_plus' (3564) panicked at hc-rt\tests\scalar.rs:10:29:
+load: CompileError 5:14: cannot assign to `total` because it is not declared `mut`; use `var mut total` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    generic_operator_plus
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 64 tests
+test m22_binary_integer_required ... ok
+test m22_condition_requires_bool ... ok
+test m22_binary_numeric_required ... ok
+test m22_continuous_rejects_ref_field ... ok
+test m22_enum_variant_rejected ... ok
+test definite_assignment_rejects_partial_return ... ok
+test m22_for_not_iterable ... ok
+test m22_assign_pointer_field ... ok
+test continuous_assignment_allowed ... ok
+test definite_assignment_allows_complete ... ok
+test m22_named_lit_field_type_mismatch ... ok
+test copy_deep_mode_default ... ok
+test m22_field_access_unknown ... ok
+test m22_named_lit_missing_field ... ok
+test m22_binary_ok ... ok
+test copy_shallow_mode ... ok
+test extension_method_struct ... ok
+test definite_assignment_ignores_continuous ... ok
+test m22_for_iterable_ok ... FAILED
+test m22_orelse_requires_optional ... ok
+test m22_named_lit_unknown_field ... ok
+test m22_return_ok ... ok
+test at_int_from_enum ... ok
+test m22_tuple_destructure_mismatch ... ok
+test m22_return_type_mismatch ... ok
+test m22_var_init_type_mismatch ... ok
+test m22_field_access_len ... ok
+test m22_try_requires_error_union ... ok
+test m22_table_double_index_ok ... ok
+test m22_where_constraint_violated ... ok
+test m22_where_constraint_satisfied ... FAILED
+test m22_slice_range_index ... ok
+test m43_compile_error_rejected ... ok
+test m25_dangling_hold_not_accessed_ok ... ok
+test m25_dangling_release_bare_read ... ok
+test m43_field_align_override ... ok
+test m43_ptrcast_passthrough ... ok
+test m43_field_align_affects_struct_align ... ok
+test pool_alloc_no_args ... ok
+test pool_alloc_free_reuse ... ok
+test m43_field_align_padding ... ok
+test m43_intcast_ok_and_overflow ... ok
+test m25_dangling_access_rejected_debug ... ok
+test pool_init_alloc_free ... ok
+test reference_assignment_rejected ... ok
+test m43_typeof_returns_type_name ... ok
+test m43_sizeof_scalars_and_continuous ... ok
+test pool_deinit ... ok
+test struct_defaults_mixed ... ok
+test struct_defaults_override ... ok
+test m43_alignof_and_offsetof ... ok
+test struct_attr_syntax_test_basic ... ok
+test m43_add_with_overflow_tuple ... ok
+test struct_attr_syntax_test_timeout ... ok
+test struct_attr_syntax_test_mode_async ... ok
+test struct_defaults_arena_init ... ok
+test pool_multiple_alloc_free ... ok
+test struct_defaults_alloc_init ... ok
+test width_check_u8_overflow ... ok
+test table_construct_and_index ... ok
+test struct_attr_syntax_align ... ok
+test width_check_i32_ok ... ok
+test width_check_u64_ok ... ok
+test width_check_hex_ok ... ok
+
+failures:
+
+---- m22_for_iterable_ok stdout ----
+
+thread 'm22_for_iterable_ok' (18444) panicked at hc-rt\tests\semantics.rs:11:29:
+load: CompileError 3:30: cannot assign to `sum` because it is not declared `mut`; use `var mut sum` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- m22_where_constraint_satisfied stdout ----
+
+thread 'm22_where_constraint_satisfied' (43624) panicked at hc-rt\tests\semantics.rs:11:29:
+load: CompileError 3:33: cannot assign to `total` because it is not declared `mut`; use `var mut total` to make it mutable
+
+
+failures:
+    m22_for_iterable_ok
+    m22_where_constraint_satisfied
+
+test result: FAILED. 62 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 7 tests
+test pad_packed_layout ... ok
+test align_type_level_alignment ... ok
+test serialize_json_csv_parse ... ok
+test heap_json_nested_roundtrip ... ok
+test nested_continuous_roundtrip ... ok
+test serialize_parse_int_float ... ok
+test serialize_parser_helpers ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 7 tests
+test archive_compress_decompress_roundtrip ... ok
+test archive_binary_roundtrip ... ok
+test archive_decompress_invalid ... ok
+test storage_kv_contains_remove_len ... ok
+test storage_kv_close_idempotent ... ok
+test storage_kv_put_get ... ok
+test storage_kv_persist_reopen ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 11 tests
+test rng_float_range ... FAILED
+test rng_int_bounds ... FAILED
+test rng_seed_determinism ... ok
+test text_split ... ok
+test text_invalid_pattern ... ok
+test text_replace_all ... ok
+test timezone_components_format ... ok
+test text_find_position ... ok
+test text_matches_basic ... ok
+test text_matches_anchors_alt_quant ... ok
+test time_tick_elapsed ... ok
+
+failures:
+
+---- rng_float_range stdout ----
+
+thread 'rng_float_range' (38576) panicked at hc-rt\tests\text_rng.rs:10:29:
+load: CompileError 7:10: cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable
+
+---- rng_int_bounds stdout ----
+
+thread 'rng_int_bounds' (38096) panicked at hc-rt\tests\text_rng.rs:10:29:
+load: CompileError 8:10: cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    rng_float_range
+    rng_int_bounds
+
+test result: FAILED. 9 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 7 tests
+test spawn_join_returns_value ... ok
+test join_error_propagates ... ok
+test detach_marks_thread ... ok
+test thread_is_done_transitions ... ok
+test unjoined_thread_joins_at_program_end ... ok
+test thread_own_alloc_isolation ... ok
+test cancel_then_join_returns_cancelled ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 8 tests
+test treemap_insert_descending ... ok
+test treemap_large_keys ... ok
+test treemap_clear ... ok
+test treemap_init_empty ... ok
+test treemap_insert_ascending ... ok
+test treemap_update_existing_key ... ok
+test treemap_insert_and_get ... ok
+test treemap_contains ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 33 tests
+test cli::versiongen::tests::test_build_without_trailing_comma ... ok
+test doc::tests::stdlib_page_has_modules ... ok
+test project::buildzon::tests::load_from_dir_none_when_absent ... ok
+test doc::tests::page_contains_sig_and_doc ... ok
+test project::buildzon::tests::parse_full_manifest ... ok
+test project::buildzon::tests::missing_build_const_errors ... ok
+test cli::versiongen::tests::test_bump_build ... ok
+test tests::color_helpers_paint_and_test_line ... ok
+test project::buildzon::tests::parse_dep_without_path_is_registry ... ok
+test project::buildzon::tests::parse_kinds ... ok
+hitest tests::bytecode_source_round_trips ... ok
+test doc::tests::render_type_covers_forms ... ok
+test doc::tests::doc_run_extraction ... ok
+test tests::division_by_zero ... ok
+test cli::versiongen::tests::test_no_build_field ... ok
+test tests::lint_unused_var_skipped_underscore ... ok
+test tests::io_print_through_ir ... ok
+test tests::main_io_param_void_placeholder ... ok
+test tests::leak_report_does_not_change_exit_code ... ok
+test tests::lint_unused_var_detected ... ok
+test tests::merge_modules_exports_qualified_only ... ok
+test tests::no_main_entry ... ok
+test tests::ir_io_exit_maps_code ... ok
+test tests::lint_redundant_eq_false_detected ... ok
+test tests::strip_test_funcs_remaps_index ... ok
+test tests::parse_error_rendered ... ok
+test tests::merge_modules_concats_globals_and_init ... ok
+test tests::unhandled_error_value ... ok
+test tests::slice_in_if_while_try_catch ... ok
+test tests::test_runner_runs_only_entry_tests ... ok
+test tests::slice_in_simple_return ... ok
+test tests::programs_to_ll_multi_file_and_private_sibling ... ok
+test tests::write_bytecode_artifact_decodable ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 20 tests
+test doc_std_generates_stdlib_page ... ok
+test doc_format_regression_examples_wellformed ... ok
+test run_directory_without_hc_errors ... ok
+test run_exit_error_prints_and_codes ... ok
+test run_exit_nonzero_code_is_silent ... ok
+test build_lib_with_main_is_diagnosed ... ok
+test doc_single_file_and_default_out ... ok
+test doc_project_generates_index_and_file_pages ... ok
+test run_directory_prefers_main_hc_else_first_hc ... ok
+test missing_local_dep_is_diagnosed ... ok
+test run_exit_success_is_silent_and_aborts ... ok
+test run_io_stdin_reads_line ... ok
+test run_ir_exit_propagates_code ... ok
+test run_package_directory_uses_main_entry_and_deps ... ok
+test init_refuses_nonempty_dir_and_bad_name ... ok
+test dep_version_mismatch_warns ... ok
+test init_creates_runnable_scaffold ... ok
+test pkg_add_writes_local_dep_and_run_green ... ok
+test build_lib_static_archive_and_link_exe ... ok
+test build_lib_dll_and_runtime_load ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.19s
+
+
+running 20 tests
+test comptime_arith_folding_expect_eq_passes ... ok
+test comptime_sees_script_generated_types ... ok
+test anytype_ret_concrete_mismatch_is_compile_error ... ok
+test comptime_folding_expect_eq_failure_is_compile_error ... ok
+test comptime_float_var_decl_typechecks_and_folds ... ok
+test comptime_unknown_type_fields_is_compile_error ... ok
+test comptime_return_error_is_compile_error ... ok
+test comptime_float_folding_expect_eq_passes ... ok
+test comptime_narrowing_u8_in_range_passes ... ok
+test comptime_float_folding_expect_eq_failure_is_compile_error ... ok
+test comptime_int_var_decl_typechecks_and_folds ... ok
+test comptime_io_forbidden ... ok
+test comptime_narrowing_u8_overflow_is_compile_error ... ok
+test comptime_value_fn_non_type_arg_is_compile_error ... ok
+test comptime_value_fn_self_recursion_is_compile_error ... ok
+test anytype_ret_resolves_concrete_across_modes ... ok
+test comptime_block_passes_and_program_runs ... ok
+test comptime_value_fn_mixed_type_and_value_params ... ok
+test comptime_value_fn_runtime_call_folds_in_interp ... ok
+test comptime_value_fn_type_param_folds_in_block ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+
+
+running 4 tests
+test empty_block_stays_inline ... ok
+test examples_corpus_idempotent ... ok
+test comment_only_block_stays_idempotent ... ok
+test representative_shapes_idempotent ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.48s
+
+
+running 5 tests
+test parse_error_file_reports_fail_nonzero ... ok
+test injects_io_alloc_into_tests ... ok
+test failing_test_exits_nonzero_with_fail_line ... ok
+test collects_only_test_fns_skip_and_summary ... ok
+test collects_across_files_in_dir ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+
+running 2 tests
+test self_source_matches ... FAILED
+test corpus_matches_rust_reference ... FAILED
+
+failures:
+
+---- self_source_matches stdout ----
+
+thread 'self_source_matches' (14908) panicked at hc-tools\tests\k1_lexer.rs:40:5:
+hc run lexer.hc 失败于 \\?\C:\Users\Hank\Documents\works\AI\H2\stage1\lexer.hc：error.CompileError: 175:30: cannot assign to `tmp` because it is not declared `mut`; use `var mut tmp` to make it mutable
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- corpus_matches_rust_reference stdout ----
+
+thread 'corpus_matches_rust_reference' (14000) panicked at hc-tools\tests\k1_lexer.rs:40:5:
+hc run lexer.hc 失败于 \\?\C:\Users\Hank\Documents\works\AI\H2\stage1\corpus\01-keywords.hc：error.CompileError: 175:30: cannot assign to `tmp` because it is not declared `mut`; use `var mut tmp` to make it mutable
+
+
+
+failures:
+    corpus_matches_rust_reference
+    self_source_matches
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+running 3 tests
+test self_hosting_parses_self ... ignored, K2 自举性能：H 版 parser 解析自身约需 60s+，手动运行
+test self_source_matches ... FAILED
+test corpus_matches_rust_reference ... FAILED
+
+failures:
+
+---- self_source_matches stdout ----
+
+thread 'self_source_matches' (15984) panicked at hc-tools\tests\k2_parser.rs:120:5:
+H 版 parser 运行 10-fn-basic.hc 失败：error.CompileError: 157:14: cannot assign to `k` because it is not declared `mut`; use `var mut k` to make it mutable
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- corpus_matches_rust_reference stdout ----
+[SKIP] H 版 parser 运行失败: 04-strings.hc: error.CompileError: 157:14: cannot assign to `k` because it is not declared `mut`; use `var mut k` to make it mutable
+[SKIP] H 版 parser 运行失败: 10-fn-basic.hc: error.CompileError: 157:14: cannot assign to `k` because it is not declared `mut`; use `var mut k` to make it mutable
+[SKIP] H 版 parser 运行失败: 11-var-decl.hc: error.CompileError: 157:14: cannot assign to `k` because it is not declared `mut`; use `var mut k` to make it mutable
+[SKIP] 已知不支持: 12-if-while.hc
+[SKIP] H 版 parser 运行失败: 13-expr.hc: error.CompileError: 157:14: cannot assign to `k` because it is not declared `mut`; use `var mut k` to make it mutable
+
+thread 'corpus_matches_rust_reference' (9132) panicked at hc-tools\tests\k2_parser.rs:90:5:
+没有语料文件通过对照测试（passed=0, skipped=13）
+
+
+failures:
+    corpus_matches_rust_reference
+    self_source_matches
+
+test result: FAILED. 0 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.39s
+
+
+running 39 tests
+test aggregate_enum_literal_and_eq_native ... ok
+test aggregate_tuple_destructure_native ... ok
+test aggregate_index_oob_is_failure ... ok
+test aggregate_slice_store_native ... ok
+test aggregate_len_fields_native ... ok
+test aggregate_slice_view_and_alias_native ... ok
+test aggregate_struct_literal_and_field_native ... ok
+test aggregate_array_index_and_store_native ... ok
+test aggregate_move_expr_native ... ok
+test fmt_int_float_native ... ok
+test aggregate_unwrap_null_is_failure ... ok
+test global_const_native_init_and_mutation ... ok
+test g4b_thread_spawn_aborts_notcallable ... ok
+test division_by_zero_is_failure ... ok
+test aggregate_unwrap_opt_native ... ok
+test global_addr_native_writes_through ... ok
+test if_while_try_catch_program ... ok
+test phase6_defer_loop_break_continue_native ... FAILED
+test phase6_errdefer_error_path_native ... FAILED
+test phase6_labeled_break_continue_native ... FAILED
+test phase3_for_arr_mut_writeback_native ... ok
+test phase3_for_slice_write_through_native ... ok
+test tree_vec_field_append_recursion_native ... FAILED
+test phase3_switch_error_pattern_native ... ok
+test phase3_switch_int_and_else_native ... ok
+test phase3_for_range_native ... ok
+test phase3_switch_enum_capture_native ... ok
+test phase3_for_break_continue_native ... ok
+test phase3_for_str_bytes_native ... ok
+test phase6_defer_lifo_native ... ok
+test phase6_defer_runs_on_return_native ... ok
+test pointer_write_through_native ... ok
+test phase6_labeled_break_runs_defers_native ... ok
+test scalar_main_returns_ok ... ok
+test string_literal_and_compare ... ok
+test test_runner_global_init_runs_first ... ok
+test test_runner_green_exits_zero ... ok
+test unhandled_error_value_is_failure ... ok
+test test_runner_red_exits_nonzero ... ok
+
+failures:
+
+---- phase6_defer_loop_break_continue_native stdout ----
+
+thread 'phase6_defer_loop_break_continue_native' (32392) panicked at hc-tools\tests\native.rs:34:5:
+语义检查失败: [Diagnostic { severity: Error, span: Span { start: 152, end: 158, line: 9, col: 10 }, message: "cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 271, end: 276, line: 15, col: 6 }, message: "cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 328, end: 334, line: 18, col: 10 }, message: "cannot assign to `i` because it is not declared `mut`; use `var mut i` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 378, end: 387, line: 20, col: 13 }, message: "cannot assign to `clog` because it is not declared `mut`; use `var mut clog` to make it mutable" }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- phase6_errdefer_error_path_native stdout ----
+
+thread 'phase6_errdefer_error_path_native' (2624) panicked at hc-tools\tests\native.rs:34:5:
+语义检查失败: [Diagnostic { severity: Error, span: Span { start: 311, end: 335, line: 16, col: 6 }, message: "cannot assign to `r` because it is not declared `mut`; use `var mut r` to make it mutable" }]
+
+---- phase6_labeled_break_continue_native stdout ----
+
+thread 'phase6_labeled_break_continue_native' (22364) panicked at hc-tools\tests\native.rs:34:5:
+语义检查失败: [Diagnostic { severity: Error, span: Span { start: 124, end: 130, line: 7, col: 14 }, message: "cannot assign to `j` because it is not declared `mut`; use `var mut j` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 186, end: 192, line: 9, col: 14 }, message: "cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 244, end: 249, line: 13, col: 6 }, message: "cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 328, end: 334, line: 16, col: 10 }, message: "cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 376, end: 381, line: 19, col: 6 }, message: "cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 471, end: 477, line: 23, col: 14 }, message: "cannot assign to `j` because it is not declared `mut`; use `var mut j` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 536, end: 542, line: 25, col: 14 }, message: "cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable" }, Diagnostic { severity: Error, span: Span { start: 562, end: 570, line: 27, col: 10 }, message: "cannot assign to `s` because it is not declared `mut`; use `var mut s` to make it mutable" }]
+
+---- tree_vec_field_append_recursion_native stdout ----
+
+thread 'tree_vec_field_append_recursion_native' (36696) panicked at hc-tools\tests\native.rs:108:5:
+语义检查失败: [Diagnostic { severity: Error, span: Span { start: 138, end: 157, line: 7, col: 4 }, message: "cannot assign to `sum` because it is not declared `mut`; use `var mut sum` to make it mutable" }]
+
+
+failures:
+    phase6_defer_loop_break_continue_native
+    phase6_errdefer_error_path_native
+    phase6_labeled_break_continue_native
+    tree_vec_field_append_recursion_native
+
+test result: FAILED. 35 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.80s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

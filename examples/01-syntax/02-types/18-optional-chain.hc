@@ -5,7 +5,7 @@ import H.std.{io};
 //   - orelse 默认值 / .? 断言 / if (opt) |v| 捕获（20 已示基础）
 //   - 嵌套字段 optional + 默认值链
 
-class Config {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
+class Config {
     host: ?String,
     port: ?i32,
 }

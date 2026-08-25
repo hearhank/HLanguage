@@ -280,19 +280,29 @@ pub(crate) fn call_alloc_method_ir(
         "deinit" => Ok(Some(IrValue::Void)),
         // G5/§8.3 Debug 泄漏检测：断言无泄漏——有活跃分配则返回错误
         "assert_no_leaks" => {
-            if ctx.alloc_tracker.is_empty() {
+            // 检查全局 alloc 分配
+            let mut total_leaks = ctx.alloc_tracker.len();
+            let mut report = String::new();
+            for (size, line) in &ctx.alloc_tracker {
+                report.push_str(&format!("leak: line {line}: {size} bytes\n"));
+            }
+            // 检查所有 Arena 状态的块分配
+            for cell in &ctx.cells {
+                if let Cell::Arena(st) = cell {
+                    if st.live && !st.alloc_tracker.is_empty() {
+                        for (size, _) in &st.alloc_tracker {
+                            report.push_str(&format!("leak (Arena block): line 0: {size} bytes\n"));
+                        }
+                        total_leaks += st.alloc_tracker.len();
+                    }
+                }
+            }
+            if total_leaks == 0 {
                 Ok(Some(IrValue::Void))
             } else {
-                let mut report = String::new();
-                for (size, line) in &ctx.alloc_tracker {
-                    report.push_str(&format!("leak: line {line}: {size} bytes\n"));
-                }
                 Err(IrError::msg(
                     "LeakDetected",
-                    format!(
-                        "{} allocation(s) not freed:\n{report}",
-                        ctx.alloc_tracker.len()
-                    ),
+                    format!("{} allocation(s) not freed:\n{report}", total_leaks),
                 ))
             }
         }

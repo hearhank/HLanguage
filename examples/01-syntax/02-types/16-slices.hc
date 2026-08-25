@@ -31,11 +31,12 @@ fn main() !void {
 
     // 可写切片视图（唯一写者登记）
     var s2: &mut [i32] = &mut arr[0..2];
+    // io.print("{}",s2.length);
     zero_out(s2);
     io.print("arr[0] = {}, arr[1] = {}\n", arr[0], arr[1]);
 
     // 越界：编译期可证 → 所有模式编译期报错
-    // var v = arr[10];  // 错误（编译期，Q24）
+    var v = arr[10];  // 错误（编译期，Q24）
 
     // 字符串字面量 = &[u8] 静态只读切片
     var msg: &[u8] = "hello";

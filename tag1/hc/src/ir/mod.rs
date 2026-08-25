@@ -660,6 +660,8 @@ pub struct ArenaStateIr {
     pub total: usize,
     /// 可用标志（`deinit` 后 false → `alloc` 抛 `ArenaDeinitialized`）
     pub live: bool,
+    /// G5/§8.3 Debug 泄漏检测：Arena 块分配登记表（bump 时登记，deinit 时清空）
+    pub alloc_tracker: Vec<(usize, u32)>,
 }
 
 impl ArenaStateIr {
@@ -669,6 +671,7 @@ impl ArenaStateIr {
             cursor: 0,
             total: 0,
             live: true,
+            alloc_tracker: vec![],
         }
     }
 
@@ -691,6 +694,8 @@ impl ArenaStateIr {
                 .try_reserve_exact(size)
                 .map_err(|_| ArenaAllocErrIr::Oom)?;
             block.resize(size, 0u8);
+            // G5/§8.3 Debug 泄漏检测：登记 Arena 块分配
+            self.alloc_tracker.push((block.len(), 0));
             self.blocks.push(block);
             self.cursor = 0;
         }
@@ -704,6 +709,7 @@ impl ArenaStateIr {
     /// deinit：清空全部块（归还 backing）、重置统计、标记不可用
     fn deinit(&mut self) {
         self.blocks.clear();
+        self.alloc_tracker.clear();
         self.cursor = 0;
         self.total = 0;
         self.live = false;

@@ -174,6 +174,9 @@ pub struct ArenaState {
     pub total: usize,
     /// 可用标志（`deinit` 后 false → `alloc` 抛 `ArenaDeinitialized`）
     pub live: bool,
+    /// G5/§8.3 Debug 泄漏检测：Arena 块分配登记表（`Arena.init(alloc)` 时从 Interp 共享；
+    /// deinit 清 block 后弱引用失效自动视为释放；退出时仍存活者 = 泄漏）
+    pub alloc_tracker: Option<Rc<RefCell<Vec<LeakRecord>>>>,
 }
 
 unsafe impl Send for ArenaState {}
@@ -241,6 +244,7 @@ impl ArenaState {
             cursor: 0,
             total: 0,
             live: true,
+            alloc_tracker: None,
         }
     }
 
@@ -266,7 +270,16 @@ impl ArenaState {
                 .try_reserve_exact(size)
                 .map_err(|_| ArenaAllocErr::Oom)?;
             block.resize(size, 0u8);
-            self.blocks.push(Rc::new(RefCell::new(block)));
+            let block_rc = Rc::new(RefCell::new(block));
+            // G5/§8.3 Debug 泄漏检测：登记 Arena 块分配（弱引用随 deinit 失效）
+            if let Some(ref tracker) = self.alloc_tracker {
+                tracker.borrow_mut().push(LeakRecord {
+                    size: block_rc.borrow().len(),
+                    line: 0,
+                    weak: Rc::downgrade(&block_rc),
+                });
+            }
+            self.blocks.push(block_rc);
             self.cursor = 0;
         }
         let block = self.blocks.last().unwrap().clone();
