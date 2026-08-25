@@ -135,6 +135,14 @@ impl Interp {
                 fields,
                 ..
             } => {
+                // Map<K,V>{k = v, ...} 容器字面量（ADR-0027）
+                if ty == "Map" {
+                    let mut m = HashMap::new();
+                    for (k, v) in fields {
+                        m.insert(k.clone(), self.eval(v)?);
+                    }
+                    return Ok(Value::map(m, Value::Alloc));
+                }
                 // class 字面量构造 / enum 带负载字面量。
                 // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 let ty = if ty_args.is_empty() {

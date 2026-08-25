@@ -1601,6 +1601,35 @@ impl<'a> LowerCtx<'a> {
                 span,
                 ..
             } => {
+                // Map<K,V>{k = v, ...} 容器字面量（ADR-0027）
+                if ty == "Map" {
+                    let alloc_t = self.alloc_slot();
+                    self.push(IrInst::LoadGlobal {
+                        temp: alloc_t,
+                        name: "alloc".to_string(),
+                    });
+                    self.push(IrInst::CallBuiltin {
+                        name: "Map.init".to_string(),
+                        args: vec![alloc_t],
+                        temp: t,
+                    });
+                    for (key, val_expr) in fields {
+                        let key_t = self.alloc_slot();
+                        self.push(IrInst::Const {
+                            temp: key_t,
+                            val: IrConst::Str(key.clone()),
+                        });
+                        let val_t = self.lower_expr(val_expr);
+                        let discard_t = self.alloc_slot();
+                        self.push(IrInst::CallMethod {
+                            temp: discard_t,
+                            base: t,
+                            method: "put".to_string(),
+                            args: vec![key_t, val_t],
+                        });
+                    }
+                    return t;
+                }
                 // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 // 具体化失败（实参个数/形态不符）→ 硬错误。
                 let ty = if ty_args.is_empty() {
