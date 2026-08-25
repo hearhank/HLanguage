@@ -695,6 +695,16 @@ impl Interp {
                 "len" => Ok(Value::Int(m.borrow().fields.len() as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
             },
+            // String 值类型：.len
+            Value::String(s) => match field {
+                "len" => Ok(Value::Int(s.len() as i128)),
+                _ => Err(RtError::new("NoField", Some(span.clone()))),
+            },
+            // Bytes 原始内存块：.len
+            Value::Bytes(b) => match field {
+                "len" => Ok(Value::Int(b.borrow().len() as i128)),
+                _ => Err(RtError::new("NoField", Some(span.clone()))),
+            },
             Value::Slice { len, .. } => match field {
                 "len" => Ok(Value::Int(*len as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
