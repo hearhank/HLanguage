@@ -189,9 +189,10 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
             }
             if let Err(e) = interp.load(program) {
                 eprintln!(
-                    "{} {name} (load error: {})",
+                    "{} {name} (load error: {}: {})",
                     paint(err_color(), "31", "[FAIL]"),
-                    e.name
+                    e.name,
+                    e.message
                 );
                 total_f += 1;
                 all_ok = false;
