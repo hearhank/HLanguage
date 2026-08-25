@@ -585,6 +585,14 @@ impl Value {
     pub fn str(s: &str) -> Value {
         Value::str_bytes(s.as_bytes().to_vec())
     }
+    /// 从 `&[u8]` 或 `String` 提取字节（用于 IO/FS 等需要字节数据的函数）
+    pub fn extract_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            Value::Str(s) => Some(s.borrow().clone()),
+            Value::String(s) => Some(s.as_slice().to_vec()),
+            _ => None,
+        }
+    }
     pub fn arr(items: Vec<Value>) -> Value {
         let items = items
             .into_iter()

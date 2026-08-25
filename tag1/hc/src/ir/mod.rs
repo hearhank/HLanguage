@@ -546,6 +546,7 @@ impl PartialEq for IrValue {
             (IrValue::Float(a), IrValue::Float(b)) => a == b,
             (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
             (IrValue::Str(a), IrValue::Str(b)) => a == b,
+            (IrValue::String(a), IrValue::String(b)) => a == b,
             (IrValue::Opt(a), IrValue::Opt(b)) => a == b,
             (IrValue::Err { name: an, code: ac }, IrValue::Err { name: bn, code: bc }) => {
                 an == bn && ac == bc
@@ -1200,6 +1201,7 @@ fn match_pattern(subject: &IrValue, pat: &IrPattern) -> bool {
         (IrValue::Int(i), IrPattern::Int(s)) => *i == *s,
         (IrValue::Float(f), IrPattern::Float(s)) => *f == *s,
         (IrValue::Str(st), IrPattern::Str(s)) => *st == s.as_bytes(),
+        (IrValue::String(st), IrPattern::Str(s)) => st.as_slice() == s.as_bytes(),
         (IrValue::Int(c), IrPattern::Char(pc)) => *c == *pc as i128,
         (IrValue::Err { name, .. }, IrPattern::Error(pe)) => name == pe,
         (IrValue::Bool(b), IrPattern::Ident(s)) => (*b && s == "true") || (!*b && s == "false"),
@@ -1365,6 +1367,14 @@ fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<V
                 is_ref: false,
             })
             .collect()),
+        IrValue::String(s) => Ok(s
+            .as_slice()
+            .iter()
+            .map(|b| IterItem {
+                cell: ctx.alloc(Cell::Value(IrValue::Int(*b as i128))),
+                is_ref: false,
+            })
+            .collect()),
         other => Err(IrError::msg(
             "NotIterable",
             format!("value of type `{}` is not iterable", type_descr(&other)),
@@ -1391,6 +1401,13 @@ fn field_value(ctx: &Ctx, b: &IrValue, field: &str) -> R<IrValue> {
             _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
         },
         IrValue::Str(s) => {
+            if field == "len" {
+                Ok(IrValue::Int(s.len() as i128))
+            } else {
+                Err(IrError::msg("NoField", format!("no field `{field}`")))
+            }
+        }
+        IrValue::String(s) => {
             if field == "len" {
                 Ok(IrValue::Int(s.len() as i128))
             } else {
@@ -1468,6 +1485,13 @@ fn index_value(ctx: &Ctx, b: &IrValue, i: usize) -> R<IrValue> {
             }
             Ok(IrValue::Int(s[i] as i128))
         }
+        IrValue::String(s) => {
+            let bytes = s.as_slice();
+            if i >= bytes.len() {
+                return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
+            }
+            Ok(IrValue::Int(bytes[i] as i128))
+        }
         IrValue::Slice { data, start, len } => {
             if i >= *len {
                 return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
@@ -1519,6 +1543,14 @@ fn slice_of(ctx: &Ctx, b: &IrValue, lo: usize, hi: usize, open_end: bool) -> R<I
         },
         IrValue::Str(s) => {
             let bytes = s.clone();
+            let h = if open_end { bytes.len() } else { hi };
+            if h > bytes.len() || lo > bytes.len() {
+                return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
+            }
+            Ok(IrValue::Str(bytes[lo..h].to_vec()))
+        }
+        IrValue::String(s) => {
+            let bytes = s.as_slice();
             let h = if open_end { bytes.len() } else { hi };
             if h > bytes.len() || lo > bytes.len() {
                 return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
@@ -1678,6 +1710,7 @@ impl IrValue {
             IrValue::Int(i) => *i != 0,
             IrValue::Float(f) => *f != 0.0,
             IrValue::Str(s) => !s.is_empty(),
+            IrValue::String(s) => !s.is_empty(),
             IrValue::Opt(Some(v)) => v.as_bool(),
             // 指针恒真（对齐 tree-walking `Value::Ptr(_) => true`）
             IrValue::Ptr(_) => true,
@@ -1793,6 +1826,7 @@ impl IrValue {
             (IrValue::Float(a), IrValue::Float(b)) => a == b,
             (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
             (IrValue::Str(a), IrValue::Str(b)) => a == b,
+            (IrValue::String(a), IrValue::String(b)) => a == b,
             (IrValue::Opt(a), IrValue::Opt(b)) => match (a, b) {
                 (Some(x), Some(y)) => x.value_eq(ctx, y),
                 (None, None) => true,

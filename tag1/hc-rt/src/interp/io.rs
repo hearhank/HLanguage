@@ -35,10 +35,9 @@ impl Interp {
         }
         let fmt = self.eval(&args[0])?;
         let fmt = self.deref_value(fmt);
-        let fmt = match fmt {
-            Value::Str(s) => s.borrow().clone(),
-            _ => return Err(RtError::new("TypeError", Some(span.clone()))),
-        };
+        let fmt = fmt
+            .extract_bytes()
+            .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
         let mut out = Vec::new();
         let mut argi = 1;
         let mut i = 0;
@@ -165,10 +164,9 @@ impl Interp {
             .get(i)
             .ok_or_else(|| RtError::new("ArityMismatch", Some(span.clone())))?;
         let v = self.eval(a)?;
-        match self.deref_value(v) {
-            Value::Str(s) => Ok(s.borrow().clone()),
-            _ => Err(RtError::new("TypeError", Some(span.clone()))),
-        }
+        self.deref_value(v)
+            .extract_bytes()
+            .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))
     }
 
     /// 求值第 i 个参数为路径字符串（fs 函数路径参数）
@@ -772,6 +770,11 @@ impl Interp {
                     }
                     Value::Str(s) => {
                         let path = String::from_utf8_lossy(&s.borrow()).into_owned();
+                        let entries = self.list_dir_entries(&path)?;
+                        Ok(Some(entries))
+                    }
+                    Value::String(s) => {
+                        let path = String::from_utf8_lossy(s.as_slice()).into_owned();
                         let entries = self.list_dir_entries(&path)?;
                         Ok(Some(entries))
                     }
@@ -2782,8 +2785,10 @@ impl Interp {
             let v = &vals[ix];
             match v {
                 Value::Str(s) => Ok(s.borrow().clone()),
+                Value::String(s) => Ok(s.as_slice().to_vec()),
                 Value::Ptr(p) => match &*p.borrow() {
                     Value::Str(s) => Ok(s.borrow().clone()),
+                    Value::String(s) => Ok(s.as_slice().to_vec()),
                     _ => Err(RtError::new("TypeError", Some(span.clone()))),
                 },
                 _ => Err(RtError::new("TypeError", Some(span.clone()))),
@@ -2898,28 +2903,28 @@ impl Interp {
             "json.parse" => {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
-                if let Value::Str(s) = v {
-                    let text = String::from_utf8_lossy(&s.borrow()).to_string();
-                    let obj = self.parse_json_obj(&text)?;
-                    return Ok(Value::class("Map", obj));
-                }
-                Err(RtError::new("TypeError", Some(span.clone())))
+                let bytes = v
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let text = String::from_utf8_lossy(&bytes).to_string();
+                let obj = self.parse_json_obj(&text)?;
+                return Ok(Value::class("Map", obj));
             }
             "csv.parse" => {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
-                if let Value::Str(s) = v {
-                    let text = String::from_utf8_lossy(&s.borrow()).to_string();
-                    let rows = text
-                        .split('\n')
-                        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-                        .filter(|line| !line.is_empty())
-                        .map(|line| line.split(',').map(Value::str).collect::<Vec<_>>())
-                        .map(Value::arr)
-                        .collect::<Vec<_>>();
-                    return Ok(Value::arr(rows));
-                }
-                Err(RtError::new("TypeError", Some(span.clone())))
+                let bytes = v
+                    .extract_bytes()
+                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
+                let text = String::from_utf8_lossy(&bytes).to_string();
+                let rows = text
+                    .split('\n')
+                    .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                    .filter(|line| !line.is_empty())
+                    .map(|line| line.split(',').map(Value::str).collect::<Vec<_>>())
+                    .map(Value::arr)
+                    .collect::<Vec<_>>();
+                return Ok(Value::arr(rows));
             }
             // parse_int/parse_float/parse_number/skip_space/peek/advance/is_digit/expect
             _ => match self.call_builtin(helper, args, span)? {
@@ -3018,6 +3023,7 @@ impl Interp {
                 let sep = self.deref_value(sep);
                 let sep_bytes: Vec<u8> = match &sep {
                     Value::Str(s) => s.borrow().clone(),
+                    Value::String(s) => s.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 let items: Vec<Vec<u8>> = match &parts {
