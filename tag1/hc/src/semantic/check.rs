@@ -365,7 +365,7 @@ impl Checker {
                 );
                 // 2026-08-25：owned 或堆分配类型变量登记到 owned_stack
                 let is_owned = matches!(ty, Some(Type::Owned(_)));
-                let is_heap = source == AllocSource::NonArena;
+                let is_heap = source == AllocSource::NonArena || source == AllocSource::Unknown;
                 if is_owned || is_heap {
                     self.owned_stack.last_mut().unwrap().push(name.clone());
                 }
