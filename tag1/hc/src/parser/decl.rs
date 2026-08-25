@@ -21,8 +21,8 @@ fn parse_pad_trait(_p: &mut Parser) -> Result<Trait, Diagnostic> {
     Ok(Trait::Pad)
 }
 
-fn parse_module_trait(_p: &mut Parser) -> Result<Trait, Diagnostic> {
-    Ok(Trait::Module)
+fn parse_module_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
+    Err(p.error_at("[module] is removed. Use `src/Modules/` directory instead (see ADR-0026)."))
 }
 
 fn parse_align_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
