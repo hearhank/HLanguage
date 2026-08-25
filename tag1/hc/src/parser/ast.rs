@@ -161,8 +161,9 @@ impl Decl {
 }
 
 /// D1 并发测试 runner：测试执行模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TestMode {
+    #[default]
     Serial,
     Async,
     Thread,

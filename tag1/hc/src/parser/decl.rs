@@ -3,6 +3,7 @@
 use super::*;
 use crate::ast::*;
 use crate::diag::Diagnostic;
+use crate::parser::test_attribute::TestAttributeExt;
 use crate::semantic::trait_registry::TraitRegistry;
 use crate::token::TokenKind;
 
@@ -43,83 +44,7 @@ fn parse_align_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
 }
 
 fn parse_test_trait(p: &mut Parser) -> Result<Trait, Diagnostic> {
-    let mut name = None;
-    let mut mode = TestMode::Serial;
-    let mut timeout = None;
-    if p.at(&TokenKind::LParen) {
-        p.advance();
-        if !p.at(&TokenKind::RParen) {
-            let tok = p.peek().clone();
-            match tok {
-                TokenKind::Str(s) => {
-                    p.advance();
-                    name = Some(s);
-                }
-                TokenKind::KwAsync => {
-                    p.advance();
-                    mode = TestMode::Async;
-                }
-                TokenKind::Ident(id) if id == "thread" => {
-                    p.advance();
-                    mode = TestMode::Thread;
-                }
-                TokenKind::Ident(id) if id == "timeout" => {
-                    p.advance();
-                    p.expect(&TokenKind::Eq, "`=` after timeout")?;
-                    if let TokenKind::Int(n) = p.peek().clone() {
-                        p.advance();
-                        timeout = Some(
-                            n.trim_end_matches(|c: char| c.is_alphabetic())
-                                .replace('_', "")
-                                .parse::<u64>()
-                                .map_err(|_| p.error_at(format!("invalid timeout value `{n}`")))?,
-                        );
-                    } else {
-                        return Err(p.error_at("expected integer timeout value"));
-                    }
-                }
-                _ => return Err(p.error_at("expected test name, mode, or timeout")),
-            }
-            while p.at(&TokenKind::Comma) {
-                p.advance();
-                let tok = p.peek().clone();
-                match tok {
-                    TokenKind::KwAsync => {
-                        p.advance();
-                        mode = TestMode::Async;
-                    }
-                    TokenKind::Ident(id) if id == "thread" => {
-                        p.advance();
-                        mode = TestMode::Thread;
-                    }
-                    TokenKind::Ident(id) if id == "timeout" => {
-                        p.advance();
-                        p.expect(&TokenKind::Eq, "`=` after timeout")?;
-                        if let TokenKind::Int(n) = p.peek().clone() {
-                            p.advance();
-                            timeout = Some(
-                                n.trim_end_matches(|c: char| c.is_alphabetic())
-                                    .replace('_', "")
-                                    .parse::<u64>()
-                                    .map_err(|_| {
-                                        p.error_at(format!("invalid timeout value `{n}`"))
-                                    })?,
-                            );
-                        } else {
-                            return Err(p.error_at("expected integer timeout value"));
-                        }
-                    }
-                    _ => return Err(p.error_at("expected async, thread, or timeout=N")),
-                }
-            }
-        }
-        p.expect(&TokenKind::RParen, "`)")?;
-    }
-    Ok(Trait::Test {
-        name,
-        mode,
-        timeout,
-    })
+    p.parse_test_attr()
 }
 
 /// 注册系统特性处理器到注册表
@@ -444,7 +369,7 @@ impl Parser {
 
         // 按名称分发到对应特性类型
         match name {
-            "test" => self.build_test_from_struct(fields),
+            "test" => self.build_test_from_attr(fields),
             "align" => self.build_align_from_struct(fields),
             _ => {
                 let known = self.trait_registry.known_names().join(", ");
@@ -454,51 +379,6 @@ impl Parser {
                 ))
             }
         }
-    }
-
-    /// 从 struct 字面量构建 `[test{...}]` 特性
-    fn build_test_from_struct(&self, fields: Vec<(String, Expr)>) -> Result<Trait, Diagnostic> {
-        let mut name = None;
-        let mut mode = TestMode::Serial;
-        let mut timeout = None;
-        for (fname, fval) in &fields {
-            match fname.as_str() {
-                "name" => {
-                    if let Expr::StrLit { value, .. } = fval {
-                        name = Some(value.clone());
-                    } else {
-                        return Err(self.error_at("test.name must be a string literal"));
-                    }
-                }
-                "mode" => match fval {
-                    Expr::Ident(s, _) if s == "async" => mode = TestMode::Async,
-                    Expr::Ident(s, _) if s == "thread" => mode = TestMode::Thread,
-                    _ => return Err(self.error_at("test.mode must be `async` or `thread`")),
-                },
-                "timeout" => {
-                    if let Expr::IntLit { text, .. } = fval {
-                        let n = text
-                            .trim_end_matches(|c: char| c.is_alphabetic())
-                            .replace('_', "")
-                            .parse::<u64>()
-                            .map_err(|_| {
-                                self.error_at(format!("invalid timeout value `{text}`"))
-                            })?;
-                        timeout = Some(n);
-                    } else {
-                        return Err(self.error_at("test.timeout must be an integer"));
-                    }
-                }
-                _ => {
-                    return Err(self.error_at(format!("unknown field `{fname}` in test attribute")));
-                }
-            }
-        }
-        Ok(Trait::Test {
-            name,
-            mode,
-            timeout,
-        })
     }
 
     /// 从 struct 字面量构建 `[align{value=N}]` 特性

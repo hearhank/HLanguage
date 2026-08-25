@@ -8,6 +8,7 @@ pub use ast::*;
 mod decl;
 mod expr;
 mod stmt;
+pub mod test_attribute;
 mod r#type;
 mod type_decl;
 mod util;
