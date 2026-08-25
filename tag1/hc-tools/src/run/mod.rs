@@ -43,7 +43,7 @@ pub(crate) fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
     // M1-1：文件级命名空间自动推断
     let project_root = script::find_project_root(path);
     let ns_name = script::compute_namespace_name(path, project_root.as_deref());
-    script::infer_namespace(&mut program, &ns_name);
+    script::infer_namespace(&mut program, &ns_name, Some(path));
     let mut interp = Interp::new(&source);
     // A3：程序 args（[程序名] + 文件后参数）；io.args() 已取消
     interp.args = prog_args.to_vec();
@@ -228,7 +228,7 @@ pub(crate) fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(),
                     // M1-1：兄弟文件命名空间自动推断
                     let project_root = script::find_project_root(s);
                     let ns_name = script::compute_namespace_name(s, project_root.as_deref());
-                    script::infer_namespace(&mut p, &ns_name);
+                    script::infer_namespace(&mut p, &ns_name, Some(s));
                     programs.push(p);
                 }
                 Err(msg) => {
@@ -595,7 +595,7 @@ pub(crate) fn run_file_dangle_bench(
     // M1-1：文件级命名空间自动推断
     let project_root = crate::script::find_project_root(path);
     let ns_name = crate::script::compute_namespace_name(path, project_root.as_deref());
-    crate::script::infer_namespace(&mut program, &ns_name);
+    crate::script::infer_namespace(&mut program, &ns_name, Some(path));
     let t2 = if bench { Some(Instant::now()) } else { None };
     let mut interp = Interp::new(&source);
     interp.set_debug_dangling(dangle.is_on());

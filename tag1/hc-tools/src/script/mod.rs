@@ -69,10 +69,18 @@ pub(crate) fn write_cache(path: &PathBuf, content: &str) {
     let _ = std::fs::write(path, content);
 }
 
+/// 判断文件路径是否在 src/Modules/ 目录下（ADR-0026 模块约定）
+pub fn is_module_path(path: &Path) -> bool {
+    path.to_str().map_or(false, |s| {
+        s.contains("src/Modules/") || s.contains("src\\Modules\\")
+    })
+}
+
 /// M1-1：文件级命名空间自动推断。
 /// 如果文件没有显式 `Decl::Namespace`，则根据 `ns_name` 包裹所有声明。
 /// 一个文件只能有一个命名空间（设计决策 D1）。
-pub fn infer_namespace(program: &mut Program, ns_name: &str) {
+/// `file_path` 可选，用于判断文件是否在 src/Modules/ 下（模块隔离）。
+pub fn infer_namespace(program: &mut Program, ns_name: &str, file_path: Option<&Path>) {
     let has_explicit = program
         .decls
         .iter()
@@ -80,12 +88,13 @@ pub fn infer_namespace(program: &mut Program, ns_name: &str) {
     if has_explicit {
         return;
     }
+    let is_module = file_path.map_or(false, |p| is_module_path(p));
     let decls = std::mem::take(&mut program.decls);
     program.decls = vec![Decl::Namespace {
         name: ns_name.to_string(),
         decls,
         pub_: true,
-        is_module: false,
+        is_module,
         span: Span::new(0, 0, 0, 0),
     }];
 }

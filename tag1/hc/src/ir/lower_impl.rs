@@ -1630,6 +1630,26 @@ impl<'a> LowerCtx<'a> {
                     }
                     return t;
                 }
+                // Vec<T>{} / Deque<T>{} 空容器字面量（ADR-0027）
+                if ty == "Vec" || ty == "Deque" {
+                    let alloc_t = self.alloc_slot();
+                    self.push(IrInst::LoadGlobal {
+                        temp: alloc_t,
+                        name: "alloc".to_string(),
+                    });
+                    self.push(IrInst::CallBuiltin {
+                        name: "Vec.init".to_string(),
+                        args: if fields.is_empty() {
+                            vec![alloc_t]
+                        } else {
+                            // 非空字段暂不支持（Vec<T>{a = 1} 无意义）
+                            self.fail_void(t, &format!("容器 `{ty}` 的字面量不允许命名字段"), span);
+                            return t;
+                        },
+                        temp: t,
+                    });
+                    return t;
+                }
                 // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 // 具体化失败（实参个数/形态不符）→ 硬错误。
                 let ty = if ty_args.is_empty() {

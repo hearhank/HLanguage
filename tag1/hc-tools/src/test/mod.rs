@@ -185,7 +185,7 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
                         // M1-1：文件级命名空间自动推断
                         let project_root = script::find_project_root(f);
                         let ns_name = script::compute_namespace_name(f, project_root.as_deref());
-                        script::infer_namespace(&mut p, &ns_name);
+                        script::infer_namespace(&mut p, &ns_name, Some(f));
                         parsed.push((f.clone(), expanded, p));
                     }
                     Err(msg) => {
@@ -226,7 +226,7 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
                             let project_root = script::find_project_root(sf);
                             let ns_name =
                                 script::compute_namespace_name(sf, project_root.as_deref());
-                            script::infer_namespace(&mut p, &ns_name);
+                            script::infer_namespace(&mut p, &ns_name, Some(sf));
                             src_programs.push(p);
                         }
                     }

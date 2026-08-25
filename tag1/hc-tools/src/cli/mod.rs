@@ -823,12 +823,16 @@ fn dump_expr(expr: &hc::ast::Expr, depth: usize) {
                 dump_expr(e, depth + 1);
             }
         }
-        hc::ast::Expr::ContainerLit { ty, ty_args, items, .. } => {
+        hc::ast::Expr::ContainerLit {
+            ty, ty_args, items, ..
+        } => {
             print!("{indent}ContainerLit|ty={ty}");
             if !ty_args.is_empty() {
                 print!("|ty_args=[");
                 for (i, ta) in ty_args.iter().enumerate() {
-                    if i > 0 { print!(", "); }
+                    if i > 0 {
+                        print!(", ");
+                    }
                     print!("{}", hc::ast::fmt_type_debug(ta));
                 }
                 print!("]");
@@ -1171,7 +1175,7 @@ fn check_file(path: &Path) -> Result<(), ExitCode> {
             // M1-1：文件级命名空间自动推断
             let project_root = script::find_project_root(path);
             let ns_name = script::compute_namespace_name(path, project_root.as_deref());
-            script::infer_namespace(&mut program, &ns_name);
+            script::infer_namespace(&mut program, &ns_name, Some(path));
             let mut interp = Interp::new(&source);
             // M1.4：同包兄弟文件先登记符号（解析失败仅告警）
             if let Err(code) = load_siblings_into(&mut interp, path) {

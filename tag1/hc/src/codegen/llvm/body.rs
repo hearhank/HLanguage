@@ -1013,6 +1013,29 @@ impl BodyEmitter {
             }
             _ => {}
         }
+        // ---------- Vec.init(alloc) / Vec.init(alloc, arr) 集合字面量 ----------
+        // 集合字面量 `Vec<T>[1, 2, 3]` 经 IR 降级为 MakeArr + CallBuiltin("Vec.init", [alloc, arr])。
+        // 空 Vec `Vec<T>{}` 降级为 CallBuiltin("Vec.init", [alloc])。
+        // LLVM 后端 Arr 与 Vec 共用 T_ARR 标签：
+        // - 有 arr 参数：透传 arr 值
+        // - 无 arr 参数：hc_make_arr(i64 0) 创建空数组
+        if name == "Vec.init" {
+            if args.len() >= 2 {
+                let Some(&arr_slot) = args.get(1) else {
+                    self.abort_feature("builtin");
+                    return;
+                };
+                let v = self.r();
+                self.emit(format!("{v} = load %Value, %Value* %sp.{arr_slot}"));
+                self.emit(format!("store %Value {v}, %Value* %sp.{temp}"));
+                return;
+            }
+            // 空 Vec: Vec.init(alloc) → hc_make_arr(i64 0)
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @hc_make_arr(i64 0)"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
         // ---------- 其余内建（sort/binary_search/集合/json/csv/io/fs/时间）→ 响亮拒绝 ----------
         self.abort_feature("builtin");
     }
