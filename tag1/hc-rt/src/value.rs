@@ -80,6 +80,8 @@ pub enum Value {
     Mutex(Arc<StdMutex<Value>>),
     /// 通道（E4：M:N 协程通信——chan<T> 替代 Pipe/Tee/Funnel/Hub）
     Chan(Arc<ChanState>),
+    /// IoC 容器上下文（ADR-0026：AppContext / 模块 Context，背靠 Arena）
+    Context(Rc<RefCell<ContextState>>),
     /// 空值 / void
     Void,
     /// M2.5/M4.7 悬垂标记：目标已销毁（Debug 下指针访问抛错带位置）
@@ -303,7 +305,93 @@ impl ArenaState {
     }
 }
 
-/// 分配器返回的内存块
+/// IoC 容器上下文状态（ADR-0026：AppContext / 模块 Context，背靠 Arena）
+#[derive(Debug, Clone)]
+pub struct ContextState {
+    /// 注册表：(type_name, name) → 存储的值
+    pub registry: HashMap<String, Value>,
+    /// 工厂函数注册表：(type_name, name) → 闭包
+    pub factories: HashMap<String, Value>,
+    /// 父 context（用于层级委托）
+    pub parent: Option<Weak<RefCell<ContextState>>>,
+    /// 可用标志
+    pub live: bool,
+}
+
+impl ContextState {
+    pub fn new() -> Self {
+        Self {
+            registry: HashMap::new(),
+            factories: HashMap::new(),
+            parent: None,
+            live: true,
+        }
+    }
+
+    /// 注册单例实例（深拷贝到 registry）
+    pub fn register(&mut self, type_name: &str, value: Value) {
+        self.registry.insert(type_name.to_string(), value);
+    }
+
+    /// 命名注册
+    pub fn register_named(&mut self, type_name: &str, name: &str, value: Value) {
+        let key = format!("{}:{}", type_name, name);
+        self.registry.insert(key, value);
+    }
+
+    /// 获取注册的实例（查找自身，未找到时委托父 context）
+    pub fn get(&self, type_name: &str) -> Option<Value> {
+        if let Some(v) = self.registry.get(type_name) {
+            return Some(v.clone());
+        }
+        // 委托父 context
+        if let Some(ref parent) = self.parent {
+            if let Some(p) = parent.upgrade() {
+                return p.borrow().get(type_name);
+            }
+        }
+        None
+    }
+
+    /// 按名获取
+    pub fn get_named(&self, type_name: &str, name: &str) -> Option<Value> {
+        let key = format!("{}:{}", type_name, name);
+        if let Some(v) = self.registry.get(&key) {
+            return Some(v.clone());
+        }
+        if let Some(ref parent) = self.parent {
+            if let Some(p) = parent.upgrade() {
+                return p.borrow().get_named(type_name, name);
+            }
+        }
+        None
+    }
+
+    /// 注册工厂
+    pub fn register_factory(&mut self, name: &str, factory: Value) {
+        self.factories.insert(name.to_string(), factory);
+    }
+
+    /// 获取工厂
+    pub fn get_factory(&self, name: &str) -> Option<Value> {
+        if let Some(f) = self.factories.get(name) {
+            return Some(f.clone());
+        }
+        if let Some(ref parent) = self.parent {
+            if let Some(p) = parent.upgrade() {
+                return p.borrow().get_factory(name);
+            }
+        }
+        None
+    }
+
+    /// 清理全部注册
+    pub fn deinit(&mut self) {
+        self.registry.clear();
+        self.factories.clear();
+        self.live = false;
+    }
+}
 #[derive(Debug, Clone)]
 pub struct AllocBlock {
     pub data: Rc<RefCell<Vec<u8>>>,
@@ -738,6 +826,7 @@ impl Value {
                 ch.inner.lock().unwrap().queue.len(),
                 ch.capacity
             ),
+            Value::Context(_) => "Context".to_string(),
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -871,6 +960,7 @@ impl Value {
                 _ => false,
             },
             (Value::Chan(a), Value::Chan(b)) => Arc::ptr_eq(a, b),
+            (Value::Context(a), Value::Context(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -935,6 +1025,7 @@ impl Value {
             Value::LazyIter(_) => "LazyIter".into(),
             Value::Mutex(_) => "Mutex".into(),
             Value::Chan(_) => "Chan".into(),
+            Value::Context(_) => "Context".into(),
             Value::Void => "void".into(),
             Value::Dangling => "dangling".into(),
         }

@@ -2021,6 +2021,86 @@ impl Interp {
             (Value::Chan(ch), _) => {
                 return self.call_chan_method(ch, field, args, span);
             }
+            // IoC Context 方法（ADR-0026：register / get / make / registerFactory / deinit）
+            (Value::Context(ctx), "register") => {
+                if args.len() < 2 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let type_name = self.eval(&args[0])?;
+                let type_name = self.deref_value(type_name);
+                let type_name_str = match &type_name {
+                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let impl_v = self.eval(&args[1])?;
+                let impl_v = self.deref_value(impl_v);
+                ctx.borrow_mut().register(&type_name_str, impl_v);
+                Ok(Some(Value::Void))
+            }
+            (Value::Context(ctx), "get") => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let type_name = self.eval(&args[0])?;
+                let type_name = self.deref_value(type_name);
+                let type_name_str = match &type_name {
+                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                match ctx.borrow().get(&type_name_str) {
+                    Some(v) => Ok(Some(Value::Ptr(Rc::new(RefCell::new(v))))),
+                    None => Ok(Some(Value::Opt(None))),
+                }
+            }
+            (Value::Context(ctx), "registerFactory") => {
+                if args.len() < 2 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let name = self.eval(&args[0])?;
+                let name = self.deref_value(name);
+                let name_str = match &name {
+                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let factory = self.eval(&args[1])?;
+                let factory = self.deref_value(factory);
+                ctx.borrow_mut().register_factory(&name_str, factory);
+                Ok(Some(Value::Void))
+            }
+            (Value::Context(ctx), "make") => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let name = self.eval(&args[0])?;
+                let name = self.deref_value(name);
+                let name_str = match &name {
+                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                match ctx.borrow().get_factory(&name_str) {
+                    Some(Value::Closure(c)) => {
+                        // 工厂闭包可能接受 0 参（无 context）或 1 参（接收 context）
+                        let ctx_val = Value::Context(ctx.clone());
+                        let arg_vals: Vec<Value> = if c.params.is_empty() {
+                            vec![]
+                        } else {
+                            vec![ctx_val]
+                        };
+                        let result = self.call_closure(&c, &arg_vals, span)?;
+                        Ok(Some(result))
+                    }
+                    Some(_) => Err(RtError::new("TypeError", Some(span.clone()))),
+                    None => Err(RtError::msg(
+                        "NotRegistered",
+                        format!("factory `{}` not registered", name_str),
+                    )),
+                }
+            }
+            (Value::Context(ctx), "deinit") => {
+                ctx.borrow_mut().deinit();
+                Ok(Some(Value::Void))
+            }
+            (Value::Context(_), _) => Err(RtError::new("NoMethod", Some(span.clone()))),
             _ => Ok(None),
         }
     }

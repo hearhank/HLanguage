@@ -1208,6 +1208,10 @@ impl Interp {
                         arena.alloc_tracker = Some(self.alloc_tracker.clone());
                         return Ok(Value::Arena(Rc::new(RefCell::new(arena))));
                     }
+                    // AppContext.init(alloc) 内建：IoC 容器上下文（ADR-0026）
+                    if bname == "AppContext" && field == "init" {
+                        return Ok(Value::Context(Rc::new(RefCell::new(ContextState::new()))));
+                    }
                     // Pool.init(backing, item_size) 内建：固定大小对象池（Phase 3）
                     if bname == "Pool" && field == "init" {
                         if args.len() < 2 {

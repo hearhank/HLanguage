@@ -1,6 +1,8 @@
 # 入口与导入定案：main(args) + import 语句取代 using
 
 > 2026-08-17 定案（第二部分评审 Q9/Q13/Q14）。关联：[ADR-0002 初始编译器](0002-initial-compiler-in-rust.md)、[06-08-modules.md](../SPEC/06-08-modules.md)、[04-stdlib-scope.md](../SPEC/04-stdlib-scope.md)、执行细表 [09-part2-execution.md](../SPEC/09-part2-execution.md)。
+>
+> **2026-08-25 更新**：本 ADR 中关于 `[module]` 特性标记的条款已被 ADR-0026 取代。模块系统改为 `src/Modules/` 目录驱动 + `IContext` IoC 容器架构。详见 ADR-0026。
 
 ## 背景
 

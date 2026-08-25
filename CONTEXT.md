@@ -286,25 +286,50 @@ _Avoid_: 普通函数用 anyerror 偷懒
 内置终止原语（2026-08-13 Q-S2 定案）：不可恢复运行时错误（Debug 悬垂标记开启时访问已标记悬垂指针）调用 `@panic("消息", 位置)`——打印消息 + 位置（Debug 带堆栈）后 **abort 终止**；**不执行 defer 清理**、**无 unwind/recover**（回卷是隐式控制流，不引入）；测试环境内 panic → 该测试记 FAIL（不终止整个 hc test）。
 _Avoid_: 用 panic 替代 error union（可恢复错误走 `E!T`）
 
-## 10. 模块与包（M1/M8，2026-08-23 重构）
+## 10. 模块与包（M1/M8，2026-08-25 重构：ADR-0026）
 
-**命名空间 (Namespace, 2026-08-23 重构)**:
+### 目录结构
+
+```
+project/
+├── src/
+│   ├── main.hc              # 入口，命名空间 = 项目名
+│   ├── Modules/
+│   │   ├── Auth/             # 模块，命名空间 = project.Auth
+│   │   │   ├── context.hc    # 模块 context（IContext 实现）
+│   │   │   ├── interfaces.hc # 公开接口定义
+│   │   │   └── services.hc   # 内部实现
+│   │   └── Storage/          # 模块，命名空间 = project.Storage
+│   │       ├── context.hc
+│   │       ├── interfaces.hc
+│   │       └── storage.hc
+│   └── utils/                # 普通代码（非模块）
+│       └── helpers.hc
+tests/                        # 项目根目录，测试文件
+├── test_auth.hc
+└── test_storage.hc
+```
+
+### 命名空间 (Namespace)
+
 **文件路径即命名空间**——不再使用 C# 式块式 `namespace { }` 声明。规则：
 - 根入口文件 `src/main.hc` 的命名空间 = **项目名称**（build.zon 的 `name` 字段）
 - 标准库的根命名空间 = `H.std`
 - 子目录文件的命名空间 = `{上级命名空间}.{当前文件夹名称}`
-- 示例：`src/math/algebra.hc` → `{项目名}.math`（`main.hc` 的命名空间为 `{项目名}`，`math` 文件夹追加为 `{项目名}.math`）
+- 示例：`src/main.hc` → `{项目名}`；`src/Modules/Auth/services.hc` → `{项目名}.Auth`
 - 文件内不写 `namespace` 关键字时，自动归属上述路径命名空间
 - 文件内写 `namespace abc { }` 时，**覆盖**默认路径命名空间，指定为 `abc`
 - 编译时按命名空间将同空间文件编译在一起
 - `namespace` 关键字仍可用于**显式覆盖**默认路径命名空间
 _Avoid_: 一文件多命名空间
 
-**引入 (using, 已废弃 → 将移除)**:
+### 引入 (using, 已废弃 → 将移除)
+
 `using Math;` 引入命名空间（2026-08-13 Q21 定案）——**2026-08-17 被 `import` 取代**（ADR-0010），**2026-08-23 决定移除**（解析到 `using` 直接报错）。
 _Avoid_: 通配符式隐式引入一切
 
-**导入 (import)**:
+### 导入 (import)
+
 文件级导入语句（2026-08-17 定案，ADR-0010——取代 using，推翻「无文件级 import」）：
 - `import pkg.mod.{sym as 别名}` — 符号选择 + `as` 重名重命名
 - `import pkg.mod;` — 整模块导入
@@ -313,41 +338,126 @@ _Avoid_: 通配符式隐式引入一切
 `H.std` = 内置标准库根路径，用户库经 build.zon 声明后按依赖名引用。**依赖解析顺序**：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。**重名冲突规则**：同名导入符号冲突 → 编译错误，用户必须用 `as` 显式消歧。**库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）。
 _Avoid_: 多套导入机制并存
 
-**`[module]` 特性标记 (2026-08-23 定案)**:
-`[module]` 是编译时特性标记（类似 `[test]` / `[Continuous]`），作用于文件级命名空间：
-- **不写 `[module]`**：该文件所在文件夹的**所有子文件夹内容编译为私有**（对外不可见）；当前文件夹内容编译为**公开**
-- **标记 `[module]`**：当前文件内容编译为公开；子文件夹内容编译为私有。对外部调用者来说，**该模块无子命名空间可见**
-- `[module]` 标记的文件必须定义 `context`（见下文）
-- 模块是高度集中的功能集，有明确的边界和依赖
+### 模块系统（ADR-0026，2026-08-25 定案）
 
-**`context`**：语言级关键字，**每个 `[module]` 只能有一个 `context`**。`context` 是模块的 `global` 变量，模块内所有类型默认可访问。设计参考：**Windows IOC 容器模式**——
-  - **接口注册**：`context.register(Interface, Implementation)`，在 `main` 中填充
-  - **IoC 反转实例化**：模块内部通过 `context.new(Interface, args...)` 实例化对象，由 context 解析依赖图
-  - **接口不可实例化**，但可继承（含默认实现）
-  - **类型安全**：`context.get(name: String, T: type) ?T` 通过 comptime 类型参数获得类型安全
-  - **初始化顺序**：`main` 中显式控制，编译器不做自动排序
-- 模块内类型直接创建外部类型 → 编译错误
-- 模块间连接：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交
+`[module]` 特性标记已移除，模块由 `src/Modules/` 目录结构定义。
 
-**程序环境 (io 模块)**:
+**模块定义规则**：
+- `src/Modules/` 下的每个子目录 = 一个模块。子目录名即模块名，编译器自动发现，无需手动声明。
+- 模块目录仅支持扁平结构，不支持嵌套子模块。嵌套应通过独立包实现。
+- 每个模块必须定义 context（`src/Modules/X/context.hc`），实现 `IContext` 接口。
+- 纯工具函数应放在 `src/` 下的非 `Modules/` 目录中，不放在模块目录下。
+- 模块内非 `pub` 符号对外不可见。模块的公开 API = context 结构体 + 接口定义。
+
+**模块与标准库**：
+- 标准库（`H.std`）可直接 `import` 使用。
+- 模块与标准库以外的对象交流，必须通过 context。
+
+### IContext 接口与 IoC 容器
+
+`IContext` 接口定义在 `H.std.ioc` 中，提供 IoC 容器能力：
+
+```h
+interface IContext {
+    fn register<T>(self, impl: T);                             // 注册单例（深拷贝到 Arena）
+    fn register<T>(self, name: &[u8], impl: T);                // 命名单例
+    fn registerFactory<T>(self, name: &[u8], factory: fn(ctx: &IContext) -> T);
+    fn get<T>(self) -> *T;                                     // 获取 Arena 引用（无所有权，不 defer）
+    fn get<T>(self, name: &[u8]) -> *T;                        // 按名获取 Arena 引用
+    fn make<T>(self, name: &[u8]) -> owned T;                  // 创建新实例（调用者拥有，必须 defer）
+}
+
+**内存管理规则**：
+- `get<T>()` 返回 `*T`（Arena 引用，无所有权，不需要 `defer`）
+- `make<T>(name)` 返回 `owned T`（调用者拥有，必须 `defer` 或 `move`）
+- `register<T>(impl)` 在 Arena 中深拷贝一份，原实例由调用者自己管理
+- `registerFactory<T>(name, fn)` 工厂首次调用结果缓存到 Arena，后续 `get` 返回缓存引用；`make<T>(name)` 每次调用工厂创建新实例
+
+**Context 层级委托**：
+- `AppContext`（应用域）→ `ModuleContext`（模块子域），子 context 持有父 context 引用
+- 子 context 解析不到时向上委托给父 context
+- 每个 context 背靠 Arena 分配器，context 销毁时所有通过它创建的对象一并销毁
+
+**模块面向接口编程**：
+- 模块只知接口，不知具体实现。注册什么就用什么。
+- 接口定义在提供该接口的模块中（如 `src/Modules/Auth/interfaces.hc`），使用方通过 `import project.Auth.{IUserService}` 引入。
+- 模块内类型直接创建外部类型 → 编译错误。
+- 模块间连接：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交。
+
+**引导流程示例**：
+
+```h
+// src/main.hc
+import H.std.{io};
+import H.std.ioc.{IContext, AppContext};
+import myapp.Auth.{AuthContext, IUserService};
+import myapp.Storage.{StorageContext, IFileService};
+
+fn main() !void {
+    var app_ctx = AppContext.init(alloc);
+    defer app_ctx.deinit();
+
+    // 注册全局服务
+    app_ctx.register(IUserService, UserService{});
+    app_ctx.register(IFileService, FileService{});
+
+    // 初始化模块（注册到父 context 的子域）
+    var auth = AuthContext.init(app_ctx);
+    var storage = StorageContext.init(app_ctx);
+
+    run(app_ctx);
+}
+```
+
+**初始化与生命周期**：
+- 初始化即注册：`AuthContext.init(app_ctx)` 将模块注册到父 context
+- 懒加载实例化：`get<T>()` 按需创建对象，对象随 context 销毁
+- 同一接口可注册多个实现，通过 `name` 区分
+- 工厂方法接收 context 引用，可在工厂内部解析依赖
+
+### 程序环境 (io 模块)
+
 标准库模块形态的程序环境句柄（2026-08-17 定案，ADR-0010）：`io.print`/`io.fs.*`/`io.net.*`/`io.time.*`/`io.text.*`/`io.rng.*`/`io.storage.*`/`io.archive.*`/`io.ipc.*`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)` 均为模块函数 + 模块内环境状态；经 `import H.std.{io}` 引入。`H.std` 是标准库的统一导入路径。`Io` 接口保留（并发 E2 的 `Io.threaded()/evented()`）。
 _Avoid_: 把程序环境当全局可变状态泄漏
 
-**应用程序 (Application, 2026-08-17 定案)**:
+### 应用程序 (Application)
+
 含 `main` 入口函数的包（build.zon `Kind::exe`）——编译产出可运行的 exe（平台原生形态）。与库相对：库不含 main（见库）。
 _Avoid_: 把库当应用运行
 
-**库 (Library, 2026-08-23 定案)**:
+### 库 (Library)
+
 不含 `main` 入口的包（build.zon `Kind::lib`）——代码集合（1+ 模块），**不单独运行**；产出形态构建参数选择：**lib 静态库**（编译时链接进 exe）或 **dll 动态库**（exe 运行时加载）。
 _Avoid_: 库内写 main 入口
 
-**包与依赖 (Package & deps, 2026-08-23 细化)**:
+### 包与依赖 (Package & deps)
+
 包管理器内置编译器；**包形态 = 应用（`Kind::exe`，含 main）/ 库（`Kind::lib`，无 main，1+ 模块，产出 lib/dll）**；依赖清单 = **H 数据字面量**（`const build = Build{ ... }`，build.zon 式）。**依赖解析**：`import <name>.<sym>` 中 `<name>` 对应 build.zon 依赖声明的 `name` 字段。解析顺序：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。官方注册中心；`hc build` / `hc cc`（M8 工具链，系统库自带、静态链接默认）。
 _Avoid_: 隐藏系统依赖
 
-**`.hs` 脚本导入 (2026-08-23 定案)**:
+### `.hs` 脚本导入
+
 `.hs` 文件使用 `import "path/to/file.hs"` 引用其他 `.hs` 文件。Parser 扩展：`import` 后跟字符串字面量 → 文件引用（AST 新增 `Decl::ImportFile` 变体）；跟标识符路径 → 模块引用（既有 `Decl::Import`）。文件引用与标准库引用是同一 `import` 语句的两种形态，parser 按引号检测区分。脚本项目不需要 `build.zon`。
 _Avoid_: 混用 `.hs` 文件引用与 `.hc` 模块引用
+
+### 测试目录
+
+项目根目录的 `tests/` 目录用于存放测试文件：
+- `tests/` 不参与命名空间系统，仅由 `hc test` 发现和执行
+- 测试文件通过 `import` 引入被测模块的接口
+- 测试中可注入 mock 实现：
+
+```h
+// tests/test_auth.hc
+import myapp.Auth.{AuthContext, IUserService};
+
+[Test] fn test_auth_service() !void {
+    var ctx = AuthContext.init(alloc);
+    defer ctx.deinit();
+    ctx.register(IUserService, MockUserService{});
+    // ...
+}
+```
 
 ## 11. 工具链（M8）
 

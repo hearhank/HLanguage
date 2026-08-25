@@ -9,7 +9,7 @@
 ### 1.1 词法分析（Lexer）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using / import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
+| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using（已废弃）/ import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
 | 字面量 | 整数（进制前缀+后缀）、浮点、字符串（含转义）、原生字符串 `"""..."""`、字符 | ✅ |
 | 运算符/标点 | 完整运算符集（算术/比较/逻辑/位/赋值/范围/`||` 错误集联合） | ✅ |
 | 注释 | 行注释 `//` + 块注释 `/* */` | ✅ |
@@ -19,14 +19,14 @@
 ### 1.2 语法分析（Parser + AST）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
+| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using（已废弃）/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
 | 语句解析 | 表达式/变量声明/if/while/for/switch（含守卫）/return/break/continue/defer/errdefer/块 | ✅ |
 | 表达式解析 | 完整优先级：字面量/标识符/一元/二元/调用/索引/字段/取址/解引用/if/switch/闭包/构造 | ✅ |
 | 类型解析 | 命名类型/指针/切片/可选/错误联合/元组/数组/推断类型 | ✅ |
 | 函数参数 | 类型标注/默认值/anytype/T: type 类型参数 | ✅ |
 | 重载解析 | 同名函数多候选（含可选参数） | ✅ |
 | 测试标记 | `[test]` / `[test("name")]` 声明级属性 | ✅ |
-| 类属性 | `[Continuous]` / `[Pad]` / `[Align]` / `[Module]` | ✅ |
+| 类属性 | `[Continuous]` / `[Pad]` / `[Align]` | ✅ |
 | 跨文件解析 | 兄弟文件符号登记、目录 = 包 | ✅ |
 
 ### 1.3 诊断基础设施
@@ -476,12 +476,21 @@
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | `namespace` | 命名空间声明 | ✅ |
-| `using` | 命名空间引入 | ✅ |
+| `using` | 命名空间引入（已废弃，解析到直接报错） | 🟡 废弃 |
 | `import` | 包导入（含 `H.std.{...}` 限定选择） | ✅ |
 | `pub` | 可见性控制 | ✅ |
 | `export` | 导出标记 | ✅ |
 | 目录 = 包 | 同目录 `.hc` 文件自动组包 | ✅ |
 | 兄弟文件符号 | 同包文件间全可见 | ✅ |
+| `src/Modules/` 目录模块 | 子目录自动识别为模块，编译器自动发现 | ⏳ 待实现 |
+| `context.hc` 文件约定 | 模块的 context 定义文件，编译器自动识别 | ⏳ 待实现 |
+| `IContext` 接口 | `H.std.ioc` 提供 IoC 容器接口（register/get/registerFactory） | ⏳ 待实现 |
+| `AppContext` 实现 | 应用级 context，背靠 Arena，支持层级委托 | ⏳ 待实现 |
+| Context 层级委托 | 子 context 持有父 context 引用，解析不到时向上委托 | ⏳ 待实现 |
+| 模块面向接口编程 | 模块只知接口，不知具体实现，通过 context 获取实例 | ⏳ 待实现 |
+| 命名注册 | 同一接口可注册多个实现，通过 name 区分 | ⏳ 待实现 |
+| 工厂方法注册 | `registerFactory<T>(name, factory)` 接收 context 参数 | ⏳ 待实现 |
+| `tests/` 目录 | 项目根目录，不参与命名空间，`hc test` 发现执行 | ⏳ 待实现 |
 | 依赖包 pub 边界 | 跨包仅 pub 符号可见 | ✅ |
 | `build.zon` 清单 | 包名/版本/类型/文件/依赖声明 | ✅ |
 | 本地依赖 | 基于 path 的本地包依赖 | ✅ |
@@ -489,7 +498,7 @@
 | 依赖递归装载 | 依赖的依赖递归解析 | ✅ |
 | 版本声明检查 | 依赖版本不符告警 | ✅ |
 | 指纹校验 | SHA-256 / 整数指纹 | ✅ |
-| `[module]` 领域约定 | 模块边界、owns 数据、pub API、上下文 init 参数列表 | ✅ |
+| `[module]` 领域约定 | 已移除，由 `src/Modules/` 目录结构替代（ADR-0026） | 🟡 移除 |
 
 ---
 
