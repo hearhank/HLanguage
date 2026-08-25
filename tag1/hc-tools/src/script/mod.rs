@@ -102,7 +102,11 @@ pub fn compute_namespace_name(file_path: &Path, project_root: Option<&Path>) -> 
             parts.push(project_name);
             if let Some(parent) = rel.parent() {
                 if parent != Path::new("") {
-                    for segment in parent {
+                    // 去除 src/ 前缀（源码根目录）
+                    let stripped = parent.strip_prefix("src").unwrap_or(parent);
+                    // 去除 Modules/ 前缀（模块目录透明化）
+                    let stripped = stripped.strip_prefix("Modules").unwrap_or(stripped);
+                    for segment in stripped {
                         parts.push(capitalize_first(segment.to_string_lossy().as_ref()));
                     }
                 }
