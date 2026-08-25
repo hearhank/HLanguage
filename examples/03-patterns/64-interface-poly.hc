@@ -48,7 +48,7 @@ fn main() !void {
     io.print("circle = {}\n", describe(&circ));
 
     // 异构集合：显式装箱
-    var shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var mut shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
     defer shapes.deinit();
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
@@ -65,7 +65,7 @@ fn main() !void {
 [Test] fn heterogeneous_boxing() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
-    var shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var mut shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
     defer shapes.deinit();
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));

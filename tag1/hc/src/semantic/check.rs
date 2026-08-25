@@ -862,6 +862,7 @@ impl Checker {
         scopes: &[HashMap<String, VarInfo>],
         span: &Span,
     ) {
+        // 直接变量赋值：v = x
         if let Expr::Ident(name, _) = target {
             for s in scopes.iter().rev() {
                 if let Some(info) = s.get(name) {
@@ -877,6 +878,27 @@ impl Checker {
                     break;
                 }
             }
+            return;
+        }
+        // 索引赋值：v[i] = x ——检查基变量是否为 mut
+        if let Expr::Index { base, .. } = target {
+            if let Expr::Ident(name, _) = base.as_ref() {
+                for s in scopes.iter().rev() {
+                    if let Some(info) = s.get(name) {
+                        if !info.mut_ {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot mutate `{name}` through index because it is not declared `mut`; \
+                                     use `var mut {name}` to make it mutable"
+                                ),
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+            return;
         }
     }
 

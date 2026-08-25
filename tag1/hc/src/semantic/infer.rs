@@ -1154,6 +1154,58 @@ impl Checker {
 
     // ---------- 调用检查（重载匹配 + where 约束验证） ----------
 
+    /// 检查方法调用是否需要 `mut` 接收者（ADR-0027：容器读写权限 = 变量绑定）
+    fn check_method_mutability(
+        &mut self,
+        var_name: Option<&str>,
+        method: &str,
+        typename: &str,
+        _sigs: Option<&[FnSig]>,
+        scopes: &[HashMap<String, VarInfo>],
+        span: &Span,
+    ) {
+        // 判断方法是否需要 mut 接收者（仅内建容器类型，ADR-0027）
+        let needs_mut = match typename {
+            "Vec" | "Deque" => matches!(
+                method,
+                "append"
+                    | "push_back"
+                    | "push_front"
+                    | "pop_back"
+                    | "pop_front"
+                    | "extend"
+                    | "put"
+                    | "remove"
+                    | "clear"
+                    | "sort"
+                    | "reverse"
+                    | "append_u64"
+            ),
+            "Map" => matches!(method, "put" | "remove" | "clear"),
+            "Table" => matches!(method, "put"),
+            _ => false,
+        };
+        if !needs_mut {
+            return;
+        }
+        // 检查接收者变量是否为 mut
+        if let Some(name) = var_name {
+            let is_mut = scopes
+                .iter()
+                .rev()
+                .any(|s| s.get(name).map_or(false, |info| info.mut_));
+            if !is_mut {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!(
+                        "cannot call mutating method `{method}` on `{name}` because it is not declared `mut`; \
+                         use `var mut {name}` to make it mutable"
+                    ),
+                ));
+            }
+        }
+    }
+
     pub(crate) fn check_call(
         &mut self,
         callee: &Expr,
@@ -1237,6 +1289,15 @@ impl Checker {
                     _ => None,
                 };
                 if let Some(sigs) = method_sigs {
+                    // 检查变异方法是否需要 mut 接收者（ADR-0027）
+                    if let Some(SType::Named(tn, _)) = &dt {
+                        let vn = if let Expr::Ident(name, _) = base.as_ref() {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        };
+                        self.check_method_mutability(vn, field, tn, None, scopes, span);
+                    }
                     let arg_tys: Vec<Option<SType>> =
                         args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
                     return self.match_overloads(
@@ -1249,7 +1310,17 @@ impl Checker {
                         true,
                     );
                 }
-                // 内建方法（Vec.append 等）或未知：放行
+                // 内建方法（Vec.append 等）或未知：放行前检查变异方法要求 mut
+                if let Some(SType::Named(tn, _)) = &dt {
+                    if is_builtin_type(tn) {
+                        let vn = if let Expr::Ident(name, _) = base.as_ref() {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        };
+                        self.check_method_mutability(vn, field, tn, None, scopes, span);
+                    }
+                }
                 for a in args {
                     let _ = self.expr_ty(a, scopes, None);
                 }
@@ -1268,6 +1339,17 @@ impl Checker {
                             _ => None,
                         };
                         if let Some(sigs) = method_sigs {
+                            // 检查变异方法是否需要 mut 接收者（ADR-0027）
+                            if let Some(SType::Named(tn, _)) = &dt {
+                                self.check_method_mutability(
+                                    Some(n.as_str()),
+                                    field,
+                                    tn,
+                                    None,
+                                    scopes,
+                                    span,
+                                );
+                            }
                             let arg_tys: Vec<Option<SType>> =
                                 args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
                             return self.match_overloads(
@@ -1280,7 +1362,19 @@ impl Checker {
                                 true,
                             );
                         }
-                        // 内建方法或未知：放行
+                        // 内建方法或未知：放行前检查变异方法要求 mut
+                        if let Some(SType::Named(tn, _)) = &dt {
+                            if is_builtin_type(tn) {
+                                self.check_method_mutability(
+                                    Some(n.as_str()),
+                                    field,
+                                    tn,
+                                    None,
+                                    scopes,
+                                    span,
+                                );
+                            }
+                        }
                         for a in args {
                             let _ = self.expr_ty(a, scopes, None);
                         }

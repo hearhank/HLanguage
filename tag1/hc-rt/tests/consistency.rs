@@ -727,7 +727,7 @@ fn agg_array_index_and_store() {
     assert_all_pass(
         r#"
 [test] fn arr_index() void {
-    var a = [10, 20, 30];
+    var mut a = [10, 20, 30];
     expect_eq(a[0], 10);
     expect_eq(a[2], 30);
     a[1] = 99;
@@ -762,7 +762,7 @@ fn agg_slice_view_and_alias() {
     assert_all_pass(
         r#"
 [test] fn slice_view() void {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     var sub = arr[1..4];
     expect_eq(sub.len, 3);
     expect_eq(sub[0], 2);
@@ -780,7 +780,7 @@ fn agg_slice_store_write_through() {
     assert_all_pass(
         r#"
 [test] fn slice_store() void {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     arr[1..3] = [20, 30];
     expect_eq(arr[1], 20);
     expect_eq(arr[2], 30);
@@ -1811,7 +1811,7 @@ fn p7_map_json_csv_and_string() {
     assert_all_pass(
         r#"
 [test] fn map_ops() !void {
-    var m = Map.from_json("{\"a\":1,\"b\":2}");
+    var mut m = Map.from_json("{\"a\":1,\"b\":2}");
     m.put("c", 3);
     try expect_eq(m.get("a").?, 1);
     try expect_eq(m.len(), 3);
@@ -2505,7 +2505,7 @@ fn d2_table_multi_index_consistent() {
     assert_all_pass(
         r#"
 [test] fn t() !void {
-    var t = Table<i32>.init(2, 3, 7, alloc);
+    var mut t = Table<i32>.init(2, 3, 7, alloc);
     try expect_eq(t.len(), 2);
     try expect_eq(t[0, 0], 7);
     try expect_eq(t[0, 1], 7);
@@ -2525,7 +2525,7 @@ fn d2_vec_operations_consistent() {
     assert_all_pass(
         r#"
 [test] fn t() !void {
-    var v = Vec<i32>.init(alloc);
+    var mut v = Vec<i32>.init(alloc);
     try expect_eq(v.len(), 0);
     v.append(10);
     v.append(20);

@@ -98,7 +98,7 @@ fn box_interface_dispatch() {
          [test] fn t() !void {
              var rect = Rect{ w = 3.0, h = 4.0 };
              var circ = Circle{ r = 2.0 };
-             var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+             var mut shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
              defer shapes.deinit();
              shapes.append(box(rect, alloc));
              shapes.append(box(circ, alloc));
