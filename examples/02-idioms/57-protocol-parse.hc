@@ -7,7 +7,7 @@ import H.std.{io};
 //   - ⚠️ 注意：含切片/指针字段的类型不可标 [continuous]（会序列化指针值）——
 //     需递归序列化（脚本定制，Q37 精神）或定长缓冲
 
-[continuous] class Message {   // 连续内存：可 to_bytes 直映射（8 字节）
+class Message {   // 连续内存：可 to_bytes 直映射（8 字节）
     id: i32,
     kind: u8,
 }

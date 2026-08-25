@@ -14,7 +14,7 @@ import H.std.{io};
 // 应用 `import orders.Orders;` 后 `Orders.total(...)` 限定访问。本示例为单文件
 // 同包形态，聚焦边界与上下文；import 机制另见 41-namespaces / 02-packages。
 
-[module] namespace Orders {
+// [module] namespace Orders {
     // —— owns 数据（模块内私有类型：无 pub = 模块私有，扁平/跨包不可见）——
     class LineItem {
         sku: String,
@@ -30,8 +30,8 @@ import H.std.{io};
 
     // 上下文工厂：显式接收依赖（税率、最小起订量），返回模块上下文；
     // 调用方持有 ctx 并传入各 API（数据/依赖经上下文进入模块）
-    pub fn init(tax_pct: i32, min_qty: i32) Orders.OrderCtx {
-        return Orders.OrderCtx{tax_pct = tax_pct, min_qty = min_qty};
+    pub fn init(tax_pct: i32, min_qty: i32) OrderCtx {
+        return move OrderCtx{tax_pct = tax_pct, min_qty = min_qty};
     }
 
     // —— 对外 pub API（边界）——
@@ -45,7 +45,7 @@ import H.std.{io};
         }
         return sum + (sum * ctx.tax_pct) / 100;
     }
-}
+// }
 
 [Test] fn orders_domain_boundary_and_total() !void {
     var ctx = Orders.init(10, 2);   // 税率 10%、最小起订 2 件

@@ -1309,7 +1309,12 @@ impl Interp {
                     let _ = tx.send((1, 0, 0, test_out));
                 }
                 Err(e) => {
-                    test_out.push(format!("[FAIL] {} (error.{})", display_clone, e.name));
+                    let msg = if e.message.is_empty() {
+                        format!("[FAIL] {} (error.{})", display_clone, e.name)
+                    } else {
+                        format!("[FAIL] {} (error.{}: {})", display_clone, e.name, e.message)
+                    };
+                    test_out.push(msg);
                     let _ = tx.send((0, 1, 0, test_out));
                 }
             }
