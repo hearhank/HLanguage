@@ -459,6 +459,73 @@ import myapp.Auth.{AuthContext, IUserService};
 }
 ```
 
+## 12. 容器与初始化器（2026-08-26 定案，ADR-0027）
+
+**容器 (Container)**:
+持有元素所有权的动态集合类型（Vec / Deque / Map / Table）。容器默认 owning——元素所有权归容器，容器销毁时一并释放元素内存。容器不持有元素时（借用语义）通过切片 `&[T]` / `&mut [T]` 表达，不是容器类型。
+_避免_: 把切片当作容器
+
+**容器初始化器统一规则 (Container init convention, ADR-0027)**:
+所有容器使用 `init` 方法创建，遵循以下规则：
+1. 分配器永远是**最后一个参数**（可省略，回退全局 alloc）
+2. `var mut` 可变绑定 → 可空构造，后续追加元素
+3. `var` 只读绑定 → 建议提供初值（空容器产生编译警告）
+4. 所有数据通过 `move` 进入容器（值类型自动拷贝）
+
+| 容器 | init 签名 | 说明 |
+|------|-----------|------|
+| `Vec<T>` | `.init()` | 空 Vec，默认 allocator |
+| | `.init(alloc)` | 空 Vec，显式 allocator |
+| | `.init(cap)` | 预分配容量，默认 allocator |
+| | `.init(cap, alloc)` | 预分配容量，显式 allocator |
+| | `.init([items])` | 从数组字面量，默认 allocator |
+| | `.init([items], alloc)` | 从数组字面量，显式 allocator |
+| `Deque<T>` | 同 Vec | 方法集额外有 push_front/pop_front |
+| `Map<K,V>` | `.init()` | 空 Map，默认 allocator |
+| | `.init(alloc)` | 空 Map，显式 allocator |
+| | `.init({k = v, ...})` | 花括号 KV 字面量，默认 allocator |
+| | `.init({k = v, ...}, alloc)` | 花括号 KV 字面量，显式 allocator |
+| `Table<T>` | `.init(rows, cols, val)` | 统一初始值，默认 allocator |
+| | `.init(rows, cols, val, alloc)` | 统一初始值，显式 allocator |
+| | `.init([[items]])` | 从二维数组，默认 allocator |
+| | `.init([[items]], alloc)` | 从二维数组，显式 allocator |
+| | `.init_with(rows, cols, fn)` | 回调构造，默认 allocator |
+| | `.init_with(rows, cols, fn, alloc)` | 回调构造，显式 allocator |
+
+_避免_: 分配器放在第一个参数；容器类型参数中加 `owned`/`mut`
+
+**元素读写权限 (Element mutability)**:
+容器元素的读写权限与容器变量本身的 `var`/`var mut` 绑定：
+- `var v = Vec<i32>.init(alloc, [1, 2, 3])` — 容器只读，元素只读（`v[0] = 5` 编译错误）
+- `var mut v = Vec<i32>.init(alloc)` — 容器可变，元素可读写（`v.append(5)` 允许）
+此为简化设计：不再需要类型参数级别的 `owned`/`mut` 标注。
+_避免_: 在容器类型参数中加 `owned mut T`（容器统一默认 owning）
+
+**alloc.init 三形态 (Three forms of alloc.init, ADR-0027)**:
+堆分配原语 `alloc.init` 有三种形态，覆盖所有堆分配场景：
+
+```h
+// 形态 1：类型实例，零初始化
+var mut p: *T = alloc.init(T);
+
+// 形态 2：类型实例，带字段初始化
+var mut p: *T = alloc.init(T{ field = "value" });
+
+// 形态 3：数组，n 个元素
+var mut a: *[T, n] = alloc.init(T, n);
+```
+
+三者与容器 `init` 方法正交：`alloc.init` 是底层分配原语，容器 `init` 是高级构造器（内部使用 allocator 管理存储）。
+_避免_: 用 `alloc.init` 创建容器（容器有自己的 `init` 方法）
+
+**容器字面量 (Container literals)**:
+- `Vec<T>[1, 2, 3]` — 方括号字面量（IR 降级器待实现）
+- `Map<K,V>{"k" = v}` — 花括号 KV 字面量，`=` 分隔键值
+- 数组字面量 `[1, 2, 3]` 保持现有语法，始终是 owning 引用类型
+
+**A6 数据结构 (A6 data structures)**:
+RingBuf / PageMem / IntrList / TreeMap / Bitmap 保持 `io.*` 命名空间访问，不纳入统一容器初始化设计。
+
 ## 11. 工具链（M8）
 
 **LSP服务器 (Language Server Protocol Server)**:

@@ -599,7 +599,7 @@
 | tree-walking 解释器 | `hc run <file.hc>` | 全语言 | ✅ |
 | IR 参考解释器 | `hc run --ir <file.hc>` | 全语言（含 G1–G5 标准库） | ✅ |
 | 字节码 VM | `hc run <file.hbc>` | 全语言（复用 `run_ir`） | ✅ |
-| LLVM 原生 | `hc build <file.hc>` | 已实现内建子集（compile mismatch ≤ 60） | 🟡 |
+| LLVM 原生 | `hc build <file.hc>` | 已实现内建子集（compile mismatch = 16，全为设计内硬错误/IR 降级器限制/解释器 bug，非 LLVM 后端问题） | 🟡 |
 
 四个后端共享同一语义源（`IrModule` + `run_ir`，ADR-0004），禁止后端私语义。
 
@@ -611,12 +611,12 @@
 |------|------|------|
 | `cargo test --workspace` | 900+ 项全绿（含新增 chan/mutex/scheduler 测试） | 2026-08-24 |
 | 解释模式示例回归 | 147 通过 + 0 失败 + 1 跳过（全绿） | 2026-08-23 |
-| 原生模式交叉验证 | 57 项 mismatch（未实现原生内建/方法） | 2026-08-23 |
+| 原生模式交叉验证 | 16 项 mismatch（11 defer-try-f 设计内硬错误 + 3 Vec 字面量构造 IR 限制 + 2 解释器 vs 原生行为差异） | 2026-08-26 |
 | 一致性测试 tree-walking ↔ IR | 100+ 测试全绿 | 2026-08-23 |
 | 通道测试（chan<T>） | 9 测试全绿（含 3 spawn+通道集成测试） | 2026-08-24 |
 | 调度器单元测试 | 4 测试全绿（submit+complete/state transitions/multi/unknown） | 2026-08-24 |
 | Mutex 测试 | 11 测试全绿（含 spawn 共享访问） | 2026-08-24 |
-| LLVM 后端单元测试 | 60 测试全绿（含 C8-1 类型槽表） | 2026-08-24 |
+| LLVM 后端单元测试 | 60 测试全绿（含 C8-1 类型槽表） | 2026-08-26 |
 
 ---
 

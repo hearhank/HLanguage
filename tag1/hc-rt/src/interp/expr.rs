@@ -1107,16 +1107,16 @@ impl Interp {
                     }
                     return Ok(Value::vec(vec![], alloc_v));
                 }
-                // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
+                // Table(T).init(rows, cols, init, alloc)（ADR-0027：分配器永远是最后一个参数）
                 if bname == "Table" && field == "init" {
                     if args.len() < 4 {
                         return Err(RtError::new("ArityMismatch", Some(span.clone())));
                     }
-                    let alloc_v = self.eval(&args[0])?;
+                    let rows = self.eval(&args[0])?;
+                    let cols = self.eval(&args[1])?;
+                    let init_v = self.eval(&args[2])?;
+                    let alloc_v = self.eval(&args[3])?;
                     let alloc_v = self.deref_value(alloc_v);
-                    let rows = self.eval(&args[1])?;
-                    let cols = self.eval(&args[2])?;
-                    let init_v = self.eval(&args[3])?;
                     let rows = match self.deref_value(rows) {
                         Value::Int(i) => i.max(0) as usize,
                         _ => return Err(RtError::new("TypeError", Some(span.clone()))),
@@ -1302,18 +1302,18 @@ impl Interp {
                         }
                         return Ok(Value::vec(vec![], alloc_v));
                     }
-                    // Table(T).init(alloc, rows, cols, init)：二维表（M8 定案；G4 持有 alloc）
+                    // Table(T).init(rows, cols, init, alloc)（ADR-0027：分配器永远是最后一个参数）
                     if bname == "Table" && field == "init" {
                         if args.len() < 4 {
                             return Err(RtError::new("ArityMismatch", Some(span.clone())));
                         }
+                        let rows = self.eval(&args[0])?;
+                        let cols = self.eval(&args[1])?;
+                        let init_v = self.eval(&args[2])?;
                         let alloc_v = {
-                            let a = self.eval(&args[0])?;
+                            let a = self.eval(&args[3])?;
                             self.deref_value(a)
                         };
-                        let rows = self.eval(&args[1])?;
-                        let cols = self.eval(&args[2])?;
-                        let init_v = self.eval(&args[3])?;
                         let rows = match self.deref_value(rows) {
                             Value::Int(i) => i.max(0) as usize,
                             _ => return Err(RtError::new("TypeError", Some(span.clone()))),

@@ -1466,41 +1466,55 @@ impl Interp {
             ) => Ok(Some(Value::Int(*len as i128))),
             // 分配器方法
             (Value::Alloc, "init") => {
-                // alloc.init(T) / alloc.init(T{...})
-                if args.len() != 1 {
+                // alloc.init(T) / alloc.init(T{...}) / alloc.init(T, n)
+                if args.len() == 1 {
+                    // 无参构造 alloc.init(T)：按类型创建空实例（字段逐赋值，definite assignment M2.5）
+                    if let Expr::Ident(tname, _) = &args[0] {
+                        if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
+                            let mut f = HashMap::new();
+                            // 先克隆字段类型/默认值：default_value(&mut self) 具体化会重新借用 self
+                            let ftypes: Vec<(String, Type, Option<Expr>)> = fields
+                                .iter()
+                                .map(|fd| (fd.name.clone(), fd.ty.clone(), fd.default.clone()))
+                                .collect();
+                            for (fname, fty, default) in &ftypes {
+                                let val = if let Some(de) = default {
+                                    self.eval(de)?
+                                } else {
+                                    self.default_value(Some(fty))?
+                                };
+                                f.insert(fname.clone(), val);
+                            }
+                            return Ok(Some(Value::class(tname, f)));
+                        }
+                        if self.types.contains_key(tname) {
+                            // 枚举等：空变体
+                            return Ok(Some(Value::Enum {
+                                name: tname.clone(),
+                                variant: "__none__".into(),
+                                payload: None,
+                            }));
+                        }
+                    }
+                    // 带参构造 alloc.init(T{...})：字面量求值即实例
+                    let v = self.eval(&args[0])?;
+                    Ok(Some(v))
+                } else if args.len() == 2 {
+                    // alloc.init(T, n)：创建 n 个元素的数组（ADR-0027 形态 3）
+                    let n_val = self.eval(&args[1])?;
+                    let n = match self.deref_value(n_val) {
+                        Value::Int(i) => i.max(0) as usize,
+                        _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                    };
+                    let mut items = Vec::with_capacity(n);
+                    let default = Value::Int(0);
+                    for _ in 0..n {
+                        items.push(default.clone());
+                    }
+                    Ok(Some(Value::arr(items)))
+                } else {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
                 }
-                // 无参构造 alloc.init(T)：按类型创建空实例（字段逐赋值，definite assignment M2.5）
-                if let Expr::Ident(tname, _) = &args[0] {
-                    if let Some(TypeDef::Class { fields, .. }) = self.types.get(tname) {
-                        let mut f = HashMap::new();
-                        // 先克隆字段类型/默认值：default_value(&mut self) 具体化会重新借用 self
-                        let ftypes: Vec<(String, Type, Option<Expr>)> = fields
-                            .iter()
-                            .map(|fd| (fd.name.clone(), fd.ty.clone(), fd.default.clone()))
-                            .collect();
-                        for (fname, fty, default) in &ftypes {
-                            let val = if let Some(de) = default {
-                                self.eval(de)?
-                            } else {
-                                self.default_value(Some(fty))?
-                            };
-                            f.insert(fname.clone(), val);
-                        }
-                        return Ok(Some(Value::class(tname, f)));
-                    }
-                    if self.types.contains_key(tname) {
-                        // 枚举等：空变体
-                        return Ok(Some(Value::Enum {
-                            name: tname.clone(),
-                            variant: "__none__".into(),
-                            payload: None,
-                        }));
-                    }
-                }
-                // 带参构造 alloc.init(T{...})：字面量求值即实例
-                let v = self.eval(&args[0])?;
-                Ok(Some(v))
             }
             (Value::Alloc, "alloc") => {
                 let n = self.eval(&args[0])?;

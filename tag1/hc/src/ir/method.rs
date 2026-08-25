@@ -240,20 +240,42 @@ pub(crate) fn call_alloc_method_ir(
         // alloc.init(T)：类型名参数建空实例（tag1 IR 无布局表——字段型构造请用
         // 字面量 `alloc.init(T{...})`；对齐 oracle interp.rs:3865-3891 的 Ident 分支）。
         // 实参已是类实例（字面量构造）→ 原样返回（对齐 oracle 字面量分支）。
+        // alloc.init(T, n)：创建 n 个元素的数组（ADR-0027 形态 3）。
         "init" => {
-            if args.len() != 1 {
-                return Err(IrError::msg("ArityMismatch", "alloc.init expects 1 arg"));
-            }
-            match deref_value(ctx, &args[0]).clone() {
-                IrValue::Str(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
-                    name: String::from_utf8_lossy(&s).to_string(),
-                    fields: HashMap::new(),
-                })))),
-                IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
-                _ => Err(IrError::msg(
-                    "TypeError",
-                    "alloc.init expects type name or literal",
-                )),
+            if args.len() == 1 {
+                match deref_value(ctx, &args[0]).clone() {
+                    IrValue::Str(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: String::from_utf8_lossy(&s).to_string(),
+                        fields: HashMap::new(),
+                    })))),
+                    IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
+                    _ => Err(IrError::msg(
+                        "TypeError",
+                        "alloc.init expects type name or literal",
+                    )),
+                }
+            } else if args.len() == 2 {
+                // alloc.init(T, n)：创建 n 个元素的数组
+                let n = match deref_value(ctx, &args[1]) {
+                    IrValue::Int(i) => (*i).max(0) as usize,
+                    _ => {
+                        return Err(IrError::msg(
+                            "TypeError",
+                            "alloc.init(T, n) expects n as int",
+                        ))
+                    }
+                };
+                let mut items = Vec::with_capacity(n);
+                let default = IrValue::Int(0);
+                for _ in 0..n {
+                    items.push(default.clone());
+                }
+                Ok(Some(make_arr(ctx, items)))
+            } else {
+                return Err(IrError::msg(
+                    "ArityMismatch",
+                    "alloc.init expects 1 or 2 args",
+                ));
             }
         }
         "alloc" => {

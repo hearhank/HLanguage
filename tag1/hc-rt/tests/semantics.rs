@@ -89,12 +89,12 @@ fn continuous_assignment_allowed() {
 
 #[test]
 fn table_construct_and_index() {
-    // M8：Table<T>.init(alloc, rows, cols, init) + t[i, j] 多参索引
+    // M8：Table<T>.init(rows, cols, init, alloc) + t[i, j] 多参索引
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table<i32>.init(alloc, 3, 4, 0);
+    var tbl = Table<i32>.init(3, 4, 0, alloc);
     try expect_eq(tbl[1, 2], 0);
-    var t2 = Table<i32>.init(alloc, 2, 2, 7);
+    var t2 = Table<i32>.init(2, 2, 7, alloc);
     try expect_eq(t2[0, 0], 7);
     try expect_eq(t2[1, 1], 7);
 }\n",
@@ -364,7 +364,7 @@ fn m22_field_access_len() {
 fn m22_table_double_index_ok() {
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table<i32>.init(alloc, 2, 2, 0);
+    var tbl = Table<i32>.init(2, 2, 0, alloc);
     try expect_eq(tbl[1, 0], 0);
 }\n",
     );

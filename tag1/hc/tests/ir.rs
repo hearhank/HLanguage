@@ -1556,10 +1556,10 @@ fn t() i32 {
 
 #[test]
 fn table_init_captures_alloc_ir() {
-    // `Table<T>.init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
+    // `Table<T>.init(rows, cols, init, alloc)`（ADR-0027：分配器永远是最后一个参数）
     let src = r#"
 fn t() i32 {
-    var t = Table<i32>.init(alloc, 2, 3, 7);
+    var t = Table<i32>.init(2, 3, 7, alloc);
     if (t.len() != 2) { return 1; }
     if (t[0].len() != 3) { return 2; }
     if (t[0][1] != 7) { return 3; }

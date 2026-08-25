@@ -72,8 +72,8 @@ fn map_iterates_kv_pairs() {
 
 #[test]
 fn table_init_captures_alloc() {
-    // `Table<T>.init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
+    // `Table<T>.init(rows, cols, init, alloc)`：外层 Vec 持分配器引用，grid 二维
     run_ok(
-        "[test] fn t() !void {\n    var t = Table<i32>.init(alloc, 2, 3, 7);\n    try expect_eq(t.len(), 2);\n    try expect_eq(t[0].len(), 3);\n    try expect_eq(t[0][1], 7);\n    try expect_eq(t[1][2], 7);\n    var buf = t.alloc().alloc(8);\n    try expect_eq(buf, \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\");\n}\n",
+        "[test] fn t() !void {\n    var t = Table<i32>.init(2, 3, 7, alloc);\n    try expect_eq(t.len(), 2);\n    try expect_eq(t[0].len(), 3);\n    try expect_eq(t[0][1], 7);\n    try expect_eq(t[1][2], 7);\n    var buf = t.alloc().alloc(8);\n    try expect_eq(buf, \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\");\n}\n",
     );
 }

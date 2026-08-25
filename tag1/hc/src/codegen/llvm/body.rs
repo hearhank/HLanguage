@@ -266,11 +266,15 @@ impl BodyEmitter {
                         self.emit(format!("{r} = {iop} i128 {da}, {db}"));
                         self.build_store(temp, T_INT, r);
                     } else {
-                        // Float: bitcast i128 to double, op, bitcast back
+                        // Float: trunc i128 to i64, bitcast to double, op, bitcast back
+                        let ta = self.r();
+                        self.emit(format!("{ta} = trunc i128 {da} to i64"));
                         let fa = self.r();
-                        self.emit(format!("{fa} = bitcast i128 {da} to double"));
+                        self.emit(format!("{fa} = bitcast i64 {ta} to double"));
+                        let tb = self.r();
+                        self.emit(format!("{tb} = trunc i128 {db} to i64"));
                         let fb = self.r();
-                        self.emit(format!("{fb} = bitcast i128 {db} to double"));
+                        self.emit(format!("{fb} = bitcast i64 {tb} to double"));
                         let fop = match op {
                             IrBinOp::Add => "fadd",
                             IrBinOp::Sub => "fsub",
@@ -340,11 +344,15 @@ impl BodyEmitter {
                         self.emit(format!("{c} = {icmp_op} i128 {da}, {db}"));
                         self.emit_bool_store(temp, &c);
                     } else {
-                        // Float comparison
+                        // Float comparison: trunc i128 to i64, bitcast to double
+                        let ta = self.r();
+                        self.emit(format!("{ta} = trunc i128 {da} to i64"));
                         let fa = self.r();
-                        self.emit(format!("{fa} = bitcast i128 {da} to double"));
+                        self.emit(format!("{fa} = bitcast i64 {ta} to double"));
+                        let tb = self.r();
+                        self.emit(format!("{tb} = trunc i128 {db} to i64"));
                         let fb = self.r();
-                        self.emit(format!("{fb} = bitcast i128 {db} to double"));
+                        self.emit(format!("{fb} = bitcast i64 {tb} to double"));
                         let fcmp_op = match op {
                             IrBinOp::Eq => "fcmp oeq",
                             IrBinOp::Ne => "fcmp one",
@@ -935,11 +943,15 @@ impl BodyEmitter {
                         self.emit(format!("{sel} = select i1 {cmp}, i128 {da}, i128 {db}"));
                         self.build_store(temp, T_INT, sel);
                     } else {
-                        // Float: bitcast i128 to double, fcmp, select, bitcast back
+                        // Float: trunc i128 to i64, bitcast to double, fcmp, select, bitcast back
+                        let ta = self.r();
+                        self.emit(format!("{ta} = trunc i128 {da} to i64"));
                         let fa = self.r();
-                        self.emit(format!("{fa} = bitcast i128 {da} to double"));
+                        self.emit(format!("{fa} = bitcast i64 {ta} to double"));
+                        let tb = self.r();
+                        self.emit(format!("{tb} = trunc i128 {db} to i64"));
                         let fb = self.r();
-                        self.emit(format!("{fb} = bitcast i128 {db} to double"));
+                        self.emit(format!("{fb} = bitcast i64 {tb} to double"));
                         let fcmp_op = if is_min { "fcmp olt" } else { "fcmp ogt" };
                         let cmp = self.r();
                         self.emit(format!("{cmp} = {fcmp_op} double {fa}, {fb}"));
@@ -2203,7 +2215,11 @@ impl BodyEmitter {
                 self.emit(format!("{fn_ptr} = inttoptr i128 {payload} to {fn_type}*"));
                 let arglist = args
                     .iter()
-                    .map(|a| format!("%Value %sp.{a}"))
+                    .map(|a| {
+                        let v = self.r();
+                        self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
+                        format!("%Value {v}")
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 let fn_r = self.r();
@@ -2249,7 +2265,11 @@ impl BodyEmitter {
                 let arglist_cl = format!(
                     "%Value {env_v1}, {}",
                     args.iter()
-                        .map(|a| format!("%Value %sp.{a}"))
+                        .map(|a| {
+                            let v = self.r();
+                            self.emit(format!("{v} = load %Value, %Value* %sp.{a}"));
+                            format!("%Value {v}")
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 );

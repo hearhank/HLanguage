@@ -2520,7 +2520,7 @@ fn d2_table_multi_index_consistent() {
     assert_all_pass(
         r#"
 [test] fn t() !void {
-    var t = Table<i32>.init(alloc, 2, 3, 7);
+    var t = Table<i32>.init(2, 3, 7, alloc);
     try expect_eq(t.len(), 2);
     try expect_eq(t[0, 0], 7);
     try expect_eq(t[0, 1], 7);

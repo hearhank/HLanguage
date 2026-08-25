@@ -1105,7 +1105,7 @@ impl Interp {
                     }
                     return Ok(Value::vec(vec![], alloc_v));
                 }
-                // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
+                // Table(T).init(rows, cols, init, alloc)（M8；G4：外层 Vec 持分配器引用）
                 if bname == "Table" && field == "init" {
                     if args.len() < 4 {
                         return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -1296,7 +1296,7 @@ impl Interp {
                         }
                         return Ok(Value::vec(vec![], alloc_v));
                     }
-                    // Table(T).init(alloc, rows, cols, init)：二维表（M8 定案；G4 持有 alloc）
+                    // Table(T).init(rows, cols, init, alloc)：二维表（M8 定案；G4 持有 alloc）
                     if bname == "Table" && field == "init" {
                         if args.len() < 4 {
                             return Err(RtError::new("ArityMismatch", Some(span.clone())));

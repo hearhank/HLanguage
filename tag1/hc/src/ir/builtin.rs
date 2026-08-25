@@ -3162,21 +3162,21 @@ pub(crate) fn call_dotted_implicit(
                 capacity,
             })));
         }
-        // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
+        // Table(T).init(rows, cols, init, alloc)（ADR-0027：分配器永远是最后一个参数）
         "Table.init" => {
             if args.len() < 4 {
                 return Err(IrError::msg("ArityMismatch", "Table.init expects 4 args"));
             }
-            let alloc_v = args[0].clone();
-            let rows = match deref_value(ctx, &args[1]) {
+            let rows = match deref_value(ctx, &args[0]) {
                 IrValue::Int(i) => (*i).max(0) as usize,
                 _ => return Err(IrError::msg("TypeError", "Table.init rows must be int")),
             };
-            let cols = match deref_value(ctx, &args[2]) {
+            let cols = match deref_value(ctx, &args[1]) {
                 IrValue::Int(i) => (*i).max(0) as usize,
                 _ => return Err(IrError::msg("TypeError", "Table.init cols must be int")),
             };
-            let init_v = args[3].clone();
+            let init_v = args[2].clone();
+            let alloc_v = args[3].clone();
             let mut grid = Vec::new();
             for _ in 0..rows {
                 let mut row = Vec::new();
