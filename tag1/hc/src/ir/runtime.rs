@@ -287,6 +287,7 @@ pub(crate) fn ir_type_name(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::Float(_) => "f64".into(),
         IrValue::Bool(_) => "bool".into(),
         IrValue::Str(_) => "&[u8]".into(),
+        IrValue::String(_) => "String".into(),
         IrValue::Arr(_) => "array".into(),
         IrValue::Vec(_) => "array".into(),
         IrValue::Map(_) => "Map".into(),

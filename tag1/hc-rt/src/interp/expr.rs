@@ -1355,14 +1355,16 @@ impl Interp {
                         }
                         return Ok(Value::arr(items));
                     }
-                    // String.from(s, alloc) 内建
+                    // String.from(s) 内建（值语义，deep copy）
                     if bname == "String" && field == "from" {
                         let v = self.eval(&args[0])?;
                         let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            return Ok(Value::Str(s));
-                        }
-                        return Ok(Value::str(&v.display()));
+                        let bytes = match v {
+                            Value::Str(s) => s.borrow().clone(),
+                            Value::String(s) => s.as_slice().to_vec(),
+                            other => other.display().as_bytes().to_vec(),
+                        };
+                        return Ok(Value::String(StringData::from_slice(&bytes)));
                     }
                     // json.parse(data)（M5.3 序列化辅助）：JSON 对象 → Map
                     if bname == "json" && field == "parse" {

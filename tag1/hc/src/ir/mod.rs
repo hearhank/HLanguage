@@ -23,6 +23,7 @@ mod lower_impl;
 mod method;
 mod ops;
 mod runtime;
+pub mod string;
 mod types;
 
 pub use self::builtin::*;
@@ -31,6 +32,7 @@ pub use self::lower_impl::*;
 pub use self::method::*;
 pub use self::ops::*;
 pub use self::runtime::*;
+pub use self::string::*;
 pub use self::types::*;
 
 // ---------- IR 结构 ----------
@@ -480,6 +482,9 @@ pub enum IrValue {
     Float(f64),
     Bool(bool),
     Str(Vec<u8>),
+    /// String 值类型（拥有所有权的字节数组，值语义，复制即 deep copy）
+    /// 生命周期由编译器管理，作用域出口自动插入 `deinit()`
+    String(StringDataIr),
     /// 可选值（`null` = `Opt(None)`，对齐 tree-walking `Value::Opt`）
     Opt(Option<Box<IrValue>>),
     /// 错误值（M4.2：码 + 名字；码 = M2.6 编译期错误码表，全局唯一）
@@ -1163,6 +1168,7 @@ fn type_descr(v: &IrValue) -> String {
         IrValue::Float(_) => "f64".into(),
         IrValue::Bool(_) => "bool".into(),
         IrValue::Str(_) => "&[u8]".into(),
+        IrValue::String(_) => "String".into(),
         IrValue::Opt(_) => "?T".into(),
         IrValue::Err { name, .. } => format!("error.{name}"),
         IrValue::Ptr(_) => "*T".into(),
@@ -1694,6 +1700,7 @@ impl IrValue {
             }
             IrValue::Bool(b) => b.to_string(),
             IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+            IrValue::String(s) => s.to_string(),
             IrValue::Opt(Some(v)) => format!("?{}", v.display(ctx)),
             IrValue::Opt(None) => "null".into(),
             IrValue::Err { name, .. } => format!("error.{name}"),

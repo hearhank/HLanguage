@@ -2929,7 +2929,7 @@ impl Interp {
         }
     }
 
-    /// String 内建静态方法（String = 内建新类型，M3 定案；tag1：from/from_slice/concat）
+    /// String 内建静态方法（String = 内建新类型，值语义，复制即 deep copy）
     pub(crate) fn call_string_builtin(
         &mut self,
         field: &str,
@@ -2940,13 +2940,15 @@ impl Interp {
             "from" => {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
-                match v {
-                    Value::Str(s) => Ok(Value::Str(s)),
-                    other => Ok(Value::str(&other.display())),
-                }
+                let bytes = match v {
+                    Value::Str(s) => s.borrow().clone(),
+                    Value::String(s) => s.as_slice().to_vec(),
+                    other => other.display().as_bytes().to_vec(),
+                };
+                Ok(Value::String(StringData::from_slice(&bytes)))
             }
             "from_slice" => {
-                // String.from_slice(&buf, arena)：字节切片/数组 → String（49-arena-pool）
+                // String.from_slice(&buf)：字节切片/数组 → String（deep copy）
                 if args.is_empty() {
                     return Err(RtError::new("ArityMismatch", Some(span.clone())));
                 }
@@ -2954,6 +2956,7 @@ impl Interp {
                 let v = self.deref_value(v);
                 let bytes = match v {
                     Value::Str(s) => s.borrow().clone(),
+                    Value::String(s) => s.as_slice().to_vec(),
                     Value::Arr(a) => a
                         .borrow()
                         .iter()
@@ -2964,34 +2967,43 @@ impl Interp {
                         .collect(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
-                Ok(Value::str_bytes(bytes))
+                Ok(Value::String(StringData::from_slice(&bytes)))
             }
             "concat" => {
                 let a = self.eval(&args[0])?;
                 let b = self.eval(&args[1])?;
                 let a = self.deref_value(a);
                 let b = self.deref_value(b);
-                match (a, b) {
-                    (Value::Str(x), Value::Str(y)) => {
-                        let mut bytes = x.borrow().clone();
-                        bytes.extend_from_slice(&y.borrow());
-                        Ok(Value::str_bytes(bytes))
-                    }
-                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
-                }
+                let bytes_a = match &a {
+                    Value::Str(x) => x.borrow().clone(),
+                    Value::String(x) => x.as_slice().to_vec(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let bytes_b = match &b {
+                    Value::Str(y) => y.borrow().clone(),
+                    Value::String(y) => y.as_slice().to_vec(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let mut bytes = bytes_a;
+                bytes.extend_from_slice(&bytes_b);
+                Ok(Value::String(StringData::from_slice(&bytes)))
             }
             "compare" => {
                 let a = self.eval(&args[0])?;
                 let b = self.eval(&args[1])?;
                 let a = self.deref_value(a);
                 let b = self.deref_value(b);
-                let ord = match (&a, &b) {
-                    (Value::Str(x), Value::Str(y)) => {
-                        let (x, y) = (x.borrow().clone(), y.borrow().clone());
-                        x.cmp(&y)
-                    }
+                let bytes_a = match &a {
+                    Value::Str(x) => x.borrow().clone(),
+                    Value::String(x) => x.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
+                let bytes_b = match &b {
+                    Value::Str(y) => y.borrow().clone(),
+                    Value::String(y) => y.as_slice().to_vec(),
+                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
+                };
+                let ord = bytes_a.cmp(&bytes_b);
                 let v = match ord {
                     std::cmp::Ordering::Less => -1,
                     std::cmp::Ordering::Equal => 0,
@@ -3037,7 +3049,68 @@ impl Interp {
                     }
                     out.extend_from_slice(it);
                 }
-                Ok(Value::str_bytes(out))
+                Ok(Value::String(StringData::from_slice(&out)))
+            }
+            "copy_from" => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::String(s) => Ok(Value::String(s.clone())),
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            "as_slice" => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::String(s) => {
+                        let bytes = s.as_slice().to_vec();
+                        Ok(Value::Str(Rc::new(RefCell::new(bytes))))
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            "into_array" => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::String(mut s) => {
+                        let (ptr, len, cap) = s.take_ptr();
+                        // 构建 Array(u8) 表示——目前用 Value::Bytes 暂代
+                        if !ptr.is_null() {
+                            let layout =
+                                std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
+                            let vec = unsafe {
+                                let b = std::slice::from_raw_parts_mut(ptr, len);
+                                Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
+                            };
+                            Ok(Value::Bytes(Rc::new(RefCell::new(vec))))
+                        } else {
+                            Ok(Value::Bytes(Rc::new(RefCell::new(Vec::new()))))
+                        }
+                    }
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
+            "len" => {
+                if args.is_empty() {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::String(s) => Ok(Value::Int(s.len() as i128)),
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
             }
             _ => Err(RtError::new("NoMethod", Some(span.clone()))),
         }

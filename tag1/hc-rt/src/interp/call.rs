@@ -936,6 +936,24 @@ impl Interp {
                 Err(RtError::new("TypeError", Some(span.clone())))
             }
             (Value::Str(s), "as_slice") => Ok(Some(Value::Str(s.clone()))),
+            (Value::String(s), "as_slice") => {
+                let bytes = s.as_slice().to_vec();
+                Ok(Some(Value::Str(Rc::new(RefCell::new(bytes)))))
+            }
+            (Value::String(s), "into_array") => {
+                let mut s = s.clone();
+                let (ptr, len, cap) = s.take_ptr();
+                if !ptr.is_null() {
+                    let layout = std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
+                    let vec = unsafe {
+                        let b = std::slice::from_raw_parts_mut(ptr, len);
+                        Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
+                    };
+                    Ok(Some(Value::Bytes(Rc::new(RefCell::new(vec)))))
+                } else {
+                    Ok(Some(Value::Bytes(Rc::new(RefCell::new(Vec::new())))))
+                }
+            }
             (Value::Str(s), "split") => {
                 // 按分隔符切分（返回 Vec of String）
                 let sep_v = self.eval(&args[0])?;
@@ -1034,6 +1052,7 @@ impl Interp {
                 Ok(Some(Value::str_bytes(out)))
             }
             (Value::Str(s), "len") => Ok(Some(Value::Int(s.borrow().len() as i128))),
+            (Value::String(s), "len") => Ok(Some(Value::Int(s.len() as i128))),
             // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
             (Value::Str(s), "to_upper") | (Value::Str(s), "to_lower") => {
                 let upper = field == "to_upper";

@@ -2517,6 +2517,21 @@ pub(crate) fn call_builtin_method(
             }
         }
         (IrValue::Str(s), "as_slice") => Ok(Some(IrValue::Str(s.clone()))),
+        (IrValue::String(s), "as_slice") => Ok(Some(IrValue::Str(s.as_slice().to_vec()))),
+        (IrValue::String(s), "into_array") => {
+            let mut s = s.clone();
+            let (ptr, len, cap) = s.take_ptr();
+            if !ptr.is_null() {
+                let layout = std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
+                let vec = unsafe {
+                    let b = std::slice::from_raw_parts_mut(ptr, len);
+                    Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
+                };
+                Ok(Some(IrValue::Str(vec)))
+            } else {
+                Ok(Some(IrValue::Str(vec![])))
+            }
+        }
         (IrValue::Str(s), "split") => {
             let sep_v = deref_value(
                 ctx,
@@ -2608,6 +2623,7 @@ pub(crate) fn call_builtin_method(
             Ok(Some(str_bytes_val(out)))
         }
         (IrValue::Str(_), "len") => Ok(Some(IrValue::Int(self_v.display(ctx).len() as i128))),
+        (IrValue::String(s), "len") => Ok(Some(IrValue::Int(s.len() as i128))),
         // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
         (IrValue::Str(s), "to_upper") | (IrValue::Str(s), "to_lower") => {
             let upper = method == "to_upper";
@@ -3234,11 +3250,196 @@ pub(crate) fn call_dotted_implicit(
                 .first()
                 .ok_or_else(|| IrError::msg("ArityMismatch", "String.from"))?;
             let v = deref_value(ctx, v);
-            let s = match v {
+            let bytes = match v {
                 IrValue::Str(s) => s.clone(),
+                IrValue::String(s) => s.as_slice().to_vec(),
                 other => other.display(ctx).as_bytes().to_vec(),
             };
-            return Ok(IrValue::Str(s));
+            return Ok(IrValue::String(StringDataIr::from_slice(&bytes)));
+        }
+        "String.from_slice" => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.from_slice"))?;
+            let v = deref_value(ctx, v);
+            let bytes = match v {
+                IrValue::Str(s) => s.clone(),
+                IrValue::String(s) => s.as_slice().to_vec(),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "String.from_slice expects &[u8] or String",
+                    ))
+                }
+            };
+            return Ok(IrValue::String(StringDataIr::from_slice(&bytes)));
+        }
+        "String.copy_from" => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.copy_from"))?;
+            let v = deref_value(ctx, v);
+            return match v {
+                IrValue::String(s) => Ok(IrValue::String(s.clone())),
+                _ => Err(IrError::msg("TypeError", "String.copy_from expects String")),
+            };
+        }
+        "String.concat" => {
+            if args.len() < 2 {
+                return Err(IrError::msg(
+                    "ArityMismatch",
+                    "String.concat expects 2 args",
+                ));
+            }
+            let a = deref_value(ctx, &args[0]);
+            let b = deref_value(ctx, &args[1]);
+            let bytes_a = match &a {
+                IrValue::Str(s) => s.clone(),
+                IrValue::String(s) => s.as_slice().to_vec(),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "String.concat expects &[u8] or String",
+                    ))
+                }
+            };
+            let bytes_b = match &b {
+                IrValue::Str(s) => s.clone(),
+                IrValue::String(s) => s.as_slice().to_vec(),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "String.concat expects &[u8] or String",
+                    ))
+                }
+            };
+            let mut out = bytes_a;
+            out.extend_from_slice(&bytes_b);
+            return Ok(IrValue::String(StringDataIr::from_slice(&out)));
+        }
+        "String.compare" => {
+            if args.len() < 2 {
+                return Err(IrError::msg(
+                    "ArityMismatch",
+                    "String.compare expects 2 args",
+                ));
+            }
+            let a = deref_value(ctx, &args[0]);
+            let b = deref_value(ctx, &args[1]);
+            let bytes_a = match &a {
+                IrValue::Str(s) => s.clone(),
+                IrValue::String(s) => s.as_slice().to_vec(),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "String.compare expects &[u8] or String",
+                    ))
+                }
+            };
+            let bytes_b = match &b {
+                IrValue::Str(s) => s.clone(),
+                IrValue::String(s) => s.as_slice().to_vec(),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "String.compare expects &[u8] or String",
+                    ))
+                }
+            };
+            let ord = bytes_a.cmp(&bytes_b);
+            let v = match ord {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            };
+            return Ok(IrValue::Int(v));
+        }
+        "String.join" => {
+            if args.len() < 2 {
+                return Err(IrError::msg("ArityMismatch", "String.join expects 2 args"));
+            }
+            let parts_v = deref_value(ctx, &args[0]);
+            let sep_v = deref_value(ctx, &args[1]);
+            let sep_bytes = match &sep_v {
+                IrValue::Str(s) => s.clone(),
+                _ => {
+                    return Err(IrError::msg(
+                        "TypeError",
+                        "String.join separator expects &[u8]",
+                    ))
+                }
+            };
+            let items: Vec<Vec<u8>> = match &parts_v {
+                IrValue::Arr(c) => match &ctx.cells[*c] {
+                    Cell::Elems(e) => e
+                        .iter()
+                        .map(|ec| {
+                            let v = ctx.cell_value(*ec);
+                            match v {
+                                IrValue::Str(s) => s.clone(),
+                                IrValue::String(s) => s.as_slice().to_vec(),
+                                other => other.display(ctx).into_bytes(),
+                            }
+                        })
+                        .collect(),
+                    _ => return Err(IrError::msg("TypeError", "String.join expects array")),
+                },
+                _ => return Err(IrError::msg("TypeError", "String.join expects array")),
+            };
+            let mut out = Vec::new();
+            for (i, it) in items.iter().enumerate() {
+                if i > 0 {
+                    out.extend_from_slice(&sep_bytes);
+                }
+                out.extend_from_slice(it);
+            }
+            return Ok(IrValue::String(StringDataIr::from_slice(&out)));
+        }
+        "String.as_slice" => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.as_slice"))?;
+            let v = deref_value(ctx, v);
+            return match v {
+                IrValue::String(s) => Ok(IrValue::Str(s.as_slice().to_vec())),
+                _ => Err(IrError::msg("TypeError", "String.as_slice expects String")),
+            };
+        }
+        "String.into_array" => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.into_array"))?;
+            let v = deref_value(ctx, v).clone();
+            return match v {
+                IrValue::String(mut s) => {
+                    let (ptr, len, cap) = s.take_ptr();
+                    if !ptr.is_null() {
+                        let layout =
+                            std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
+                        let vec = unsafe {
+                            let b = std::slice::from_raw_parts_mut(ptr, len);
+                            Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
+                        };
+                        Ok(IrValue::Str(vec))
+                    } else {
+                        Ok(IrValue::Str(vec![]))
+                    }
+                }
+                _ => Err(IrError::msg(
+                    "TypeError",
+                    "String.into_array expects String",
+                )),
+            };
+        }
+        "String.len" => {
+            let v = args
+                .first()
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.len"))?;
+            let v = deref_value(ctx, v);
+            return match v {
+                IrValue::String(s) => Ok(IrValue::Int(s.len() as i128)),
+                _ => Err(IrError::msg("TypeError", "String.len expects String")),
+            };
         }
         _ => {}
     }

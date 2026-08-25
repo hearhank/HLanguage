@@ -1,12 +1,14 @@
 //! Value 值模型：H 语言运行时值类型系统
 //!
 //! 定义：枚举：Value, LazyOp, ArenaAllocErr, AllocErr, AllocatorImpl
-//! 定义：结构体：ClassData, ChanState, ChanInner, ClosureData, LazyIterData, ArenaState, BoxedData, VecData, MapData, LeakRecord, AllocBlock, PoolState
+//! 定义：结构体：ClassData, ChanState, ChanInner, ClosureData, LazyIterData, ArenaState, BoxedData, VecData, MapData, LeakRecord, AllocBlock, PoolState, StringData
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
+
+use crate::StringData;
 
 /// 运行时值
 #[derive(Debug, Clone)]
@@ -15,8 +17,11 @@ pub enum Value {
     Int(i128),
     Float(f64),
     Bool(bool),
-    /// 字节串（String / &[u8] / 静态切片）
+    /// 字节串（&[u8] / 静态切片）
     Str(Rc<RefCell<Vec<u8>>>),
+    /// String 值类型（拥有所有权的字节数组，值语义，复制即 deep copy）
+    /// 生命周期由编译器管理，作用域出口自动插入 `deinit()`
+    String(StringData),
     /// 数组/集合（共享可变；元素为共享槽以支持 for 可写捕获与索引写回）
     Arr(Rc<RefCell<Vec<Rc<RefCell<Value>>>>>),
     /// 切片视图（带位置和长度的指针，H4 定案）：data[start..start+len]
@@ -622,6 +627,7 @@ impl Value {
             }
             Value::Bool(b) => b.to_string(),
             Value::Str(s) => String::from_utf8_lossy(&s.borrow()).to_string(),
+            Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
             Value::Arr(a) => {
                 let items: Vec<String> = a.borrow().iter().map(|v| v.borrow().display()).collect();
                 format!("[{}]", items.join(", "))
@@ -738,6 +744,7 @@ impl Value {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => *a.borrow() == *b.borrow(),
+            (Value::String(a), Value::String(b)) => a == b,
             (Value::Arr(a), Value::Arr(b)) => {
                 let (a, b) = (a.borrow(), b.borrow());
                 a.len() == b.len()
@@ -900,6 +907,7 @@ impl Value {
             Value::Float(_) => "f64".into(),
             Value::Bool(_) => "bool".into(),
             Value::Str(_) => "&[u8]".into(),
+            Value::String(_) => "String".into(),
             Value::Arr(_) => "array".into(),
             Value::Slice { .. } => "slice".into(),
             Value::Class(c) => c.borrow().name.clone(),
