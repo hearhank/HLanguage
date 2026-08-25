@@ -110,6 +110,11 @@ pub(crate) fn sibling_files(path: &Path) -> Vec<PathBuf> {
                     }
                 }
             }
+            // 扫描 src/Modules/ 子目录（模块自动发现，ADR-0026）
+            let modules_dir = dir.join("Modules");
+            if modules_dir.is_dir() {
+                crate::project::fsio::collect_hc_files(&modules_dir, &mut out);
+            }
         }
     }
     out.sort();
@@ -140,9 +145,39 @@ pub(crate) fn dir_hc_files(dir: &Path) -> Vec<PathBuf> {
                 }
             }
         }
+        // 检查 src/Modules/ 子目录（模块自动发现，ADR-0026）
+        let modules_dir = src_dir.join("Modules");
+        if modules_dir.is_dir() {
+            crate::project::fsio::collect_hc_files(&modules_dir, &mut out);
+        }
     }
     out.sort();
     out
+}
+
+/// 检查 src/Modules/ 下每个子目录是否包含 context.hc（ADR-0026 约定）
+pub(crate) fn validate_module_contexts(project_root: &Path) {
+    let modules_dir = project_root.join("src").join("Modules");
+    if !modules_dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&modules_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let ctx_file = path.join("context.hc");
+        if !ctx_file.is_file() {
+            let module_name = path.file_name().map_or("?", |n| n.to_str().unwrap_or("?"));
+            eprintln!(
+                "warning: module `{module_name}` in src/Modules/ has no context.hc; \
+                 each module should define a context implementing IContext"
+            );
+        }
+    }
 }
 
 /// M7.1：合并多文件 IR 模块——入口在前（索引不变），兄弟函数依次追加。

@@ -483,7 +483,8 @@
 | 目录 = 包 | 同目录 `.hc` 文件自动组包 | ✅ |
 | 兄弟文件符号 | 同包文件间全可见 | ✅ |
 | `src/Modules/` 目录模块 | 子目录自动识别为模块，命名空间计算自动剥离 `Modules/` 前缀 | ✅ |
-| `context.hc` 文件约定 | 模块的 context 定义文件，编译器自动识别 | ⏳ 待实现 |
+| `context.hc` 文件约定 | 模块的 context 定义文件，编译器自动识别 | ✅ |
+| 模块 context.hc 验证 | `hc run` 时检查 src/Modules/ 下各子目录是否有 context.hc | ✅ |
 | `IContext` 接口 | `H.std.ioc` 提供 IoC 容器接口（register/get/registerFactory） | ✅ 运行时内建 |
 | `AppContext` 实现 | 应用级 context，背靠 Arena，支持层级委托 | ✅ |
 | Context 层级委托 | 子 context 持有父 context 引用，解析不到时向上委托 | ✅ |
