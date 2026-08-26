@@ -373,8 +373,9 @@ fn m22_table_double_index_ok() {
 #[test]
 fn m22_continuous_rejects_ref_field() {
     // 存储形态验证：[continuous] 含引用字段 → 编译错误
+    // String 是值类型（64 字节栈内联），Vec 是引用类型
     run_compile_error(
-        "struct Bad { s: String }
+        "struct Bad { s: Vec<i32> }
 [test] fn t() !void {}\n",
         "non-value field",
     );

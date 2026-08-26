@@ -7,7 +7,7 @@ import H.std.{io};
 //   - 用途：数据定义 → 序列化/校验样板（Q37/Q38 定制通道，组 C E1.3）
 //   - 生成函数由 `types.fields("User")` 元数据驱动，随类型定义自动更新
 
-class User {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
+struct User {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     name: String,
     age: i32,
     email: ?String,

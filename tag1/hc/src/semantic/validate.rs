@@ -268,7 +268,11 @@ impl Checker {
                         false
                     }
                     None => {
-                        // 内建引用类型（String/Vec/Map/Deque/Table）：非值类型
+                        // String 是 64 字节栈内联值类型（值语义，复制即可）
+                        if n == "String" {
+                            return true;
+                        }
+                        // 内建引用类型（Vec/Map/Deque/Table）：非值类型
                         if is_builtin_type(n) || is_collection(n) {
                             return false;
                         }
@@ -277,7 +281,8 @@ impl Checker {
                 }
             }
             Type::Tuple(ts) => ts.iter().all(|t| self.type_is_value(t)),
-            Type::Optional(_) | Type::Slice(_, _) | Type::Ptr(_, _) => false,
+            Type::Optional(inner) => self.type_is_value(inner), // Optional 包裹的值类型仍是值类型
+            Type::Slice(_, _) | Type::Ptr(_, _) => false,
             Type::Array(_, inner) => self.type_is_value(inner), // 定长数组的元素为值类型则可内联
             _ => false,
         }

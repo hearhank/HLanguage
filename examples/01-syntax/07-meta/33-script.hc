@@ -9,7 +9,7 @@ import H.std.{io};
 // Q23 定案（2026-08-13）：输入机制 = 隐式 types 元数据对象
 //   - types.fields("Person") 返回字段 [名, 类型] 列表；产物 = 代码字符串就地替换
 
-class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
+struct Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     name: String,
     age: i32,
 }

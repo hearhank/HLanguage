@@ -388,7 +388,7 @@ pub(crate) fn is_builtin_type(name: &str) -> bool {
 
 /// 内建集合类型（可迭代 / 引用语义）
 pub(crate) fn is_collection(name: &str) -> bool {
-    matches!(name, "Vec" | "Map" | "Deque" | "Table" | "String")
+    matches!(name, "Vec" | "Map" | "Deque" | "Table")
 }
 
 /// 递归收集 class 声明（namespace 内展平），供接口实现验证用
