@@ -1742,6 +1742,7 @@ pub(crate) fn call_io_print_ir(ctx: &mut Ctx, args: &[IrValue]) -> R<()> {
     }
     let fmt = match deref_value(ctx, &args[0]) {
         IrValue::Str(s) => s.clone(),
+        IrValue::String(s) => s.as_slice().to_vec(),
         _ => return Err(IrError::msg("TypeError", "io.print expects &[u8]")),
     };
     let mut out = Vec::new();

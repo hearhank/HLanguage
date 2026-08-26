@@ -442,7 +442,7 @@ class Lexer {
             }
         }
         var s = buf.as_slice();
-        io.print("{} {} {} {} {(\"", start, self.pos, self.line, self.col, kind);
+        io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", s);
     }
 
