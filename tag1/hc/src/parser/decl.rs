@@ -708,6 +708,18 @@ impl Parser {
         }
         loop {
             let start = self.span();
+            // 可选 var mut 前缀（如 var mut out: Vec<u8>）
+            let mut_ = if self.at(&TokenKind::KwVar) {
+                self.advance();
+                if self.at(&TokenKind::KwMut) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let name = self.expect_ident()?;
             self.expect(&TokenKind::Colon, "`:` after parameter name")?;
             let ty = self.parse_type()?;
@@ -722,6 +734,7 @@ impl Parser {
                 ty,
                 default,
                 span: start,
+                mut_,
             });
             if self.at(&TokenKind::Comma) {
                 self.advance();

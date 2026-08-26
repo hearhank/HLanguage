@@ -1055,6 +1055,17 @@ impl Interp {
                     unreachable!()
                 }
             }
+            (Value::Arr(a), "as_slice") => {
+                let arr = a.borrow();
+                let bytes: Vec<u8> = arr
+                    .iter()
+                    .filter_map(|v| match &*v.borrow() {
+                        Value::Int(n) if *n >= 0 && *n <= 255 => Some(*n as u8),
+                        _ => None,
+                    })
+                    .collect();
+                Ok(Some(Value::Str(Rc::new(RefCell::new(bytes)))))
+            }
             (Value::Arr(a), "append") => {
                 let v = self.eval(&args[0])?;
                 a.borrow_mut().push(Rc::new(RefCell::new(v)));

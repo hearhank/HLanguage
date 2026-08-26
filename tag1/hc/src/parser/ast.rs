@@ -241,6 +241,7 @@ pub struct Param {
     pub ty: Type,
     pub default: Option<Expr>,
     pub span: Span,
+    pub mut_: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -54,7 +54,7 @@ impl Checker {
                             // 参数来源由调用点决定（o T 拥有 / 借用）——保守放行
                             source: AllocSource::Unknown,
                             thread: None,
-                            mut_: false,
+                            mut_: p.mut_,
                         },
                     );
                 }
@@ -229,7 +229,7 @@ impl Checker {
                     pending_fields: None,
                     source: AllocSource::Unknown,
                     thread: None,
-                    mut_: false,
+                    mut_: p.mut_,
                 },
             );
         }

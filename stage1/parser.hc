@@ -149,7 +149,7 @@ class Lexer {
         self.pos += utf8_width(self.src[self.pos]);
     }
 
-    fn append_char(self: *mut Self, content: Vec<u8>) void {
+    fn append_char(self: *mut Self, var mut content: Vec<u8>) void {
         var w = utf8_width(self.src[self.pos]);
         var mut k: i32 = 0;
         while (k < w) {
@@ -341,7 +341,7 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: i32, kind: &[u8], var mut buf: Vec<u8>) void {
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
             if (suf) |s| {
@@ -2312,7 +2312,7 @@ class Parser {
 // 打印属性：props 是 |key=value 格式的扁平 Vec<u8>
 fn dump_props(props: Vec<u8>) void {
     if (@intCast(i32, props.len) > 0) {
-        var s = String.from_slice(props, alloc);
+        var s = props.as_slice();
         io.print("{}", s);
     }
 }
@@ -2323,12 +2323,12 @@ fn dump_ast(node: AstNode, depth: i32) void {
         io.print(" ");
         i += 1;
     }
-    var mut kind_str = String.from_slice(node.kind, alloc);
+    var mut kind_str = node.kind.as_slice();
     // Handle ret: nodes specially
     if (kind_str == "ret:") {
         io.print("ret: ");
         if (node.props.len > 0) {
-            var s = String.from_slice(node.props, alloc);
+            var s = node.props.as_slice();
             io.print("\"{}\"", s);
         }
         io.print("\n");

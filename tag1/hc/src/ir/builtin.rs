@@ -2627,6 +2627,20 @@ pub(crate) fn call_builtin_method(
             Ok(Some(str_bytes_val(out)))
         }
         (IrValue::Arr(c), "len") => Ok(Some(IrValue::Int(ctx.elems_len(*c) as i128))),
+        (IrValue::Arr(c), "as_slice") => {
+            let cells = &ctx.cells;
+            let bytes = match &cells[*c] {
+                Cell::Elems(elems) => elems
+                    .iter()
+                    .filter_map(|cid| match &cells[*cid] {
+                        Cell::Value(IrValue::Int(n)) if *n >= 0 && *n <= 255 => Some(*n as u8),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            Ok(Some(IrValue::Str(bytes)))
+        }
         (IrValue::Arr(c), "append") => {
             let v = args
                 .first()

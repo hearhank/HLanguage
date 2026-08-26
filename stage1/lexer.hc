@@ -167,7 +167,7 @@ fn is_printable(cp: i32) bool {
 }
 
 // 追加 `\u{hex}`（hex 小写无前导零，对齐 Rust escape_unicode）
-fn append_unicode_escape(out: Vec<u8>, cp: i32) void {
+fn append_unicode_escape(var mut out: Vec<u8>, cp: i32) void {
     out.append('\\'); out.append('u'); out.append('{');
     var digits = "0123456789abcdef";
     var mut sh: i32 = 0;
@@ -224,7 +224,7 @@ class Lexer {
     }
 
     // 追加一个完整字符（含多字节 UTF-8）到内容缓冲并前进
-    fn append_char(self: *mut Self, content: Vec<u8>) void {
+    fn append_char(self: *mut Self, var mut content: Vec<u8>) void {
         var w = utf8_width(self.src[self.pos]);
         var mut k: i32 = 0;
         while (k < w) {
@@ -251,7 +251,7 @@ class Lexer {
     fn emit_content(self: *mut Self, start: i32, kind: &[u8], content: Vec<u8>) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         var esc = dbg_escape(content);
-        var s = String.from_slice(esc, alloc);
+        var s = esc.as_slice();
         io.print("{}\")\n", s);
     }
 
@@ -427,7 +427,7 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: i32, kind: &[u8], var mut buf: Vec<u8>) void {
         // 惰性宽度后缀
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
@@ -441,8 +441,8 @@ class Lexer {
                 }
             }
         }
-        var s = String.from_slice(buf, alloc);
-        io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
+        var s = buf.as_slice();
+        io.print("{} {} {} {} {(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", s);
     }
 
