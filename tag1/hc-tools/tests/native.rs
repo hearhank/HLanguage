@@ -362,7 +362,7 @@ fn aggregate_array_index_and_store_native() {
     // MakeArr/Index/StoreIndex + 数组深比较
     let src = r#"
 fn main() i32 {
-    var a = [10, 20, 30];
+    var mut a = [10, 20, 30];
     if (a[0] != 10 or a[2] != 30) { return 1; }
     a[1] = 99;
     if (a[1] != 99) { return 2; }
@@ -406,7 +406,7 @@ fn aggregate_slice_view_and_alias_native() {
     // SliceOf：切片为共享视图——源数组元素写穿（元素 cell 别名）
     let src = r#"
 fn main() i32 {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     var sub = arr[1..4];
     if (sub.len != 3 or sub[0] != 2 or sub[2] != 4) { return 1; }
     arr[1] = 99;
@@ -427,7 +427,7 @@ fn aggregate_slice_store_native() {
     // StoreSlice：`arr[lo..hi] = v` 写回源数组元素
     let src = r#"
 fn main() i32 {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     arr[1..3] = [20, 30];
     if (arr[1] != 20 or arr[2] != 30 or arr.len != 5) { return 1; }
     return 0;

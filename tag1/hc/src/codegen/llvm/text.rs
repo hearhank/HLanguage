@@ -2589,22 +2589,23 @@ done:
   %dcount = sub i64 64, %pos
   %extra = select i1 %is_neg, i64 1, i64 0
   %nbytes = add i64 %dcount, %extra
-  %allocn = add i64 %nbytes, 1
-  %bufh = call i8* @hc_alloc(i64 %allocn)
+  %raw = call noalias i8* @malloc(i64 72)
+  %sd = bitcast i8* %raw to %StringData*
+  %sd_buf = getelementptr %StringData, %StringData* %sd, i64 0, i32 0
+  %sd_bptr = bitcast [64 x i8]* %sd_buf to i8*
   %dp = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %pos
-  %dstd = getelementptr i8, i8* %bufh, i64 %extra
+  %dstd = getelementptr i8, i8* %sd_bptr, i64 %extra
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dstd, i8* %dp, i64 %dcount, i1 false)
-  %nuloff = add i64 %dcount, %extra
-  %nulp = getelementptr i8, i8* %bufh, i64 %nuloff
-  store i8 0, i8* %nulp
   br i1 %is_neg, label %sig, label %mk
 sig:
-  store i8 45, i8* %bufh
+  store i8 45, i8* %sd_bptr
   br label %mk
 mk:
-  %pi = ptrtoint i8* %bufh to i128
+  %len_p = getelementptr %StringData, %StringData* %sd, i64 0, i32 1
+  store i64 %nbytes, i64* %len_p
+  %ptr = ptrtoint %StringData* %sd to i128
   %x0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
-  %x1 = insertvalue %Value %x0, i128 %pi, 1
+  %x1 = insertvalue %Value %x0, i128 %ptr, 1
   ret %Value %x1
 }
 "#;
@@ -2638,14 +2639,16 @@ frac_f:
   br label %mk
 mk:
   %len = call i64 @strlen(i8* %buf)
-  %allocn = add i64 %len, 1
-  %bufh = call i8* @hc_alloc(i64 %allocn)
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %bufh, i8* %buf, i64 %len, i1 false)
-  %nulp = getelementptr i8, i8* %bufh, i64 %len
-  store i8 0, i8* %nulp
-  %pi = ptrtoint i8* %bufh to i128
+  %raw = call noalias i8* @malloc(i64 72)
+  %sd = bitcast i8* %raw to %StringData*
+  %sd_buf = getelementptr %StringData, %StringData* %sd, i64 0, i32 0
+  %sd_bptr = bitcast [64 x i8]* %sd_buf to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %sd_bptr, i8* %buf, i64 %len, i1 false)
+  %len_p = getelementptr %StringData, %StringData* %sd, i64 0, i32 1
+  store i64 %len, i64* %len_p
+  %ptr = ptrtoint %StringData* %sd to i128
   %x0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
-  %x1 = insertvalue %Value %x0, i128 %pi, 1
+  %x1 = insertvalue %Value %x0, i128 %ptr, 1
   ret %Value %x1
 }
 "#;
