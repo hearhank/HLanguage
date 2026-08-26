@@ -472,3 +472,49 @@ var v = Vec<i32>[1, 2, 3];       // Vec<i32>
 | `Cell<T>` / `RefCell<T>` | 无显式 | 解释器内部用 RefCell |
 | mpsc::channel | `Chan<T>` | H 有 M:N 通道 |
 | DataFrame | `Table<T>` | H 特有 |
+
+---
+
+## 12. 接口 (Interface)
+
+H 语言支持接口定义，用于声明跨类型共享的方法契约。
+
+### 12.1 语法
+
+```hc
+interface ICollection<T> {
+    fn append(self: *mut Self, item: T) void;
+    fn len(self: &Self) usize;
+    fn get(self: &Self, i: usize) ?T;
+    fn put(self: *mut Self, i: usize, item: T) void;
+    fn front(self: &Self) ?T;
+    fn back(self: &Self) ?T;
+}
+
+class Vec<T> : ICollection<T> {
+    fn append(self: *mut Self, item: T) void { ... }
+    fn len(self: &Self) usize { ... }
+    // ...
+}
+```
+
+### 12.2 设计原则 (ADR-0027)
+
+- **编译期静态分派**：无运行时虚表，调用点已知具体类型，直接生成具体函数调用
+- **类声明时实现**：`class X : IInterface { ... }`，类似 C# 风格
+- **默认方法实现**（后续）：方法体写在接口中即为默认实现，类型可选择 override
+- **IR lowerer 负责分派**：语义分析阶段建立 `type_implements` 映射表，lowerer 查表后生成具体调用
+
+### 12.3 标准接口
+
+| 接口 | 方法 | 实现者 | 状态 |
+|------|------|--------|------|
+| `ICollection<T>` | `append`/`len`/`get`/`put`/`front`/`back` | Vec, Arr, Deque | 待实现 |
+| `IComparable` | `eq`/`lt` | Int, Float, String, Bool | 已有 (INumber/ICompare) |
+| `IIterable<T>` | `next` → `?T` | 所有可迭代类型 | 已有 |
+
+### 12.4 与 LLVM codegen 的交互
+
+- 接口方法调用在 IR lowerer 中转为 `CallBuiltin("Type.method", ...)`
+- LLVM codegen 的 `call_builtin` 处理具体的方法调用
+- 移除 `call_method` 中的 `is_coll_method` 手工枚举和运行时 tag 检查
