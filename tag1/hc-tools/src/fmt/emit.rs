@@ -634,6 +634,10 @@ impl<'a> Fmt<'a> {
             }
             TokenKind::Pipe => {
                 if self.in_capture {
+                    // 无参闭包 | | expr → 两 | 间保留空格，避免合并为 ||（PipePipe）
+                    if matches!(self.prev, Some(TokenKind::Pipe)) {
+                        self.space();
+                    }
                     self.raw("|");
                     self.in_capture = false;
                     self.prev_nospace = false;
