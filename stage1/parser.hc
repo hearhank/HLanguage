@@ -182,8 +182,8 @@ class Token {
 
 class Lexer {
     src: &[u8],
-    n: i32,
-    mut pos: i32,
+    n: usize,
+    mut pos: usize,
     mut line: i32,
     mut col: i32,
     mut tokens: Vec<Token>,
@@ -213,7 +213,7 @@ class Lexer {
 
     // append_char 已内联到调用处（避免参数 mut 关键字）
 
-    fn push_token(self: *mut Self, kind: &[u8], text: Vec<u8>, start: i32) void {
+    fn push_token(self: *mut Self, kind: &[u8], text: Vec<u8>, start: usize) void {
         var tok = Token{
             kind = vec_from_slice(kind),
             text = text,
@@ -225,7 +225,7 @@ class Lexer {
         self.tokens.append(tok);
     }
 
-    fn push_simple(self: *mut Self, kind: &[u8], start: i32) void {
+    fn push_simple(self: *mut Self, kind: &[u8], start: usize) void {
         var empty = Vec<u8>.init(alloc);
         self.push_token(kind, empty, start);
     }
@@ -285,7 +285,7 @@ class Lexer {
         }
     }
 
-    fn lex_ident(self: *mut Self, start: i32) void {
+    fn lex_ident(self: *mut Self, start: usize) void {
         var s2 = self.pos;
         while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
         var name = self.src[s2..self.pos];
@@ -298,7 +298,7 @@ class Lexer {
         }
     }
 
-    fn lex_number(self: *mut Self, start: i32) void {
+    fn lex_number(self: *mut Self, start: usize) void {
         var buf = Vec<u8>.init(alloc);
         var mut is_float = false;
         if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
@@ -395,7 +395,7 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: usize, kind: &[u8], buf: Vec<u8>) void {
         // 创建可变副本，绕过参数不能声明 mut 的限制
         var mut txt = vec_from_slice(buf);
         if (self.pos < self.n) {
@@ -413,7 +413,7 @@ class Lexer {
         self.push_token(kind, txt, start);
     }
 
-    fn lex_string(self: *mut Self, start: i32) void {
+    fn lex_string(self: *mut Self, start: usize) void {
         self.bump();
         if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
             self.bump();
@@ -512,7 +512,7 @@ class Lexer {
         self.push_token("Str", content, start);
     }
 
-    fn lex_char(self: *mut Self, start: i32) void {
+    fn lex_char(self: *mut Self, start: usize) void {
         self.bump();
         var mut val: i32 = -1;
         if (self.pos >= self.n) { return; }
@@ -545,7 +545,7 @@ class Lexer {
         }
     }
 
-    fn lex_punct(self: *mut Self, start: i32) void {
+    fn lex_punct(self: *mut Self, start: usize) void {
         var mut c = self.src[self.pos];
         self.bump();
         if (c == '{') { self.push_simple("LBrace", start); }
@@ -634,8 +634,8 @@ fn hexval(b: u8) i32 {
 
 fn vec_from_slice(s: &[u8]) Vec<u8> {
     var v = Vec<u8>.init(alloc);
-    var mut i: i32 = 0;
-    while (i < @intCast(i32, s.len)) {
+    var mut i: usize = 0;
+    while (i < s.len) {
         v.append(s[i]);
         i += 1;
     }
@@ -672,16 +672,14 @@ fn make_node(kind: &[u8]) AstNode {
 fn node_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
     // encode: |key=value
     node.props.append('|');
-    var mut i: i32 = 0;
-    var key_len = @intCast(i32, key.len);
-    while (i < key_len) {
+    var mut i: usize = 0;
+    while (i < key.len) {
         node.props.append(key[i]);
         i += 1;
     }
     node.props.append('=');
     i = 0;
-    var val_len = @intCast(i32, val.len);
-    while (i < val_len) {
+    while (i < val.len) {
         node.props.append(val[i]);
         i += 1;
     }
@@ -693,17 +691,15 @@ fn node_add_child(node: *mut AstNode, child: AstNode) void {
 
 fn quoted_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
     node.props.append('|');
-    var mut i: i32 = 0;
-    var key_len = @intCast(i32, key.len);
-    while (i < key_len) {
+    var mut i: usize = 0;
+    while (i < key.len) {
         node.props.append(key[i]);
         i += 1;
     }
     node.props.append('=');
     node.props.append('"');
     i = 0;
-    var val_len = @intCast(i32, val.len);
-    while (i < val_len) {
+    while (i < val.len) {
         node.props.append(val[i]);
         i += 1;
     }
@@ -716,24 +712,24 @@ fn quoted_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
 
 class Parser {
     tokens: Vec<Token>,
-    mut pos: i32,
-    n: i32,
+    mut pos: usize,
+    n: usize,
     rev_kw_map: Map<&[u8], &[u8]>,
 
     fn peek(self: *mut Self) &[u8] {
-        var tok = self.tokens[@intCast(usize, self.pos)];
+        var tok = self.tokens[self.pos];
         return tok.kind.as_slice();
     }
 
-    fn peek_n(self: *mut Self, n: i32) &[u8] {
+    fn peek_n(self: *mut Self, n: usize) &[u8] {
         var mut idx = self.pos + n;
         if (idx >= self.n) { idx = self.n - 1; }
-        var tok = self.tokens[@intCast(usize, idx)];
+        var tok = self.tokens[idx];
         return tok.kind.as_slice();
     }
 
     fn peek_text(self: *mut Self) &[u8] {
-        var tok = self.tokens[@intCast(usize, self.pos)];
+        var tok = self.tokens[self.pos];
         return tok.text.as_slice();
     }
 
@@ -746,8 +742,8 @@ class Parser {
     }
 
     fn at_any(self: *mut Self, kinds: &[&[u8]]) bool {
-        var mut i: i32 = 0;
-        while (i < @intCast(i32, kinds.len)) {
+        var mut i: usize = 0;
+        while (i < kinds.len) {
             if (self.at(kinds[i])) return true;
             i += 1;
         }
@@ -755,7 +751,7 @@ class Parser {
     }
 
     fn advance(self: *mut Self) Token {
-        var t = self.tokens[@intCast(usize, self.pos)];
+        var t = self.tokens[self.pos];
         if (self.pos < self.n - 1) { self.pos += 1; }
         return t;
     }
@@ -2335,8 +2331,8 @@ class AstDumper {
             if (node.props.len > 0) {
                 var s = node.props.as_slice();
                 self.buf.append('"');
-                var mut j: i32 = 0;
-                while (j < @intCast(i32, s.len)) {
+                var mut j: usize = 0;
+                while (j < s.len) {
                     self.buf.append(s[j]);
                     j += 1;
                 }
@@ -2346,8 +2342,8 @@ class AstDumper {
             return;
         }
         // kind
-        var mut j: i32 = 0;
-        while (j < @intCast(i32, kind_str.len)) {
+        var mut j: usize = 0;
+        while (j < kind_str.len) {
             self.buf.append(kind_str[j]);
             j += 1;
         }
@@ -2355,15 +2351,15 @@ class AstDumper {
         if (node.props.len > 0) {
             var s = node.props.as_slice();
             j = 0;
-            while (j < @intCast(i32, s.len)) {
+            while (j < s.len) {
                 self.buf.append(s[j]);
                 j += 1;
             }
         }
         self.buf.append('\n');
         // children
-        var mut ci = 0;
-        while (ci < @intCast(i32, node.children.len)) {
+        var mut ci: usize = 0;
+        while (ci < node.children.len) {
             self.dump(node.children[ci], depth + 1);
             ci += 1;
         }
@@ -2383,7 +2379,7 @@ fn main(args: Vec<String>) !void {
     var rev_kw_map = build_rev_kw_map();
     // 词法分析
     var lx: Lexer = alloc.init(Lexer{
-        src = src, n = @intCast(i32, src.len),
+        src = src, n = src.len,
         pos = 0, line = 1, col = 1,
         tokens = Vec<Token>.init(alloc),
         kw_map = kw_map,
@@ -2392,7 +2388,7 @@ fn main(args: Vec<String>) !void {
     // 语法分析
     var parser: Parser = alloc.init(Parser{
         tokens = lx.tokens, pos = 0,
-        n = @intCast(i32, lx.tokens.len),
+        n = lx.tokens.len,
         rev_kw_map = rev_kw_map,
     });
     var ast = parser.parse_program();
