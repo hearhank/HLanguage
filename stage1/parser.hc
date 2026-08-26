@@ -211,15 +211,7 @@ class Lexer {
         else { self.pos += 4; }
     }
 
-    fn append_char(self: *mut Self, var mut content: Vec<u8>) void {
-        var w = utf8_width(self.src[self.pos]);
-        var mut k: i32 = 0;
-        while (k < w) {
-            content.append(self.src[self.pos + k]);
-            k += 1;
-        }
-        self.bump();
-    }
+    // append_char 已内联到调用处（避免参数 mut 关键字）
 
     fn push_token(self: *mut Self, kind: &[u8], text: Vec<u8>, start: i32) void {
         var tok = Token{
@@ -403,20 +395,21 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], var mut buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec<u8>) void {
+        // 创建可变副本，绕过参数不能声明 mut 的限制
+        var mut txt = vec_from_slice(buf);
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
             if (suf) |s| {
                 var slen: i32 = @intCast(i32, s.len);
                 var mut k: i32 = 0;
                 while (k < slen) {
-                    buf.append(s[k]);
+                    txt.append(s[k]);
                     self.bump();
                     k += 1;
                 }
             }
         }
-        var txt = vec_from_slice(buf);
         self.push_token(kind, txt, start);
     }
 
@@ -432,9 +425,15 @@ class Lexer {
                     self.bump(); self.bump(); self.bump();
                     break;
                 }
-                self.append_char(content);
+                var w = utf8_width(self.src[self.pos]);
+                var mut k = 0;
+                while (k < w) {
+                    content.append(self.src[self.pos + k]);
+                    k += 1;
+                }
+                self.bump();
             }
-            self.push_token("RawStr", content, start);
+            self.push_token("Str", content, start);
             return;
         }
         var content = Vec<u8>.init(alloc);
@@ -501,7 +500,13 @@ class Lexer {
                 }
             }
             else {
-                self.append_char(content);
+                var w = utf8_width(self.src[self.pos]);
+                var mut k = 0;
+                while (k < w) {
+                    content.append(self.src[self.pos + k]);
+                    k += 1;
+                }
+                self.bump();
             }
         }
         self.push_token("Str", content, start);
@@ -686,16 +691,23 @@ fn node_add_child(node: *mut AstNode, child: AstNode) void {
     node.children.append(child);
 }
 
-fn quoted(s: &[u8]) Vec<u8> {
-    var buf = Vec<u8>.init(alloc);
-    buf.append('"');
+fn quoted_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
+    node.props.append('|');
     var mut i: i32 = 0;
-    while (i < @intCast(i32, s.len)) {
-        buf.append(s[i]);
+    var key_len = @intCast(i32, key.len);
+    while (i < key_len) {
+        node.props.append(key[i]);
         i += 1;
     }
-    buf.append('"');
-    return buf;
+    node.props.append('=');
+    node.props.append('"');
+    i = 0;
+    var val_len = @intCast(i32, val.len);
+    while (i < val_len) {
+        node.props.append(val[i]);
+        i += 1;
+    }
+    node.props.append('"');
 }
 
 // ============================================================
@@ -1140,9 +1152,9 @@ class Parser {
             var ty = self.peek_text();
             self.advance();
             if (ty.len > 0) {
-                node_add_prop(&p, "ty", quoted(ty[0..ty.len]));
+                quoted_add_prop(&p, "ty", ty);
             } else {
-                node_add_prop(&p, "ty", quoted("void"));
+                quoted_add_prop(&p, "ty", "void");
             }
         } else {
             self.parse_type();
@@ -1549,9 +1561,9 @@ class Parser {
                 var ty = self.peek_text();
                 self.advance();
                 if (ty.len > 0) {
-                    node_add_prop(&v, "ty", quoted(ty[0..ty.len]));
+                    quoted_add_prop(&v, "ty", ty);
                 } else {
-                    node_add_prop(&v, "ty", quoted("void"));
+                    quoted_add_prop(&v, "ty", "void");
                 }
             } else {
                 self.parse_type();
@@ -2307,50 +2319,54 @@ class Parser {
 // AST 输出（dump 函数，与 Rust `hc parse` 格式一致）
 // ============================================================
 
-fn dump_ast(node: AstNode, depth: i32, var mut buf: Vec<u8>) void {
-    var mut i = 0;
-    while (i < depth * 2) {
-        buf.append(' ');
-        i += 1;
-    }
-    var mut kind_str = node.kind;
-    // Handle ret: nodes specially
-    if (kind_str == "ret:") {
-        buf.append('r'); buf.append('e'); buf.append('t'); buf.append(':'); buf.append(' ');
-        if (node.props.len > 0) {
-            var s = node.props.as_slice();
-            buf.append('"');
-            var mut j: i32 = 0;
-            while (j < @intCast(i32, s.len)) {
-                buf.append(s[j]);
-                j += 1;
-            }
-            buf.append('"');
+class AstDumper {
+    mut buf: Vec<u8>,
+
+    fn dump(self: *mut Self, node: AstNode, depth: i32) void {
+        var mut i = 0;
+        while (i < depth * 2) {
+            self.buf.append(' ');
+            i += 1;
         }
-        buf.append('\n');
-        return;
-    }
-    // kind
-    var mut j: i32 = 0;
-    while (j < @intCast(i32, kind_str.len)) {
-        buf.append(kind_str[j]);
-        j += 1;
-    }
-    // props
-    if (node.props.len > 0) {
-        var s = node.props.as_slice();
-        j = 0;
-        while (j < @intCast(i32, s.len)) {
-            buf.append(s[j]);
+        var mut kind_str = node.kind;
+        // Handle ret: nodes specially
+        if (kind_str == "ret:") {
+            self.buf.append('r'); self.buf.append('e'); self.buf.append('t'); self.buf.append(':'); self.buf.append(' ');
+            if (node.props.len > 0) {
+                var s = node.props.as_slice();
+                self.buf.append('"');
+                var mut j: i32 = 0;
+                while (j < @intCast(i32, s.len)) {
+                    self.buf.append(s[j]);
+                    j += 1;
+                }
+                self.buf.append('"');
+            }
+            self.buf.append('\n');
+            return;
+        }
+        // kind
+        var mut j: i32 = 0;
+        while (j < @intCast(i32, kind_str.len)) {
+            self.buf.append(kind_str[j]);
             j += 1;
         }
-    }
-    buf.append('\n');
-    // children
-    var mut ci = 0;
-    while (ci < @intCast(i32, node.children.len)) {
-        dump_ast(node.children[ci], depth + 1, buf);
-        ci += 1;
+        // props
+        if (node.props.len > 0) {
+            var s = node.props.as_slice();
+            j = 0;
+            while (j < @intCast(i32, s.len)) {
+                self.buf.append(s[j]);
+                j += 1;
+            }
+        }
+        self.buf.append('\n');
+        // children
+        var mut ci = 0;
+        while (ci < @intCast(i32, node.children.len)) {
+            self.dump(node.children[ci], depth + 1);
+            ci += 1;
+        }
     }
 }
 
@@ -2381,7 +2397,9 @@ fn main(args: Vec<String>) !void {
     });
     var ast = parser.parse_program();
     // 输出 AST（一次性构建缓冲区，减少 io.print 调用）
-    var mut buf = Vec<u8>.init(alloc);
-    dump_ast(ast, 0, buf);
-    io.print("{}", buf.as_slice());
+    var dumper: AstDumper = alloc.init(AstDumper{
+        buf = Vec<u8>.init(alloc),
+    });
+    dumper.dump(ast, 0);
+    io.print("{}", dumper.buf.as_slice());
 }
