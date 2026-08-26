@@ -10,7 +10,7 @@ fn main() !void {
     defer dir.close();
 
     var entries = try io.fs.list_dir(&dir, alloc);
-    var count = 0;
+    var mut count = 0;
     for (entries) |entry| {
         io.print("{}{}\n", entry.name, if (entry.is_dir) "/" else "");
         count += 1;

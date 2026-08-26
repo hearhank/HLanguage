@@ -19,6 +19,7 @@ async fn async_add(b: *i32, n: i32) i32 {
 fn main() !void {
     // 线程 = 数据对象（12.24）：spawn 归当前作用域，join 消耗所有权
     var t: owned Thread<i32> = spawn(compute, 6, 7);
+    defer t.deinit();
     var result = try t.join();
     io.print("result = {}\n", result);
 
@@ -36,6 +37,7 @@ fn main() !void {
 
 [Test] fn thread_join() !void {
     var t: owned Thread<i32> = spawn(compute, 6, 7);
+    defer t.deinit();
     var result = try t.join();
     try expect_eq(result, 42);
 }

@@ -10,7 +10,7 @@ fn search_file<T>(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     var text = String.from(data, alloc);
     var lines = text.split('\n');
 
-    var hits = 0;
+    var mut hits = 0;
     for (lines) |line| {
         if (line.find(needle)) |_| {
             io.print("{}: {}\n", path, line);
@@ -26,7 +26,7 @@ fn main() !void {
     defer dir.close();
 
     var entries = try io.fs.list_dir(&dir, alloc);
-    var total = 0;
+    var mut total = 0;
     for (entries) |entry| {
         if (!entry.is_dir and entry.name.ends_with(".hc")) {
             total += try search_file(&io, entry.name, needle);

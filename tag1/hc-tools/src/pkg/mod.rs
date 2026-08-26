@@ -319,10 +319,21 @@ pub(crate) fn check_and_merge_deps(
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, entry_source));
     }
-    let entry_module = hc::ir::lower(entry).map_err(lower_err)?;
+    // 构建合并类型表：先收集所有程序（入口 + 兄弟）的类型定义，使跨文件 using 导入
+    // 的类型在降级时可解析（如 44-multi-file-main.hc 的 using Orders → Orders.Line）。
+    let mut combined_types = hc::ir::build_type_table(entry);
+    for s in siblings {
+        let st = hc::ir::build_type_table(s);
+        combined_types.classes.extend(st.classes);
+        combined_types.enums.extend(st.enums);
+        combined_types.unions.extend(st.unions);
+        combined_types.namespaces.extend(st.namespaces);
+    }
+    let entry_module =
+        hc::ir::lower_with_types(entry, combined_types.clone()).map_err(lower_err)?;
     let mut sibling_modules: Vec<hc::ir::IrModule> = siblings
         .iter()
-        .map(|p| hc::ir::lower(p).map_err(lower_err))
+        .map(|p| hc::ir::lower_with_types(p, combined_types.clone()).map_err(lower_err))
         .collect::<Result<Vec<_>, String>>()?;
     if strip_sibling_tests {
         for m in &mut sibling_modules {

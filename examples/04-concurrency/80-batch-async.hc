@@ -20,7 +20,7 @@ fn main() !void {
     }
 
     // 全部等待并汇总
-    var total = 0;
+    var mut total = 0;
     for (futures) |f| {
         var body = try await f;
         total += body.len;

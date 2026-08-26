@@ -77,10 +77,22 @@ impl BodyEmitter {
     }
 
     pub(crate) fn label(&mut self, id: usize) {
-        if !self.terminated {
-            let _ = writeln!(self.cur, "  br label %L{id}");
-            self.terminated = true;
+        // 当前块已由 terminator 关闭（close_block 已调用），直接开始新块
+        if self.terminated {
+            self.cur = format!("L{id}:\n");
+            self.terminated = false;
+            return;
         }
+        // 当前块为空（已被 close_block 清空），直接开始新块
+        // 避免向空块添加 br label 产生无标签基本块
+        if self.cur.trim().is_empty() {
+            self.cur = format!("L{id}:\n");
+            self.terminated = false;
+            return;
+        }
+        // 非空块：添加 br 跳转到目标标签，关闭块，开始新块
+        let _ = writeln!(self.cur, "  br label %L{id}");
+        self.terminated = true;
         self.close_block();
         self.cur = format!("L{id}:\n");
         self.terminated = false;

@@ -447,11 +447,11 @@ fn deref_eq() bool {
 fn out_of_slice_constructs_are_hard_errors() {
     // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
     // Phase 3-6 for/switch/闭包/global/const/defer/errdefer/标签均已纳入 IR 支持面（见正例测试）；
-    // 此处仅保留仍未实现者（未知标识符 / 循环外 break / defer 体控制流）。
+    // 2026-08-26：defer 体现已支持控制流（如 `defer try f()`），标签由 new_label() 保证唯一。
+    // 此处仅保留仍未实现者（未知标识符 / 循环外 break）。
     for src in [
-        "fn f() i32 { return nosuch; }",    // 未知标识符
-        "fn f() i32 { break; }",            // break 在循环外
-        "fn f() void { defer try foo(); }", // defer 体含控制流（try → 跳转指令）
+        "fn f() i32 { return nosuch; }", // 未知标识符
+        "fn f() i32 { break; }",         // break 在循环外
     ] {
         let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
         let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");

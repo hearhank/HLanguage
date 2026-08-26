@@ -167,23 +167,10 @@ fn run_tests_one_fail(src: &str) -> Interp {
 }
 
 #[test]
-fn a2b_module_member_not_flat() {
-    // `[module]` 隔离：成员仅限定名——扁平调用 `f()` → UndefinedName（[FAIL]）
-    let interp = run_tests_one_fail(
-        "[module] namespace M { pub fn f() i32 { return 1; } }\n[test] fn t() !void {\n    var x = f();\n}\n",
-    );
-    assert!(
-        interp.test_out.iter().any(|l| l.contains("NoFunction")),
-        "test_out: {:?}",
-        interp.test_out
-    );
-}
-
-#[test]
-fn a2b_module_qualified_access_works() {
-    // `[module]` 成员限定访问 `M.f()` 可用
+fn a2b_namespace_qualified_access_works() {
+    // 命名空间成员限定访问 `M.f()` 可用
     run_tests_ok(
-        "[module] namespace M { pub fn f() i32 { return 1; } }\n[test] fn t() !void {\n    var x = M.f();\n    try expect_eq(x, 1);\n}\n",
+        "namespace M { pub fn f() i32 { return 1; } }\n[test] fn t() !void {\n    var x = M.f();\n    try expect_eq(x, 1);\n}\n",
     );
 }
 

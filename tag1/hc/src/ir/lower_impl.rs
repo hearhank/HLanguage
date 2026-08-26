@@ -6,8 +6,15 @@
 use super::*;
 
 pub fn lower(program: &Program) -> Result<IrModule, IrError> {
-    let errors = crate::runtime::errorcodes::collect(program, 0);
     let types = build_type_table(program);
+    lower_with_types(program, types)
+}
+
+/// 使用外部提供的类型表降级程序（用于多文件合并时共享类型定义）。
+/// 类型表应包含所有文件的类型定义，使跨文件类型引用（如 `using` 导入的命名空间类）
+/// 在降级时能够解析。
+pub fn lower_with_types(program: &Program, types: TypeTable) -> Result<IrModule, IrError> {
+    let errors = crate::runtime::errorcodes::collect(program, 0);
     let funcs = collect_func_names(program);
     let mut globals = collect_globals(program);
     // Phase 7：隐式环境名（alloc/io/pi/Vec…）按全局处理——`io.print` 等限定名根标识符
@@ -967,18 +974,84 @@ impl<'a> LowerCtx<'a> {
             }
         }
     }
-    /// 单条 defer 守卫 + 内联体 + 排空。体无控制流（降级期硬错误保证），可多次安全发射。
+    /// 单条 defer 守卫 + 内联体 + 排空。体允许含控制流（如 `defer try f()`），
+    /// 续块标签确保 PopDefer 在 LLVM 后端始终位于合法基本块中。
+    /// 体中的标签（Label/JumpIfErr/Jump 等）在每次发射时重新分配唯一 ID，
+    /// 避免同一 DeferRecord 在多个退出点发射时产生重复标签。
     pub(crate) fn emit_defer_guarded(&mut self, rec: &DeferRecord) {
         let l_skip = self.new_label();
+        let l_cont = self.new_label();
         self.push(IrInst::JumpIfNotDefer {
             id: rec.id,
             label: l_skip,
         });
-        for inst in &rec.body {
+        // 重映射体中的标签（Label/JumpIfErr/Jump 等），使每次发射获得唯一标签 ID
+        let remapped = self.remap_body_labels(&rec.body);
+        for inst in &remapped {
             self.push(inst.clone());
         }
+        // 续块标签：体可能含 Return 终止了当前块，PopDefer 需在合法基本块中
+        self.label(l_cont);
         self.push(IrInst::PopDefer { id: rec.id });
         self.label(l_skip);
+    }
+
+    /// 重映射指令序列中的标签（Label 定义 + Jump/JumpIfErr/JumpIfNotDefer 等引用），
+    /// 使每次发射获得唯一标签 ID。体中的 Label 指令使用 new_label() 分配新 ID，
+    /// 所有引用旧标签的指令同步更新。
+    fn remap_body_labels(&mut self, body: &[IrInst]) -> Vec<IrInst> {
+        use std::collections::HashMap;
+        // 收集体中的 Label 定义，分配新 ID
+        let mut label_map: HashMap<usize, usize> = HashMap::new();
+        for inst in body {
+            if let IrInst::Label { id } = inst {
+                label_map.entry(*id).or_insert_with(|| self.new_label());
+            }
+        }
+        if label_map.is_empty() {
+            return body.to_vec();
+        }
+        // 重映射每条指令中的标签引用
+        body.iter()
+            .map(|inst| self.map_inst_labels(inst, &label_map))
+            .collect()
+    }
+
+    /// 重映射单条指令中的标签引用（Label 定义 + 跳转目标）。
+    fn map_inst_labels(&self, inst: &IrInst, map: &HashMap<usize, usize>) -> IrInst {
+        macro_rules! remap {
+            ($id:expr) => {{
+                map.get(&$id).copied().unwrap_or($id)
+            }};
+        }
+        match inst {
+            IrInst::Label { id } => IrInst::Label { id: remap!(*id) },
+            IrInst::Jump { label } => IrInst::Jump {
+                label: remap!(*label),
+            },
+            IrInst::JumpIf { temp, label } => IrInst::JumpIf {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfNot { temp, label } => IrInst::JumpIfNot {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfNull { temp, label } => IrInst::JumpIfNull {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfErr { temp, label } => IrInst::JumpIfErr {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfNotDefer { id, label } => IrInst::JumpIfNotDefer {
+                id: *id,
+                label: remap!(*label),
+            },
+            // 不含标签引用的指令，直接克隆
+            _ => inst.clone(),
+        }
     }
     /// 当前作用域绑定（遮蔽时分配新槽，旧绑定保留在外层）
     pub(crate) fn bind(&mut self, name: &str, slot: usize) {
@@ -3251,12 +3324,11 @@ impl<'a> LowerCtx<'a> {
         let _ = self.lower_expr(e);
         let mut body = self.pending.take().expect("pending 缓冲已初始化");
         self.pending = prev;
-        // 2) 体含控制流指令 → 硬错误（带 label 指令重复发射冲突；对齐「硬错误 > 静默误编译」）
-        if body.iter().any(|i| is_control_flow_inst(i)) {
-            self.fail(
-                "`defer`/`errdefer` 体不允许控制流（如 `defer try f()`）",
-                span,
-            );
+        // 2) 体含 defer 管理指令 → 硬错误（PushDefer/PopDefer/JumpIfNotDefer
+        //    重复发射会导致运行期守卫错乱）。跳转/标签/Return 等由 new_label()
+        //    保证唯一性，安全可重复发射（如 `defer try f()`）。
+        if body.iter().any(|i| is_defer_admin_inst(i)) {
+            self.fail("`defer`/`errdefer` 体不允许嵌套 defer 管理指令", span);
             body.clear(); // 避免污染退出点发射
         }
         // 3) 主流登记

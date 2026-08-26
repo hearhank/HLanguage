@@ -31,7 +31,7 @@ fn user_validate(u: *User) !void {
 }
 
 fn user_to_json(u: *User, alloc: Allocator) String {
-    var out = "{";
+    var mut out = "{";
     out = out.concat("\"name\": \"").concat(u.name).concat("\"");
     out = out.concat(", ");
     out = out.concat("\"age\": ").concat(fmt_int(u.age));

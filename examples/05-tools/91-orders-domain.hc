@@ -14,7 +14,7 @@ import H.std.{io};
 // 应用 `import orders.Orders;` 后 `Orders.total(...)` 限定访问。本示例为单文件
 // 同包形态，聚焦边界与上下文；import 机制另见 41-namespaces / 02-packages。
 
-// [module] namespace Orders {
+namespace Orders {
     // —— owns 数据（模块内私有类型：无 pub = 模块私有，扁平/跨包不可见）——
     class LineItem {
         sku: String,
@@ -37,7 +37,7 @@ import H.std.{io};
     // —— 对外 pub API（边界）——
     // 订单合计（整数分，精确）：低于最小起订量的行剔除，末尾按上下文税率加税
     pub fn total(ctx: Orders.OrderCtx, lines: [2]Orders.LineItem) i32 {
-        var sum: i32 = 0;
+        var mut sum: i32 = 0;
         for (lines) |line| {
             if (line.qty >= ctx.min_qty) {
                 sum += line.qty * line.price_cents;
@@ -45,7 +45,7 @@ import H.std.{io};
         }
         return sum + (sum * ctx.tax_pct) / 100;
     }
-// }
+}
 
 [Test] fn orders_domain_boundary_and_total() !void {
     var ctx = Orders.init(10, 2);   // 税率 10%、最小起订 2 件

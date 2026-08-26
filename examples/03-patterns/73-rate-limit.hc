@@ -37,7 +37,7 @@ fn main() !void {
 
 [Test] fn token_bucket() !void {
     var bucket: TokenBucket = TokenBucket.new(3, io.time.now());
-    var allowed = 0;
+    var mut allowed = 0;
     for (0..5) |_| {
         if (bucket.allow(&io)) {
             allowed += 1;
