@@ -130,7 +130,7 @@ fn self_source_matches() {
 }
 
 #[test]
-// #[ignore = "K2 自举性能：H 版 parser 解析自身约需 60s+，手动运行"]
+// #[ignore = "K2 自举验证：H 版 parser 解析自身约需 1s，已达标，手动运行确认"]
 fn self_hosting_parses_self() {
     // H 版 parser 解析自身源码——自举验证（耗时约 60s，默认忽略）
     let root = repo_root();

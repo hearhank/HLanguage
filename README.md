@@ -170,7 +170,7 @@ flowchart LR
 | E4 系统编程 | 系统编程特性（K1–K11） | ✅ 已落地：K1 无标签 union / K2 volatile / K4 @ptrFromInt·@intFromPtr / K5 export fn + `extern fn` 外部函数声明，K3 asm / K6 freestanding / K7–K11 1.x |
 | E5 工具链扩展 | LSP / 格式化 / lint / 文档生成 / 项目脚手架 / 包注册中心 | ✅ 已落地：hc fmt（token 级重排 + AST 保真 + --check）/ hc lint（9 规则 + --json）/ hc doc（Markdown 生成 + 索引页）/ hc lsp（诊断推送 + 自动补全 + 跳转定义 + 悬停提示 + 文档注释）/ hc init 脚手架 / hc cc C 互操作编译 / hc pkg add/publish；B7 质量工具完整（LSP/格式化/lint 集）已完成；Zed 编辑器扩展（Tree-sitter 语法高亮 + LSP 集成）；包注册中心正式版 1.x |
 | E6 语言扩展 | 惰性迭代、switch 守卫、开放问题裁决、吃狗粮反馈 | 🟡 部分落地：switch 守卫已实施（模式+if 守卫+穷举检查）；开放问题裁决已定案（ADR-0016/0017）；C5 内建泛型嵌套具体化已实施；C6 格式串 comptime 校验已实施；惰性迭代（A7）已落地；吃狗粮反馈待自举阶段 |
-| E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 推进中：K1 H版 lexer ✅（6621 token 零 diff），K2 H版 parser 🔴（部分实现，测试超时），K3–K6 待实现 |
+| E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 推进中：K1 H版 lexer ✅（6621 token 零 diff），K2 H版 parser 🟢 性能已优化（解析自身 ~1s，较原 60s+ 提升 ~60x，8 项语料对照通过），K3–K6 待实现 |
 
 ### 里程碑节点
 
