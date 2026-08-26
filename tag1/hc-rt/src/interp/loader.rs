@@ -896,7 +896,11 @@ impl Interp {
                 let _ = name;
                 let addr = Rc::as_ptr(cell) as usize;
                 if self.tracked.remove(&addr) {
-                    *cell.borrow_mut() = Value::Dangling;
+                    // 使用 try_borrow_mut 避免 RefCell 已借出时 panic
+                    // （被指针引用的 cell 可能仍被借用，此时跳过标记——用户负责指针问题）
+                    if let Ok(mut v) = cell.try_borrow_mut() {
+                        *v = Value::Dangling;
+                    }
                 }
             }
         }
