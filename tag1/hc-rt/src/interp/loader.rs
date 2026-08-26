@@ -7,6 +7,7 @@ impl Interp {
         Self {
             source: source.to_string(),
             funcs: HashMap::new(),
+            fn_cache: HashMap::new(),
             types: HashMap::new(),
             globals: HashMap::new(),
             scopes: vec![Scope::new()],

@@ -517,6 +517,8 @@ use hc::rng::xorshift64;
 pub struct Interp {
     pub source: String,
     funcs: HashMap<String, Vec<FnDef>>,
+    /// 函数调用缓存：避免重复 HashMap 查找（键 = (函数名, 参数个数)）
+    fn_cache: HashMap<(String, usize), FnDef>,
     types: HashMap<String, TypeDef>,
     globals: HashMap<String, Rc<RefCell<Value>>>,
     scopes: Vec<Scope>,

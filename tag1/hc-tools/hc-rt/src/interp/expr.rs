@@ -1559,7 +1559,12 @@ impl Interp {
         }
     }
 
-    pub(crate) fn pick_fn(&self, name: &str, arg_vals: &[Value]) -> Result<FnDef> {
+    pub(crate) fn pick_fn(&mut self, name: &str, arg_vals: &[Value]) -> Result<FnDef> {
+        // 缓存查找：键 = (函数名, 参数个数)
+        let cache_key = (name.to_string(), arg_vals.len());
+        if let Some(cached) = self.fn_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
         let candidates = self
             .funcs
             .get(name)
@@ -1575,7 +1580,9 @@ impl Interp {
             exact
         };
         if pool.len() == 1 {
-            return Ok(pool[0].clone());
+            let result = pool[0].clone();
+            self.fn_cache.insert(cache_key, result.clone());
+            return Ok(result);
         }
         // 2) 按实参值类型匹配（具体优先于泛型）
         let mut best: Option<&FnDef> = None;
