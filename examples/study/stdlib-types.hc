@@ -53,14 +53,11 @@ enum Result_ {
 }
 
 class Person {
-    name: String,
+    name: &[u8],
     age: i32,
 
-    fn greet(self: *Self) String {
-        return String.concat(
-            String.from("hello, ", alloc),
-            self.name,
-        );
+    fn greet(self: *Self) &[u8] {
+        return "hello, ".concat(self.name);
     }
 
     fn is_adult(self: *Self) bool {
@@ -696,21 +693,21 @@ fn cube(x: i32) i32 {
 
 [Test] fn class_construction_and_method() !void {
     var p = alloc.init(Person{
-        name = String.from("alice", alloc),
+        name = "alice",
         age = 30,
     });
-    try expect_eq_slices(p.name.as_slice(), "alice");
+    try expect_eq_slices(p.name, "alice");
     try expect_eq(p.age, 30);
     try expect(p.is_adult());
 }
 
 [Test] fn class_method_greet() !void {
     var p = alloc.init(Person{
-        name = String.from("bob", alloc),
+        name = "bob",
         age = 25,
     });
     var greeting = p.greet();
-    try expect_eq_slices(greeting.as_slice(), "hello, bob");
+    try expect_eq_slices(greeting, "hello, bob");
 }
 
 [Test] fn class_boxing() !void {
@@ -735,49 +732,49 @@ fn cube(x: i32) i32 {
 // ============================================================
 
 [Test] fn string_from_literal() !void {
-    var s = String.from("hello", alloc);
+    var s = "hello";
     try expect_eq_slices(s.as_slice(), "hello");
 }
 
 [Test] fn string_concat_method() !void {
-    var s = String.from("hello, ", alloc).concat(String.from("world", alloc));
+    var s = "hello, ".concat("world");
     try expect_eq_slices(s.as_slice(), "hello, world");
 }
 
 [Test] fn string_concat_function() !void {
-    var a = String.from("abc", alloc);
-    var b = String.from("def", alloc);
-    var c = String.concat(a, b);
+    var a = "abc";
+    var b = "def";
+    var c = a.concat(b);
     try expect_eq_slices(c.as_slice(), "abcdef");
 }
 
 [Test] fn string_content_equals() !void {
-    var a = String.from("abc", alloc);
-    var b = String.from("abc", alloc);
+    var a = "abc";
+    var b = "abc";
     try expect_eq(a == b, true);
-    var c = String.from("xyz", alloc);
+    var c = "xyz";
     try expect_eq(a == c, false);
 }
 
 [Test] fn string_split() !void {
-    var csv = String.from("a,b,c,d", alloc);
+    var csv = "a,b,c,d";
     var parts = csv.split(',');
     try expect_eq(parts.len, 4);
-    try expect_eq_slices(parts[0].as_slice(), "a");
-    try expect_eq_slices(parts[3].as_slice(), "d");
+    try expect_eq_slices(parts[0], "a");
+    try expect_eq_slices(parts[3], "d");
 }
 
 [Test] fn string_join() !void {
-    var parts = Vec<String>.init(alloc);
-    parts.append(String.from("x", alloc));
-    parts.append(String.from("y", alloc));
-    parts.append(String.from("z", alloc));
+    var parts = Vec<&[u8]>.init(alloc);
+    parts.append("x");
+    parts.append("y");
+    parts.append("z");
     var joined = String.join(&parts, " - ");
     try expect_eq_slices(joined.as_slice(), "x - y - z");
 }
 
 [Test] fn string_find() !void {
-    var text = String.from("hello world", alloc);
+    var text = "hello world";
     var pos = text.find("world");
     try expect_eq(pos.?, 6);
     var not_found = text.find("xyz");
@@ -785,7 +782,7 @@ fn cube(x: i32) i32 {
 }
 
 [Test] fn string_substring() !void {
-    var text = String.from("hello world", alloc);
+    var text = "hello world";
     var sub = text.substring(0, 5);
     try expect_eq_slices(sub.as_slice(), "hello");
     var sub2 = text.substring(6, 11);
@@ -793,22 +790,22 @@ fn cube(x: i32) i32 {
 }
 
 [Test] fn string_replace() !void {
-    var text = String.from("hello world", alloc);
+    var text = "hello world";
     var replaced = text.replace("world", "h");
     try expect_eq_slices(replaced.as_slice(), "hello h");
 }
 
 [Test] fn string_copy_owns() !void {
-    var s1 = String.from("original", alloc);
+    var s1 = "original";
     var s2 = copy(&s1);
     try expect_eq_slices(s2.as_slice(), "original");
     try expect_eq_slices(s1.as_slice(), "original");
 }
 
 [Test] fn string_compare() !void {
-    var a = String.from("abc", alloc);
-    var b = String.from("abd", alloc);
-    var c = String.from("abc", alloc);
+    var a = "abc";
+    var b = "abd";
+    var c = "abc";
     try expect_eq(String.compare(a, a), 0);
     try expect_eq(String.compare(a, c), 0);
     try expect(String.compare(a, b) < 0);
@@ -816,7 +813,7 @@ fn cube(x: i32) i32 {
 }
 
 [Test] fn string_empty() !void {
-    var s = String.from("", alloc);
+    var s = "";
     try expect_eq(s.as_slice().len, 0);
 }
 
@@ -873,13 +870,13 @@ fn cube(x: i32) i32 {
 }
 
 [Test] fn vec_of_strings() !void {
-    var v = Vec<String>.init(alloc);
-    v.append(String.from("a", alloc));
-    v.append(String.from("b", alloc));
-    v.append(String.from("c", alloc));
+    var v = Vec<&[u8]>.init(alloc);
+    v.append("a");
+    v.append("b");
+    v.append("c");
     try expect_eq(v.len, 3);
-    try expect_eq_slices(v[0].as_slice(), "a");
-    try expect_eq_slices(v[2].as_slice(), "c");
+    try expect_eq_slices(v[0], "a");
+    try expect_eq_slices(v[2], "c");
 }
 
 [Test] fn vec_to_bytes_roundtrip() !void {

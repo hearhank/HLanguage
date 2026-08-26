@@ -22,7 +22,7 @@ class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上
 fn person_field_count() i32 { return 2; }
 
 fn main() !void {
-    var p = alloc.init(Person{name = String.from("alice", alloc), age = 30});   // 带参构造（C1'）
+    var p = alloc.init(Person{name = "alice", age = 30});   // 带参构造（C1'）
     io.print("person_field_count = {}\n", person_field_count());
 }
 

@@ -19,7 +19,7 @@ fn main() !void {
     var cfg = alloc.init(Config{host = null, port = 8080});
 
     // 可选值 + 默认值链
-    var host = cfg.host orelse String.from("localhost", alloc);
+    var host = cfg.host orelse "localhost";
     var port = cfg.port orelse 8080;
     io.print("{}:{}\n", host, port);
 
@@ -36,6 +36,6 @@ fn main() !void {
     var cfg = alloc.init(Config{host = null, port = 8080});
     var port = cfg.port orelse 8080;
     try expect_eq(port, 8080);
-    var host = cfg.host orelse String.from("localhost", alloc);
+    var host = cfg.host orelse "localhost";
     try expect_eq_slices(host.as_slice(), "localhost");
 }

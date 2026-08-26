@@ -7,9 +7,9 @@ import H.std.{io};
 //   - 同一套 await 代码在 Threaded（默认）/ Evented 下运行
 //   - await = 阻塞等待（Threaded） vs 协作挂起（Evented），语义一致（双模式承诺）
 
-async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
+async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !&[u8] where T: Io {
     var body = try io.net.get(url);
-    return String.from(body, alloc);
+    return body;
 }
 
 fn main() !void {

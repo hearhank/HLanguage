@@ -32,7 +32,7 @@ fn main() !void {
     io.print("v1 len = {}, v2 len = {}\n", v1.len, v2.len);
 
     // String = u8[] 别名（Q3/Q1'）：复制走显式 copy；concat 返回新 String
-    var s1 = String.from("hi", alloc);
+    var s1 = "hi";
     var s2 = copy(&s1);               // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");         // concat 返回新 String
     io.print("{} {}\n", s1, s3);     // s1 未变
@@ -60,7 +60,7 @@ fn main() !void {
 }
 
 [Test] fn string_copy_owns() !void {
-    var s1 = String.from("hi", alloc);
+    var s1 = "hi";
     var s2 = copy(&s1);   // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");   // concat 返回新 String
     try expect_eq_slices(s1.as_slice(), "hi");   // 原变量未变

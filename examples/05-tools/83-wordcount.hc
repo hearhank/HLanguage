@@ -11,7 +11,7 @@ fn main() !void {
 
     // 分词 + 统计（修改数据）
     var counts = Map<&[u8], i32>.init(alloc);
-    var words = String.from(data, alloc).split(' ');
+    var words = data.split(' ');
     for (words) |w| {
         if (w.len > 0) {
             counts.put(w, (counts.get(w) orelse 0) + 1);

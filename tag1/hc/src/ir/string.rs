@@ -26,12 +26,19 @@ impl StringDataIr {
         }
     }
 
-    /// 从字节切片复制数据创建 String（超出 STRING_BUF_SIZE 的字节被截断）
+    /// 从字节切片复制数据创建 String（超出 STRING_BUF_SIZE 的字节 panic）
     pub fn from_slice(slice: &[u8]) -> Self {
-        let len = slice.len().min(STRING_BUF_SIZE);
+        assert!(
+            slice.len() <= STRING_BUF_SIZE,
+            "String literal exceeds {} bytes",
+            STRING_BUF_SIZE
+        );
         let mut buf = [0u8; STRING_BUF_SIZE];
-        buf[..len].copy_from_slice(&slice[..len]);
-        Self { buf, len }
+        buf[..slice.len()].copy_from_slice(slice);
+        Self {
+            buf,
+            len: slice.len(),
+        }
     }
 
     /// 返回内部字节的借用视图
@@ -47,21 +54,6 @@ impl StringDataIr {
     /// 是否为空字符串
     pub fn is_empty(&self) -> bool {
         self.len == 0
-    }
-
-    /// 创建新 String 并追加字节（超出缓冲区的字节被截断）
-    pub fn concat(&self, other: &[u8]) -> Self {
-        let total_len = self.len + other.len();
-        let new_len = total_len.min(STRING_BUF_SIZE);
-        let mut buf = [0u8; STRING_BUF_SIZE];
-        let self_copy_len = self.len.min(new_len);
-        buf[..self_copy_len].copy_from_slice(&self.buf[..self_copy_len]);
-        let other_copy_len = (new_len - self_copy_len).min(other.len());
-        if other_copy_len > 0 {
-            buf[self_copy_len..self_copy_len + other_copy_len]
-                .copy_from_slice(&other[..other_copy_len]);
-        }
-        Self { buf, len: new_len }
     }
 }
 
@@ -150,54 +142,6 @@ mod tests {
         let display = format!("{}", s);
         // lossy: 非法 UTF-8 被替换为
         assert!(display.contains('\u{FFFD}'));
-    }
-
-    #[test]
-    fn concat_two_strings() {
-        let a = StringDataIr::from_slice(b"hello");
-        let b = a.concat(b" world");
-        assert_eq!(b.as_slice(), b"hello world");
-        assert_eq!(b.len(), 11);
-    }
-
-    #[test]
-    fn concat_empty() {
-        let a = StringDataIr::from_slice(b"hello");
-        let b = a.concat(b"");
-        assert_eq!(b, a);
-    }
-
-    #[test]
-    fn concat_with_empty_start() {
-        let a = StringDataIr::new();
-        let b = a.concat(b"hello");
-        assert_eq!(b.as_slice(), b"hello");
-    }
-
-    #[test]
-    fn concat_truncated() {
-        let a = StringDataIr::from_slice(b"hello");
-        let long = vec![b'x'; STRING_BUF_SIZE];
-        let b = a.concat(&long);
-        assert_eq!(b.len(), STRING_BUF_SIZE);
-        // 前 5 字节来自 "hello"
-        assert_eq!(&b.as_slice()[..5], b"hello");
-    }
-
-    #[test]
-    fn from_slice_truncated() {
-        let long = vec![b'a'; STRING_BUF_SIZE + 10];
-        let s = StringDataIr::from_slice(&long);
-        assert_eq!(s.len(), STRING_BUF_SIZE);
-        assert_eq!(s.as_slice(), &long[..STRING_BUF_SIZE]);
-    }
-
-    #[test]
-    fn concat_self() {
-        let a = StringDataIr::from_slice(b"ab");
-        let b = a.concat(b"ab");
-        assert_eq!(b.as_slice(), b"abab");
-        assert_eq!(b.len(), 4);
     }
 
     #[test]

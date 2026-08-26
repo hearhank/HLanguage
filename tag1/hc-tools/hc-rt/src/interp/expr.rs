@@ -1381,15 +1381,6 @@ impl Interp {
                         }
                         return Ok(Value::arr(items));
                     }
-                    // String.from(s, alloc) 内建
-                    if bname == "String" && field == "from" {
-                        let v = self.eval(&args[0])?;
-                        let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            return Ok(Value::Str(s));
-                        }
-                        return Ok(Value::str(&v.display()));
-                    }
                     // json.parse(data)（M5.3 序列化辅助）：JSON 对象 → Map
                     if bname == "json" && field == "parse" {
                         let v = self.eval(&args[0])?;

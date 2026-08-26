@@ -30,7 +30,7 @@ fn main() !void {
     io.print("apple = {}\n", m.get("apple").?);
 
     // String = u8[] 别名（Q3）：从静态切片显式转换；复制走显式 copy（Q1'）
-    var name = String.from("hello", alloc);
+    var name = "hello";
     var name2 = copy(&name);   // 深复制（Q1'）：新建内存，name2 有所有权
     io.print("{}\n", name2);
 }
@@ -56,7 +56,7 @@ fn main() !void {
 }
 
 [Test] fn string_copy_owns() !void {
-    var name = String.from("hello", alloc);
+    var name = "hello";
     var name2 = copy(&name);   // 深复制（Q1'）：新建内存、有所有权
     try expect_eq_slices(name2.as_slice(), "hello");
     try expect_eq_slices(name.as_slice(), "hello");   // 原变量不受影响

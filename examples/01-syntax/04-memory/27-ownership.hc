@@ -13,7 +13,7 @@ fn take<T>(io: *T, y: String) void where T: Io {
 }
 
 fn make() String {
-    var s = String.from("made");   // alloc = 默认分配器（global，Q8）
+    var s = "made";
     return s;                        // 新建值必须 move 返回（12.5）
 }
 
@@ -23,7 +23,7 @@ fn borrow<T>(io: *T, v: *String) void where T: Io {
 
 fn main() !void {
     // move 进函数（调用点显式；销毁责任转移，原绑定仍可访问——悬垂由用户负责）
-    var s1 = String.from("hello");
+    var s1 = "hello";
     take(&io, s1);
 
     // move 返回
@@ -39,7 +39,7 @@ fn main() !void {
 }
 
 [Test] fn move_into_function() !void {
-    var s1 = String.from("hello");
+    var s1 = "hello";
     take(&io, s1);   // 销毁责任转移；原绑定仍可访问（悬垂/冲突由用户负责）
 }
 
@@ -49,7 +49,7 @@ fn main() !void {
 }
 
 [Test] fn borrow_keeps_ownership() !void {
-    var s2 = String.from("borrow");
+    var s2 = "borrow";
     borrow(&io, &s2);
     try expect_eq(s2.len, 6);   // 借用后仍可用
 }

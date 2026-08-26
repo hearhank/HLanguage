@@ -8,11 +8,11 @@ import H.std.{io};
 //   - 线程默认执行；事件循环（Evented）为可选运行时
 //   - 并发 await 方向：Go 式协程 + 通道（评审 B2）
 
-async fn fetch_url<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
+async fn fetch_url<T>(io: *T, url: &[u8], alloc: Allocator) !&[u8] where T: Io {
     var conn = try io.net.connect(url);
     defer conn.close();
     var body = try io.net.read_all(&conn, alloc);
-    return String.from(body, alloc);
+    return body;
 }
 
 async fn parse_json(data: &[u8]) !JsonValue {

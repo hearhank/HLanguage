@@ -21,7 +21,7 @@ fn main() !void {
     io.print("count = {}\n", v2.len);
 
     // String → bytes：[len][utf8]
-    var s = String.from("hello", alloc);
+    var s = "hello";
     var s_bytes = s.to_bytes();
     io.print("s bytes = {}\n", s_bytes.len);
 }
@@ -38,7 +38,7 @@ fn main() !void {
 }
 
 [Test] fn string_to_bytes() !void {
-    var s = String.from("hello", alloc);
+    var s = "hello";
     try expect_eq(s.as_slice().len, 5);   // 内容视图无前缀
     try expect_eq(s.to_bytes().len, 13);  // 序列化格式：8（u64 前缀）+ 5
 }

@@ -8,7 +8,7 @@ import H.std.{io};
 fn read_numbers<T>(io: *T, path: &[u8]) !Vec<i32> where T: Io {
     var data = try io.fs.read_file(path, alloc);
     var nums = Vec<i32>.init(alloc);
-    var parts = String.from(data, alloc).split(',');
+    var parts = data.split(',');
     for (parts) |p| {
         var n = parse_int(p) orelse continue;
         nums.append(n);

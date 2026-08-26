@@ -3249,77 +3249,36 @@ pub(crate) fn call_dotted_implicit(
                 .collect();
             return Ok(make_arr(ctx, rows));
         }
-        "String.from" => {
+        "String.fromInt" | "@intToStr" => {
             let v = args
                 .first()
-                .ok_or_else(|| IrError::msg("ArityMismatch", "String.from"))?;
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.fromInt"))?;
             let v = deref_value(ctx, v);
-            let bytes = match v {
-                IrValue::Str(s) => s.clone(),
-                IrValue::String(s) => s.as_slice().to_vec(),
-                other => other.display(ctx).as_bytes().to_vec(),
+            let s = match v {
+                IrValue::Int(i) => i.to_string(),
+                IrValue::Float(f) => f.to_string(),
+                _ => return Err(IrError::msg("TypeError", "String.fromInt expects number")),
             };
+            let bytes = s.into_bytes();
             return Ok(IrValue::String(StringDataIr::from_slice(&bytes)));
         }
-        "String.from_slice" => {
+        "String.parseInt" | "@strToInt" => {
             let v = args
                 .first()
-                .ok_or_else(|| IrError::msg("ArityMismatch", "String.from_slice"))?;
+                .ok_or_else(|| IrError::msg("ArityMismatch", "String.parseInt"))?;
             let v = deref_value(ctx, v);
             let bytes = match v {
-                IrValue::Str(s) => s.clone(),
                 IrValue::String(s) => s.as_slice().to_vec(),
-                _ => {
-                    return Err(IrError::msg(
-                        "TypeError",
-                        "String.from_slice expects &[u8] or String",
-                    ))
-                }
+                _ => return Err(IrError::msg("TypeError", "String.parseInt expects String")),
             };
-            return Ok(IrValue::String(StringDataIr::from_slice(&bytes)));
-        }
-        "String.copy_from" => {
-            let v = args
-                .first()
-                .ok_or_else(|| IrError::msg("ArityMismatch", "String.copy_from"))?;
-            let v = deref_value(ctx, v);
-            return match v {
-                IrValue::String(s) => Ok(IrValue::String(s.clone())),
-                _ => Err(IrError::msg("TypeError", "String.copy_from expects String")),
+            let text = String::from_utf8_lossy(&bytes);
+            return match text.trim().parse::<i128>() {
+                Ok(n) => Ok(IrValue::Int(n)),
+                Err(_) => Err(IrError::msg(
+                    "InvalidFormat",
+                    "String.parseInt: invalid integer",
+                )),
             };
-        }
-        "String.concat" => {
-            if args.len() < 2 {
-                return Err(IrError::msg(
-                    "ArityMismatch",
-                    "String.concat expects 2 args",
-                ));
-            }
-            let a = deref_value(ctx, &args[0]);
-            let b = deref_value(ctx, &args[1]);
-            let bytes_a = match &a {
-                IrValue::Str(s) => s.clone(),
-                IrValue::String(s) => s.as_slice().to_vec(),
-                _ => {
-                    return Err(IrError::msg(
-                        "TypeError",
-                        "String.concat expects &[u8] or String",
-                    ))
-                }
-            };
-            let bytes_b = match &b {
-                IrValue::Str(s) => s.clone(),
-                IrValue::String(s) => s.as_slice().to_vec(),
-                _ => {
-                    return Err(IrError::msg(
-                        "TypeError",
-                        "String.concat expects &[u8] or String",
-                    ))
-                }
-            };
-            let mut out = bytes_a;
-            out.extend_from_slice(&bytes_b);
-            return Ok(IrValue::String(StringDataIr::from_slice(&out)));
         }
         "String.compare" => {
             if args.len() < 2 {
@@ -3358,47 +3317,7 @@ pub(crate) fn call_dotted_implicit(
             };
             return Ok(IrValue::Int(v));
         }
-        "String.join" => {
-            if args.len() < 2 {
-                return Err(IrError::msg("ArityMismatch", "String.join expects 2 args"));
-            }
-            let parts_v = deref_value(ctx, &args[0]);
-            let sep_v = deref_value(ctx, &args[1]);
-            let sep_bytes = match &sep_v {
-                IrValue::Str(s) => s.clone(),
-                _ => {
-                    return Err(IrError::msg(
-                        "TypeError",
-                        "String.join separator expects &[u8]",
-                    ))
-                }
-            };
-            let items: Vec<Vec<u8>> = match &parts_v {
-                IrValue::Arr(c) => match &ctx.cells[*c] {
-                    Cell::Elems(e) => e
-                        .iter()
-                        .map(|ec| {
-                            let v = ctx.cell_value(*ec);
-                            match v {
-                                IrValue::Str(s) => s.clone(),
-                                IrValue::String(s) => s.as_slice().to_vec(),
-                                other => other.display(ctx).into_bytes(),
-                            }
-                        })
-                        .collect(),
-                    _ => return Err(IrError::msg("TypeError", "String.join expects array")),
-                },
-                _ => return Err(IrError::msg("TypeError", "String.join expects array")),
-            };
-            let mut out = Vec::new();
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    out.extend_from_slice(&sep_bytes);
-                }
-                out.extend_from_slice(it);
-            }
-            return Ok(IrValue::String(StringDataIr::from_slice(&out)));
-        }
+
         "String.as_slice" => {
             let v = args
                 .first()

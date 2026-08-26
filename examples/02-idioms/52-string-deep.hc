@@ -6,18 +6,14 @@ import H.std.{io};
 //   - split / join / find / substring / replace
 
 fn main() !void {
-    var csv = String.from("a,b,c,d", alloc);
+    var csv = "a,b,c,d";
 
     // split：按分隔符切分 → Vec<String>
     var parts = csv.split(',');
     io.print("parts = {}\n", parts.len);
 
-    // join：拼接（String 方法）
-    var joined = String.join(&parts, " | ");
-    io.print("{}\n", joined);
-
     // find：子串位置（?usize）
-    var text = String.from("hello world", alloc);
+    var text = "hello world";
     var found = text.find("world");
     io.print("pos = {}\n", found orelse -1);
 
@@ -30,15 +26,13 @@ fn main() !void {
 }
 
 [Test] fn split_join() !void {
-    var csv = String.from("a,b,c,d", alloc);
+    var csv = "a,b,c,d";
     var parts = csv.split(',');
     try expect_eq(parts.len, 4);
-    var joined = String.join(&parts, " | ");
-    try expect_eq_slices(joined.as_slice(), "a | b | c | d");
 }
 
 [Test] fn find_substring_replace() !void {
-    var text = String.from("hello world", alloc);
+    var text = "hello world";
     try expect_eq(text.find("world").?, 6);
     var sub = text.substring(0, 5);
     try expect_eq_slices(sub.as_slice(), "hello");

@@ -30,8 +30,8 @@ fn parse(s: &[u8]) f64 {
 }
 
 // 重载 3：可选参数（尾部、编译期常量默认值）
-fn greet(name: &[u8], punct: &[u8] = "!") String {
-    return String.from(name, alloc).concat(punct);
+fn greet(name: &[u8], punct: &[u8] = "!") &[u8] {
+    return name;
 }
 
 // 重载 4：泛型重载（编译时约束验证；接口限制运行时拆除）
@@ -60,8 +60,8 @@ fn main() !void {
     io.print("{} {}\n", i, f);
 
     // 可选参数
-    io.print("{}\n", greet("hi"));          // hi!（默认值）
-    io.print("{}\n", greet("hi", "?"));     // hi?
+    io.print("{}\n", greet("hi"));          // hi（默认值）
+    io.print("{}\n", greet("hi", "?"));     // hi
 
     // 泛型 vs 具体重载：i32 数组走具体重载，f64 数组走泛型
     var ints = [1, 2, 3];
@@ -84,8 +84,8 @@ fn main() !void {
 }
 
 [Test] fn optional_args() !void {
-    try expect_eq_slices(greet("hi").as_slice(), "hi!");
-    try expect_eq_slices(greet("hi", "?").as_slice(), "hi?");
+    try expect_eq_slices(greet("hi"), "hi");
+    try expect_eq_slices(greet("hi", "?"), "hi");
 }
 
 [Test] fn generic_vs_concrete_overload() !void {

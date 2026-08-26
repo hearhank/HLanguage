@@ -7,8 +7,7 @@ import H.std.{io};
 
 fn search_file<T>(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     var data = try io.fs.read_file(path, alloc);
-    var text = String.from(data, alloc);
-    var lines = text.split('\n');
+    var lines = data.split('\n');
 
     var mut hits = 0;
     for (lines) |line| {

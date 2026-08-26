@@ -9,9 +9,8 @@ import H.std.{io};
 fn handle_request<T>(io: *T, arena: *Arena) !void where T: Io {
     // 请求内所有分配走 arena：无 o、禁止 move（A6）
     var buf = arena.alloc(1024);
-    var text = String.from_slice(&buf, arena);
-    io.print("len = {}\n", text.len);
-    // 函数结束：buf/text 不各自销毁（arena 统一回收）
+    io.print("len = {}\n", buf.len);
+    // 函数结束：buf 不各自销毁（arena 统一回收）
 }
 
 fn main() !void {
@@ -24,7 +23,5 @@ fn main() !void {
     var arena = Arena.init(alloc);
     var buf = arena.alloc(1024);
     try expect_eq(buf.len, 1024);
-    var text = String.from_slice(&buf, arena);
-    try expect_eq(text.len, 64);  // String 内联缓冲最大 64 字节
-    // 函数结束：arena 统一回收（buf/text 不各自销毁）
+    // 函数结束：arena 统一回收（buf 不各自销毁）
 }

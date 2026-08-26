@@ -19,7 +19,7 @@ class TextStyle {            // 样式（组合成员；缺此定义导致 Unkno
 }
 
 class Paragraph {
-    mut text: String,
+    mut text: &[u8],
     mut style: TextStyle,        // 组合：段落 = 文本 + 样式
 
     fn draw(self: *Self) void {
@@ -28,7 +28,7 @@ class Paragraph {
 }
 
 class Document: IDrawable, ISaveable {
-    mut title: String,
+    mut title: &[u8],
     mut body: Vec<Paragraph>,    // 组合：文档 = 标题 + 段落列表
 
     fn draw(self: *Self) void {
@@ -44,15 +44,15 @@ fn save<T>(self: *Self, io: *T) !void where T: Io {
 
 fn main() !void {
     var doc: Document = alloc.init(Document);   // 无参构造（C1'）
-    doc.title = String.from("组合示例", alloc);
+    doc.title = "组合示例";
     doc.body.append(alloc.init(Paragraph));
     io.print("paragraphs = {}\n", doc.body.len);
 }
 
 [Test] fn class_composition() !void {
     var doc: Document = alloc.init(Document);
-    doc.title = String.from("组合示例", alloc);
+    doc.title = "组合示例";
     doc.body.append(alloc.init(Paragraph));
     try expect_eq(doc.body.len, 1);
-    try expect_eq_slices(doc.title.as_slice(), "组合示例");
+    try expect_eq_slices(doc.title, "组合示例");
 }

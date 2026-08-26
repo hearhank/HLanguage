@@ -6,24 +6,24 @@ import H.std.{io};
 //   - 内建默认（Q37 C）；契约定制（字段映射/忽略）走脚本生成覆盖
 
 class Address {
-    mut city: String,
+    mut city: &[u8],
     mut zip: &[u8],
 }
 
 class Person {
-    mut name: String,
+    mut name: &[u8],
     mut age: i32,
     mut addr: owned Address,     // 嵌套 class（默认拥有，Q16）
 
-    fn to_json(self: *Self) String {
+    fn to_json(self: *Self) &[u8] {
         // 内建：递归嵌套字段序列化（{"name":...,"addr":{"city":...}}）
     }
 }
 
 fn main() !void {
     var mut p: Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
-    p.name = String.from("alice", alloc);
-    p.addr.city = String.from("beijing", alloc);
+    p.name = "alice";
+    p.addr.city = "beijing";
 
     var json = p.to_json();
     io.print("{}\n", json);
