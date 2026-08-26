@@ -248,6 +248,7 @@ pub fn check_with_extern_deps(
         anytype_ret_cache: HashMap::new(),
         anytype_resolving: HashSet::new(),
         extension_of: None,
+        type_implements: HashMap::new(),
         owned_stack: Vec::new(),
         diags: Vec::new(),
     };
@@ -315,6 +316,8 @@ struct Checker {
     anytype_resolving: HashSet<(String, String)>,
     /// Q15：当前正在检查的扩展方法的目标类型名（None = 普通函数或类方法）
     extension_of: Option<String>,
+    /// ADR-0027：类型名 → 实现的接口名列表（编译期接口分派用）
+    type_implements: HashMap<String, Vec<String>>,
     /// 2026-08-25：当前作用域中 `owned` 变量名列表（平行于 scopes）
     /// 进入作用域 push，退出时检查未匹配的 owned 变量 → warining
     owned_stack: Vec<Vec<String>>,

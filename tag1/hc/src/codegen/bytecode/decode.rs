@@ -91,6 +91,7 @@ pub fn decode(bytes: &[u8]) -> Result<IrModule, String> {
         enum_variants,
         continuous,
         unions,
+        type_implements: HashMap::new(),
     })
 }
 

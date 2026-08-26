@@ -62,6 +62,8 @@ pub struct IrModule {
     /// K1 无标签 union（扁平 + 全限定）→ 字段声明（名 + 类型，声明序）：`UnionSync`
     /// 与 `store_field` 写路径字节重解释同步用（ADR-0014）。
     pub unions: HashMap<String, Vec<(String, Type)>>,
+    /// ADR-0027：类型名 → 实现的接口名列表（编译期接口分派用）
+    pub type_implements: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]

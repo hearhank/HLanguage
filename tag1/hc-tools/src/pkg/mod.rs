@@ -196,6 +196,7 @@ pub(crate) fn merge_modules(
     let mut enum_variants = entry.enum_variants;
     let mut continuous = entry.continuous;
     let mut unions = entry.unions;
+    let mut type_implements = entry.type_implements;
     for m in siblings {
         let offset = funcs.len();
         let coffset = closures.len();
@@ -242,6 +243,8 @@ pub(crate) fn merge_modules(
         continuous.extend(m.continuous);
         // K1 union 表：并入兄弟（同名同定义，覆盖等价）
         unions.extend(m.unions);
+        // ADR-0027：类型→接口映射表：并入兄弟（同名同定义，覆盖等价）
+        type_implements.extend(m.type_implements);
     }
     hc::ir::IrModule {
         funcs,
@@ -252,6 +255,7 @@ pub(crate) fn merge_modules(
         enum_variants,
         continuous,
         unions,
+        type_implements,
     }
 }
 

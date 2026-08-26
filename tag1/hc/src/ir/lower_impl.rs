@@ -47,6 +47,8 @@ pub fn lower_with_types(program: &Program, types: TypeTable) -> Result<IrModule,
             module.continuous.insert(n.clone());
         }
     }
+    // ADR-0027：类型→接口映射表（编译期接口分派）
+    module.type_implements = collect_type_implements(program);
     for d in &program.decls {
         lower_decl(
             d,
@@ -92,6 +94,30 @@ pub(crate) fn collect_globals(program: &Program) -> HashSet<String> {
     let mut set = HashSet::new();
     collect_globals_in(&program.decls, &mut set);
     set
+}
+
+/// ADR-0027：扫描所有类声明，收集类型→接口映射表
+/// 例如 `class Vec<T> : ICollection<T> { ... }` → {"Vec": ["ICollection"]}
+pub(crate) fn collect_type_implements(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    collect_type_implements_in(&program.decls, &mut map);
+    map
+}
+
+fn collect_type_implements_in(decls: &[Decl], map: &mut HashMap<String, Vec<String>>) {
+    for d in decls {
+        match d {
+            Decl::Class { name, ifaces, .. } => {
+                for iface in ifaces {
+                    if let Type::Named(n, _) = iface.strip() {
+                        map.entry(name.clone()).or_default().push(n.to_string());
+                    }
+                }
+            }
+            Decl::Namespace { decls, .. } => collect_type_implements_in(decls, map),
+            _ => {}
+        }
+    }
 }
 
 /// C3：文件级 import 展开表——(符号选择 bound → 完整限定名, 整模块 bound → 包路径)。

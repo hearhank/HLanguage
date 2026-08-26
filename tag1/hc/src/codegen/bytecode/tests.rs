@@ -244,6 +244,7 @@ fn exhaustive_module() -> IrModule {
         enum_variants,
         continuous: HashSet::from(["Point".to_string()]),
         unions,
+        type_implements: HashMap::new(),
     }
 }
 

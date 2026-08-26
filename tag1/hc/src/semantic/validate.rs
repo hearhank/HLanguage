@@ -75,6 +75,11 @@ impl Checker {
                 let mut visited: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 self.check_iface_impl(name, &iname, methods, span, &mut visited);
+                // ADR-0027：记录类型→接口映射，供 IR lowerer 编译期接口分派
+                self.type_implements
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(iname);
             }
         }
     }
