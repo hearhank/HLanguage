@@ -2653,6 +2653,42 @@ mk:
 }
 "#;
 
+pub(crate) const HC_FS_READ_FILE: &str = r#"define %Value @hc_fs_read_file(%Value %path, %Value %alloc) {
+entry:
+  %pd = extractvalue %Value %path, 1
+  %pp = inttoptr i128 %pd to %StringData*
+  %plen_p = getelementptr %StringData, %StringData* %pp, i64 0, i32 1
+  %plen = load i64, i64* %plen_p
+  %pbuf_p = getelementptr %StringData, %StringData* %pp, i64 0, i32 0
+  %pbuf = bitcast [64 x i8]* %pbuf_p to i8*
+  %mode = getelementptr inbounds [3 x i8], ptr @.fmode_rb, i64 0, i64 0
+  %f = call i8* @fopen(i8* %pbuf, i8* %mode)
+  %is_null = icmp eq i8* %f, null
+  br i1 %is_null, label %error, label %read
+read:
+  call i32 @fseek(i8* %f, i64 0, i32 2)
+  %fsize = call i64 @ftell(i8* %f)
+  call i32 @fseek(i8* %f, i64 0, i32 0)
+  %raw = call noalias i8* @malloc(i64 72)
+  %sd = bitcast i8* %raw to %StringData*
+  %sd_buf = getelementptr %StringData, %StringData* %sd, i64 0, i32 0
+  %sd_bptr = bitcast [64 x i8]* %sd_buf to i8*
+  %cap = icmp ugt i64 %fsize, 64
+  %rlen = select i1 %cap, i64 64, i64 %fsize
+  call i64 @fread(i8* %sd_bptr, i64 1, i64 %rlen, i8* %f)
+  call i32 @fclose(i8* %f)
+  %len_p = getelementptr %StringData, %StringData* %sd, i64 0, i32 1
+  store i64 %rlen, i64* %len_p
+  %ptr = ptrtoint %StringData* %sd to i128
+  %v0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0
+  %v1 = insertvalue %Value %v0, i128 %ptr, 1
+  ret %Value %v1
+error:
+  %ev0 = insertvalue %Value { i32 0, i128 0 }, i32 6, 0
+  ret %Value %ev0
+}
+"#;
+
 pub(crate) const HC_ADD_OVERFLOW: &str = r#"define %Value @hc_add_overflow(%Value %a, %Value %b) {
 entry:
   %ta = extractvalue %Value %a, 0

@@ -209,6 +209,7 @@ pub(crate) fn emit_scalar_builtin_helpers(out: &mut String) {
         HC_READ_U64_LE,
         HC_FMT_INT,
         HC_FMT_FLOAT,
+        HC_FS_READ_FILE,
         HC_ADD_OVERFLOW,
         HC_SUB_OVERFLOW,
         HC_MUL_OVERFLOW,

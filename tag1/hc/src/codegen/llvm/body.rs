@@ -520,9 +520,31 @@ impl BodyEmitter {
             self.call_alloc_init(args, temp, slot_consts, strings);
             return;
         }
+        if name == "Vec.init" {
+            // Vec.init(alloc) / Vec.init(alloc, arr) — 对齐 call_builtin 处理
+            if args.len() >= 2 {
+                let Some(&arr_slot) = args.get(1) else {
+                    self.abort_feature("builtin");
+                    return;
+                };
+                let v = self.r();
+                self.emit(format!("{v} = load %Value, %Value* %sp.{arr_slot}"));
+                self.emit(format!("store %Value {v}, %Value* %sp.{temp}"));
+                return;
+            }
+            let res = self.r();
+            self.emit(format!("{res} = call %Value @hc_make_arr(i64 0)"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
         // math.nan/inf/inf_neg/sqrt/abs/pow/floor/ceil/round（对齐 oracle call_math）
         if let Some(field) = name.strip_prefix("math.") {
             self.call_math(field, args, temp);
+            return;
+        }
+        // io.fs.* 文件系统操作
+        if let Some(field) = name.strip_prefix("io.fs.") {
+            self.call_io_fs(field, args, temp);
             return;
         }
         let Some(candidates) = canon.get(name) else {
@@ -612,6 +634,28 @@ impl BodyEmitter {
             }
             "pow" => {
                 self.emit_math_unop_inline("call double @pow(double %f, double %f)", args, temp)
+            }
+            _ => self.abort_feature("builtin"),
+        }
+    }
+
+    /// io.fs.* 文件系统操作。当前仅支持 read_file。
+    pub(crate) fn call_io_fs(&mut self, field: &str, args: &[usize], temp: usize) {
+        match field {
+            "read_file" => {
+                if args.len() < 2 {
+                    self.abort_feature("builtin");
+                    return;
+                }
+                let pv = self.r();
+                self.emit(format!("{pv} = load %Value, %Value* %sp.{}", args[0]));
+                let av = self.r();
+                self.emit(format!("{av} = load %Value, %Value* %sp.{}", args[1]));
+                let res = self.r();
+                self.emit(format!(
+                    "{res} = call %Value @hc_fs_read_file(%Value {pv}, %Value {av})"
+                ));
+                self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
             }
             _ => self.abort_feature("builtin"),
         }
@@ -1250,6 +1294,10 @@ impl BodyEmitter {
         user_owners.dedup();
         owners.extend(user_owners);
         if owners.is_empty() && !is_coll_method && !is_str_method {
+            eprintln!(
+                "DEBUG LLVM NoMethod: method='{}' owners={:?}",
+                method, owners
+            );
             self.abort_feature("nomethod");
             return;
         }
@@ -1351,6 +1399,10 @@ impl BodyEmitter {
             self.terminated = false;
         }
         // 全部不中 → 硬中止；续块换成 done（后续指令落入 done）
+        eprintln!(
+            "DEBUG LLVM NoMethod(class chain): method='{}' owners={:?}",
+            method, owners
+        );
         self.abort_feature("nomethod");
         self.cur = format!("{l_done}:\n");
         self.terminated = false;

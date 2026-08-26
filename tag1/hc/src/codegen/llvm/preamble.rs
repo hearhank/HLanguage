@@ -46,6 +46,13 @@ pub(crate) fn emit_preamble(
     out.push_str("declare double @fabs(double)\n");
     out.push_str("declare double @sqrt(double)\n");
     out.push_str("declare double @pow(double, double)\n\n");
+    // io.fs.read_file 文件 I/O（libc fopen/fseek/ftell/fread/fclose）
+    out.push_str("declare i8* @fopen(i8*, i8*)\n");
+    out.push_str("declare i32 @fseek(i8*, i64, i32)\n");
+    out.push_str("declare i64 @ftell(i8*)\n");
+    out.push_str("declare i64 @fread(i8*, i64, i64, i8*)\n");
+    out.push_str("declare i32 @fclose(i8*)\n");
+    out.push_str("@.fmode_rb = private unnamed_addr constant [3 x i8] c\"rb\\00\"\n\n");
 
     // 断言失败标志（全局；单线程顺序执行）
     out.push_str("@hc_fail_msg = global i8* null\n");
