@@ -10,8 +10,8 @@ mod preamble;
 mod tests;
 pub(crate) mod text;
 
-use crate::runtime::errorcodes::ErrorCodeTable;
 use crate::ir::{IrConst, IrInst, IrModule, IrPattern};
+use crate::runtime::errorcodes::ErrorCodeTable;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -446,6 +446,25 @@ fn llvm_escape(bytes: &[u8]) -> String {
         } else {
             s.push_str(&format!("\\{:02X}", b));
         }
+    }
+    s
+}
+
+/// 生成 `%StringData` 的 `[64 x i8]` 缓冲区初始值（前 N 字节为字符串内容，
+/// 其余填充 `\00` 零字节）。
+fn llvm_escape_string_data(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    let len = bytes.len().min(64);
+    for &b in &bytes[..len] {
+        if (0x20..0x7e).contains(&b) && b != b'"' && b != b'\\' {
+            s.push(b as char);
+        } else {
+            s.push_str(&format!("\\{:02X}", b));
+        }
+    }
+    // 填充至 64 字节
+    for _ in len..64 {
+        s.push_str("\\00");
     }
     s
 }

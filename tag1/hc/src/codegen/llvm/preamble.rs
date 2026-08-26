@@ -20,6 +20,8 @@ pub(crate) fn emit_preamble(
     out.push_str("%EnumObj = type { i8*, i8*, %Value* }\n");
     out.push_str("%SeqInfo = type { %Value*, i64, i64 }\n");
     out.push_str("%FindRes = type { i1, %Value }\n");
+    // Phase 9 内联缓冲 String 值类型（72 字节，无堆分配，无 deinit）
+    out.push_str("%StringData = type { [64 x i8], i64 }\n\n");
     // Phase 3 迭代器（`for` 展开：源指针 + 写回目标）
     out.push_str("%IterItemObj = type { %Value*, i1 }\n");
     out.push_str("%IterObj = type { %IterItemObj*, i64, i64, i64 }\n\n");
@@ -121,8 +123,17 @@ pub(crate) fn emit_preamble(
             out,
             "@.str.{i} = private unnamed_addr constant [{n} x i8] c\"{esc}\\00\""
         );
+        // 内联缓冲 String 值类型全局常量（前 64 字节 = 缓冲区，后 i64 = 长度）
+        let esc64 = llvm_escape_string_data(s.as_bytes());
+        let _ = writeln!(
+            out,
+            "@.str.{i}_data = private unnamed_addr constant %StringData {{ [64 x i8] c\"{esc64}\", i64 {len} }}",
+            len = s.len()
+        );
     }
     out.push('\n');
+    // 空字符串 StringData（辅助用途）
+    out.push_str("@.empty_str_data = private unnamed_addr constant %StringData { [64 x i8] zeroinitializer, i64 0 }\n\n");
 
     // 中止 + 各硬错误无参包装
     out.push_str("define void @hc_abort(i8* %msg) {\n  call i32 @puts(i8* %msg)\n  call void @exit(i32 1)\n  unreachable\n}\n\n");

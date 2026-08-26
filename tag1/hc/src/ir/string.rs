@@ -1,88 +1,42 @@
-//! String 值类型（IR 侧）：拥有所有权的字节数组（值语义，复制即 deep copy）
+//! String 值类型（IR 侧）：栈上内联缓冲的字节数组（值语义，复制即 memcpy）
 //!
-//! 定义：结构体：StringDataIr
-//!
-//! 生命周期由编译器管理（作用域出口自动插入 `deinit()`），
-//! 用户不可手动调用。`into_array()` 是唯一"逃逸口"。
+//! 与 `hc_rt::string::StringData` 结构相同。
+//! 无堆分配，不需要 `deinit()`，作用域退出自动销毁。
+//! 字面量创建时编译期检查长度不超过 STRING_BUF_SIZE，超长编译错误。
 
-use std::alloc::{alloc, dealloc, Layout};
+pub const STRING_BUF_SIZE: usize = 64;
 
-/// 拥有所有权的字节数组（IR 侧值语义）
+/// String 值类型：栈上内联缓冲的字节数组（值语义，复制即 memcpy）
 ///
-/// 与 `hc_rt::string::StringData` 结构相同，但独立于解释器运行时。
-/// # Safety
-/// - `ptr` 指向 `Layout::from_size_align(cap, 1)` 分配的堆内存
-/// - `len <= cap`
-/// - `deinit()` 是唯一释放内存的途径，由编译器负责调用
-#[derive(Debug)]
+/// 与 `hc_rt::string::StringData` 结构相同。
+/// 无堆分配，不需要 `deinit()`，作用域退出自动销毁。
+/// 字面量创建时编译期检查长度不超过 STRING_BUF_SIZE，超长编译错误。
+#[derive(Debug, Clone, Copy)]
 pub struct StringDataIr {
-    ptr: *mut u8,
+    buf: [u8; STRING_BUF_SIZE],
     len: usize,
-    cap: usize,
 }
 
-unsafe impl Send for StringDataIr {}
-unsafe impl Sync for StringDataIr {}
-
 impl StringDataIr {
-    /// 创建空字符串（零分配）
+    /// 创建空字符串
     pub fn new() -> Self {
         Self {
-            ptr: std::ptr::null_mut(),
+            buf: [0u8; STRING_BUF_SIZE],
             len: 0,
-            cap: 0,
         }
     }
 
-    /// 从字节切片复制数据创建 String（分配 `slice.len()` 字节）
+    /// 从字节切片复制数据创建 String（超出 STRING_BUF_SIZE 的字节被截断）
     pub fn from_slice(slice: &[u8]) -> Self {
-        if slice.is_empty() {
-            return Self::new();
-        }
-        let layout = Layout::from_size_align(slice.len(), 1).expect("valid layout");
-        let ptr = unsafe { alloc(layout) as *mut u8 };
-        if ptr.is_null() {
-            panic!("out of memory allocating String");
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(slice.as_ptr(), ptr, slice.len());
-        }
-        Self {
-            ptr,
-            len: slice.len(),
-            cap: slice.len(),
-        }
-    }
-
-    /// 释放堆内存，重置为空字符串
-    pub fn deinit(&mut self) {
-        if !self.ptr.is_null() {
-            let layout = Layout::from_size_align(self.cap, 1).expect("valid layout");
-            unsafe {
-                dealloc(self.ptr as *mut u8, layout);
-            }
-            self.ptr = std::ptr::null_mut();
-            self.len = 0;
-            self.cap = 0;
-        }
+        let len = slice.len().min(STRING_BUF_SIZE);
+        let mut buf = [0u8; STRING_BUF_SIZE];
+        buf[..len].copy_from_slice(&slice[..len]);
+        Self { buf, len }
     }
 
     /// 返回内部字节的借用视图
     pub fn as_slice(&self) -> &[u8] {
-        if self.ptr.is_null() {
-            return &[];
-        }
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    /// Deep copy（分配新内存，复制所有字节）
-    pub fn clone(&self) -> Self {
-        Self::from_slice(self.as_slice())
-    }
-
-    /// 是否为空字符串
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
+        &self.buf[..self.len]
     }
 
     /// 字节长度
@@ -90,24 +44,30 @@ impl StringDataIr {
         self.len
     }
 
-    /// 取走内部指针，转移所有权（用于 `into_array()`）
-    pub fn take_ptr(&mut self) -> (*mut u8, usize, usize) {
-        let ptr = std::mem::replace(&mut self.ptr, std::ptr::null_mut());
-        let len = std::mem::take(&mut self.len);
-        let cap = std::mem::take(&mut self.cap);
-        (ptr, len, cap)
+    /// 是否为空字符串
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// 创建新 String 并追加字节（超出缓冲区的字节被截断）
+    pub fn concat(&self, other: &[u8]) -> Self {
+        let total_len = self.len + other.len();
+        let new_len = total_len.min(STRING_BUF_SIZE);
+        let mut buf = [0u8; STRING_BUF_SIZE];
+        let self_copy_len = self.len.min(new_len);
+        buf[..self_copy_len].copy_from_slice(&self.buf[..self_copy_len]);
+        let other_copy_len = (new_len - self_copy_len).min(other.len());
+        if other_copy_len > 0 {
+            buf[self_copy_len..self_copy_len + other_copy_len]
+                .copy_from_slice(&other[..other_copy_len]);
+        }
+        Self { buf, len: new_len }
     }
 }
 
 impl Default for StringDataIr {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Clone for StringDataIr {
-    fn clone(&self) -> Self {
-        Self::from_slice(self.as_slice())
     }
 }
 
@@ -125,9 +85,132 @@ impl std::fmt::Display for StringDataIr {
     }
 }
 
-impl Drop for StringDataIr {
-    /// 作用域退出时自动释放堆内存
-    fn drop(&mut self) {
-        self.deinit();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_empty() {
+        let s = StringDataIr::new();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        assert_eq!(s.as_slice(), b"");
+    }
+
+    #[test]
+    fn from_slice_hello() {
+        let s = StringDataIr::from_slice(b"hello");
+        assert!(!s.is_empty());
+        assert_eq!(s.len(), 5);
+        assert_eq!(s.as_slice(), b"hello");
+    }
+
+    #[test]
+    fn from_slice_empty() {
+        let s = StringDataIr::from_slice(b"");
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        assert_eq!(s.as_slice(), b"");
+    }
+
+    #[test]
+    fn clone_creates_independent_copy() {
+        let a = StringDataIr::from_slice(b"clone me");
+        let mut b = a.clone();
+        assert_eq!(a, b);
+        // 修改 b 不应影响 a
+        b = StringDataIr::from_slice(b"modified");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn copy_semantics() {
+        let a = StringDataIr::from_slice(b"copy");
+        let b = a; // copy via move
+        assert_eq!(a, b); // 值语义：a 依然可用
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let s: StringDataIr = Default::default();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn display_works() {
+        let s = StringDataIr::from_slice(b"hello");
+        let display = format!("{}", s);
+        assert_eq!(display, "hello");
+    }
+
+    #[test]
+    fn display_utf8_lossy() {
+        let s = StringDataIr::from_slice(b"\xff\xfe");
+        let display = format!("{}", s);
+        // lossy: 非法 UTF-8 被替换为
+        assert!(display.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn concat_two_strings() {
+        let a = StringDataIr::from_slice(b"hello");
+        let b = a.concat(b" world");
+        assert_eq!(b.as_slice(), b"hello world");
+        assert_eq!(b.len(), 11);
+    }
+
+    #[test]
+    fn concat_empty() {
+        let a = StringDataIr::from_slice(b"hello");
+        let b = a.concat(b"");
+        assert_eq!(b, a);
+    }
+
+    #[test]
+    fn concat_with_empty_start() {
+        let a = StringDataIr::new();
+        let b = a.concat(b"hello");
+        assert_eq!(b.as_slice(), b"hello");
+    }
+
+    #[test]
+    fn concat_truncated() {
+        let a = StringDataIr::from_slice(b"hello");
+        let long = vec![b'x'; STRING_BUF_SIZE];
+        let b = a.concat(&long);
+        assert_eq!(b.len(), STRING_BUF_SIZE);
+        // 前 5 字节来自 "hello"
+        assert_eq!(&b.as_slice()[..5], b"hello");
+    }
+
+    #[test]
+    fn from_slice_truncated() {
+        let long = vec![b'a'; STRING_BUF_SIZE + 10];
+        let s = StringDataIr::from_slice(&long);
+        assert_eq!(s.len(), STRING_BUF_SIZE);
+        assert_eq!(s.as_slice(), &long[..STRING_BUF_SIZE]);
+    }
+
+    #[test]
+    fn concat_self() {
+        let a = StringDataIr::from_slice(b"ab");
+        let b = a.concat(b"ab");
+        assert_eq!(b.as_slice(), b"abab");
+        assert_eq!(b.len(), 4);
+    }
+
+    #[test]
+    fn eq_same_content() {
+        let a = StringDataIr::from_slice(b"same");
+        let b = StringDataIr::from_slice(b"same");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn eq_different_content() {
+        let a = StringDataIr::from_slice(b"abc");
+        let b = StringDataIr::from_slice(b"xyz");
+        assert_ne!(a, b);
     }
 }

@@ -254,6 +254,8 @@ pub(crate) fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
                 alloc,
             }))
         }
+        // 内联缓冲区 String：值类型，直接 clone 即可（无堆分配，无需 deinit）
+        IrValue::String(_) => v.clone(),
         IrValue::Opt(Some(b)) => IrValue::Opt(Some(Box::new(deep_copy(ctx, *b)))),
         // move 捕获闭包值：捕获 cell 逐个深拷贝——闭包持有独立环境副本
         // （与原作用域/其他闭包脱离共享，对齐 oracle `deep_copy` Closure 臂）
@@ -1556,7 +1558,8 @@ pub(crate) fn scalar_size_ir(ty: &str) -> Option<usize> {
         "i32" | "u32" | "f32" => Some(4),
         "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
         "i128" | "u128" | "f128" => Some(16),
-        "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
+        "String" => Some(72),
+        "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
         _ => None,
     }
 }

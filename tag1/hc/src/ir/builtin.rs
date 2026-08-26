@@ -2518,20 +2518,7 @@ pub(crate) fn call_builtin_method(
         }
         (IrValue::Str(s), "as_slice") => Ok(Some(IrValue::Str(s.clone()))),
         (IrValue::String(s), "as_slice") => Ok(Some(IrValue::Str(s.as_slice().to_vec()))),
-        (IrValue::String(s), "into_array") => {
-            let mut s = s.clone();
-            let (ptr, len, cap) = s.take_ptr();
-            if !ptr.is_null() {
-                let layout = std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
-                let vec = unsafe {
-                    let b = std::slice::from_raw_parts_mut(ptr, len);
-                    Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
-                };
-                Ok(Some(IrValue::Str(vec)))
-            } else {
-                Ok(Some(IrValue::Str(vec![])))
-            }
-        }
+        (IrValue::String(s), "into_array") => Ok(Some(IrValue::Str(s.as_slice().to_vec()))),
         (IrValue::Str(s), "split") => {
             let sep_v = deref_value(
                 ctx,
@@ -3428,20 +3415,7 @@ pub(crate) fn call_dotted_implicit(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "String.into_array"))?;
             let v = deref_value(ctx, v).clone();
             return match v {
-                IrValue::String(mut s) => {
-                    let (ptr, len, cap) = s.take_ptr();
-                    if !ptr.is_null() {
-                        let layout =
-                            std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
-                        let vec = unsafe {
-                            let b = std::slice::from_raw_parts_mut(ptr, len);
-                            Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
-                        };
-                        Ok(IrValue::Str(vec))
-                    } else {
-                        Ok(IrValue::Str(vec![]))
-                    }
-                }
+                IrValue::String(s) => Ok(IrValue::Str(s.as_slice().to_vec())),
                 _ => Err(IrError::msg(
                     "TypeError",
                     "String.into_array expects String",

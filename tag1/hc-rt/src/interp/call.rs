@@ -951,18 +951,8 @@ impl Interp {
                 Ok(Some(Value::Str(Rc::new(RefCell::new(bytes)))))
             }
             (Value::String(s), "into_array") => {
-                let mut s = s.clone();
-                let (ptr, len, cap) = s.take_ptr();
-                if !ptr.is_null() {
-                    let layout = std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
-                    let vec = unsafe {
-                        let b = std::slice::from_raw_parts_mut(ptr, len);
-                        Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
-                    };
-                    Ok(Some(Value::Bytes(Rc::new(RefCell::new(vec)))))
-                } else {
-                    Ok(Some(Value::Bytes(Rc::new(RefCell::new(Vec::new())))))
-                }
+                let vec = s.as_slice().to_vec();
+                Ok(Some(Value::Bytes(Rc::new(RefCell::new(vec)))))
             }
             (Value::Str(s), "split") => {
                 // 按分隔符切分（返回 Vec of String）

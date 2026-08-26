@@ -228,7 +228,8 @@ pub(crate) fn scalar_size_native(ty: &str) -> Option<usize> {
         "i32" | "u32" | "f32" => Some(4),
         "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
         "i128" | "u128" | "f128" => Some(16),
-        "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
+        "String" => Some(72),
+        "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
         _ => None,
     }
 }
@@ -240,6 +241,7 @@ pub(crate) fn align_native(ty: &str) -> usize {
         "i16" | "u16" | "f16" => 2,
         "i32" | "u32" | "f32" => 4,
         "i128" | "u128" | "f128" => 16,
+        "String" => 8,
         _ => scalar_size_native(ty).map(|s| s.min(8)).unwrap_or(8),
     }
 }
@@ -604,7 +606,21 @@ pub(crate) fn emit_main_wrapper(out: &mut String, module: &IrModule) {
             out.push_str("argbody:\n");
             out.push_str("  %argp = getelementptr inbounds i8*, i8** %argv, i64 %argi\n");
             out.push_str("  %argstr = load i8*, i8** %argp\n");
-            out.push_str("  %argspi = ptrtoint i8* %argstr to i128\n");
+            out.push_str("  %arglen = call i64 @strlen(i8* %argstr)\n");
+            out.push_str("  %arglen_cap = icmp ugt i64 %arglen, 64\n");
+            out.push_str("  %arglen_sat = select i1 %arglen_cap, i64 64, i64 %arglen\n");
+            out.push_str("  %argraw = call noalias i8* @malloc(i64 72)\n");
+            out.push_str("  %argsd = bitcast i8* %argraw to %StringData*\n");
+            out.push_str(
+                "  %argbuf_p = getelementptr %StringData, %StringData* %argsd, i64 0, i32 0\n",
+            );
+            out.push_str("  %argbuf = bitcast [64 x i8]* %argbuf_p to i8*\n");
+            out.push_str("  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %argbuf, i8* %argstr, i64 %arglen_sat, i1 false)\n");
+            out.push_str(
+                "  %arglen_p = getelementptr %StringData, %StringData* %argsd, i64 0, i32 1\n",
+            );
+            out.push_str("  store i64 %arglen_sat, i64* %arglen_p\n");
+            out.push_str("  %argspi = ptrtoint %StringData* %argsd to i128\n");
             out.push_str("  %argsv0 = insertvalue %Value { i32 0, i128 0 }, i32 5, 0\n");
             out.push_str("  %argsv1 = insertvalue %Value %argsv0, i128 %argspi, 1\n");
             out.push_str("  call void @hc_arr_set(%Value %argvoid, i64 %argi, %Value %argsv1)\n");

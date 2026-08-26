@@ -482,8 +482,8 @@ pub enum IrValue {
     Float(f64),
     Bool(bool),
     Str(Vec<u8>),
-    /// String 值类型（拥有所有权的字节数组，值语义，复制即 deep copy）
-    /// 生命周期由编译器管理，作用域出口自动插入 `deinit()`
+    /// String 值类型：栈上内联缓冲的字节数组（值语义，复制即 memcpy）
+    /// 无堆分配，不需要 `deinit()`，作用域退出自动销毁
     String(StringDataIr),
     /// 可选值（`null` = `Opt(None)`，对齐 tree-walking `Value::Opt`）
     Opt(Option<Box<IrValue>>),

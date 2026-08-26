@@ -154,13 +154,12 @@ impl BodyEmitter {
     ) -> String {
         if let IrConst::Str(s) = val {
             let idx = strings.iter().position(|x| x == s).unwrap_or(0);
-            let n = s.len() + 1;
             let p = self.r();
             self.emit(format!(
-                "{p} = getelementptr inbounds [{n} x i8], ptr @.str.{idx}, i64 0, i64 0"
+                "{p} = getelementptr %StringData, %StringData* @.str.{idx}_data, i64 0"
             ));
             let pi = self.r();
-            self.emit(format!("{pi} = ptrtoint i8* {p} to i128"));
+            self.emit(format!("{pi} = ptrtoint %StringData* {p} to i128"));
             // SSA 链：每个 insertvalue 用新名（同寄存器二次定义非法）
             let v0 = self.r();
             self.emit(format!(

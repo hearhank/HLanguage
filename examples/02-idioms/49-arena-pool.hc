@@ -25,6 +25,6 @@ fn main() !void {
     var buf = arena.alloc(1024);
     try expect_eq(buf.len, 1024);
     var text = String.from_slice(&buf, arena);
-    try expect_eq(text.len, 1024);
+    try expect_eq(text.len, 64);  // String 内联缓冲最大 64 字节
     // 函数结束：arena 统一回收（buf/text 不各自销毁）
 }

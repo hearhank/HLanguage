@@ -3089,20 +3089,9 @@ impl Interp {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
                 match v {
-                    Value::String(mut s) => {
-                        let (ptr, len, cap) = s.take_ptr();
-                        // 构建 Array(u8) 表示——目前用 Value::Bytes 暂代
-                        if !ptr.is_null() {
-                            let layout =
-                                std::alloc::Layout::from_size_align(cap, 1).expect("valid layout");
-                            let vec = unsafe {
-                                let b = std::slice::from_raw_parts_mut(ptr, len);
-                                Vec::from_raw_parts(b.as_mut_ptr(), len, cap)
-                            };
-                            Ok(Value::Bytes(Rc::new(RefCell::new(vec))))
-                        } else {
-                            Ok(Value::Bytes(Rc::new(RefCell::new(Vec::new()))))
-                        }
+                    Value::String(s) => {
+                        let vec = s.as_slice().to_vec();
+                        Ok(Value::Bytes(Rc::new(RefCell::new(vec))))
                     }
                     _ => Err(RtError::new("TypeError", Some(span.clone()))),
                 }
