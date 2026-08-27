@@ -143,3 +143,14 @@ fn undefined_name_detected() {
         "H checker 应报告 undefined name，实际输出：{h_out}"
     );
 }
+
+#[test]
+fn if_while_matches_rust_reference() {
+    // Task 8: if/while/for 语句——H 版 checker 输出应与 Rust 参考一致
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/12-if-while.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
+    assert_checker_matches(&h_checker, &corpus);
+}

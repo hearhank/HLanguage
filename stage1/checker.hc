@@ -2796,10 +2796,17 @@ class Checker {
         }
     }
 
+    // 检查条件表达式类型（与 Rust 参考保持一致：接受大多数类型）
+    fn check_condition(self: *mut Self, cond: AstNode) void {
+        // 当前阶段：条件表达式已在 check_expr 中检查，
+        // 此处保留扩展点（未来可添加更严格的类型检查）
+    }
+
     // 检查 if 语句
     fn check_if(self: *mut Self, stmt: AstNode) void {
         if (stmt.children.len > 0) {
             self.check_expr(stmt.children[0]);
+            self.check_condition(stmt.children[0]);
         }
         if (stmt.children.len > 1) {
             var then_block = stmt.children[1];
@@ -2821,6 +2828,7 @@ class Checker {
     fn check_while(self: *mut Self, stmt: AstNode) void {
         if (stmt.children.len > 0) {
             self.check_expr(stmt.children[0]);
+            self.check_condition(stmt.children[0]);
         }
         if (stmt.children.len > 1) {
             var body = stmt.children[1];
@@ -2834,6 +2842,7 @@ class Checker {
     fn check_for(self: *mut Self, stmt: AstNode) void {
         if (stmt.children.len > 0) {
             self.check_expr(stmt.children[0]);
+            self.check_condition(stmt.children[0]);
         }
         if (stmt.children.len > 1) {
             var body = stmt.children[1];
