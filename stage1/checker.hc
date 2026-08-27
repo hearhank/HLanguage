@@ -82,56 +82,6 @@ fn slice_eq(a: &[u8], b: &[u8]) bool {
 // 关键字字典
 // ============================================================
 
-fn build_kw_map() Map<&[u8], &[u8]> {
-    var m = Map<&[u8], &[u8]>.init(alloc);
-    m.put("and", "KwAnd");
-    m.put("anytype", "KwAnytype");
-    m.put("async", "KwAsync");
-    m.put("await", "KwAwait");
-    m.put("break", "KwBreak");
-    m.put("catch", "KwCatch");
-    m.put("class", "KwClass");
-    m.put("comptime", "KwComptime");
-    m.put("const", "KwConst");
-    m.put("continue", "KwContinue");
-    m.put("defer", "KwDefer");
-    m.put("else", "KwElse");
-    m.put("enum", "KwEnum");
-    m.put("errdefer", "KwErrdefer");
-    m.put("export", "KwExport");
-    m.put("extern", "KwExtern");
-    m.put("false", "KwFalse");
-    m.put("fn", "KwFn");
-    m.put("for", "KwFor");
-    m.put("global", "KwGlobal");
-    m.put("if", "KwIf");
-    m.put("import", "KwImport");
-    m.put("interface", "KwInterface");
-    m.put("move", "KwMove");
-    m.put("mut", "KwMut");
-    m.put("namespace", "KwNamespace");
-    m.put("null", "KwNull");
-    m.put("or", "KwOr");
-    m.put("orelse", "KwOrelse");
-    m.put("owned", "KwOwned");
-    m.put("pub", "KwPub");
-    m.put("return", "KwReturn");
-    m.put("script", "KwScript");
-    m.put("spawn", "KwSpawn");
-    m.put("switch", "KwSwitch");
-    m.put("tree", "KwTree");
-    m.put("true", "KwTrue");
-    m.put("try", "KwTry");
-    m.put("type", "KwType");
-    m.put("union", "KwUnion");
-    m.put("using", "KwUsing");
-    m.put("var", "KwVar");
-    m.put("void", "KwVoid");
-    m.put("where", "KwWhere");
-    m.put("while", "KwWhile");
-    return m;
-}
-
 fn build_rev_kw_map() Map<&[u8], &[u8]> {
     var m = Map<&[u8], &[u8]>.init(alloc);
     m.put("KwAnd", "and");
@@ -202,11 +152,81 @@ class Lexer {
     mut line: i32,
     mut col: i32,
     mut tokens: Vec<Token>,
-    kw_map: Map<&[u8], &[u8]>,
+
 
     fn kw_of(self: *mut Self, name: &[u8]) ?&[u8] {
-        if (self.kw_map.contains(name)) {
-            return self.kw_map.get(name).?;
+        var len = name.len;
+        if (len >= 2 and len <= 9) {
+            if (len == 2) {
+                if (slice_eq(name, "fn")) return "KwFn";
+                if (slice_eq(name, "if")) return "KwIf";
+                if (slice_eq(name, "or")) return "KwOr";
+                return null;
+            }
+            if (len == 3) {
+                if (slice_eq(name, "var")) return "KwVar";
+                if (slice_eq(name, "for")) return "KwFor";
+                if (slice_eq(name, "pub")) return "KwPub";
+                if (slice_eq(name, "mut")) return "KwMut";
+                if (slice_eq(name, "and")) return "KwAnd";
+                if (slice_eq(name, "try")) return "KwTry";
+                return null;
+            }
+            if (len == 4) {
+                if (slice_eq(name, "else")) return "KwElse";
+                if (slice_eq(name, "enum")) return "KwEnum";
+                if (slice_eq(name, "tree")) return "KwTree";
+                if (slice_eq(name, "move")) return "KwMove";
+                if (slice_eq(name, "type")) return "KwType";
+                if (slice_eq(name, "void")) return "KwVoid";
+                if (slice_eq(name, "null")) return "KwNull";
+                if (slice_eq(name, "true")) return "KwTrue";
+                return null;
+            }
+            if (len == 5) {
+                if (slice_eq(name, "const")) return "KwConst";
+                if (slice_eq(name, "while")) return "KwWhile";
+                if (slice_eq(name, "break")) return "KwBreak";
+                if (slice_eq(name, "defer")) return "KwDefer";
+                if (slice_eq(name, "class")) return "KwClass";
+                if (slice_eq(name, "union")) return "KwUnion";
+                if (slice_eq(name, "where")) return "KwWhere";
+                if (slice_eq(name, "using")) return "KwUsing";
+                if (slice_eq(name, "owned")) return "KwOwned";
+                if (slice_eq(name, "catch")) return "KwCatch";
+                if (slice_eq(name, "async")) return "KwAsync";
+                if (slice_eq(name, "await")) return "KwAwait";
+                if (slice_eq(name, "spawn")) return "KwSpawn";
+                if (slice_eq(name, "false")) return "KwFalse";
+                return null;
+            }
+            if (len == 6) {
+                if (slice_eq(name, "global")) return "KwGlobal";
+                if (slice_eq(name, "return")) return "KwReturn";
+                if (slice_eq(name, "switch")) return "KwSwitch";
+                if (slice_eq(name, "struct")) return "KwStruct";
+                if (slice_eq(name, "import")) return "KwImport";
+                if (slice_eq(name, "export")) return "KwExport";
+                if (slice_eq(name, "orelse")) return "KwOrelse";
+                if (slice_eq(name, "script")) return "KwScript";
+                if (slice_eq(name, "extern")) return "KwExtern";
+                return null;
+            }
+            if (len == 7) {
+                if (slice_eq(name, "anytype")) return "KwAnytype";
+                return null;
+            }
+            if (len == 8) {
+                if (slice_eq(name, "continue")) return "KwContinue";
+                if (slice_eq(name, "errdefer")) return "KwErrdefer";
+                if (slice_eq(name, "comptime")) return "KwComptime";
+                return null;
+            }
+            if (len == 9) {
+                if (slice_eq(name, "interface")) return "KwInterface";
+                if (slice_eq(name, "namespace")) return "KwNamespace";
+                return null;
+            }
         }
         return null;
     }
@@ -3175,7 +3195,6 @@ fn main(args: Vec<String>) !void {
     var mut src = try io.fs.read_file(path, alloc);
 
     // 构建关键字字典
-    var kw_map = build_kw_map();
     var rev_kw_map = build_rev_kw_map();
 
     // 词法分析
@@ -3183,7 +3202,6 @@ fn main(args: Vec<String>) !void {
         src = src, n = src.len,
         pos = 0, line = 1, col = 1,
         tokens = Vec<Token>.init(alloc),
-        kw_map = kw_map,
     });
     lx.run();
 
