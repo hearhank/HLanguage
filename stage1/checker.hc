@@ -2271,6 +2271,12 @@ class Checker {
     src: Vec<u8>,
     // 行号表（从源码构建）
     line_starts: Vec<usize>,
+    // 作用域栈（每个作用域是一个名字→VarInfo 的映射）
+    scopes: Vec<Map<Vec<u8>, VarInfo>>,
+    // 类型注册表（名字→类型信息）
+    types: Map<Vec<u8>, SType>,
+    // 函数注册表（名字→函数签名）
+    funcs: Map<Vec<u8>, FnSig>,
 
     // 初始化：从源码构建行号表
     fn init(self: *mut Self, src: Vec<u8>) void {
@@ -2284,11 +2290,73 @@ class Checker {
             }
             i += 1;
         }
+        // 初始化全局作用域
+        self.push_scope();
     }
 
     // 添加错误
     fn error(self: *mut Self, msg: Vec<u8>) void {
         self.diags.append(msg);
+    }
+
+    // 推入新作用域
+    fn push_scope(self: *mut Self) void {
+        var m = Map<Vec<u8>, VarInfo>.init(alloc);
+        self.scopes.append(m);
+    }
+
+    // 弹出作用域
+    fn pop_scope(self: *mut Self) void {
+        if (self.scopes.len > 0) {
+            self.scopes.pop();
+        }
+    }
+
+    // 在当前作用域注册名字
+    fn register(self: *mut Self, name: Vec<u8>, info: VarInfo) void {
+        if (self.scopes.len > 0) {
+            var mut scope = self.scopes[self.scopes.len - 1];
+            scope.put(name, info);
+        }
+    }
+
+    // 从当前作用域栈查找名字（从最内层向外查找）
+    fn lookup(self: *mut Self, name: Vec<u8>) ?VarInfo {
+        var mut i: i64 = @intCast(i64, self.scopes.len) - 1;
+        while (i >= 0) {
+            var scope = self.scopes[@intCast(usize, i)];
+            if (scope.contains(name)) {
+                return scope.get(name);
+            }
+            i -= 1;
+        }
+        return null;
+    }
+
+    // 注册类型
+    fn register_type(self: *mut Self, name: Vec<u8>, ty: SType) void {
+        self.types.put(name, ty);
+    }
+
+    // 查找类型
+    fn lookup_type(self: *mut Self, name: Vec<u8>) ?SType {
+        if (self.types.contains(name)) {
+            return self.types.get(name);
+        }
+        return null;
+    }
+
+    // 注册函数
+    fn register_func(self: *mut Self, name: Vec<u8>, sig: FnSig) void {
+        self.funcs.put(name, sig);
+    }
+
+    // 查找函数
+    fn lookup_func(self: *mut Self, name: Vec<u8>) ?FnSig {
+        if (self.funcs.contains(name)) {
+            return self.funcs.get(name);
+        }
+        return null;
     }
 
     // 检查程序
@@ -2355,6 +2423,9 @@ fn main(args: Vec<String>) !void {
         diags = Vec<Vec<u8>>.init(alloc),
         src = Vec<u8>.init(alloc),
         line_starts = Vec<usize>.init(alloc),
+        scopes = Vec<Map<Vec<u8>, VarInfo>>.init(alloc),
+        types = Map<Vec<u8>, SType>.init(alloc),
+        funcs = Map<Vec<u8>, FnSig>.init(alloc),
     });
     checker.init(src);
     checker.check_program(ast);
