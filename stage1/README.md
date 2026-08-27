@@ -30,7 +30,7 @@
 | 7 | 表达式类型检查（is_compatible + 二元运算符） | ✅ |
 | 8 | 语句类型检查（if/while/for 条件检查） | ✅ |
 | 9 | 所有权分析（分配来源/move/引用逃逸） | ✅ |
-| 10 | 错误集分析（错误集推断/错误码表） | ⏳ |
+| 10 | 错误集分析（错误集推断/错误码表） | ✅ |
 | 11 | 集成验证（全部语料对照 + 修复不匹配） | ⏳ |
 
 ### 对照测试
@@ -46,6 +46,7 @@
 | `undefined_name_detected` | `17-undefined-simple.hc` | 未定义名称检测 |
 | `if_while_matches_rust_reference` | `12-if-while.hc` | if/while 语句 |
 | `ownership_move_detected` | `21-ownership.hc` | 所有权分析（move 检测） |
+| `error_set_detected` | `22-error-set.hc` | 错误集分析（错误字面量检测） |
 
 运行方式：`cargo test --release -p hc-tools --test k3_checker`
 

@@ -1058,6 +1058,7 @@ class Parser {
         self.expect("RParen");
         if (self.at("Bang")) {
             self.advance();
+            node_add_prop(&f, "ret_union", "true");
             if (self.at("Ident") or self.at("KwVoid")) {
                 var mut ret_ty = self.peek_text();
                 self.advance();
@@ -2295,6 +2296,8 @@ class Checker {
     types: Map<&[u8], SType>,
     // 函数注册表（名字→函数签名）
     funcs: Map<&[u8], FnSig>,
+    // 当前函数是否声明了错误联合返回类型
+    current_fn_ret_is_error_union: bool,
 
     // 初始化：从源码构建行号表
     fn init(self: *mut Self, src: Vec<u8>) void {
@@ -2568,7 +2571,21 @@ class Checker {
         }
         if (k == "ArrayLit") { return make_ty("array"); }
         if (k == "AtBuiltin") { return make_ty("unknown"); }
-        if (k == "Field") { return make_ty("unknown"); }
+        if (k == "Field") {
+            // error.NotFound → 错误类型
+            if (expr.children.len > 0) {
+                var base = expr.children[0];
+                if (base.kind == "Ident") {
+                    var name = get_prop(base.props, "name");
+                    if (name) |n| {
+                        if (slice_eq(n, "error")) {
+                            return make_ty("error_type");
+                        }
+                    }
+                }
+            }
+            return make_ty("unknown");
+        }
         if (k == "Index") { return make_ty("unknown"); }
         if (k == "Unwrap") {
             if (expr.children.len > 0) {
@@ -2685,6 +2702,10 @@ class Checker {
     // 检查函数声明
     fn check_fn(self: *mut Self, decl: AstNode) void {
         self.push_scope();
+        // 解析返回类型是否是错误联合
+        var ru = get_prop(decl.props, "ret_union");
+        if (ru) |_| { self.current_fn_ret_is_error_union = true; }
+        else { self.current_fn_ret_is_error_union = false; }
         var mut i: usize = 0;
         while (i < decl.children.len) {
             var child = decl.children[i];
@@ -2711,6 +2732,7 @@ class Checker {
             i += 1;
         }
         self.pop_scope();
+        self.current_fn_ret_is_error_union = false;
     }
 
     // 检查块
@@ -2911,7 +2933,35 @@ class Checker {
     // 检查 return 语句
     fn check_return(self: *mut Self, stmt: AstNode) void {
         if (stmt.children.len > 0) {
-            self.check_expr(stmt.children[0]);
+            var expr = stmt.children[0];
+            self.check_expr(expr);
+            // 检查是否返回错误字面量但函数没有声明错误联合返回类型
+            if (expr.kind == "Field" and expr.children.len > 0) {
+                var base = expr.children[0];
+                if (base.kind == "Ident") {
+                    var name = get_prop(base.props, "name");
+                    if (name) |n| {
+                        if (slice_eq(n, "error")) {
+                            if (!self.current_fn_ret_is_error_union) {
+                                var msg = Vec<u8>.init(alloc);
+                                msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
+                                msg.append(':'); msg.append(' ');
+                                msg.append('c'); msg.append('a'); msg.append('n'); msg.append('n'); msg.append('o'); msg.append('t');
+                                msg.append(' '); msg.append('r'); msg.append('e'); msg.append('t'); msg.append('u'); msg.append('r'); msg.append('n');
+                                msg.append(' '); msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
+                                msg.append(' '); msg.append('l'); msg.append('i'); msg.append('t'); msg.append('e'); msg.append('r'); msg.append('a'); msg.append('l');
+                                msg.append(':'); msg.append(' '); msg.append('f'); msg.append('u'); msg.append('n'); msg.append('c'); msg.append('t'); msg.append('i'); msg.append('o'); msg.append('n');
+                                msg.append(' '); msg.append('d'); msg.append('o'); msg.append('e'); msg.append('s'); msg.append(' ');
+                                msg.append('n'); msg.append('o'); msg.append('t'); msg.append(' ');
+                                msg.append('d'); msg.append('e'); msg.append('c'); msg.append('l'); msg.append('a'); msg.append('r'); msg.append('e');
+                                msg.append(' '); msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r'); msg.append(' ');
+                                msg.append('u'); msg.append('n'); msg.append('i'); msg.append('o'); msg.append('n');
+                                self.error(msg);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3069,6 +3119,7 @@ class Checker {
         if (slice_eq(name, "type") or slice_eq(name, "anytype")) return true;
         if (slice_eq(name, "Future")) return true;
         if (slice_eq(name, "expect") or slice_eq(name, "expect_eq")) return true;
+        if (slice_eq(name, "error")) return true;
         return false;
     }
 
@@ -3125,6 +3176,7 @@ fn main(args: Vec<String>) !void {
         scope_sizes = Vec<usize>.init(alloc),
         types = Map<&[u8], SType>.init(alloc),
         funcs = Map<&[u8], FnSig>.init(alloc),
+        current_fn_ret_is_error_union = false,
     });
     checker.init(src);
     checker.check_program(ast);
