@@ -548,7 +548,7 @@ impl Interp {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
                 let s = match v {
-                    Value::Str(s) => s.borrow().clone(),
+                    Value::String(s) => s.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 let text = String::from_utf8_lossy(&s).trim().to_string();
@@ -566,7 +566,7 @@ impl Interp {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
                 let s = match v {
-                    Value::Str(s) => s.borrow().clone(),
+                    Value::String(s) => s.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 let text = String::from_utf8_lossy(&s).trim().to_string();
@@ -925,16 +925,6 @@ impl Interp {
             }
         }
         match (self_v, field) {
-            (Value::Str(s), "concat") => {
-                let other = self.eval(&args[0])?;
-                let other = self.deref_value(other);
-                let other_bytes = other
-                    .extract_bytes()
-                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
-                let mut bytes = s.borrow().clone();
-                bytes.extend_from_slice(&other_bytes);
-                return Ok(Some(Value::str_bytes(bytes)));
-            }
             (Value::String(s), "concat") => {
                 let other = self.eval(&args[0])?;
                 let other = self.deref_value(other);
@@ -945,43 +935,13 @@ impl Interp {
                 bytes.extend_from_slice(&other_bytes);
                 return Ok(Some(Value::str_bytes(bytes)));
             }
-            (Value::Str(s), "as_slice") => Ok(Some(Value::Str(s.clone()))),
             (Value::String(s), "as_slice") => {
                 let bytes = s.as_slice().to_vec();
-                Ok(Some(Value::Str(Rc::new(RefCell::new(bytes)))))
+                Ok(Some(Value::String(StringData::from_bytes(bytes))))
             }
             (Value::String(s), "into_array") => {
                 let vec = s.as_slice().to_vec();
                 Ok(Some(Value::Bytes(Rc::new(RefCell::new(vec)))))
-            }
-            (Value::Str(s), "split") => {
-                // 按分隔符切分（返回 Vec of String）
-                let sep_v = self.eval(&args[0])?;
-                let sep_v = self.deref_value(sep_v);
-                let sep = match sep_v {
-                    Value::Int(i) => vec![i as u8],
-                    _ => sep_v
-                        .extract_bytes()
-                        .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?,
-                };
-                let data = s.borrow().clone();
-                let mut out = Vec::new();
-                if sep.is_empty() {
-                    return Ok(Some(Value::arr(vec![Value::str_bytes(data)])));
-                }
-                let mut start = 0usize;
-                let mut i = 0usize;
-                while i + sep.len() <= data.len() {
-                    if &data[i..i + sep.len()] == sep.as_slice() {
-                        out.push(Value::str_bytes(data[start..i].to_vec()));
-                        i += sep.len();
-                        start = i;
-                    } else {
-                        i += 1;
-                    }
-                }
-                out.push(Value::str_bytes(data[start..].to_vec()));
-                Ok(Some(Value::arr(out)))
             }
             (Value::String(s), "split") => {
                 let sep_v = self.eval(&args[0])?;
@@ -1011,39 +971,11 @@ impl Interp {
                 out.push(Value::str_bytes(data[start..].to_vec()));
                 Ok(Some(Value::arr(out)))
             }
-            (Value::Str(s), "to_bytes") => {
-                // 序列化格式：[u64 LE 长度][utf8]
-                let b = s.borrow();
-                let mut out = (b.len() as u64).to_le_bytes().to_vec();
-                out.extend_from_slice(&b);
-                Ok(Some(Value::str_bytes(out)))
-            }
             (Value::String(s), "to_bytes") => {
                 let b = s.as_slice();
                 let mut out = (b.len() as u64).to_le_bytes().to_vec();
                 out.extend_from_slice(b);
                 Ok(Some(Value::str_bytes(out)))
-            }
-            (Value::Str(s), "find") => {
-                let needle = self.eval(&args[0])?;
-                let needle = self.deref_value(needle);
-                let needle_bytes: Vec<u8> = match &needle {
-                    Value::Int(i) => vec![*i as u8],
-                    _ => needle
-                        .extract_bytes()
-                        .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?,
-                };
-                let data = s.borrow().clone();
-                let pos = if needle_bytes.is_empty() {
-                    Some(0usize)
-                } else {
-                    data.windows(needle_bytes.len())
-                        .position(|w| w == needle_bytes.as_slice())
-                };
-                Ok(Some(match pos {
-                    Some(p) => Value::Opt(Some(Rc::new(Value::Int(p as i128)))),
-                    None => Value::Opt(None),
-                }))
             }
             (Value::String(s), "find") => {
                 let needle = self.eval(&args[0])?;
@@ -1066,20 +998,6 @@ impl Interp {
                     None => Value::Opt(None),
                 }))
             }
-            (Value::Str(s), "substring") => {
-                let lo = self.eval(&args[0])?;
-                let hi = self.eval(&args[1])?;
-                let lo = self.deref_value(lo);
-                let hi = self.deref_value(hi);
-                let (lo, hi) = match (lo, hi) {
-                    (Value::Int(a), Value::Int(b)) => (a.max(0) as usize, b.max(0) as usize),
-                    _ => return Err(RtError::new("TypeError", Some(span.clone()))),
-                };
-                let data = s.borrow();
-                let hi = hi.min(data.len());
-                let sub = data[lo.min(hi)..hi].to_vec();
-                Ok(Some(Value::str_bytes(sub)))
-            }
             (Value::String(s), "substring") => {
                 let lo = self.eval(&args[0])?;
                 let hi = self.eval(&args[1])?;
@@ -1093,36 +1011,6 @@ impl Interp {
                 let hi = hi.min(data.len());
                 let sub = data[lo.min(hi)..hi].to_vec();
                 Ok(Some(Value::str_bytes(sub)))
-            }
-            (Value::Str(s), "replace") => {
-                let from = self.eval(&args[0])?;
-                let to = self.eval(&args[1])?;
-                let from = self.deref_value(from);
-                let to = self.deref_value(to);
-                let from_b = from
-                    .extract_bytes()
-                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
-                let to_b = to
-                    .extract_bytes()
-                    .ok_or_else(|| RtError::new("TypeError", Some(span.clone())))?;
-                let data = s.borrow().clone();
-                let mut out = Vec::new();
-                let mut i = 0usize;
-                while i < data.len() {
-                    if from_b.is_empty() {
-                        out.push(data[i]);
-                        i += 1;
-                    } else if i + from_b.len() <= data.len()
-                        && &data[i..i + from_b.len()] == from_b.as_slice()
-                    {
-                        out.extend_from_slice(&to_b);
-                        i += from_b.len();
-                    } else {
-                        out.push(data[i]);
-                        i += 1;
-                    }
-                }
-                Ok(Some(Value::str_bytes(out)))
             }
             (Value::String(s), "replace") => {
                 let from = self.eval(&args[0])?;
@@ -1154,24 +1042,8 @@ impl Interp {
                 }
                 Ok(Some(Value::str_bytes(out)))
             }
-            (Value::Str(s), "len") => Ok(Some(Value::Int(s.borrow().len() as i128))),
             (Value::String(s), "len") => Ok(Some(Value::Int(s.len() as i128))),
             // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
-            (Value::Str(s), "to_upper") | (Value::Str(s), "to_lower") => {
-                let upper = field == "to_upper";
-                let data = s.borrow();
-                let out: Vec<u8> = data
-                    .iter()
-                    .map(|&b| {
-                        if upper {
-                            b.to_ascii_uppercase()
-                        } else {
-                            b.to_ascii_lowercase()
-                        }
-                    })
-                    .collect();
-                Ok(Some(Value::str_bytes(out)))
-            }
             (Value::String(s), "to_upper") | (Value::String(s), "to_lower") => {
                 let upper = field == "to_upper";
                 let data = s.as_slice();
@@ -1203,7 +1075,7 @@ impl Interp {
                         _ => None,
                     })
                     .collect();
-                Ok(Some(Value::Str(Rc::new(RefCell::new(bytes)))))
+                Ok(Some(Value::String(StringData::from_bytes(bytes))))
             }
             (Value::Arr(a), "append") => {
                 let v = self.eval(&args[0])?;
@@ -1295,13 +1167,6 @@ impl Interp {
                         }
                         Ok(Some(Value::Void))
                     }
-                    Value::Str(b) => {
-                        for byte in b.borrow().iter() {
-                            a.borrow_mut()
-                                .push(Rc::new(RefCell::new(Value::Int(*byte as i128))));
-                        }
-                        Ok(Some(Value::Void))
-                    }
                     Value::String(s) => {
                         for byte in s.as_slice().iter() {
                             a.borrow_mut()
@@ -1357,7 +1222,7 @@ impl Interp {
                 let bytes = self.eval(&args[0])?;
                 let bytes = self.deref_value(bytes);
                 let b = match bytes {
-                    Value::Str(s) => s.borrow().clone(),
+                    Value::String(s) => s.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 if b.len() < 8 {
@@ -1546,7 +1411,7 @@ impl Interp {
                                 line: span.line as u32,
                                 weak: Rc::downgrade(&rc),
                             });
-                            Ok(Some(Value::Str(rc)))
+                            Ok(Some(Value::Bytes(rc)))
                         }
                         None => Ok(Some(self.err_val("OutOfMemory"))),
                     }
@@ -1820,8 +1685,8 @@ impl Interp {
             (Value::Class(c), "from_json") if c.borrow().name == "Map" => {
                 let json = self.eval(&args[0])?;
                 let json = self.deref_value(json);
-                if let Value::Str(s) = json {
-                    let s = s.borrow().clone();
+                if let Value::String(s) = json {
+                    let s = s.as_slice().to_vec();
                     let obj = self.parse_json_obj(&String::from_utf8_lossy(&s))?;
                     let mut f = HashMap::new();
                     for (k, v) in obj {
@@ -1848,8 +1713,8 @@ impl Interp {
                 let alloc = m.borrow().alloc.clone();
                 let json = self.eval(&args[0])?;
                 let json = self.deref_value(json);
-                if let Value::Str(s) = json {
-                    let s = s.borrow().clone();
+                if let Value::String(s) = json {
+                    let s = s.as_slice().to_vec();
                     let obj = self.parse_json_obj(&String::from_utf8_lossy(&s))?;
                     Ok(Some(Value::map(obj, alloc)))
                 } else {
@@ -2060,7 +1925,7 @@ impl Interp {
                 let type_name = self.eval(&args[0])?;
                 let type_name = self.deref_value(type_name);
                 let type_name_str = match &type_name {
-                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 if args.len() >= 3 {
@@ -2068,7 +1933,7 @@ impl Interp {
                     let name = self.eval(&args[1])?;
                     let name = self.deref_value(name);
                     let name_str = match &name {
-                        Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                        Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                         _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                     };
                     let impl_v = self.eval(&args[2])?;
@@ -2090,7 +1955,7 @@ impl Interp {
                 let type_name = self.eval(&args[0])?;
                 let type_name = self.deref_value(type_name);
                 let type_name_str = match &type_name {
-                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 if args.len() >= 2 {
@@ -2098,7 +1963,7 @@ impl Interp {
                     let name = self.eval(&args[1])?;
                     let name = self.deref_value(name);
                     let name_str = match &name {
-                        Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                        Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                         _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                     };
                     match ctx.borrow().get_named(&type_name_str, &name_str) {
@@ -2120,7 +1985,7 @@ impl Interp {
                 let name = self.eval(&args[0])?;
                 let name = self.deref_value(name);
                 let name_str = match &name {
-                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 let factory = self.eval(&args[1])?;
@@ -2135,7 +2000,7 @@ impl Interp {
                 let name = self.eval(&args[0])?;
                 let name = self.deref_value(name);
                 let name_str = match &name {
-                    Value::Str(s) => String::from_utf8_lossy(&*s.borrow()).to_string(),
+                    Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 match ctx.borrow().get_factory(&name_str) {
@@ -2185,7 +2050,7 @@ impl Interp {
                 ops: Vec::new(),
                 keys_cache: Vec::new(),
             }),
-            Value::Str(_) => Ok(LazyIterData {
+            Value::String(_) => Ok(LazyIterData {
                 source: v.clone(),
                 index: 0,
                 source_type: "str".to_string(),
@@ -2268,13 +2133,13 @@ impl Interp {
                     v
                 }
                 "str" => {
-                    let Value::Str(s) = &source else {
+                    let Value::String(s) = &source else {
                         return Err(RtError::msg(
                             "InternalError",
                             "lazy_iter: str source_type mismatch",
                         ));
                     };
-                    let bytes = s.borrow();
+                    let bytes = s.as_slice();
                     if data.index >= bytes.len() {
                         return Ok(Value::Opt(None));
                     }

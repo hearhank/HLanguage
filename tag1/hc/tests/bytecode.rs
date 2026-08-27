@@ -3,7 +3,7 @@
 //! 定义：枚举：Maybe
 
 use hc::bytecode::{encode, run_bytecode};
-use hc::ir::{lower, run_ir, IrError, IrValue};
+use hc::ir::{lower, run_ir, IrError, IrValue, StringDataIr};
 use hc::parse_source;
 
 /// 解析 + lower + encode → 字节码 VM 执行（失败时 unwrap 给出诊断）
@@ -68,7 +68,7 @@ fn label(x: i32) &[u8] { return if (x > 5) "big" else "small"; }
     assert_consistent(src, "label", &[IrValue::Int(3)]);
     assert_eq!(
         run_bc(src, "label", &[IrValue::Int(7)]).unwrap(),
-        IrValue::Str(b"big".to_vec())
+        IrValue::String(StringDataIr::from_bytes(b"big".to_vec()))
     );
 }
 
@@ -291,8 +291,16 @@ fn pb(b: bool) i32 {
 }
 "#;
     assert_consistent(src, "fail", &[IrValue::Int(1)]);
-    assert_consistent(src, "pick", &[IrValue::Str(b"a".to_vec())]);
-    assert_consistent(src, "pick", &[IrValue::Str(b"z".to_vec())]);
+    assert_consistent(
+        src,
+        "pick",
+        &[IrValue::String(StringDataIr::from_bytes(b"a".to_vec()))],
+    );
+    assert_consistent(
+        src,
+        "pick",
+        &[IrValue::String(StringDataIr::from_bytes(b"z".to_vec()))],
+    );
     assert_consistent(src, "pb", &[IrValue::Bool(true)]);
     assert_consistent(src, "pb", &[IrValue::Bool(false)]);
 }

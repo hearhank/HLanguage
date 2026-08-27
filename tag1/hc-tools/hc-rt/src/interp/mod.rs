@@ -15,6 +15,7 @@ use hc::ast::*;
 use hc::comptime::{self, Instantiated};
 use hc::token::Span;
 
+pub use crate::string::StringData;
 use crate::value::{
     AllocBlock, AllocErr, AllocatorImpl, ArenaAllocErr, ArenaState, BoxedData, ChanInner,
     ChanState, ClassData, ClosureData, LazyIterData, LazyOp, LeakRecord, MapData, PoolState, Value,

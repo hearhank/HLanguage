@@ -12,7 +12,7 @@ impl Interp {
                 let d = c.borrow();
                 matches!(
                     d.fields.get("runtime"),
-                    Some(Value::Str(s)) if s.borrow().as_slice() == b"evented"
+                    Some(Value::String(s)) if s.as_slice() == b"evented"
                 )
             }
             _ => return Err(RtError::new("TypeError", Some(span.clone()))),
@@ -765,11 +765,6 @@ impl Interp {
                             .get(&fd)
                             .ok_or_else(|| RtError::new("BadFd", Some(span.clone())))?
                             .clone();
-                        let entries = self.list_dir_entries(&path)?;
-                        Ok(Some(entries))
-                    }
-                    Value::Str(s) => {
-                        let path = String::from_utf8_lossy(&s.borrow()).into_owned();
                         let entries = self.list_dir_entries(&path)?;
                         Ok(Some(entries))
                     }
@@ -2784,10 +2779,8 @@ impl Interp {
         let get_bytes = |ix: usize, vals: &[Value]| -> std::result::Result<Vec<u8>, RtError> {
             let v = &vals[ix];
             match v {
-                Value::Str(s) => Ok(s.borrow().clone()),
                 Value::String(s) => Ok(s.as_slice().to_vec()),
                 Value::Ptr(p) => match &*p.borrow() {
-                    Value::Str(s) => Ok(s.borrow().clone()),
                     Value::String(s) => Ok(s.as_slice().to_vec()),
                     _ => Err(RtError::new("TypeError", Some(span.clone()))),
                 },
@@ -2972,12 +2965,10 @@ impl Interp {
                 let a = self.deref_value(a);
                 let b = self.deref_value(b);
                 let bytes_a = match &a {
-                    Value::Str(x) => x.borrow().clone(),
                     Value::String(x) => x.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };
                 let bytes_b = match &b {
-                    Value::Str(y) => y.borrow().clone(),
                     Value::String(y) => y.as_slice().to_vec(),
                     _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                 };

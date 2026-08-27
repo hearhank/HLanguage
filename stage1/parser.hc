@@ -168,14 +168,14 @@ fn build_rev_kw_map() Map<&[u8], &[u8]> {
 }
 
 // ============================================================
-// 璇嶆硶鍒嗘瀽鍣紙Token 娴侊級
+// 词法分析器（Token 流）
 // ============================================================
 
 class Token {
-    kind: Vec<u8>,
+    kind: &[u8],
     text: Vec<u8>,
-    start: i32,
-    end: i32,
+    start: usize,
+    end: usize,
     line: i32,
     col: i32,
 }
@@ -215,7 +215,7 @@ class Lexer {
 
     fn push_token(self: *mut Self, kind: &[u8], text: Vec<u8>, start: usize) void {
         var tok = Token{
-            kind = vec_from_slice(kind),
+            kind = kind,
             text = text,
             start = start,
             end = self.pos,
@@ -385,8 +385,7 @@ class Lexer {
                 var mut j = self.pos;
                 while (j < self.n and self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
                 var mut suf = self.src[self.pos..j];
-                var slen: i32 = @intCast(i32, suf.len);
-                if (slen >= 2) {
+                if (suf.len >= 2) {
                     var ok = is_digit(self.src[self.pos + 1]) or suf == "isize" or suf == "usize";
                     if (ok) return suf;
                 }
@@ -401,9 +400,8 @@ class Lexer {
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
             if (suf) |s| {
-                var slen: i32 = @intCast(i32, s.len);
-                var mut k: i32 = 0;
-                while (k < slen) {
+                var mut k: usize = 0;
+                while (k < s.len) {
                     txt.append(s[k]);
                     self.bump();
                     k += 1;
@@ -718,14 +716,14 @@ class Parser {
 
     fn peek(self: *mut Self) &[u8] {
         var tok = self.tokens[self.pos];
-        return tok.kind.as_slice();
+        return tok.kind;
     }
 
     fn peek_n(self: *mut Self, n: usize) &[u8] {
         var mut idx = self.pos + n;
         if (idx >= self.n) { idx = self.n - 1; }
         var tok = self.tokens[idx];
-        return tok.kind.as_slice();
+        return tok.kind;
     }
 
     fn peek_text(self: *mut Self) &[u8] {
@@ -793,7 +791,7 @@ class Parser {
         return txt;
     }
 
-    // ---------- 绋嬪簭鍏ュ彛 ----------
+    // ---------- 程序入口 ----------
 
     fn parse_program(self: *mut Self) AstNode {
         var prog = make_node("Program");
@@ -804,7 +802,7 @@ class Parser {
         return prog;
     }
 
-    // ---------- 澹版槑瑙ｆ瀽 ----------
+    // ---------- 声明解析 ----------
 
     fn parse_decl(self: *mut Self) AstNode {
         // pub
@@ -934,7 +932,7 @@ class Parser {
             var cp = make_node("Comptime");
             return cp;
         }
-        // 鏈煡澹版槑 鈫?绌鸿妭鐐?骞朵笖鎺ㄨ繘褰撳墠 token 闃叉鏃犻檺寰幆
+        // 未知声明 → 空节点并且推进当前 token 防止无限循环
         self.advance();
         return make_node("UnknownDecl");
     }
@@ -1013,15 +1011,15 @@ class Parser {
         if (is_pub) { node_add_prop(&f, "pub", "true"); }
         if (is_async) { node_add_prop(&f, "async", "true"); }
         if (is_export) { node_add_prop(&f, "exported", "true"); }
-        // 妫€鏌?test 鐗规€?
-        var mut i: i32 = 0;
-        while (i < @intCast(i32, traits.len)) {
-            if (traits[@intCast(usize, i)] == "test") {
+        // 检查 [test] 特性
+        var mut i: usize = 0;
+        while (i < traits.len) {
+            if (traits[i] == "test") {
                 node_add_prop(&f, "test", "true");
             }
             i += 1;
         }
-        // 娉涘瀷鍙傛暟 <T>
+        // 泛型参数 <T>
         if (self.at("Lt")) {
             self.advance();
             while (!self.at("Gt") and !self.at("Eof")) {
@@ -1030,7 +1028,7 @@ class Parser {
             }
             self.expect("Gt");
         }
-        // 鍙傛暟 (params)
+        // 参数 (params)
         self.expect("LParen");
         if (!self.at("RParen")) {
             while (true) {
@@ -1041,16 +1039,16 @@ class Parser {
             }
         }
         self.expect("RParen");
-        // 杩斿洖绫诲瀷
+        // 返回类型
         if (self.at("Bang")) {
             self.advance();
             if (self.at("Ident") or self.at("KwVoid")) {
                 var mut ret_ty = self.peek_text();
                 self.advance();
                 var r = make_node("ret:");
-                var mut k: i32 = 0;
-                while (k < @intCast(i32, ret_ty.len)) {
-                    r.props.append(ret_ty[@intCast(usize, k)]);
+                var mut k: usize = 0;
+                while (k < ret_ty.len) {
+                    r.props.append(ret_ty[k]);
                     k += 1;
                 }
                 node_add_child(&f, r);
@@ -1065,9 +1063,9 @@ class Parser {
             }
             self.advance();
             var r = make_node("ret:");
-            var mut k: i32 = 0;
-            while (k < @intCast(i32, ret_ty.len)) {
-                r.props.append(ret_ty[@intCast(usize, k)]);
+            var mut k: usize = 0;
+            while (k < ret_ty.len) {
+                r.props.append(ret_ty[k]);
                 k += 1;
             }
             node_add_child(&f, r);
@@ -1115,9 +1113,9 @@ class Parser {
                 var ret_ty = self.peek_text();
                 self.advance();
                 var r = make_node("ret:");
-                var mut k: i32 = 0;
-                while (k < @intCast(i32, ret_ty.len)) {
-                    r.props.append(ret_ty[@intCast(usize, k)]);
+                var mut k: usize = 0;
+                while (k < ret_ty.len) {
+                    r.props.append(ret_ty[k]);
                     k += 1;
                 }
                 node_add_child(&f, r);
@@ -1128,9 +1126,9 @@ class Parser {
             var ret_ty = self.peek_text();
             self.advance();
             var r = make_node("ret:");
-            var mut k: i32 = 0;
-            while (k < @intCast(i32, ret_ty.len)) {
-                r.props.append(ret_ty[@intCast(usize, k)]);
+            var mut k: usize = 0;
+            while (k < ret_ty.len) {
+                r.props.append(ret_ty[k]);
                 k += 1;
             }
             node_add_child(&f, r);
@@ -1168,7 +1166,7 @@ class Parser {
         var cls = make_node("Class");
         node_add_prop(&cls, "name", name);
         if (is_pub) { node_add_prop(&cls, "pub", "true"); }
-        // 鎺ュ彛
+        // 接口
         if (self.at("LParen")) {
             self.advance();
             while (!self.at("RParen") and !self.at("Eof")) {
@@ -1183,13 +1181,13 @@ class Parser {
             self.parse_trait();
         }
         self.expect("LBrace");
-        // 瀛楁鍜屾柟娉?
+        // 字段和方法
         while (!self.at("RBrace") and !self.at("Eof")) {
             if (self.peek() == "LBracket" or self.peek() == "KwPub" or self.peek() == "KwFn") {
-                // 鏂规硶
+                // 方法
                 self.parse_method(cls);
             } else {
-                // 瀛楁
+                // 字段
                 self.parse_field(cls);
             }
         }
@@ -1213,7 +1211,7 @@ class Parser {
         if (self.at("KwPub")) { is_pub = true; self.advance(); }
         self.expect("KwFn");
         var name = self.expect_ident();
-        // 娉涘瀷 <T>
+        // 泛型 <T>
         if (self.at("Lt")) {
             self.advance();
             while (!self.at("Gt") and !self.at("Eof")) {
@@ -1311,18 +1309,18 @@ class Parser {
     fn parse_path(self: *mut Self) Vec<u8> {
         var parts = Vec<u8>.init(alloc);
         var first = self.expect_ident();
-        var mut i: i32 = 0;
-        while (i < @intCast(i32, first.len)) {
-            parts.append(first[@intCast(usize, i)]);
+        var mut i: usize = 0;
+        while (i < first.len) {
+            parts.append(first[i]);
             i += 1;
         }
         while (self.at("Dot")) {
             self.advance();
             parts.append('.');
             var seg = self.expect_name_or_keyword();
-            var mut j: i32 = 0;
-            while (j < @intCast(i32, seg.len)) {
-                parts.append(seg[@intCast(usize, j)]);
+            var mut j: usize = 0;
+            while (j < seg.len) {
+                parts.append(seg[j]);
                 j += 1;
             }
         }
@@ -1351,7 +1349,7 @@ class Parser {
             self.parse_type();
             return;
         }
-        // &[T] / &mut [T] 鎴?&T
+        // &[T] / &mut [T] 或 &T
         if (self.at("Amp")) {
             self.advance();
             if (self.at("KwMut")) { self.advance(); }
@@ -1370,15 +1368,15 @@ class Parser {
             self.parse_type();
             return;
         }
-        // !T锛坅nyerror锛?
+        // !T（anyerror）
         if (self.at("Bang")) {
             self.advance();
             self.parse_type();
             return;
         }
-        // 鍩虹绫诲瀷
+        // 基础类型
         self.parse_type_base();
-        // E!T锛堝懡鍚嶉敊璇泦锛?
+        // E!T（命名错误集）
         if (self.at("Bang")) {
             self.advance();
             self.parse_type();
@@ -1410,13 +1408,13 @@ class Parser {
                 self.expect("Gt");
             }
         } else if (self.at("LBracket")) {
-            // [N]T 瀹氶暱鏁扮粍
+            // [N]T 定长数组
             self.advance();
             self.parse_expr();
             self.expect("RBracket");
             self.parse_type();
         } else if (self.at("LParen")) {
-            // 鍏冪粍
+            // 元组
             self.advance();
             while (!self.at("RParen") and !self.at("Eof")) {
                 self.parse_type();
@@ -1536,7 +1534,7 @@ class Parser {
             self.expect("Semi");
             return make_node("Errdefer");
         }
-        // 榛樿锛氳〃杈惧紡璇彞
+        // 默认：表达式语句
         var e = self.parse_expr();
         self.expect("Semi");
         var es = make_node("ExprStmt");
@@ -1665,19 +1663,19 @@ class Parser {
 
     fn parse_switch_arm(self: *mut Self) AstNode {
         var arm = make_node("SwitchArm");
-        // 妯″紡鍒楄〃
+        // 模式列表
         while (!self.at("FatArrow") and !self.at("RBrace") and !self.at("Eof")) {
             var pat = self.parse_switch_pattern();
             node_add_child(&arm, pat);
             if (self.at("Comma")) { self.advance(); break; }
         }
         self.expect("FatArrow");
-        // 瀹堝崼
+        // 守卫
         if (self.at("KwIf")) {
             self.advance();
             self.parse_expr();
         }
-        // 浣擄紙鍧楁垨琛ㄨ揪寮忥級
+        // 体（块或表达式）
         if (self.at("LBrace")) {
             var body = self.parse_block();
             node_add_child(&arm, body);
@@ -1953,16 +1951,16 @@ class Parser {
             var callee = make_node("Ident");
             node_add_prop(&callee, "name", "spawn");
             node_add_child(&c, callee);
-            var mut i: i32 = 0;
-            while (i < @intCast(i32, args.len)) {
-                node_add_child(&c, args[@intCast(usize, i)]);
+            var mut i: usize = 0;
+            while (i < args.len) {
+                node_add_child(&c, args[i]);
                 i += 1;
             }
             return c;
         }
         if (k == "KwMove") {
             self.advance();
-            // 闂寘
+            // 闭包
             if (self.at("Pipe") or (self.at("KwMut") and self.peek_n(1) == "Pipe")) {
                 return self.parse_closure();
             }
@@ -1988,7 +1986,7 @@ class Parser {
             }
         }
         self.expect("Pipe");
-        // 浣撻儴
+        // 体部
         if (self.at("LBrace")) {
             var body = self.parse_block();
             node_add_child(&c, body);
@@ -2023,9 +2021,9 @@ class Parser {
                         node_add_prop(&fe, "field", field);
                         node_add_child(&fe, e);
                         node_add_child(&call, fe);
-                        var mut i: i32 = 0;
-                        while (i < @intCast(i32, args.len)) {
-                            node_add_child(&call, args[@intCast(usize, i)]);
+                        var mut i: usize = 0;
+                        while (i < args.len) {
+                            node_add_child(&call, args[i]);
                             i += 1;
                         }
                         e = call;
@@ -2059,12 +2057,13 @@ class Parser {
                 var args = self.parse_call_args();
                 var call = make_node("Call");
                 node_add_child(&call, e);
-                var mut i: i32 = 0;
-                while (i < @intCast(i32, args.len)) {
-                    node_add_child(&call, args[@intCast(usize, i)]);
+                var mut i: usize = 0;
+                while (i < args.len) {
+                    node_add_child(&call, args[i]);
                     i += 1;
                 }
                 e = call;
+                // 泛型字面量
                 // 泛型字面量：Pair<i32>{...}
                 if (self.at("LBrace")) {
                     // 简单处理：跳过字面量字段
@@ -2154,9 +2153,9 @@ class Parser {
             var callee = make_node("Ident");
             node_add_prop(&callee, "name", txt[0..txt.len]);
             node_add_child(&call, callee);
-            var mut i: i32 = 0;
-            while (i < @intCast(i32, args.len)) {
-                node_add_child(&call, args[@intCast(usize, i)]);
+            var mut i: usize = 0;
+            while (i < args.len) {
+                node_add_child(&call, args[i]);
                 i += 1;
             }
             return call;

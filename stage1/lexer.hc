@@ -234,21 +234,21 @@ class Lexer {
         self.bump();
     }
 
-    fn emit_simple(self: *mut Self, start: i32, kind: &[u8]) void {
+    fn emit_simple(self: *mut Self, start: usize, kind: &[u8]) void {
         io.print("{} {} {} {} {}\n", start, self.pos, self.line, self.col, kind);
     }
 
-    fn emit_slice_payload(self: *mut Self, start: i32, kind: &[u8], payload: &[u8]) void {
+    fn emit_slice_payload(self: *mut Self, start: usize, kind: &[u8], payload: &[u8]) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", payload);
     }
 
-    fn emit_error(self: *mut Self, start: i32, msg: &[u8]) void {
+    fn emit_error(self: *mut Self, start: usize, msg: &[u8]) void {
         io.print("{} {} {} {} Error(\"", start, self.pos, self.line, self.col);
         io.print("{}\")\n", msg);
     }
 
-    fn emit_content(self: *mut Self, start: i32, kind: &[u8], content: Vec<u8>) void {
+    fn emit_content(self: *mut Self, start: usize, kind: &[u8], content: Vec<u8>) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         var esc = dbg_escape(content);
         var s = esc.as_slice();
@@ -314,7 +314,7 @@ class Lexer {
         }
     }
 
-    fn lex_ident(self: *mut Self, start: i32) void {
+    fn lex_ident(self: *mut Self, start: usize) void {
         var s2 = self.pos;
         while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
         var name = self.src[s2..self.pos];
@@ -326,7 +326,7 @@ class Lexer {
         }
     }
 
-    fn lex_number(self: *mut Self, start: i32) void {
+    fn lex_number(self: *mut Self, start: usize) void {
         var buf = Vec<u8>.init(alloc);
         var mut is_float = false;
         // 前缀 0x/0b/0o
@@ -427,7 +427,7 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], var mut buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: usize, kind: &[u8], var mut buf: Vec<u8>) void {
         // 惰性宽度后缀
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
@@ -446,7 +446,7 @@ class Lexer {
         io.print("{}\")\n", s);
     }
 
-    fn lex_string(self: *mut Self, start: i32) void {
+    fn lex_string(self: *mut Self, start: usize) void {
         self.bump();  // 开引号
         // 原始多行字符串 """..."""
         if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
@@ -571,7 +571,7 @@ class Lexer {
         self.emit_content(start, "Str", content);
     }
 
-    fn lex_char(self: *mut Self, start: i32) void {
+    fn lex_char(self: *mut Self, start: usize) void {
         self.bump();  // 开引号
         var mut val: i32 = -1;
         if (self.pos >= self.n) {
@@ -628,7 +628,7 @@ class Lexer {
         io.print("{} {} {} {} Char({})\n", start, self.pos, self.line, self.col, val);
     }
 
-    fn lex_punct(self: *mut Self, start: i32) void {
+    fn lex_punct(self: *mut Self, start: usize) void {
         var mut c = self.src[self.pos];
         self.bump();
         if (c == '{') { self.emit_simple(start, "LBrace"); }

@@ -1297,18 +1297,18 @@ impl Checker {
                             None
                         };
                         self.check_method_mutability(vn, field, tn, None, scopes, span);
+                        let arg_tys: Vec<Option<SType>> =
+                            args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
+                        return self.match_overloads(
+                            &format!("{tn}.{field}"),
+                            Some(sigs),
+                            &arg_tys,
+                            args,
+                            span,
+                            expected,
+                            true,
+                        );
                     }
-                    let arg_tys: Vec<Option<SType>> =
-                        args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
-                    return self.match_overloads(
-                        &format!("{}.{}", field, field),
-                        Some(sigs),
-                        &arg_tys,
-                        args,
-                        span,
-                        expected,
-                        true,
-                    );
                 }
                 // 内建方法（Vec.append 等）或未知：放行前检查变异方法要求 mut
                 if let Some(SType::Named(tn, _)) = &dt {
@@ -1349,18 +1349,18 @@ impl Checker {
                                     scopes,
                                     span,
                                 );
+                                let arg_tys: Vec<Option<SType>> =
+                                    args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
+                                return self.match_overloads(
+                                    &format!("{tn}.{field}"),
+                                    Some(sigs),
+                                    &arg_tys,
+                                    args,
+                                    span,
+                                    expected,
+                                    true,
+                                );
                             }
-                            let arg_tys: Vec<Option<SType>> =
-                                args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
-                            return self.match_overloads(
-                                &format!("{}.{}", field, field),
-                                Some(sigs),
-                                &arg_tys,
-                                args,
-                                span,
-                                expected,
-                                true,
-                            );
                         }
                         // 内建方法或未知：放行前检查变异方法要求 mut
                         if let Some(SType::Named(tn, _)) = &dt {
@@ -1910,7 +1910,7 @@ impl Checker {
                         false
                     } else {
                         // 同精度同具体度同期望匹配：签名不同 → 歧义（要求显式标注）
-                        if !self.sig_same(s, b.0) && !ambiguous_reported {
+                        if !self.sig_same(s, b.0, skip_self) && !ambiguous_reported {
                             self.diags.push(Diagnostic::error(
                                 span.clone(),
                                 format!(
@@ -2253,13 +2253,14 @@ impl Checker {
     }
 
     /// 两个重载签名是否结构相同（参数类型 + 返回类型；歧义检测排除重复登记）
-    pub(crate) fn sig_same(&self, a: &FnSig, b: &FnSig) -> bool {
+    pub(crate) fn sig_same(&self, a: &FnSig, b: &FnSig, skip_self: bool) -> bool {
         if a.params.len() != b.params.len() {
             return false;
         }
-        a.params
+        let start = usize::from(skip_self);
+        a.params[start..]
             .iter()
-            .zip(b.params.iter())
+            .zip(b.params[start..].iter())
             .all(|(pa, pb)| self.ty_of(&pa.ty) == self.ty_of(&pb.ty))
             && self.ret_stype(&a.ret) == self.ret_stype(&b.ret)
     }

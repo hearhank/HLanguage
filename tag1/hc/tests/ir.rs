@@ -3,7 +3,7 @@
 //! 定义：枚举：Color
 //! 定义：结构体：Point, Point, Point, Point, Point, Point, Point
 
-use hc::ir::{lower, run_ir, IrValue};
+use hc::ir::{lower, run_ir, IrValue, StringDataIr};
 use hc::parse_source;
 
 /// 解析 + 降级 + 执行（失败时 unwrap 给出诊断）
@@ -77,11 +77,11 @@ fn label(x: i32) &[u8] { return if (x > 5) "big" else "small"; }
 "#;
     assert_eq!(
         run(src, "label", &[IrValue::Int(7)]).unwrap(),
-        IrValue::Str(b"big".to_vec())
+        IrValue::String(StringDataIr::from_bytes(b"big".to_vec()))
     );
     assert_eq!(
         run(src, "label", &[IrValue::Int(3)]).unwrap(),
-        IrValue::Str(b"small".to_vec())
+        IrValue::String(StringDataIr::from_bytes(b"small".to_vec()))
     );
 }
 
@@ -833,11 +833,21 @@ fn pick(s: String) i32 {
         IrValue::Int(3)
     );
     assert_eq!(
-        run(src, "pick", &[IrValue::Str("a".into())]).unwrap(),
+        run(
+            src,
+            "pick",
+            &[IrValue::String(StringDataIr::from_bytes("a".into()))]
+        )
+        .unwrap(),
         IrValue::Int(1)
     );
     assert_eq!(
-        run(src, "pick", &[IrValue::Str("z".into())]).unwrap(),
+        run(
+            src,
+            "pick",
+            &[IrValue::String(StringDataIr::from_bytes("z".into()))]
+        )
+        .unwrap(),
         IrValue::Int(0)
     );
 }

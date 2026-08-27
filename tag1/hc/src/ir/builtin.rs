@@ -137,8 +137,8 @@ pub(crate) fn call_fs_method_ir(
                     let entries = list_dir_entries_ir(ctx, module, &path)?;
                     Ok(Some(entries))
                 }
-                IrValue::Str(s) => {
-                    let path = String::from_utf8_lossy(s).into_owned();
+                IrValue::String(s) => {
+                    let path = String::from_utf8_lossy(s.as_slice()).into_owned();
                     let entries = list_dir_entries_ir(ctx, module, &path)?;
                     Ok(Some(entries))
                 }
@@ -2469,7 +2469,10 @@ pub(crate) fn call_io_method_ir(
         }
         "args" => Ok(Some(make_arr(
             ctx,
-            ctx.args.iter().map(|a| IrValue::Str(a.clone())).collect(),
+            ctx.args
+                .iter()
+                .map(|a| IrValue::String(StringDataIr::from_slice(a.as_slice())))
+                .collect(),
         ))),
         "env" => {
             let name = str_arg_ir(ctx, args, 0)?;
@@ -2503,23 +2506,26 @@ pub(crate) fn call_builtin_method(
         }
     }
     match (&self_v, method) {
-        (IrValue::Str(s), "concat") => {
+        (IrValue::String(s), "concat") => {
             let other = args
                 .first()
                 .ok_or_else(|| IrError::msg("ArityMismatch", "concat"))?;
             match deref_value(ctx, other) {
-                IrValue::Str(os) => {
-                    let mut bytes = s.clone();
-                    bytes.extend_from_slice(os);
+                IrValue::String(os) => {
+                    let mut bytes = s.as_slice().to_vec();
+                    bytes.extend_from_slice(os.as_slice());
                     Ok(Some(str_bytes_val(bytes)))
                 }
                 _ => Err(IrError::msg("TypeError", "concat expects &[u8]")),
             }
         }
-        (IrValue::Str(s), "as_slice") => Ok(Some(IrValue::Str(s.clone()))),
-        (IrValue::String(s), "as_slice") => Ok(Some(IrValue::Str(s.as_slice().to_vec()))),
-        (IrValue::String(s), "into_array") => Ok(Some(IrValue::Str(s.as_slice().to_vec()))),
-        (IrValue::Str(s), "split") => {
+        (IrValue::String(s), "as_slice") => Ok(Some(IrValue::String(StringDataIr::from_bytes(
+            s.as_slice().to_vec(),
+        )))),
+        (IrValue::String(s), "into_array") => Ok(Some(IrValue::String(StringDataIr::from_bytes(
+            s.as_slice().to_vec(),
+        )))),
+        (IrValue::String(s), "split") => {
             let sep_v = deref_value(
                 ctx,
                 args.get(0)
@@ -2528,10 +2534,10 @@ pub(crate) fn call_builtin_method(
             .clone();
             let sep = match sep_v {
                 IrValue::Int(i) => vec![i as u8],
-                IrValue::Str(ss) => ss,
+                IrValue::String(ss) => ss.as_slice().to_vec(),
                 _ => return Err(IrError::msg("TypeError", "split expects byte or bytes")),
             };
-            let data = s.clone();
+            let data = s.as_slice().to_vec();
             let mut out = Vec::new();
             if sep.is_empty() {
                 return Ok(Some(make_arr(ctx, vec![str_bytes_val(data)])));
@@ -2550,12 +2556,13 @@ pub(crate) fn call_builtin_method(
             out.push(str_bytes_val(data[start..].to_vec()));
             Ok(Some(make_arr(ctx, out)))
         }
-        (IrValue::Str(s), "to_bytes") => {
-            let mut out = (s.len() as u64).to_le_bytes().to_vec();
-            out.extend_from_slice(s);
+        (IrValue::String(s), "to_bytes") => {
+            let bytes = s.as_slice();
+            let mut out = (bytes.len() as u64).to_le_bytes().to_vec();
+            out.extend_from_slice(bytes);
             Ok(Some(str_bytes_val(out)))
         }
-        (IrValue::Str(s), "find") => {
+        (IrValue::String(s), "find") => {
             let needle_v = deref_value(
                 ctx,
                 args.get(0)
@@ -2563,11 +2570,11 @@ pub(crate) fn call_builtin_method(
             )
             .clone();
             let needle_bytes: Vec<u8> = match needle_v {
-                IrValue::Str(n) => n,
+                IrValue::String(n) => n.as_slice().to_vec(),
                 IrValue::Int(i) => vec![i as u8],
                 _ => return Err(IrError::msg("TypeError", "find expects byte or bytes")),
             };
-            let data = s.clone();
+            let data = s.as_slice().to_vec();
             let pos = if needle_bytes.is_empty() {
                 Some(0usize)
             } else {
@@ -2579,18 +2586,18 @@ pub(crate) fn call_builtin_method(
                 None => IrValue::Opt(None),
             }))
         }
-        (IrValue::Str(s), "substring") => {
+        (IrValue::String(s), "substring") => {
             let lo = int_arg_ir(ctx, args, 0)?;
             let hi = int_arg_ir(ctx, args, 1)?;
             let (lo, hi) = (lo.max(0) as usize, hi.max(0) as usize);
             let hi = hi.min(s.len());
-            let sub = s[lo.min(hi)..hi].to_vec();
+            let sub = s.as_slice()[lo.min(hi)..hi].to_vec();
             Ok(Some(str_bytes_val(sub)))
         }
-        (IrValue::Str(s), "replace") => {
+        (IrValue::String(s), "replace") => {
             let from_b = str_arg_ir(ctx, args, 0)?;
             let to_b = str_arg_ir(ctx, args, 1)?;
-            let data = s.clone();
+            let data = s.as_slice().to_vec();
             let mut out = Vec::new();
             let mut i = 0usize;
             while i < data.len() {
@@ -2609,12 +2616,12 @@ pub(crate) fn call_builtin_method(
             }
             Ok(Some(str_bytes_val(out)))
         }
-        (IrValue::Str(_), "len") => Ok(Some(IrValue::Int(self_v.display(ctx).len() as i128))),
         (IrValue::String(s), "len") => Ok(Some(IrValue::Int(s.len() as i128))),
         // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
-        (IrValue::Str(s), "to_upper") | (IrValue::Str(s), "to_lower") => {
+        (IrValue::String(s), "to_upper") | (IrValue::String(s), "to_lower") => {
             let upper = method == "to_upper";
             let out: Vec<u8> = s
+                .as_slice()
                 .iter()
                 .map(|&b| {
                     if upper {
@@ -2639,7 +2646,7 @@ pub(crate) fn call_builtin_method(
                     .collect(),
                 _ => Vec::new(),
             };
-            Ok(Some(IrValue::Str(bytes)))
+            Ok(Some(IrValue::String(StringDataIr::from_bytes(bytes))))
         }
         (IrValue::Arr(c), "append") => {
             let v = args
@@ -2788,9 +2795,9 @@ pub(crate) fn call_builtin_method(
                         _ => Err(IrError::msg("TypeError", "extend expects array")),
                     }
                 }
-                IrValue::Str(b) => {
+                IrValue::String(s) => {
                     let mut new_cells = Vec::new();
-                    for byte in b {
+                    for &byte in s.as_slice() {
                         new_cells.push(ctx.alloc(Cell::Value(IrValue::Int(byte as i128))));
                     }
                     match &mut ctx.cells[*c] {
@@ -3304,7 +3311,6 @@ pub(crate) fn call_dotted_implicit(
             let a = deref_value(ctx, &args[0]);
             let b = deref_value(ctx, &args[1]);
             let bytes_a = match &a {
-                IrValue::Str(s) => s.clone(),
                 IrValue::String(s) => s.as_slice().to_vec(),
                 _ => {
                     return Err(IrError::msg(
@@ -3314,7 +3320,6 @@ pub(crate) fn call_dotted_implicit(
                 }
             };
             let bytes_b = match &b {
-                IrValue::Str(s) => s.clone(),
                 IrValue::String(s) => s.as_slice().to_vec(),
                 _ => {
                     return Err(IrError::msg(
@@ -3338,7 +3343,9 @@ pub(crate) fn call_dotted_implicit(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "String.as_slice"))?;
             let v = deref_value(ctx, v);
             return match v {
-                IrValue::String(s) => Ok(IrValue::Str(s.as_slice().to_vec())),
+                IrValue::String(s) => Ok(IrValue::String(StringDataIr::from_bytes(
+                    s.as_slice().to_vec(),
+                ))),
                 _ => Err(IrError::msg("TypeError", "String.as_slice expects String")),
             };
         }
@@ -3348,7 +3355,9 @@ pub(crate) fn call_dotted_implicit(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "String.into_array"))?;
             let v = deref_value(ctx, v).clone();
             return match v {
-                IrValue::String(s) => Ok(IrValue::Str(s.as_slice().to_vec())),
+                IrValue::String(s) => Ok(IrValue::String(StringDataIr::from_bytes(
+                    s.as_slice().to_vec(),
+                ))),
                 _ => Err(IrError::msg(
                     "TypeError",
                     "String.into_array expects String",
@@ -3739,7 +3748,7 @@ pub(crate) fn call_builtin(
         }
         "@enumFromInt" => {
             let ty = match deref_value(ctx, &args[0]) {
-                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                 _ => return Err(IrError::msg("TypeError", "@enumFromInt expects type name")),
             };
             let i = match deref_value(ctx, &args[1]) {
@@ -3775,7 +3784,7 @@ pub(crate) fn call_builtin(
         }
         "@sizeOf" => {
             let ty = match deref_value(ctx, &args[0]) {
-                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                 _ => return Err(IrError::msg("TypeError", "@sizeOf expects type name")),
             };
             match scalar_size_ir(&ty) {
@@ -3788,7 +3797,7 @@ pub(crate) fn call_builtin(
         }
         "@alignOf" => {
             let ty = match deref_value(ctx, &args[0]) {
-                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                 _ => return Err(IrError::msg("TypeError", "@alignOf expects type name")),
             };
             let align = match ty.as_str() {
@@ -3810,7 +3819,7 @@ pub(crate) fn call_builtin(
         }
         "@intCast" => {
             let ty = match deref_value(ctx, &args[0]) {
-                IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+                IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
                 _ => return Err(IrError::msg("TypeError", "@intCast expects type name")),
             };
             let i = match deref_value(ctx, &args[1]) {

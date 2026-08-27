@@ -282,8 +282,8 @@ impl Interp {
                                 len,
                             });
                         }
-                        if let Value::Str(s) = &b {
-                            let bytes = s.borrow().clone();
+                        if let Value::String(s) = &b {
+                            let bytes = s.as_slice();
                             let hi_i = if open_end { bytes.len() } else { hi_i };
                             if hi_i > bytes.len() || lo_i > bytes.len() {
                                 return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
@@ -346,10 +346,10 @@ impl Interp {
                         drop(arr);
                         Ok(v)
                     }
-                    Value::Str(s) => {
+                    Value::String(s) => {
                         let idx = self.eval(&indices[0])?;
                         let i = self.as_index(&idx, span)?;
-                        let bytes = s.borrow();
+                        let bytes = s.as_slice();
                         if i >= bytes.len() {
                             return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
                         }
@@ -677,10 +677,6 @@ impl Interp {
                     None => Err(RtError::new("NoField", Some(span.clone()))),
                 }
             }
-            Value::Str(s) => match field {
-                "len" => Ok(Value::Int(s.borrow().len() as i128)),
-                _ => Err(RtError::new("NoField", Some(span.clone()))),
-            },
             Value::Arr(a) => match field {
                 "len" => Ok(Value::Int(a.borrow().len() as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
@@ -1393,8 +1389,8 @@ impl Interp {
                     if bname == "json" && field == "parse" {
                         let v = self.eval(&args[0])?;
                         let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                        if let Value::String(s) = v {
+                            let text = String::from_utf8_lossy(s.as_slice()).to_string();
                             let obj = self.parse_json_obj(&text)?;
                             return Ok(Value::class("Map", obj));
                         }
@@ -1404,8 +1400,8 @@ impl Interp {
                     if bname == "csv" && field == "parse" {
                         let v = self.eval(&args[0])?;
                         let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                        if let Value::String(s) = v {
+                            let text = String::from_utf8_lossy(s.as_slice()).to_string();
                             let rows = text
                                 .split('\n')
                                 .map(|line| line.strip_suffix('\r').unwrap_or(line))
@@ -1435,7 +1431,7 @@ impl Interp {
                             let json = self.eval(&args[0])?;
                             let json = self.deref_value(json);
                             let s = match json {
-                                Value::Str(s) => s.borrow().clone(),
+                                Value::String(s) => s.as_slice().to_vec(),
                                 _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                             };
                             let obj = self.parse_json_obj(&String::from_utf8_lossy(&s))?;
@@ -1626,7 +1622,7 @@ impl Interp {
                         match &a {
                             Value::Int(_) if want_float => ok = false,
                             Value::Float(_) if want_int => ok = false,
-                            Value::Str(_) if want_int || want_float || want_bool => ok = false,
+                            Value::String(_) if want_int || want_float || want_bool => ok = false,
                             Value::Bool(_) if !want_bool => ok = false,
                             Value::Class(c) if n != "String" && c.borrow().name != *n => ok = false,
                             // 泛型 T（where T: INumber 等）：不排除（编译时验证归 M2）
@@ -1641,9 +1637,9 @@ impl Interp {
                         }
                     }
                     Type::Slice(inner, _) => {
-                        // &[u8] / &[T]：Str 或数组；泛型元素 T 标记为泛型
+                        // &[u8] / &[T]：String 或数组；泛型元素 T 标记为泛型
                         match &a {
-                            Value::Str(_) => {}
+                            Value::String(_) => {}
                             Value::Arr(_) | Value::Slice { .. } => {}
                             _ => ok = false,
                         }

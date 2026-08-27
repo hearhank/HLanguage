@@ -244,8 +244,8 @@ pub(crate) fn call_alloc_method_ir(
         "init" => {
             if args.len() == 1 {
                 match deref_value(ctx, &args[0]).clone() {
-                    IrValue::Str(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
-                        name: String::from_utf8_lossy(&s).to_string(),
+                    IrValue::String(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: String::from_utf8_lossy(s.as_slice()).to_string(),
                         fields: HashMap::new(),
                     })))),
                     IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
@@ -386,8 +386,8 @@ pub(crate) fn call_arena_method_ir(
             let v = deref_value(ctx, &args[0]).clone();
             let inst = match v {
                 // 类型名参数（未知/枚举类型回退 Const Str）→ 空 class 实例
-                IrValue::Str(s) => IrValue::Class(ctx.alloc(Cell::Class {
-                    name: String::from_utf8_lossy(&s).to_string(),
+                IrValue::String(s) => IrValue::Class(ctx.alloc(Cell::Class {
+                    name: String::from_utf8_lossy(s.as_slice()).to_string(),
                     fields: HashMap::new(),
                 })),
                 // 字面量 / 已知 class 默认字段构造（lower_alloc_init_defaults）→ 原样返回

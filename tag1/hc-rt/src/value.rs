@@ -17,10 +17,7 @@ pub enum Value {
     Int(i128),
     Float(f64),
     Bool(bool),
-    /// 字节串（&[u8] / 静态切片）
-    Str(Rc<RefCell<Vec<u8>>>),
-    /// String 值类型（拥有所有权的字节数组，值语义，复制即 deep copy）
-    /// 生命周期由编译器管理，作用域出口自动插入 `deinit()`
+    /// String 值类型（拥有所有权的字节数组，值语义，克隆即深拷贝）
     String(StringData),
     /// 数组/集合（共享可变；元素为共享槽以支持 for 可写捕获与索引写回）
     Arr(Rc<RefCell<Vec<Rc<RefCell<Value>>>>>),
@@ -668,7 +665,7 @@ impl Value {
         Value::Bool(v)
     }
     pub fn str_bytes(b: Vec<u8>) -> Value {
-        Value::Str(Rc::new(RefCell::new(b)))
+        Value::String(StringData::from_bytes(b))
     }
     pub fn str(s: &str) -> Value {
         Value::str_bytes(s.as_bytes().to_vec())
@@ -676,7 +673,6 @@ impl Value {
     /// 从 `&[u8]` 或 `String` 提取字节（用于 IO/FS 等需要字节数据的函数）
     pub fn extract_bytes(&self) -> Option<Vec<u8>> {
         match self {
-            Value::Str(s) => Some(s.borrow().clone()),
             Value::String(s) => Some(s.as_slice().to_vec()),
             _ => None,
         }
@@ -722,7 +718,6 @@ impl Value {
                 }
             }
             Value::Bool(b) => b.to_string(),
-            Value::Str(s) => String::from_utf8_lossy(&s.borrow()).to_string(),
             Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
             Value::Arr(a) => {
                 let items: Vec<String> = a.borrow().iter().map(|v| v.borrow().display()).collect();
@@ -806,7 +801,7 @@ impl Value {
             },
             Value::Bytes(b) => {
                 let d = b.borrow();
-                format!("Bytes({} bytes)", d.len())
+                String::from_utf8_lossy(&d).to_string()
             }
             Value::LazyIter(li) => {
                 let d = li.borrow();
@@ -840,7 +835,6 @@ impl Value {
             (Value::Float(a), Value::Int(b)) => *a == *b as f64,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Str(a), Value::Str(b)) => *a.borrow() == *b.borrow(),
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Arr(a), Value::Arr(b)) => {
                 let (a, b) = (a.borrow(), b.borrow());
@@ -917,6 +911,8 @@ impl Value {
             (Value::Arena(a), Value::Arena(b)) => Rc::ptr_eq(a, b),
             (Value::Allocator(a), Value::Allocator(b)) => Rc::ptr_eq(a, b),
             (Value::Bytes(a), Value::Bytes(b)) => *a.borrow() == *b.borrow(),
+            (Value::Bytes(a), Value::String(b)) => *a.borrow() == b.as_slice(),
+            (Value::String(a), Value::Bytes(b)) => a.as_slice() == *b.borrow(),
             (Value::Ptr(a), Value::Ptr(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), b) => a.borrow().value_eq(b),
             (a, Value::Ptr(b)) => a.value_eq(&b.borrow()),
@@ -972,7 +968,7 @@ impl Value {
             (Value::Int(a), Value::Float(b)) => Some((*a as f64) < *b),
             (Value::Float(a), Value::Int(b)) => Some(*a < *b as f64),
             (Value::Float(a), Value::Float(b)) => Some(a < b),
-            (Value::Str(a), Value::Str(b)) => Some(*a.borrow() < *b.borrow()),
+            (Value::String(a), Value::String(b)) => Some(a.as_slice() < b.as_slice()),
             (Value::Bool(a), Value::Bool(b)) => Some(a < b),
             (Value::Ptr(a), Value::Ptr(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
             (Value::Allocator(a), Value::Allocator(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
@@ -992,7 +988,7 @@ impl Value {
             Value::Boxed(_) => true,
             Value::Vec(_) => true,
             Value::Map(_) => true,
-            Value::Str(s) => !s.borrow().is_empty(),
+            Value::String(s) => !s.is_empty(),
             Value::Bytes(b) => !b.borrow().is_empty(),
             Value::Allocator(_) => true,
             _ => true,
@@ -1004,7 +1000,6 @@ impl Value {
             Value::Int(_) => "i128".into(),
             Value::Float(_) => "f64".into(),
             Value::Bool(_) => "bool".into(),
-            Value::Str(_) => "&[u8]".into(),
             Value::String(_) => "String".into(),
             Value::Arr(_) => "array".into(),
             Value::Slice { .. } => "slice".into(),

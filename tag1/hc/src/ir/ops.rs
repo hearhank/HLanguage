@@ -416,7 +416,7 @@ pub(crate) fn value_lt(a: &IrValue, b: &IrValue) -> bool {
         (IrValue::Int(x), IrValue::Float(y)) => (*x as f64) < *y,
         (IrValue::Float(x), IrValue::Int(y)) => *x < *y as f64,
         (IrValue::Float(x), IrValue::Float(y)) => x < y,
-        (IrValue::Str(x), IrValue::Str(y)) => x < y,
+        (IrValue::String(x), IrValue::String(y)) => x.as_slice() < y.as_slice(),
         (IrValue::Bool(x), IrValue::Bool(y)) => x < y,
         // 指针序：cell 索引序（稳定全序——对齐 tree-walking 按 Rc 地址序）
         (IrValue::Ptr(x), IrValue::Ptr(y)) => x < y,
