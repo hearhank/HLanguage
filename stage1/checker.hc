@@ -2983,24 +2983,24 @@ class Checker {
         }
     }
 
-    // 判断是否为内建名称
+    // 判断是否为内建名称（使用 slice_eq 避免 &[u8] 指针比较问题）
     fn is_builtin_name(self: *mut Self, name: &[u8]) bool {
-        if (name == "alloc" or name == "page_allocator") return true;
-        if (name == "io" or name == "stdout" or name == "stderr") return true;
-        if (name == "true" or name == "false" or name == "null" or name == "void") return true;
-        if (name == "pi") return true;
-        if (name == "Vec" or name == "Deque" or name == "Map" or name == "Table") return true;
-        if (name == "String" or name == "Allocator" or name == "ExitType") return true;
-        if (name == "Pipe" or name == "Tee" or name == "Funnel" or name == "Hub") return true;
-        if (name == "i8" or name == "i16" or name == "i32" or name == "i64" or name == "i128") return true;
-        if (name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "u128") return true;
-        if (name == "isize" or name == "usize") return true;
-        if (name == "f16" or name == "f32" or name == "f64" or name == "f128") return true;
-        if (name == "bool" or name == "void") return true;
-        if (name == "comptime_int" or name == "comptime_float") return true;
-        if (name == "type" or name == "anytype") return true;
-        if (name == "Future") return true;
-        if (name == "expect" or name == "expect_eq") return true;
+        if (slice_eq(name, "alloc") or slice_eq(name, "page_allocator")) return true;
+        if (slice_eq(name, "io") or slice_eq(name, "stdout") or slice_eq(name, "stderr")) return true;
+        if (slice_eq(name, "true") or slice_eq(name, "false") or slice_eq(name, "null") or slice_eq(name, "void")) return true;
+        if (slice_eq(name, "pi")) return true;
+        if (slice_eq(name, "Vec") or slice_eq(name, "Deque") or slice_eq(name, "Map") or slice_eq(name, "Table")) return true;
+        if (slice_eq(name, "String") or slice_eq(name, "Allocator") or slice_eq(name, "ExitType")) return true;
+        if (slice_eq(name, "Pipe") or slice_eq(name, "Tee") or slice_eq(name, "Funnel") or slice_eq(name, "Hub")) return true;
+        if (slice_eq(name, "i8") or slice_eq(name, "i16") or slice_eq(name, "i32") or slice_eq(name, "i64") or slice_eq(name, "i128")) return true;
+        if (slice_eq(name, "u8") or slice_eq(name, "u16") or slice_eq(name, "u32") or slice_eq(name, "u64") or slice_eq(name, "u128")) return true;
+        if (slice_eq(name, "isize") or slice_eq(name, "usize")) return true;
+        if (slice_eq(name, "f16") or slice_eq(name, "f32") or slice_eq(name, "f64") or slice_eq(name, "f128")) return true;
+        if (slice_eq(name, "bool") or slice_eq(name, "void")) return true;
+        if (slice_eq(name, "comptime_int") or slice_eq(name, "comptime_float")) return true;
+        if (slice_eq(name, "type") or slice_eq(name, "anytype")) return true;
+        if (slice_eq(name, "Future")) return true;
+        if (slice_eq(name, "expect") or slice_eq(name, "expect_eq")) return true;
         return false;
     }
 
