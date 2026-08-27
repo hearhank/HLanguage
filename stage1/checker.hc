@@ -2180,6 +2180,86 @@ class Parser {
 }
 
 // ============================================================
+// 核心类型系统
+// ============================================================
+
+// 整数宽度
+enum IntWidth {
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    ISize,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    USize,
+    Comptime,
+}
+
+// 类型种类（简化版：用 &[u8] 标记类型名，运行时用 kind 字符串匹配）
+// 具体类型：int|float|bool|void|str|named|ptr|slice|optional|error_union|tuple|array|infer|generic|unknown
+class SType {
+    kind: Vec<u8>,
+}
+
+// 创建基本类型
+fn ty_int(width: IntWidth) SType {
+    var t = SType{kind = Vec<u8>.init(alloc)};
+    if (width == IntWidth.I8) { t.kind = vec_from_slice("i8"); }
+    else if (width == IntWidth.I16) { t.kind = vec_from_slice("i16"); }
+    else if (width == IntWidth.I32) { t.kind = vec_from_slice("i32"); }
+    else if (width == IntWidth.I64) { t.kind = vec_from_slice("i64"); }
+    else if (width == IntWidth.I128) { t.kind = vec_from_slice("i128"); }
+    else if (width == IntWidth.ISize) { t.kind = vec_from_slice("isize"); }
+    else if (width == IntWidth.U8) { t.kind = vec_from_slice("u8"); }
+    else if (width == IntWidth.U16) { t.kind = vec_from_slice("u16"); }
+    else if (width == IntWidth.U32) { t.kind = vec_from_slice("u32"); }
+    else if (width == IntWidth.U64) { t.kind = vec_from_slice("u64"); }
+    else if (width == IntWidth.U128) { t.kind = vec_from_slice("u128"); }
+    else if (width == IntWidth.USize) { t.kind = vec_from_slice("usize"); }
+    else { t.kind = vec_from_slice("comptime_int"); }
+    return t;
+}
+fn ty_float() SType { return SType{kind = vec_from_slice("float")}; }
+fn ty_bool() SType { return SType{kind = vec_from_slice("bool")}; }
+fn ty_void() SType { return SType{kind = vec_from_slice("void")}; }
+fn ty_str() SType { return SType{kind = vec_from_slice("str")}; }
+fn ty_named(name: &[u8]) SType { return SType{kind = vec_from_slice(name)}; }
+fn ty_infer() SType { return SType{kind = vec_from_slice("infer")}; }
+fn ty_unknown() SType { return SType{kind = vec_from_slice("unknown")}; }
+
+// 类型比较
+fn type_eq(a: SType, b: SType) bool {
+    return a.kind == b.kind;
+}
+
+// 分配来源
+enum AllocSource {
+    None,
+    NonArena,
+    Arena,
+    Global,
+    Unknown,
+}
+
+// 变量信息
+class VarInfo {
+    ty: SType,
+    source: AllocSource,
+    mut_: bool,
+}
+
+// 函数签名
+class FnSig {
+    param_types: Vec<SType>,
+    ret_type: SType,
+}
+
+// ============================================================
 // 语义检查器（Checker）
 // ============================================================
 
