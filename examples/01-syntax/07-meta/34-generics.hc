@@ -29,13 +29,13 @@ fn main() !void {
     io.print("{}\n", p.first + p.second);
 }
 
-[test] fn anytype_generics() !void {
+[Test] fn anytype_generics() !void {
     try expect_eq(max_value(3, 5), 5);
     var m = max_value(3.5, 2.0);
     try expect(m > 3.49 and m < 3.51);
 }
 
-[test] fn comptime_type_application() !void {
+[Test] fn comptime_type_application() !void {
     var p: Pair<i32> = Pair<i32>{first = 1, second = 2};
     try expect_eq(p.first + p.second, 3);
 }

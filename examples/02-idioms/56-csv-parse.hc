@@ -8,14 +8,13 @@ import H.std.{io};
 const CsvError = error{BadRow};
 
 class Row {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
-    name: String,
+    name: &[u8],
     age: i32,
 }
 
 fn parse_csv(data: &[u8]) CsvError!Vec<Row> {
     var rows = Vec<Row>.init(alloc);
-    var text = String.from(data, alloc);
-    var lines = text.split('\n');
+    var lines = data.split('\n');
 
     for (lines) |line| {
         var cols = line.split(',');
@@ -23,7 +22,7 @@ fn parse_csv(data: &[u8]) CsvError!Vec<Row> {
             return error.BadRow;
         }
         var age = parse_int(cols[1]) orelse return error.BadRow;
-        rows.append(alloc.init(Row{name = String.from(cols[0], alloc), age = age}));   // 带参构造（C1'）
+        rows.append(alloc.init(Row{name = cols[0], age = age}));
     }
     return rows;
 }
@@ -36,15 +35,15 @@ fn main() !void {
     }
 }
 
-[test] fn csv_parse() !void {
+[Test] fn csv_parse() !void {
     var csv = "alice,30\nbob,25";
     var rows = try parse_csv(csv);
     try expect_eq(rows.len, 2);
-    try expect_eq_slices(rows[0].name.as_slice(), "alice");
+    try expect_eq_slices(rows[0].name, "alice");
     try expect_eq(rows[0].age, 30);
 }
 
-[test] fn csv_format_error() !void {
+[Test] fn csv_format_error() !void {
     var bad = "alice,30,extra\n";
     try expect_error(error.BadRow, parse_csv(bad));
 }

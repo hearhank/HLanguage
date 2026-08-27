@@ -9,11 +9,11 @@ fn main() !void {
     var scores = [92, 45, 78, 61, 88, 30];
 
     // 过滤 + 映射（立即求值，产生新集合）
-    var passed = scores.iter().filter(|s| s >= 60).map(|s| s + 10);
+    var passed = scores.iter().filter(|s| s >= 60).map(|s| s + 10).to_array();
     io.print("passed = {}\n", passed.len);
 
     // 归约
-    var total = 0;
+    var mut total = 0;
     for (passed) |s| {
         total += s;
     }
@@ -27,11 +27,11 @@ fn main() !void {
     }
 }
 
-[test] fn filter_map_chain() !void {
+[Test] fn filter_map_chain() !void {
     var scores = [92, 45, 78, 61, 88, 30];
-    var passed = scores.iter().filter(|s| s >= 60).map(|s| s + 10);
+    var passed = scores.iter().filter(|s| s >= 60).map(|s| s + 10).to_array();
     try expect_eq(passed.len, 4);   // 92,78,61,88 通过
-    var total = 0;
+    var mut total = 0;
     for (passed) |s| {
         total += s;
     }

@@ -22,23 +22,30 @@ fn main() !void {
 
     // 形态 2：Arena 分配无所有权（归 Arena；禁止 move）
     var arena = Arena.init(alloc);
+    defer arena.deinit();
     var buf: &[u8] = arena.alloc(256);
     io.print("buf len = {}\n", buf.len);
 
     io.print("{}\n", APP_NAME);
 }
 
-[test] fn variables_three_forms() !void {
+[Test] fn variables_three_forms() !void {
     // 形态 1：标量（无所有权概念，Q15）
     var mut count: i32 = 0;
     count += 1;
     try expect_eq(count, 1);
 
-    // 形态 2：arena 分配（无所有权，归 Arena）
-    var arena = Arena.init(alloc);
-    var buf: &[u8] = arena.alloc(256);
-    try expect_eq(buf.len, 256);
+    {
+        // 形态 2：arena 分配（无所有权，归 Arena）
+        var arena = Arena.init(alloc);
+        defer arena.deinit();
+        var buf: &[u8] = arena.alloc(256);
+        try expect_eq(buf.len, 256);
+        // var abc=String.from("ABC");
+    }
 
     // 形态 3：global（静态生命周期）
     try expect_eq_slices(APP_NAME, "h");
+
+    try alloc.assert_no_leaks();
 }

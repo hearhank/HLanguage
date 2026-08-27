@@ -31,6 +31,11 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 ```
 H2/
 ├── tag1/        # 第一部分最小功能集实现（Rust，四 crate 工作区，零外部依赖）
+│   ├── hc/           # 编译器前端：lexer → parser → semantic → IR → codegen
+│   ├── hc-rt/        # 运行时：值模型 + tree-walking 解释器
+│   ├── hc-tools/     # 工具链 CLI：hc run / test / build / fmt / lint / doc / pkg
+│   ├── hc-lsp/       # LSP 语言服务器（诊断 / 补全 / 跳转 / 悬停）
+│   └── examples/     # tag1 演示用例
 ├── docs/        # 设计文档：SPEC（phase1–4）、ADR 决策记录、review 裁定
 ├── examples/    # 示例套件（语法 / 惯用法 / 模式 / 并发 / 工具等 91 例，编号 01–91）
 ├── extensions/  # Zed 编辑器扩展（Tree-sitter 语法高亮 + LSP 语言服务器）
@@ -41,7 +46,78 @@ H2/
 └── H.logo.png   # H 语言 logo
 ```
 
-`tag1/` 内部：`hc`（编译器前端）/ `hc-rt`（运行时，`interp.rs` 为语义 oracle）/ `hc-tools`（CLI）/ `hc-lsp`（LSP 语言服务器）/ `examples/`（演示用例）。详见 [`tag1/README.md`](tag1/README.md)。
+## 编译器管道
+
+编译器和运行时按管道阶段组织，每个阶段对应一个目录，内部按功能点拆分文件：
+
+```mermaid
+flowchart LR
+    subgraph hc[hc crate — 编译器前端]
+        direction TB
+        L[Lexer] --> P[Parser]
+        P --> S[Semantic]
+        S --> IR[IR & Lower]
+        IR --> BC[Bytecode]
+        IR --> LLVM[LLVM Native]
+    end
+    subgraph rt[hc-rt crate — 运行时]
+        RT[Interpreter]
+    end
+    subgraph tools[hc-tools crate — 工具链]
+        CLI[cli] --- RUN[run] --- TST[test]
+        BLD[build] --- FMT[fmt] --- LNT[lint]
+        DOC[doc] --- PKG[pkg] --- SCP[script]
+    end
+    subgraph lsp[hc-lsp crate — LSP]
+        SRV[server] --- CMP[compiler]
+        CMPL[completion] --- DOCM[document]
+        SYM[symbol] --- PRJ[project]
+    end
+    BC --> RT
+    LLVM --> EXE[.exe / .dll]
+```
+
+### 编译器管道阶段（`hc/src/`）
+
+| 阶段 | 目录 | 文件 | 说明 |
+|------|------|------|------|
+| 1. 词法分析 | `lexer/` | `mod.rs`, `token.rs` | Token 类型、词法分析器 |
+| 2. 语法分析 | `parser/` | `mod.rs`, `ast.rs`, `decl.rs`, `expr.rs`, `stmt.rs`, `type.rs`, `type_decl.rs`, `util.rs` | AST 类型、递归下降解析器 |
+| 3. 语义分析 | `semantic/` | `mod.rs`, `check.rs`, `collect.rs`, `error_infer.rs`, `infer.rs`, `resolve.rs`, `validate.rs`, `trait_registry.rs` | 名称解析、类型检查、所有权、错误集推断 |
+| 4. IR 降级 | `ir/` | `mod.rs`, `builtin.rs`, `comptime.rs`, `json.rs`, `lower_impl.rs`, `method.rs`, `ops.rs`, `runtime.rs`, `types.rs` | 共享 IR（唯一语义源） |
+| 5a. 字节码 | `codegen/bytecode/` | `mod.rs`, `encode.rs`, `decode.rs`, `opcode.rs`, `tests.rs` | HBC2 序列化 + 装载执行 |
+| 5b. LLVM 原生 | `codegen/llvm/` | `mod.rs`, `body.rs`, `emit.rs`, `helpers.rs`, `preamble.rs`, `tests.rs`, `text.rs` | LLVM IR 文本发射 + zig cc 编译 |
+| 6. 诊断 | `diag/` | `mod.rs` | 多错误收集、精确位置报告 |
+| 7. 运行时共享层 | `runtime/` | `mod.rs`, `regex.rs`, `rle.rs`, `compress.rs`, `rng.rs`, `errorcodes.rs`, `ds_*.rs` | 纯函数共享层（ADR-0004），供解释器与 IR 后端共用 |
+
+### 工具链命令（`hc-tools/src/`）
+
+| 命令 | 目录 | 说明 |
+|------|------|------|
+| `hc run` | `run/` | 脚本模式 / 字节码 VM / IR 参考解释器 |
+| `hc test` | `test/` | 测试收集与运行（含 `--mode=compile` 交叉验证） |
+| `hc build` | `build/` | 原生编译（LLVM + zig cc） |
+| `hc fmt` | `fmt/` | 代码格式化（token 级重排 + AST 保真 + `--check`） |
+| `hc lint` | `lint/` | 静态检查（9 规则 + `--json`） |
+| `hc doc` | `doc/` | 文档生成（Markdown + 索引页） |
+| `hc pkg` | `pkg/` | 包管理（add / publish） |
+| `hc init` | `project/` | 项目骨架初始化 |
+| `hc script` | `script/` | 脚本解析与缓存 |
+| `hc comptime` | `comptime/` | Comptime 值函数生成 |
+| CLI 入口 | `cli/` | 命令分发、版本管理 |
+
+### LSP 语言服务器（`hc-lsp/src/`）
+
+| 模块 | 目录 | 说明 |
+|------|------|------|
+| 服务器 | `lsp/` | LSP 协议处理 |
+| 编译器 | `compiler/` | 源码编译与诊断 |
+| 补全 | `completion/` | 自动补全 |
+| 文档 | `document/` | 文档管理 |
+| 符号 | `symbol/` | 符号表与跳转定义 |
+| 项目 | `project/` | 项目上下文 |
+
+详见 [`tag1/README.md`](tag1/README.md)。
 
 `extensions/zed/` 为 Zed 编辑器扩展，提供 Tree-sitter 语法高亮 + LSP 语言服务器集成（`hc-lsp`），详见 [`extensions/zed/README.md`](extensions/zed/README.md)。
 
@@ -56,7 +132,7 @@ H2/
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M0 地基 | cargo 四 crate 工作区（零外部依赖） | ✅ 已完成 |
-| M1 前端 | 词法 / 语法（AST）/ 多错误诊断 / 跨文件模块（namespace / using / 目录 = 包） | ✅ 已完成 |
+| M1 前端 | 词法 / 语法（AST）/ 多错误诊断 / 跨文件模块（namespace / import / 目录 = 包） | ✅ 已完成 |
 | M2 语义 | 名称解析（重载池 + 接口三用途）/ 类型检查（表达式级 + 期望类型传播）/ 推断（泛型 / 指针形态 / 重载歧义）/ 所有权（分配来源 + move 合法性 + 引用逃逸）/ 错误集（错误码表 + `!T` 推断收集）/ 函数（重载 / 闭包捕获精确化） | ✅ 已完成 |
 | M3 双后端 | 共享 IR（唯一语义源）/ 字节码 VM（HBC2）/ LLVM 原生（emit-.ll + zig cc）/ 一致性套件（CI 硬门槛） | ✅ 已完成 |
 | M4 运行时与内建 | 内存模型（作用域 LIFO + Arena）/ 错误码运行时表示 / `@` 内建基础集 / 序列化内建 / 标量接口族 / 迭代内建 / Debug 悬垂标记 | ✅ 已完成 |
@@ -94,7 +170,7 @@ H2/
 | E4 系统编程 | 系统编程特性（K1–K11） | ✅ 已落地：K1 无标签 union / K2 volatile / K4 @ptrFromInt·@intFromPtr / K5 export fn + `extern fn` 外部函数声明，K3 asm / K6 freestanding / K7–K11 1.x |
 | E5 工具链扩展 | LSP / 格式化 / lint / 文档生成 / 项目脚手架 / 包注册中心 | ✅ 已落地：hc fmt（token 级重排 + AST 保真 + --check）/ hc lint（9 规则 + --json）/ hc doc（Markdown 生成 + 索引页）/ hc lsp（诊断推送 + 自动补全 + 跳转定义 + 悬停提示 + 文档注释）/ hc init 脚手架 / hc cc C 互操作编译 / hc pkg add/publish；B7 质量工具完整（LSP/格式化/lint 集）已完成；Zed 编辑器扩展（Tree-sitter 语法高亮 + LSP 集成）；包注册中心正式版 1.x |
 | E6 语言扩展 | 惰性迭代、switch 守卫、开放问题裁决、吃狗粮反馈 | 🟡 部分落地：switch 守卫已实施（模式+if 守卫+穷举检查）；开放问题裁决已定案（ADR-0016/0017）；C5 内建泛型嵌套具体化已实施；C6 格式串 comptime 校验已实施；惰性迭代（A7）已落地；吃狗粮反馈待自举阶段 |
-| E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 推进中：K1 H版 lexer ✅（6621 token 零 diff），K2 H版 parser 🔴（部分实现，测试超时），K3–K6 待实现 |
+| E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 推进中：K1 H版 lexer ✅（6621 token 零 diff），K2 H版 parser 🟢 性能已优化（解析自身 ~1s，较原 60s+ 提升 ~60x，8 项语料对照通过），K3–K6 待实现 |
 
 ### 里程碑节点
 

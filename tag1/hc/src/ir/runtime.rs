@@ -1,3 +1,5 @@
+//! IR 运行时：run_ir 执行引擎、值模型与错误处理
+
 use super::*;
 
 /// 重载/可选参数分派（对齐 oracle `pick_fn` `interp.rs:2665-2796`）：
@@ -55,7 +57,7 @@ pub(crate) fn pick_func(
                     match a {
                         IrValue::Int(_) if want_float => ok = false,
                         IrValue::Float(_) if want_int => ok = false,
-                        IrValue::Str(_) if want_int || want_float || want_bool => ok = false,
+                        IrValue::String(_) if want_int || want_float || want_bool => ok = false,
                         IrValue::Bool(_) if !want_bool => ok = false,
                         IrValue::Class(c) if n != "String" && class_name(ctx, *c) != *n => {
                             ok = false;
@@ -75,7 +77,7 @@ pub(crate) fn pick_func(
                 Type::Slice(inner, _) => {
                     // &[u8] / &[T]：Str 或数组；泛型元素 T 标记为泛型
                     match a {
-                        IrValue::Str(_) => {}
+                        IrValue::String(_) => {}
                         IrValue::Arr(_) | IrValue::Slice { .. } => {}
                         _ => ok = false,
                     }
@@ -252,6 +254,8 @@ pub(crate) fn deep_copy(ctx: &mut Ctx, v: IrValue) -> IrValue {
                 alloc,
             }))
         }
+        // 内联缓冲区 String：值类型，直接 clone 即可（无堆分配，无需 deinit）
+        IrValue::String(_) => v.clone(),
         IrValue::Opt(Some(b)) => IrValue::Opt(Some(Box::new(deep_copy(ctx, *b)))),
         // move 捕获闭包值：捕获 cell 逐个深拷贝——闭包持有独立环境副本
         // （与原作用域/其他闭包脱离共享，对齐 oracle `deep_copy` Closure 臂）
@@ -284,7 +288,7 @@ pub(crate) fn ir_type_name(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::Int(_) => "i128".into(),
         IrValue::Float(_) => "f64".into(),
         IrValue::Bool(_) => "bool".into(),
-        IrValue::Str(_) => "&[u8]".into(),
+        IrValue::String(_) => "String".into(),
         IrValue::Arr(_) => "array".into(),
         IrValue::Vec(_) => "array".into(),
         IrValue::Map(_) => "Map".into(),
@@ -312,7 +316,7 @@ pub(crate) fn const_val(c: &IrConst) -> IrValue {
         IrConst::Int(i) => IrValue::Int(*i),
         IrConst::Float(f) => IrValue::Float(*f),
         IrConst::Bool(b) => IrValue::Bool(*b),
-        IrConst::Str(s) => IrValue::Str(s.clone().into_bytes()),
+        IrConst::Str(s) => IrValue::String(StringDataIr::from_slice(s.as_bytes())),
         IrConst::Void => IrValue::Void,
         IrConst::Null => IrValue::Opt(None),
         IrConst::Err { name, code } => IrValue::Err {
@@ -435,7 +439,7 @@ pub(crate) fn exec_body(
                         IrConst::Int(i) => IrValue::Int(*i),
                         IrConst::Float(f) => IrValue::Float(*f),
                         IrConst::Bool(b) => IrValue::Bool(*b),
-                        IrConst::Str(s) => IrValue::Str(s.clone().into_bytes()),
+                        IrConst::Str(s) => IrValue::String(StringDataIr::from_slice(s.as_bytes())),
                         IrConst::Void => IrValue::Void,
                         IrConst::Null => IrValue::Opt(None),
                         IrConst::Err { name, code } => IrValue::Err {
@@ -1093,10 +1097,10 @@ pub(crate) fn alloc_zeroed_bytes_ir(n: i128) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn str_val(s: &str) -> IrValue {
-    IrValue::Str(s.as_bytes().to_vec())
+    IrValue::String(StringDataIr::from_slice(s.as_bytes()))
 }
 pub(crate) fn str_bytes_val(b: Vec<u8>) -> IrValue {
-    IrValue::Str(b)
+    IrValue::String(StringDataIr::from_bytes(b))
 }
 pub(crate) fn opt_val(v: Option<IrValue>) -> IrValue {
     IrValue::Opt(v.map(Box::new))
@@ -1331,7 +1335,11 @@ pub(crate) fn arr_items(ctx: &mut Ctx, v: &IrValue) -> R<Vec<IrValue>> {
                 .collect()),
             _ => Err(IrError::msg("TypeError", "bad slice")),
         },
-        IrValue::Str(s) => Ok(s.iter().map(|b| IrValue::Int(*b as i128)).collect()),
+        IrValue::String(s) => Ok(s
+            .as_slice()
+            .iter()
+            .map(|b| IrValue::Int(*b as i128))
+            .collect()),
         IrValue::Class(c) if class_name(ctx, c) == "Map" => {
             let fields = match &ctx.cells[c] {
                 Cell::Class { fields, .. } => fields.clone(),
@@ -1389,7 +1397,7 @@ pub(crate) fn iter_to_arr_ir(
 /// Str/Arr/Slice → 字节（对齐 oracle `value_bytes` interp.rs:1436-1460）
 pub(crate) fn value_bytes_ir(ctx: &Ctx, v: &IrValue) -> Option<Vec<u8>> {
     match deref_value(ctx, v) {
-        IrValue::Str(s) => Some(s.clone()),
+        IrValue::String(s) => Some(s.as_slice().to_vec()),
         IrValue::Arr(c) => match &ctx.cells[*c] {
             Cell::Elems(e) => Some(
                 e.iter()
@@ -1433,9 +1441,10 @@ pub(crate) fn value_to_bytes_ir(ctx: &Ctx, v: &IrValue) -> Vec<u8> {
         }
         IrValue::Float(f) => f.to_le_bytes().to_vec(),
         IrValue::Bool(b) => vec![if *b { 1 } else { 0 }],
-        IrValue::Str(s) => {
-            let mut out = (s.len() as u64).to_le_bytes().to_vec();
-            out.extend_from_slice(s);
+        IrValue::String(s) => {
+            let bytes = s.as_slice();
+            let mut out = (bytes.len() as u64).to_le_bytes().to_vec();
+            out.extend_from_slice(bytes);
             out
         }
         IrValue::Ptr(c) => value_to_bytes_ir(ctx, ctx.cell_value(*c)),
@@ -1458,9 +1467,9 @@ pub(crate) fn value_to_json_ir(ctx: &Ctx, v: &IrValue) -> String {
         IrValue::Int(i) => i.to_string(),
         IrValue::Float(f) => f.to_string(),
         IrValue::Bool(b) => b.to_string(),
-        IrValue::Str(s) => format!(
+        IrValue::String(s) => format!(
             "\"{}\"",
-            String::from_utf8_lossy(s)
+            String::from_utf8_lossy(s.as_slice())
                 .replace('\\', "\\\\")
                 .replace('"', "\\\"")
         ),
@@ -1553,7 +1562,8 @@ pub(crate) fn scalar_size_ir(ty: &str) -> Option<usize> {
         "i32" | "u32" | "f32" => Some(4),
         "i64" | "u64" | "isize" | "usize" | "f64" => Some(8),
         "i128" | "u128" | "f128" => Some(16),
-        "String" | "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
+        "String" => Some(72),
+        "Vec" | "Map" | "Deque" | "Table" | "Allocator" => Some(8),
         _ => None,
     }
 }
@@ -1735,7 +1745,7 @@ pub(crate) fn call_io_print_ir(ctx: &mut Ctx, args: &[IrValue]) -> R<()> {
         ));
     }
     let fmt = match deref_value(ctx, &args[0]) {
-        IrValue::Str(s) => s.clone(),
+        IrValue::String(s) => s.as_slice().to_vec(),
         _ => return Err(IrError::msg("TypeError", "io.print expects &[u8]")),
     };
     let mut out = Vec::new();
@@ -1852,9 +1862,9 @@ pub(crate) fn parser_bytes(ctx: &Ctx, args: &[IrValue], ix: usize) -> R<Vec<u8>>
         .get(ix)
         .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
     match deref_value(ctx, v) {
-        IrValue::Str(s) => Ok(s.clone()),
+        IrValue::String(s) => Ok(s.as_slice().to_vec()),
         IrValue::Ptr(c) => match ctx.cell_value(*c) {
-            IrValue::Str(s) => Ok(s.clone()),
+            IrValue::String(s) => Ok(s.as_slice().to_vec()),
             _ => Err(IrError::msg("TypeError", "expected bytes")),
         },
         _ => Err(IrError::msg("TypeError", "expected bytes")),
@@ -1971,7 +1981,7 @@ pub(crate) fn str_arg_ir(ctx: &Ctx, args: &[IrValue], i: usize) -> R<Vec<u8>> {
         .get(i)
         .ok_or_else(|| IrError::msg("ArityMismatch", "missing argument"))?;
     match deref_value(ctx, a) {
-        IrValue::Str(s) => Ok(s.clone()),
+        IrValue::String(s) => Ok(s.as_slice().to_vec()),
         _ => Err(IrError::msg("TypeError", "expected &[u8]")),
     }
 }

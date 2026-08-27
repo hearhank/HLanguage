@@ -1,8 +1,8 @@
+//! hc-tools/tests/integration_test.rs
+
 use crate::cli::{color_test_line, paint};
-use crate::fsio::{source_to_bytecode, write_bytecode_artifact};
-use crate::package::{
-    check_and_merge, merge_modules, programs_to_test_ll, strip_test_funcs_in_place,
-};
+use crate::pkg::{check_and_merge, merge_modules, programs_to_test_ll, strip_test_funcs_in_place};
+use crate::project::fsio::{source_to_bytecode, write_bytecode_artifact};
 use crate::run::{run_ir_source_with_args, IrRunOutcome};
 
 /// M7.1：入口 + 同包兄弟 → LLVM IR 文本（`main` 入口）。仅测试用（C3 后生产路径
@@ -296,7 +296,7 @@ fn color_helpers_paint_and_test_line() {
 fn lint_unused_var_detected() {
     let src = "fn main() void { var x: i32 = 42; }";
     let program = hc::parse_source(src).unwrap();
-    let diags = crate::lintgen::lint_source(src, &program, false);
+    let diags = crate::lint::lint_source(src, &program, false);
     assert!(diags.iter().any(|d| d.rule.name == "unused_var"));
 }
 
@@ -304,7 +304,7 @@ fn lint_unused_var_detected() {
 fn lint_unused_var_skipped_underscore() {
     let src = "fn main() void { var _x: i32 = 42; }";
     let program = hc::parse_source(src).unwrap();
-    let diags = crate::lintgen::lint_source(src, &program, false);
+    let diags = crate::lint::lint_source(src, &program, false);
     assert!(!diags.iter().any(|d| d.rule.name == "unused_var"));
 }
 
@@ -312,6 +312,6 @@ fn lint_unused_var_skipped_underscore() {
 fn lint_redundant_eq_false_detected() {
     let src = "fn main() bool { var x: bool = true; return x == false; }";
     let program = hc::parse_source(src).unwrap();
-    let diags = crate::lintgen::lint_source(src, &program, false);
+    let diags = crate::lint::lint_source(src, &program, false);
     assert!(diags.iter().any(|d| d.rule.name == "redundant_eq_false"));
 }

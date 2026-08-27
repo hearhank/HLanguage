@@ -10,7 +10,7 @@ fn main() !void {
     defer dir.close();
 
     var entries = try io.fs.list_dir(&dir, alloc);
-    var count = 0;
+    var mut count = 0;
     for (entries) |entry| {
         io.print("{}{}\n", entry.name, if (entry.is_dir) "/" else "");
         count += 1;
@@ -18,7 +18,7 @@ fn main() !void {
     io.print("{} entries\n", count);
 }
 
-[test] fn directory_traversal_demo() !void {
+[Test] fn directory_traversal_demo() !void {
     // S4 演示型（Q-T6）：list_dir 依赖实际目录内容（CWD），断言不稳定；
     // 目录遍历断言留 M7 标准库测试
     try expect(true);

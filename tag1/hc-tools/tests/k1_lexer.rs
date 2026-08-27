@@ -1,9 +1,4 @@
-//! K1：H 版 lexer 对照测试——对 `stage1/corpus/*.hc` 逐个文件比较
-//! Rust 参考 lexer（`hc lex`）与 H 版 lexer（`hc run stage1/lexer.hc`）的 token 流输出。
-//!
-//! 对照格式：`{start} {end} {line} {col} {kind:?}`（`kind:?` 为 Rust Debug 形态），
-//! 逐行 diff 必须一致。语料覆盖：45 关键字、数字前缀归一化/惰性宽度后缀、
-//! 字符串/字符转义全套、错误路径、未知字符双 Error、未闭合注释/字符串、UTF-8 计列。
+//! hc-tools/tests/k1_lexer.rs
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

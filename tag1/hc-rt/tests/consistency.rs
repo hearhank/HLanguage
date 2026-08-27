@@ -1,21 +1,7 @@
-//! M3.4 双模式一致性验收测试
+//! hc-rt/tests/consistency.rs
 //!
-//! 同一程序分别经 **tree-walking 解释器**（hc-rt `Interp`，脚本模式）与
-//! **IR 参考解释器**（`hc::ir::IrRuntime`，M3.1 共享 IR 语义源）运行全部
-//! `test fn`，PASS/FAIL 结果必须完全一致（ADR-0004 双模式一致性承诺根基）。
-//! IR 侧共享同一运行时实例：全局/const 只初始化一次，跨 test fn 可变全局可见
-//! （对齐 tree-walking 共享 `Interp` 的 `globals: HashMap`）。
-//!
-//! 结果归一化：
-//! - tree-walk：`[PASS]/[FAIL]`（`run_tests` 输出）
-//! - IR：`Ok(非错误值)` = PASS；`Ok(错误值)` = FAIL（未处理错误到根 = panic 式失败，
-//!   M2.6 传播模型）；`Err` = FAIL
-//!
-//! 程序约束：必须通过语义检查（`Interp::load` 内置 M2 静态 pass）——例如
-//! `catch` 只能用于错误联合值、字面量必须在声明的宽度内。
-//! 覆盖范围 = M3.1 IR 切片：标量/短路/if/while/递归/try/catch/orelse/
-//! error 字面量/断言/限定名调用（含多级 namespace）/作用域/复合赋值/除零溢出；
-//! Phase 5 起含 global/const（`@__init__` 声明序初始化、跨 test fn 可变全局）。
+//! 定义：枚举：Color, Maybe, Value, Status
+//! 定义：结构体：Point
 
 use std::collections::HashMap;
 use std::fs;
@@ -741,7 +727,7 @@ fn agg_array_index_and_store() {
     assert_all_pass(
         r#"
 [test] fn arr_index() void {
-    var a = [10, 20, 30];
+    var mut a = [10, 20, 30];
     expect_eq(a[0], 10);
     expect_eq(a[2], 30);
     a[1] = 99;
@@ -776,7 +762,7 @@ fn agg_slice_view_and_alias() {
     assert_all_pass(
         r#"
 [test] fn slice_view() void {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     var sub = arr[1..4];
     expect_eq(sub.len, 3);
     expect_eq(sub[0], 2);
@@ -794,7 +780,7 @@ fn agg_slice_store_write_through() {
     assert_all_pass(
         r#"
 [test] fn slice_store() void {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     arr[1..3] = [20, 30];
     expect_eq(arr[1], 20);
     expect_eq(arr[2], 30);
@@ -1291,19 +1277,19 @@ fn closure_capture_consistency() {
     assert_all_pass(
         r#"
 [test] fn read_cap() void {
-    var a = 10;
+    var mut a = 10;
     var f = |v| v + a;
     a = 100;
     expect_eq(f(5), 105);
 }
 [test] fn move_cap() void {
-    var a = 10;
+    var mut a = 10;
     var f = move |v| v + a;
     a = 100;
     expect_eq(f(5), 15);
 }
 [test] fn mut_cap() void {
-    var total = 0;
+    var mut total = 0;
     var acc = mut |v| { total = total + v; return total; };
     expect_eq(acc(3), 3);
     expect_eq(acc(4), 7);
@@ -1323,7 +1309,7 @@ fn closure_precise_capture_consistency() {
     assert_all_pass(
         r#"
 [test] fn nested_transitive() void {
-    var a = 1;
+    var mut a = 1;
     var f = | | {
         var g = |v| v + a;      // 外层体只在内层闭包体内引用 a → 外层须捕获 a
         return g(10);
@@ -1332,14 +1318,14 @@ fn closure_precise_capture_consistency() {
     expect_eq(f(), 110);        // 共享捕获：外部变更对闭包可见
 }
 [test] fn move_deep_copy() void {
-    var x = 1;
+    var mut x = 1;
     var inner = |v| v + x;
     var outer_move = move | | inner(1);  // move 捕获闭包值 → 深拷贝其 env 副本
     x = 100;
     expect_eq(outer_move(), 2);          // 副本 x 仍为 1 → 1+1=2
 }
 [test] fn mut_cap_visible_to_nested_read() void {
-    var total = 0;
+    var mut total = 0;
     var acc = mut |v| { total = total + v; return total; };
     var read = |v| total + v;            // 嵌套只读闭包共享同一捕获 cell
     expect_eq(acc(3), 3);
@@ -1543,7 +1529,7 @@ fn defer_same_scope_capture_reads_final_value() {
 global sum: i32 = 0;
 fn add(v: i32) void { sum += v; }
 [test] fn defer_reads_final() void {
-    var x: i32 = 1;
+    var mut x: i32 = 1;
     defer add(x);
     x = 100;
 }
@@ -1603,7 +1589,7 @@ global clog: i32 = 0;
 fn bump() void { dlog += 1; }
 [test] fn defer_loop_break() void {
     dlog = 0;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (true) {
         defer bump();
         i += 1;
@@ -1614,7 +1600,7 @@ fn bump() void { dlog += 1; }
 [test] fn defer_loop_continue() void {
     dlog = 0;
     clog = 0;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < 5) {
         defer bump();
         i += 1;
@@ -1705,9 +1691,9 @@ fn labeled_break_continue() {
     assert_all_pass(
         r#"
 [test] fn labeled_break_outer() void {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer while (true) {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 10) {
             j += 1;
             if (j == 2) { break :outer; }
@@ -1717,7 +1703,7 @@ fn labeled_break_continue() {
     expect_eq(s, 1);
 }
 [test] fn labeled_continue_self() void {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer for (0..3) |i| {
         if (i == 1) { continue :outer; }
         s += i;
@@ -1725,9 +1711,9 @@ fn labeled_break_continue() {
     expect_eq(s, 2);
 }
 [test] fn labeled_continue_nested() void {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer for (0..3) |i| {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 5) {
             j += 1;
             if (i == 1) { continue :outer; }
@@ -1825,11 +1811,11 @@ fn p7_map_json_csv_and_string() {
     assert_all_pass(
         r#"
 [test] fn map_ops() !void {
-    var m = Map.from_json("{\"a\":1,\"b\":2}");
+    var mut m = Map.from_json("{\"a\":1,\"b\":2}");
     m.put("c", 3);
     try expect_eq(m.get("a").?, 1);
     try expect_eq(m.len(), 3);
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     for (m.iter()) |kv| { s += @intCast(i32, kv.value); }
     try expect_eq(s, 6);
 }
@@ -2462,7 +2448,7 @@ fn g5_rng_determinism_consistent() {
     io.rng.seed(1);
     try expect_eq(io.rng.next(), a1);
     try expect_eq(io.rng.next(), a2);
-    var i = 0;
+    var mut i = 0;
     while (i < 50) {
         var v = io.rng.int(10);
         try expect(v >= 0);
@@ -2500,7 +2486,7 @@ fn f_atomic_consistent() {
     var x: i64 = 42;
     @atomicStore(i64, &x, 7, .seq_cst);
     try expect_eq(@atomicLoad(i64, &x, .acquire), 7);
-    var old = @atomicRmw(i64, &x, .add, 5, .seq_cst);
+    var mut old = @atomicRmw(i64, &x, .add, 5, .seq_cst);
     try expect_eq(old, 7);
     try expect_eq(@atomicLoad(i64, &x, .seq_cst), 12);
     old = @atomicRmw(i64, &x, .sub, 2, .seq_cst);
@@ -2519,7 +2505,7 @@ fn d2_table_multi_index_consistent() {
     assert_all_pass(
         r#"
 [test] fn t() !void {
-    var t = Table<i32>.init(alloc, 2, 3, 7);
+    var mut t = Table<i32>.init(2, 3, 7, alloc);
     try expect_eq(t.len(), 2);
     try expect_eq(t[0, 0], 7);
     try expect_eq(t[0, 1], 7);
@@ -2539,7 +2525,7 @@ fn d2_vec_operations_consistent() {
     assert_all_pass(
         r#"
 [test] fn t() !void {
-    var v = Vec<i32>.init(alloc);
+    var mut v = Vec<i32>.init(alloc);
     try expect_eq(v.len(), 0);
     v.append(10);
     v.append(20);

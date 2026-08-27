@@ -27,7 +27,7 @@ fn main() !void {
     io.print("{} {}\n", p2.x, p2.y);
 
     // class → JSON：内建默认（零配置可用）
-    var mut order: owned Order = alloc.init(Order);   // 无参构造（C1'）+ 字段赋值
+    var mut order: Order = alloc.init(Order);   // 无参构造（C1'）+ 字段赋值
     order.id = 42;
     var json = order.to_json();
     io.print("{}\n", json);
@@ -37,17 +37,17 @@ fn main() !void {
     io.print("id = {}\n", order2.id);
 }
 
-[test] fn continuous_to_bytes() !void {
+[Test] fn continuous_to_bytes() !void {
     var p = Point{x = 1.0, y = 2.0};
     var bytes: &[u8] = p.to_bytes();
-    try expect_eq(bytes.len, 8);   // 两个 f32（直映射）
+    try expect_eq(bytes.len, 8);
     var p2 = try Point.from_bytes(bytes);
     try expect_eq(p2.x, 1.0);
     try expect_eq(p2.y, 2.0);
 }
 
-[test] fn class_to_json() !void {
-    var mut order: owned Order = alloc.init(Order);   // 无参构造（C1'）
+[Test] fn class_to_json() !void {
+    var mut order: Order = alloc.init(Order);   // 无参构造（C1'）
     order.id = 42;
     var json = order.to_json();
     var order2 = try Order.from_json(json);

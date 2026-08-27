@@ -1,4 +1,6 @@
-//! 存储形态验证：[continuous] 值类型 / 接口实现契约。
+//! 语义验证：所有权检查、类型约束验证、引入后检查
+//!
+//! 定义：结构体：fields
 
 use super::*;
 use crate::ast::*;
@@ -73,6 +75,11 @@ impl Checker {
                 let mut visited: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 self.check_iface_impl(name, &iname, methods, span, &mut visited);
+                // ADR-0027：记录类型→接口映射，供 IR lowerer 编译期接口分派
+                self.type_implements
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(iname);
             }
         }
     }
@@ -266,7 +273,11 @@ impl Checker {
                         false
                     }
                     None => {
-                        // 内建引用类型（String/Vec/Map/Deque/Table）：非值类型
+                        // String 是 64 字节栈内联值类型（值语义，复制即可）
+                        if n == "String" {
+                            return true;
+                        }
+                        // 内建引用类型（Vec/Map/Deque/Table）：非值类型
                         if is_builtin_type(n) || is_collection(n) {
                             return false;
                         }
@@ -275,7 +286,8 @@ impl Checker {
                 }
             }
             Type::Tuple(ts) => ts.iter().all(|t| self.type_is_value(t)),
-            Type::Optional(_) | Type::Slice(_, _) | Type::Ptr(_, _) => false,
+            Type::Optional(inner) => self.type_is_value(inner), // Optional 包裹的值类型仍是值类型
+            Type::Slice(_, _) | Type::Ptr(_, _) => false,
             Type::Array(_, inner) => self.type_is_value(inner), // 定长数组的元素为值类型则可内联
             _ => false,
         }

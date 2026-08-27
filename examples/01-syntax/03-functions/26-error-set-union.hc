@@ -22,7 +22,7 @@ fn main() !void {
     io.print("loaded\n");
 }
 
-[test] fn error_set_union() !void {
+[Test] fn error_set_union() !void {
     // CombinedError = FileError || ParseError（组合契约）；真实 IO：文件缺失 → NotFound
     try expect_error(error.NotFound, load_config(io, "app.json"));
 }

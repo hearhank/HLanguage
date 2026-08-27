@@ -1,3 +1,5 @@
+//! hc-lsp/tests/integration_test.rs
+
 use hc_lsp::HcLspServer;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LspService;

@@ -1,4 +1,4 @@
-//! 第二遍检查：声明级检查（fn / class / global）+ 块与语句类型检查。
+//! 语义检查主流程：声明与语句的语义分析入口
 
 use super::*;
 use crate::ast::*;
@@ -54,6 +54,7 @@ impl Checker {
                             // 参数来源由调用点决定（o T 拥有 / 借用）——保守放行
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: p.mut_,
                         },
                     );
                 }
@@ -157,6 +158,7 @@ impl Checker {
                             pending_fields: None,
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: false,
                         },
                     );
                     // 方法参数（self 显式声明时已含；此处避免重复登记由 check_block 内 params
@@ -227,6 +229,7 @@ impl Checker {
                     pending_fields: None,
                     source: AllocSource::Unknown,
                     thread: None,
+                    mut_: p.mut_,
                 },
             );
         }
@@ -261,6 +264,7 @@ impl Checker {
         ret_ty: Option<SType>,
     ) {
         scopes.push(HashMap::new());
+        self.owned_stack.push(Vec::new());
         for stmt in &b.stmts {
             self.check_stmt(stmt, scopes, err_constraint.clone(), ret_ty.clone());
         }
@@ -268,6 +272,19 @@ impl Checker {
         if let Some(scope) = scopes.last() {
             self.thread_escape_sweep(scope);
         }
+        // 2026-08-25：检查未匹配 defer/move 的 owned 变量
+        if let Some(remaining) = self.owned_stack.last() {
+            for name in remaining {
+                self.diags.push(Diagnostic::error(
+                    b.span.clone(),
+                    format!(
+                        "`{name}` is `owned` but has no matching `defer` or `move`;
+                         use `defer {name}.deinit()` or `move {name}` to transfer ownership"
+                    ),
+                ));
+            }
+        }
+        self.owned_stack.pop();
         scopes.pop();
     }
 
@@ -285,6 +302,7 @@ impl Checker {
                 ty,
                 init,
                 span,
+                mut_: var_mut,
                 ..
             } => {
                 let declared = ty.as_ref().map(|t| self.ty_of(t));
@@ -347,8 +365,13 @@ impl Checker {
                         pending_fields: pending,
                         source,
                         thread: spawn_thread,
+                        mut_: *var_mut,
                     },
                 );
+                // 2026-08-25：owned 类型变量登记到 owned_stack
+                if let Some(Type::Owned(_)) = ty {
+                    self.owned_stack.last_mut().unwrap().push(name.clone());
+                }
             }
             Stmt::ConstDecl { name, init, .. } => {
                 let t = self.expr_ty(init, scopes, None);
@@ -360,6 +383,7 @@ impl Checker {
                         pending_fields: None,
                         source,
                         thread: None,
+                        mut_: false,
                     },
                 );
             }
@@ -372,6 +396,8 @@ impl Checker {
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
+                // 2026-08-25：写只读变量 → 编译错误（须 `mut` 声明）
+                self.check_mut_write(target, scopes, span);
                 // M2.3 指针形态：写只读指针 → 编译错误
                 self.check_ptr_write(target, scopes, span);
                 // G3 Q19：spawn→join 冻结窗口——写入被引用捕获目标 → 编译错误
@@ -400,6 +426,12 @@ impl Checker {
             Stmt::Expr(e) => {
                 // G3 Q18：线程 join/detach 语句位置跟踪
                 self.track_thread_method(e, scopes);
+                // 2026-08-25：扫描表达式中的 move 操作 → 标记对应 owned 变量
+                let mut moved = Vec::new();
+                Self::collect_move_targets(e, &mut moved);
+                for name in &moved {
+                    self.mark_moved(name);
+                }
                 let _ = self.expr_ty(e, scopes, None);
             }
             Stmt::If(ifs) => {
@@ -408,7 +440,7 @@ impl Checker {
                 // G3 Q18：条件体内 join 不保证执行 → 非直线路径（不视为绑定）
                 self.conditional_depth += 1;
                 // 捕获：if (maybe) |v|——optional → 内层类型；错误联合 → 成功负载类型
-                if let Some((_, n)) = &ifs.capture {
+                if let Some((cap_mode, n)) = &ifs.capture {
                     let cap_ty = match &ct {
                         Some(SType::Optional(inner)) => Some(inner.as_ref().clone()),
                         Some(SType::ErrorUnion(_, inner)) => Some(inner.as_ref().clone()),
@@ -422,6 +454,7 @@ impl Checker {
                             pending_fields: None,
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: *cap_mode == CaptureMode::Mut,
                         },
                     );
                     self.check_block(&ifs.then_b, scopes, err_constraint.clone(), ret_ty.clone());
@@ -432,6 +465,7 @@ impl Checker {
                 if let Some(else_b) = &ifs.else_b {
                     // 错误捕获：else |err|——err 绑定为错误联合值（错误值，无负载）
                     if let Some((_, en)) = &ifs.err_capture {
+                        // err_capture always read-only
                         let err_ty = match &ct {
                             Some(SType::ErrorUnion(e, _)) => {
                                 Some(SType::ErrorUnion(e.clone(), Box::new(SType::Unknown)))
@@ -446,6 +480,7 @@ impl Checker {
                                 pending_fields: None,
                                 source: AllocSource::Unknown,
                                 thread: None,
+                                mut_: false,
                             },
                         );
                         self.check_stmt(else_b, scopes, err_constraint, ret_ty);
@@ -461,7 +496,7 @@ impl Checker {
                 self.check_condition(ct.as_ref(), &w.cond.span());
                 self.conditional_depth += 1;
                 // optional 捕获：while (maybe) |v|——Some 绑定 v 并循环
-                if let Some((_, n)) = &w.capture {
+                if let Some((cap_mode, n)) = &w.capture {
                     let cap_ty = match &ct {
                         Some(SType::Optional(inner)) => Some(inner.as_ref().clone()),
                         Some(SType::ErrorUnion(_, inner)) => Some(inner.as_ref().clone()),
@@ -475,6 +510,7 @@ impl Checker {
                             pending_fields: None,
                             source: AllocSource::Unknown,
                             thread: None,
+                            mut_: *cap_mode == CaptureMode::Mut,
                         },
                     );
                     self.check_block(&w.body, scopes, err_constraint, ret_ty);
@@ -495,6 +531,7 @@ impl Checker {
                         pending_fields: None,
                         source: AllocSource::Unknown,
                         thread: None,
+                        mut_: f.capture == CaptureMode::Mut,
                     },
                 );
                 // G3 Q18：循环体内 join 非直线路径
@@ -540,7 +577,7 @@ impl Checker {
                 self.conditional_depth += 1;
                 for arm in &sw.arms {
                     scopes.push(HashMap::new());
-                    if let Some((_, n)) = &arm.capture {
+                    if let Some((cap_mode, n)) = &arm.capture {
                         scopes.last_mut().unwrap().insert(
                             n.clone(),
                             VarInfo {
@@ -551,6 +588,7 @@ impl Checker {
                                 pending_fields: None,
                                 source: AllocSource::Unknown,
                                 thread: None,
+                                mut_: *cap_mode == CaptureMode::Mut,
                             },
                         );
                     }
@@ -560,6 +598,12 @@ impl Checker {
                 self.conditional_depth -= 1;
             }
             Stmt::Return(e, span) => {
+                // 2026-08-25：`return move x` → 标记对应 owned 变量
+                if let Some(Expr::Move(inner, _)) = e {
+                    if let Expr::Ident(name, _) = inner.as_ref() {
+                        self.mark_moved(name);
+                    }
+                }
                 // M2.4 Q18：返回值引用被编译期禁止（引用逃逸到比目标更长寿的
                 // 作用域 = 悬垂唯一产生路径）——局部变量与参数均不可；
                 // 带所有权参数须 `return move param` 转移所有权
@@ -677,11 +721,191 @@ impl Checker {
             }
             Stmt::Defer(expr, _) => {
                 let _ = self.expr_ty(expr, scopes, None);
+                self.covered_by_defer(expr);
             }
             Stmt::Errdefer(expr, _) => {
                 let _ = self.expr_ty(expr, scopes, None);
+                self.covered_by_defer(expr);
             }
             _ => {}
+        }
+    }
+
+    /// 2026-08-25：defer/errdefer 表达式中引用的 owned 变量标记为已覆盖
+    fn covered_by_defer(&mut self, expr: &Expr) {
+        let mut refs = Vec::new();
+        Self::collect_idents(expr, &mut refs);
+        for name in &refs {
+            self.mark_covered(name);
+        }
+    }
+
+    /// 收集表达式中的所有 move 目标（`move x` 中的 `x`）
+    fn collect_move_targets(expr: &Expr, out: &mut Vec<String>) {
+        match expr {
+            Expr::Move(inner, _) => {
+                if let Expr::Ident(name, _) = inner.as_ref() {
+                    out.push(name.clone());
+                }
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    Self::collect_move_targets(arg, out);
+                }
+            }
+            Expr::Binary(_, left, right, _) => {
+                Self::collect_move_targets(left, out);
+                Self::collect_move_targets(right, out);
+            }
+            Expr::Unary(_, inner, _)
+            | Expr::Deref(inner, _)
+            | Expr::AddrOf(inner, _, _)
+            | Expr::Try(inner, _)
+            | Expr::Await(inner, _) => {
+                Self::collect_move_targets(inner, out);
+            }
+            Expr::ContainerLit { items, .. } => {
+                for it in items {
+                    Self::collect_move_targets(it, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 收集表达式中的所有标识符引用
+    fn collect_idents(expr: &Expr, out: &mut Vec<String>) {
+        match expr {
+            Expr::Ident(name, _) => out.push(name.clone()),
+            Expr::Call { callee, args, .. } => {
+                Self::collect_idents(callee, out);
+                for arg in args {
+                    Self::collect_idents(arg, out);
+                }
+            }
+            Expr::Dot { base, .. } | Expr::Field { base, .. } => Self::collect_idents(base, out),
+            Expr::Index { base, indices, .. } => {
+                Self::collect_idents(base, out);
+                for idx in indices {
+                    Self::collect_idents(idx, out);
+                }
+            }
+            Expr::Unary(_, inner, _)
+            | Expr::Deref(inner, _)
+            | Expr::AddrOf(inner, _, _)
+            | Expr::Try(inner, _)
+            | Expr::Await(inner, _)
+            | Expr::Move(inner, _) => {
+                Self::collect_idents(inner, out);
+            }
+            Expr::Binary(_, left, right, _) | Expr::Orelse(left, right, _) => {
+                Self::collect_idents(left, out);
+                Self::collect_idents(right, out);
+            }
+            Expr::Catch(expr, kind, _) => {
+                Self::collect_idents(expr, out);
+                match kind.as_ref() {
+                    CatchKind::Default(e) => Self::collect_idents(e, out),
+                    CatchKind::Bind { name: _, body } => {
+                        for stmt in &body.stmts {
+                            if let Stmt::Expr(e) = stmt {
+                                Self::collect_idents(e, out);
+                            }
+                        }
+                    }
+                }
+            }
+            Expr::IfExpr {
+                cond,
+                then_e,
+                else_e,
+                ..
+            } => {
+                Self::collect_idents(cond, out);
+                Self::collect_idents(then_e, out);
+                Self::collect_idents(else_e, out);
+            }
+            Expr::Block(inner, _) => {
+                for stmt in &inner.stmts {
+                    if let Stmt::Expr(e) = stmt {
+                        Self::collect_idents(e, out);
+                    }
+                }
+            }
+            Expr::Closure { body, .. } => {
+                for stmt in &body.stmts {
+                    if let Stmt::Expr(e) = stmt {
+                        Self::collect_idents(e, out);
+                    }
+                }
+            }
+            Expr::ContainerLit { items, .. } => {
+                for it in items {
+                    Self::collect_idents(it, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 2026-08-25：标记 owned 变量已被 defer 覆盖
+    fn mark_covered(&mut self, name: &str) {
+        for scope in self.owned_stack.iter_mut().rev() {
+            scope.retain(|v| v != name);
+        }
+    }
+
+    /// 2026-08-25：检查写目标是否为只读变量（缺少 `mut` 声明）
+    pub(crate) fn check_mut_write(
+        &mut self,
+        target: &Expr,
+        scopes: &[HashMap<String, VarInfo>],
+        span: &Span,
+    ) {
+        // 直接变量赋值：v = x
+        if let Expr::Ident(name, _) = target {
+            for s in scopes.iter().rev() {
+                if let Some(info) = s.get(name) {
+                    if !info.mut_ {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "cannot assign to `{name}` because it is not declared `mut`; \
+                                 use `var mut {name}` to make it mutable"
+                            ),
+                        ));
+                    }
+                    break;
+                }
+            }
+            return;
+        }
+        // 索引赋值：v[i] = x ——检查基变量是否为 mut
+        if let Expr::Index { base, .. } = target {
+            if let Expr::Ident(name, _) = base.as_ref() {
+                for s in scopes.iter().rev() {
+                    if let Some(info) = s.get(name) {
+                        if !info.mut_ {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot mutate `{name}` through index because it is not declared `mut`; \
+                                     use `var mut {name}` to make it mutable"
+                                ),
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+    }
+
+    /// 2026-08-25：标记 owned 变量已被 move 转移
+    fn mark_moved(&mut self, name: &str) {
+        for scope in self.owned_stack.iter_mut().rev() {
+            scope.retain(|v| v != name);
         }
     }
 

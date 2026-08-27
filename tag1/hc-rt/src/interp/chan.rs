@@ -1,8 +1,4 @@
-//! 通道操作（E4：M:N 协程通信——chan<T>）
-//!
-//! Task 1 实现：chan.init(alloc[, cap]) 构造 + send/recv/try_send/try_recv/close 方法。
-//! 通道使用 Mutex<ChanInner> + Condvar 实现阻塞式 send/recv，非阻塞操作返回 bool/Opt。
-//! 阻塞操作会阻塞当前 OS 线程（worker 线程），其他 worker 线程仍可继续运行。
+//! 通道实现：chan<T> 类型、send/recv/try_send/try_recv/close
 
 use std::rc::Rc;
 use std::sync::Arc;

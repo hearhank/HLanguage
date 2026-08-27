@@ -1,8 +1,4 @@
-//! M2.1 接口三用途：真实实现（去占位）
-//!
-//! ① implements 标注 = 方法契约验证（class 冒号标注须实现接口方法，含超接口）；
-//! ② where T: 约束调用点验证；③ 类型参数编译可验证（签名兼容，能精确判定才报错）。
-//! 内建接口（ICompare/INumber/IIterable/Io）由编译器内建实现，跳过契约检查。
+//! hc-rt/tests/interfaces.rs
 
 use hc_rt::Interp;
 

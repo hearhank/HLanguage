@@ -1,8 +1,4 @@
-//! C1 CLI 测试：`hc run <目录>` 包加载形态——入口 `main.hc` 优先/首个 `.hc`、
-//! 兄弟文件合并 + build.zon 依赖装载（复用 run_file 路径，无需 zig）。
-//! F2：`io.exit`/`ExitType` 端到端——静默/打印/退出码（interpret 与 --ir 路径）。
-//!
-//! 用 `hc` 二进制（CARGO_BIN_EXE_hc-tools）驱动 CLI，断言输出与退出码。
+//! hc-tools/tests/cli.rs
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

@@ -9,7 +9,7 @@ import H.std.{io};
 // 切片（Q6/R2）：&[T] 只读 / &mut [T] 可写；取段 &arr[1..3] / &mut arr[0..2]
 
 fn sum_slice(s: &[i32]) i32 {
-    var total = 0;
+    var mut total = 0;
     for (s) |item| {
         total += item;
     }
@@ -31,25 +31,26 @@ fn main() !void {
 
     // 可写切片视图（唯一写者登记）
     var s2: &mut [i32] = &mut arr[0..2];
+    // io.print("{}",s2.length);
     zero_out(s2);
     io.print("arr[0] = {}, arr[1] = {}\n", arr[0], arr[1]);
 
     // 越界：编译期可证 → 所有模式编译期报错
-    // var v = arr[10];  // 错误（编译期，Q24）
+    var v = arr[10];  // 错误（编译期，Q24）
 
     // 字符串字面量 = &[u8] 静态只读切片
     var msg: &[u8] = "hello";
     io.print("{}\n", msg);
 }
 
-[test] fn read_only_slice_view() !void {
+[Test] fn read_only_slice_view() !void {
     var arr = [1, 2, 3, 4, 5];
     var s: &[i32] = &arr[1..3];
     try expect_eq(s.len, 2);
     try expect_eq(sum_slice(s), 5);
 }
 
-[test] fn writable_slice() !void {
+[Test] fn writable_slice() !void {
     var arr = [1, 2, 3, 4, 5];
     var s2: &mut [i32] = &mut arr[0..2];
     zero_out(s2);
@@ -58,7 +59,7 @@ fn main() !void {
     try expect_eq(arr[2], 3);   // 切片外不受影响
 }
 
-[test] fn string_literal_slice() !void {
+[Test] fn string_literal_slice() !void {
     var msg: &[u8] = "hello";
     try expect_eq(msg.len, 5);
     try expect_eq_slices(msg, "hello");

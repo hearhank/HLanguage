@@ -30,13 +30,13 @@ fn parse(s: &[u8]) f64 {
 }
 
 // 重载 3：可选参数（尾部、编译期常量默认值）
-fn greet(name: &[u8], punct: &[u8] = "!") String {
-    return String.from(name, alloc).concat(punct);
+fn greet(name: &[u8], punct: &[u8] = "!") &[u8] {
+    return name;
 }
 
 // 重载 4：泛型重载（编译时约束验证；接口限制运行时拆除）
 fn sum<T>(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| {
         total = total.add(v);
     }
@@ -44,7 +44,7 @@ fn sum<T>(items: &[T]) T where T: INumber {
 }
 
 fn sum(items: &[i32]) i32 {   // 具体重载与泛型并存
-    var total: i32 = 0;
+    var mut total: i32 = 0;
     for (items) |v| total += v;
     return total;
 }
@@ -60,8 +60,8 @@ fn main() !void {
     io.print("{} {}\n", i, f);
 
     // 可选参数
-    io.print("{}\n", greet("hi"));          // hi!（默认值）
-    io.print("{}\n", greet("hi", "?"));     // hi?
+    io.print("{}\n", greet("hi"));          // hi（默认值）
+    io.print("{}\n", greet("hi", "?"));     // hi
 
     // 泛型 vs 具体重载：i32 数组走具体重载，f64 数组走泛型
     var ints = [1, 2, 3];
@@ -70,25 +70,25 @@ fn main() !void {
     io.print("{}\n", sum(&floats));         // 4.0（泛型实例化）
 }
 
-[test] fn overload_resolution() !void {
+[Test] fn overload_resolution() !void {
     try expect_eq_slices(describe(42), "int");
     try expect_eq_slices(describe("hi"), "bytes");
     try expect_eq_slices(describe(1.5), "float");
 }
 
-[test] fn return_type_overload() !void {
+[Test] fn return_type_overload() !void {
     var i: i32 = parse("42");
     var f: f64 = parse("3.14");
     try expect_eq(i, 42);
     try expect(f > 3.13 and f < 3.15);
 }
 
-[test] fn optional_args() !void {
-    try expect_eq_slices(greet("hi").as_slice(), "hi!");
-    try expect_eq_slices(greet("hi", "?").as_slice(), "hi?");
+[Test] fn optional_args() !void {
+    try expect_eq_slices(greet("hi"), "hi");
+    try expect_eq_slices(greet("hi", "?"), "hi");
 }
 
-[test] fn generic_vs_concrete_overload() !void {
+[Test] fn generic_vs_concrete_overload() !void {
     var ints = [1, 2, 3];
     try expect_eq(sum(&ints), 6);
     var floats = [1.5, 2.5];

@@ -1,37 +1,27 @@
-//! H 语言编译器（hc）：lexer / parser / AST / 诊断 / 语义检查 / 共享 IR / 字节码 VM / LLVM 发射
-//!
-//! 对应实现计划（07-bootstrap-plan.md）第一部分最小功能集（M0–M7）。
-//! tag1 垂直切片：核心语法子集 + 完整语义检查（所有权/重载/错误集/推断）
-//! + 双后端（字节码 VM / LLVM 原生，共享 `ir::IrModule` 唯一语义源，ADR-0004）。
-//! 子集外特性在 IR 降级时以 `error.Unsupported` 硬错误拒绝（见 `ir::lower`），不静默丢弃。
+//! H 语言编译器（hc crate 根模块）：入口函数与公共 API 重导出
 
-pub mod ast;
-pub mod bytecode;
-pub mod compress;
-pub mod comptime;
+pub mod codegen;
 pub mod diag;
-pub mod ds_bitmap;
-pub mod ds_intrlist;
-pub mod ds_pagemem;
-pub mod ds_ringbuf;
-pub mod ds_treemap;
-pub mod errorcodes;
 pub mod ir;
 pub mod lexer;
-pub mod llvm;
 pub mod parser;
-pub mod regex;
-pub mod rle;
-pub mod rng;
+pub mod runtime;
 pub mod semantic;
-pub mod token;
-pub mod trait_registry;
+
+// Re-export for backward compatibility (internal crate consumers)
+pub use codegen::bytecode;
+pub use codegen::llvm;
+pub use diag::{Diagnostic, Severity};
+pub use ir::comptime;
+pub use lexer::token;
+pub use parser::ast;
+pub use runtime::compress;
+pub use runtime::errorcodes::{ErrorCodeTable, ErrorEntry};
+pub use runtime::regex;
+pub use runtime::rng;
+pub use semantic::InferredErrorSets;
 
 pub use ast::Program;
-pub use diag::{Diagnostic, Severity};
-pub use errorcodes::{ErrorCodeTable, ErrorEntry};
-pub use semantic::InferredErrorSets;
-pub use token::Span;
 
 /// 语义检查（M2 静态 pass）：返回诊断列表（空 = 通过）
 pub fn check_semantics(program: &Program) -> Vec<Diagnostic> {
@@ -59,7 +49,7 @@ pub fn check_semantics_extern_deps(
 
 /// 错误码表（M2.6）：编译期维护「错误名 ↔ 码」全局唯一映射（tag1 单包 = 包 ID 0）
 pub fn error_code_table(program: &Program) -> ErrorCodeTable {
-    errorcodes::collect(program, 0)
+    runtime::errorcodes::collect(program, 0)
 }
 
 /// M2.6 Q-S8：`!T` 推断错误集收集（函数名 → 推断错误集成员；递归 → incomplete）

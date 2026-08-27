@@ -29,7 +29,7 @@ fn main() !void {
     io.print("find 6: {}\n", binary_search(&sorted, 6) orelse -1);
 }
 
-[test] fn binary_search_hit_miss() !void {
+[Test] fn binary_search_hit_miss() !void {
     var sorted = [1, 3, 5, 7, 9, 11];
     try expect_eq(binary_search(&sorted, 7).?, 3);
     try expect_eq(binary_search(&sorted, 1).?, 0);

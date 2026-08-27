@@ -1,7 +1,4 @@
-//! C5-2：无限大小类型语言层拒绝
-//!
-//! 值内嵌自引用/互递归（无间接层）= 编译错误（报类型名 + 循环链位置）。
-//! 合法间接层 = 指针/装箱/堆容器/?T。
+//! hc/tests/infinite_size.rs
 
 use hc::{check_semantics, parse_source};
 

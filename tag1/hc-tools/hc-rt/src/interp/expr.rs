@@ -99,6 +99,18 @@ impl Interp {
             Expr::TupleLit(items, _) => Ok(Value::arr(
                 items.iter().map(|e| self.eval(e)).collect::<Result<_>>()?,
             )),
+            Expr::ContainerLit {
+                ty, items, span, ..
+            } => {
+                let mut vals = Vec::new();
+                for it in items {
+                    vals.push(self.eval(it)?);
+                }
+                if ty == "Vec" || ty == "Deque" {
+                    return Ok(Value::vec(vals, Value::Alloc));
+                }
+                return Err(RtError::new("TypeError", Some(span.clone())));
+            }
             // struct 类型字面量（E1.2 组 D）：类型值——comptime 类型函数体内求值
             // （经 `hc::comptime` 具体化引擎），运行时表达式位置 = 用法错误
             Expr::StructType { span, .. } => Err(RtError::msg(
@@ -121,6 +133,14 @@ impl Interp {
                 fields,
                 ..
             } => {
+                // Map<K,V>{k = v, ...} 容器字面量（ADR-0027）
+                if ty == "Map" {
+                    let mut m = HashMap::new();
+                    for (k, v) in fields {
+                        m.insert(k.clone(), self.eval(v)?);
+                    }
+                    return Ok(Value::map(m, Value::Alloc));
+                }
                 // class 字面量构造 / enum 带负载字面量。
                 // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 let ty = if ty_args.is_empty() {
@@ -260,13 +280,15 @@ impl Interp {
                                 len,
                             });
                         }
-                        if let Value::Str(s) = &b {
-                            let bytes = s.borrow().clone();
+                        if let Value::String(s) = &b {
+                            let bytes = s.as_slice();
                             let hi_i = if open_end { bytes.len() } else { hi_i };
                             if hi_i > bytes.len() || lo_i > bytes.len() {
                                 return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
                             }
-                            return Ok(Value::str_bytes(bytes[lo_i..hi_i].to_vec()));
+                            return Ok(Value::String(StringData::from_bytes(
+                                bytes[lo_i..hi_i].to_vec(),
+                            )));
                         }
                         // 切片再切片（57-protocol-parse：data[0..8]——data 是 &[u8] 参数）
                         if let Value::Slice { data, start, len } = &b {
@@ -324,10 +346,10 @@ impl Interp {
                         drop(arr);
                         Ok(v)
                     }
-                    Value::Str(s) => {
+                    Value::String(s) => {
                         let idx = self.eval(&indices[0])?;
                         let i = self.as_index(&idx, span)?;
-                        let bytes = s.borrow();
+                        let bytes = s.as_slice();
                         if i >= bytes.len() {
                             return Err(RtError::new("IndexOutOfBounds", Some(span.clone())));
                         }
@@ -655,10 +677,6 @@ impl Interp {
                     None => Err(RtError::new("NoField", Some(span.clone()))),
                 }
             }
-            Value::Str(s) => match field {
-                "len" => Ok(Value::Int(s.borrow().len() as i128)),
-                _ => Err(RtError::new("NoField", Some(span.clone()))),
-            },
             Value::Arr(a) => match field {
                 "len" => Ok(Value::Int(a.borrow().len() as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
@@ -671,6 +689,14 @@ impl Interp {
             // 集合（G4）：Map 字段读（.len）
             Value::Map(m) => match field {
                 "len" => Ok(Value::Int(m.borrow().fields.len() as i128)),
+                _ => Err(RtError::new("NoField", Some(span.clone()))),
+            },
+            Value::String(s) => match field {
+                "len" => Ok(Value::Int(s.len() as i128)),
+                _ => Err(RtError::new("NoField", Some(span.clone()))),
+            },
+            Value::Bytes(b) => match field {
+                "len" => Ok(Value::Int(b.borrow().len() as i128)),
                 _ => Err(RtError::new("NoField", Some(span.clone()))),
             },
             Value::Slice { len, .. } => match field {
@@ -1105,7 +1131,7 @@ impl Interp {
                     }
                     return Ok(Value::vec(vec![], alloc_v));
                 }
-                // Table(T).init(alloc, rows, cols, init)（M8；G4：外层 Vec 持分配器引用）
+                // Table(T).init(rows, cols, init, alloc)（M8；G4：外层 Vec 持分配器引用）
                 if bname == "Table" && field == "init" {
                     if args.len() < 4 {
                         return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -1202,7 +1228,9 @@ impl Interp {
                     }
                     // Arena.init(alloc) 内建：真实 arena 句柄（G1：bump + 块链表）
                     if bname == "Arena" && field == "init" {
-                        return Ok(Value::Arena(Rc::new(RefCell::new(ArenaState::new()))));
+                        let mut arena = ArenaState::new();
+                        arena.alloc_tracker = Some(self.alloc_tracker.clone());
+                        return Ok(Value::Arena(Rc::new(RefCell::new(arena))));
                     }
                     // Pool.init(backing, item_size) 内建：固定大小对象池（Phase 3）
                     if bname == "Pool" && field == "init" {
@@ -1294,7 +1322,7 @@ impl Interp {
                         }
                         return Ok(Value::vec(vec![], alloc_v));
                     }
-                    // Table(T).init(alloc, rows, cols, init)：二维表（M8 定案；G4 持有 alloc）
+                    // Table(T).init(rows, cols, init, alloc)：二维表（M8 定案；G4 持有 alloc）
                     if bname == "Table" && field == "init" {
                         if args.len() < 4 {
                             return Err(RtError::new("ArityMismatch", Some(span.clone())));
@@ -1351,21 +1379,12 @@ impl Interp {
                         }
                         return Ok(Value::arr(items));
                     }
-                    // String.from(s, alloc) 内建
-                    if bname == "String" && field == "from" {
-                        let v = self.eval(&args[0])?;
-                        let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            return Ok(Value::Str(s));
-                        }
-                        return Ok(Value::str(&v.display()));
-                    }
                     // json.parse(data)（M5.3 序列化辅助）：JSON 对象 → Map
                     if bname == "json" && field == "parse" {
                         let v = self.eval(&args[0])?;
                         let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                        if let Value::String(s) = v {
+                            let text = String::from_utf8_lossy(s.as_slice()).to_string();
                             let obj = self.parse_json_obj(&text)?;
                             return Ok(Value::class("Map", obj));
                         }
@@ -1375,8 +1394,8 @@ impl Interp {
                     if bname == "csv" && field == "parse" {
                         let v = self.eval(&args[0])?;
                         let v = self.deref_value(v);
-                        if let Value::Str(s) = v {
-                            let text = String::from_utf8_lossy(&s.borrow()).to_string();
+                        if let Value::String(s) = v {
+                            let text = String::from_utf8_lossy(s.as_slice()).to_string();
                             let rows = text
                                 .split('\n')
                                 .map(|line| line.strip_suffix('\r').unwrap_or(line))
@@ -1406,7 +1425,7 @@ impl Interp {
                             let json = self.eval(&args[0])?;
                             let json = self.deref_value(json);
                             let s = match json {
-                                Value::Str(s) => s.borrow().clone(),
+                                Value::String(s) => s.as_slice().to_vec(),
                                 _ => return Err(RtError::new("TypeError", Some(span.clone()))),
                             };
                             let obj = self.parse_json_obj(&String::from_utf8_lossy(&s))?;
@@ -1538,7 +1557,12 @@ impl Interp {
         }
     }
 
-    pub(crate) fn pick_fn(&self, name: &str, arg_vals: &[Value]) -> Result<FnDef> {
+    pub(crate) fn pick_fn(&mut self, name: &str, arg_vals: &[Value]) -> Result<FnDef> {
+        // 缓存查找：键 = (函数名, 参数个数)
+        let cache_key = (name.to_string(), arg_vals.len());
+        if let Some(cached) = self.fn_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
         let candidates = self
             .funcs
             .get(name)
@@ -1554,7 +1578,9 @@ impl Interp {
             exact
         };
         if pool.len() == 1 {
-            return Ok(pool[0].clone());
+            let result = pool[0].clone();
+            self.fn_cache.insert(cache_key, result.clone());
+            return Ok(result);
         }
         // 2) 按实参值类型匹配（具体优先于泛型）
         let mut best: Option<&FnDef> = None;
@@ -1590,7 +1616,7 @@ impl Interp {
                         match &a {
                             Value::Int(_) if want_float => ok = false,
                             Value::Float(_) if want_int => ok = false,
-                            Value::Str(_) if want_int || want_float || want_bool => ok = false,
+                            Value::String(_) if want_int || want_float || want_bool => ok = false,
                             Value::Bool(_) if !want_bool => ok = false,
                             Value::Class(c) if n != "String" && c.borrow().name != *n => ok = false,
                             // 泛型 T（where T: INumber 等）：不排除（编译时验证归 M2）
@@ -1607,7 +1633,7 @@ impl Interp {
                     Type::Slice(inner, _) => {
                         // &[u8] / &[T]：Str 或数组；泛型元素 T 标记为泛型
                         match &a {
-                            Value::Str(_) => {}
+                            Value::String(_) => {}
                             Value::Arr(_) | Value::Slice { .. } => {}
                             _ => ok = false,
                         }

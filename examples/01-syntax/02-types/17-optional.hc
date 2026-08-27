@@ -55,18 +55,18 @@ fn main() !void {
     io.print("{}\n", label);
 }
 
-[test] fn orelse_default_value() !void {
+[Test] fn orelse_default_value() !void {
     var n = parse_int("42") orelse 0;   // 草图实现返回 null → 默认值
     try expect_eq(n, 0);
 }
 
-[test] fn optional_capture() !void {
+[Test] fn optional_capture() !void {
     var maybe = parse_int("abc");
     var n = if (maybe) |v| v else 0;
     try expect_eq(n, 0);
 }
 
-[test] fn switch_exhaustive() !void {
+[Test] fn switch_exhaustive() !void {
     var dir = Direction.east;
     var dx = switch (dir) {
         Direction.north => 0,

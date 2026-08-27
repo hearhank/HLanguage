@@ -15,6 +15,7 @@ use hc::ast::*;
 use hc::comptime::{self, Instantiated};
 use hc::token::Span;
 
+pub use crate::string::StringData;
 use crate::value::{
     AllocBlock, AllocErr, AllocatorImpl, ArenaAllocErr, ArenaState, BoxedData, ChanInner,
     ChanState, ClassData, ClosureData, LazyIterData, LazyOp, LeakRecord, MapData, PoolState, Value,
@@ -514,6 +515,8 @@ use hc::rng::xorshift64;
 pub struct Interp {
     pub source: String,
     funcs: HashMap<String, Vec<FnDef>>,
+    /// 函数调用缓存：避免重复 HashMap 查找（键 = (函数名, 参数个数)）
+    fn_cache: HashMap<(String, usize), FnDef>,
     types: HashMap<String, TypeDef>,
     globals: HashMap<String, Rc<RefCell<Value>>>,
     scopes: Vec<Scope>,

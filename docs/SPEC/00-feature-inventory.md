@@ -9,7 +9,7 @@
 ### 1.1 词法分析（Lexer）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using / import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
+| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using（已废弃）/ import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
 | 字面量 | 整数（进制前缀+后缀）、浮点、字符串（含转义）、原生字符串 `"""..."""`、字符 | ✅ |
 | 运算符/标点 | 完整运算符集（算术/比较/逻辑/位/赋值/范围/`||` 错误集联合） | ✅ |
 | 注释 | 行注释 `//` + 块注释 `/* */` | ✅ |
@@ -19,14 +19,14 @@
 ### 1.2 语法分析（Parser + AST）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
+| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using（已废弃）/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
 | 语句解析 | 表达式/变量声明/if/while/for/switch（含守卫）/return/break/continue/defer/errdefer/块 | ✅ |
 | 表达式解析 | 完整优先级：字面量/标识符/一元/二元/调用/索引/字段/取址/解引用/if/switch/闭包/构造 | ✅ |
 | 类型解析 | 命名类型/指针/切片/可选/错误联合/元组/数组/推断类型 | ✅ |
 | 函数参数 | 类型标注/默认值/anytype/T: type 类型参数 | ✅ |
 | 重载解析 | 同名函数多候选（含可选参数） | ✅ |
 | 测试标记 | `[test]` / `[test("name")]` 声明级属性 | ✅ |
-| 类属性 | `[Continuous]` / `[Pad]` / `[Align]` / `[Module]` | ✅ |
+| 类属性 | `[Continuous]` / `[Pad]` / `[Align]` | ✅ |
 | 跨文件解析 | 兄弟文件符号登记、目录 = 包 | ✅ |
 
 ### 1.3 诊断基础设施
@@ -82,6 +82,7 @@
 | 多指针合法 | 多 `*mut`/`*T` 合法，无唯一写者约束 | ✅ |
 | 作用域销毁 | LIFO 销毁代码生成 | ✅ |
 | definite assignment (C7) | `alloc.init(T)` 无参构造后字段未全赋值即 return → 编译错误 | ✅ |
+| `owned` 变量检查 | `owned` 标注变量必须匹配 `defer` 或 `move`，否则编译错误 | ✅ |
 
 ### 2.5 错误集分析
 | 功能 | 描述 | 状态 |
@@ -475,12 +476,22 @@
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | `namespace` | 命名空间声明 | ✅ |
-| `using` | 命名空间引入 | ✅ |
+| `using` | 命名空间引入（已废弃，解析到直接报错） | 🟡 废弃 |
 | `import` | 包导入（含 `H.std.{...}` 限定选择） | ✅ |
 | `pub` | 可见性控制 | ✅ |
 | `export` | 导出标记 | ✅ |
 | 目录 = 包 | 同目录 `.hc` 文件自动组包 | ✅ |
 | 兄弟文件符号 | 同包文件间全可见 | ✅ |
+| `src/Modules/` 目录模块 | 子目录自动识别为模块，命名空间计算自动剥离 `Modules/` 前缀 | ✅ |
+| `context.hc` 文件约定 | 模块的 context 定义文件，编译器自动识别 | ✅ |
+| 模块 context.hc 验证 | `hc run` 时检查 src/Modules/ 下各子目录是否有 context.hc | ✅ |
+| `IContext` 接口 | `H.std.ioc` 提供 IoC 容器接口（register/get/registerFactory） | ✅ 运行时内建 |
+| `AppContext` 实现 | 应用级 context，背靠 Arena，支持层级委托 | ✅ |
+| Context 层级委托 | 子 context 持有父 context 引用，解析不到时向上委托 | ✅ |
+| 模块面向接口编程 | 模块只知接口，不知具体实现，通过 context 获取实例 | ⏳ 待实现 |
+| 命名注册 | 同一接口可注册多个实现，通过 name 区分 | ✅ |
+| 工厂方法注册 | `registerFactory<T>(name, factory)` 接收 context 参数，`make` 调用 | ✅ |
+| `tests/` 目录 | 项目根目录，不参与命名空间，`hc test` 发现执行 | ✅ |
 | 依赖包 pub 边界 | 跨包仅 pub 符号可见 | ✅ |
 | `build.zon` 清单 | 包名/版本/类型/文件/依赖声明 | ✅ |
 | 本地依赖 | 基于 path 的本地包依赖 | ✅ |
@@ -488,7 +499,7 @@
 | 依赖递归装载 | 依赖的依赖递归解析 | ✅ |
 | 版本声明检查 | 依赖版本不符告警 | ✅ |
 | 指纹校验 | SHA-256 / 整数指纹 | ✅ |
-| `[module]` 领域约定 | 模块边界、owns 数据、pub API、上下文 init 参数列表 | ✅ |
+| `[module]` 领域约定 | 已移除，由 `src/Modules/` 目录结构替代（ADR-0026） | 🟡 移除 |
 
 ---
 
@@ -589,7 +600,7 @@
 | tree-walking 解释器 | `hc run <file.hc>` | 全语言 | ✅ |
 | IR 参考解释器 | `hc run --ir <file.hc>` | 全语言（含 G1–G5 标准库） | ✅ |
 | 字节码 VM | `hc run <file.hbc>` | 全语言（复用 `run_ir`） | ✅ |
-| LLVM 原生 | `hc build <file.hc>` | 已实现内建子集（compile mismatch ≤ 60） | 🟡 |
+| LLVM 原生 | `hc build <file.hc>` | 已实现内建子集（compile mismatch = 16，全为设计内硬错误/IR 降级器限制/解释器 bug，非 LLVM 后端问题） | 🟡 |
 
 四个后端共享同一语义源（`IrModule` + `run_ir`，ADR-0004），禁止后端私语义。
 
@@ -601,12 +612,12 @@
 |------|------|------|
 | `cargo test --workspace` | 900+ 项全绿（含新增 chan/mutex/scheduler 测试） | 2026-08-24 |
 | 解释模式示例回归 | 147 通过 + 0 失败 + 1 跳过（全绿） | 2026-08-23 |
-| 原生模式交叉验证 | 57 项 mismatch（未实现原生内建/方法） | 2026-08-23 |
+| 原生模式交叉验证 | 16 项 mismatch（11 defer-try-f 设计内硬错误 + 3 Vec 字面量构造 IR 限制 + 2 解释器 vs 原生行为差异） | 2026-08-26 |
 | 一致性测试 tree-walking ↔ IR | 100+ 测试全绿 | 2026-08-23 |
 | 通道测试（chan<T>） | 9 测试全绿（含 3 spawn+通道集成测试） | 2026-08-24 |
 | 调度器单元测试 | 4 测试全绿（submit+complete/state transitions/multi/unknown） | 2026-08-24 |
 | Mutex 测试 | 11 测试全绿（含 spawn 共享访问） | 2026-08-24 |
-| LLVM 后端单元测试 | 60 测试全绿（含 C8-1 类型槽表） | 2026-08-24 |
+| LLVM 后端单元测试 | 60 测试全绿（含 C8-1 类型槽表） | 2026-08-26 |
 
 ---
 
@@ -630,7 +641,7 @@
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | K1 H 版 lexer | `stage1/lexer.hc` 用 H 重写词法分析，6621 token 零 diff | ✅ |
-| K2 H 版 parser/AST | token → 声明树 + 对照测试（k2_parser 测试超时，H 版需适配新语法） | 🔴 |
+| K2 H 版 parser/AST | token → 声明树 + 对照测试（K2 性能已优化：解析自身约 1s，较原 60s+ 提升 ~60x，8 项语料对照通过） | 🟢 已优化 |
 | K3 H 版语义 | 名称解析/类型检查/所有权/错误集 + 对照 | 🔴 |
 | K4 H 版后端 | IR 参考解释器（跑 H 自身测试）+ 对照 | 🔴 |
 | K5 自举闭环 stage2 | 用 H 编译 H；产物再编译产物 | 🔴 |

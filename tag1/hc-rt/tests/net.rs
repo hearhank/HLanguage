@@ -1,5 +1,4 @@
-//! G1（E3.1）net 验收：UDP（bind/send_to/recv_from/local_port/close + 命名空间双语）/
-//! HTTP 客户端（io.net.get）与服务端（io.net.listen + Rust 客户端对答）。
+//! hc-rt/tests/net.rs
 
 use hc_rt::Interp;
 use std::io::{Read, Write};

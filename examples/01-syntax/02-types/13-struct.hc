@@ -45,29 +45,31 @@ fn main() !void {
 
     // 装箱：值 → 堆引用（Q8，获得所有权，作用域退出自动归还）
     var hp: owned *mut Point = box(p, alloc);
+    defer unbox(hp);
     hp.x = 100.0;
     io.print("{}\n", hp.x);
 }
 
-[test] fn dist_calc_and_dual_call() !void {
+[Test] fn dist_calc_and_dual_call() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var q: Point = Point{x = 4.0, y = 6.0};
     var d1 = dist(p, q);
     var d2 = dist(p, q);
-    try expect(d1 > 4.99 and d1 < 5.01);   // √(3²+4²) = 5
-    try expect_eq(d1 == d2, true);         // 双语等价
+    try expect(d1 > 4.99 and d1 < 5.01);
+    try expect_eq(d1 == d2, true);
 }
 
-[test] fn pure_value_copy() !void {
+[Test] fn pure_value_copy() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var p2: Point = p;
     p2.x = 99.0;
-    try expect_eq(p.x, 1.0);               // 复制互不影响
+    try expect_eq(p.x, 1.0);
 }
 
-[test] fn boxing() !void {
+[Test] fn boxing() !void {
     var p: Point = Point{x = 1.0, y = 2.0};
     var hp: owned *mut Point = box(p, alloc);
+    defer unbox(hp);
     hp.x = 100.0;
     try expect_eq(hp.x, 100.0);
 }

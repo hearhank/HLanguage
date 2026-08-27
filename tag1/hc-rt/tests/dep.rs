@@ -1,7 +1,4 @@
-//! M7.2 跨包依赖：`Interp::load_dep` + `using pkg.xxx` / `pkg.xxx` + pub 边界
-//!
-//! 依赖包符号以包名前缀登记（`jsonlib.foo`）、仅 `pub` 项可见；
-//! `using jsonlib;` 再按需平铺。非 pub 依赖符号不可见（运行期失败）。
+//! hc-rt/tests/dep.rs
 
 use hc_rt::Interp;
 

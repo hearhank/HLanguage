@@ -749,18 +749,51 @@ namespace Math { ... }   // 块式分组——可跨文件、一文件多组
 
 - 同包跨命名空间访问经 `import`；`pub` 管**包边界**：跨包可见需 `pub` + 依赖声明
 - 命名空间名 `PascalCase`（首字母大写，缩写词全大写，如 `namespace TCP`）
-- **`[module]` 特性标注 = 模块声明**：命名空间打 `[module]` 标记即声明为**模块**——内容与其它命名空间**隔离**（不参与同包共享命名空间）；需要其它库的数据时经**上下文（init 参数列表）**初始化注入
+- **`src/Modules/` 目录定义模块**（ADR-0026）：`src/Modules/` 下的每个子目录 = 一个模块。子目录名即模块名，编译器自动发现。模块内非 `pub` 符号对外不可见。模块必须定义 `context.hc` 实现 `IContext` 接口。
 
-### 13.2 模块(domain)约定
+### 13.2 模块系统（ADR-0026，2026-08-25 定案）
 
-> 模块是特殊的命名空间，它也包括一些类型和方法，但是它的类型和方法都无直接的外部依赖。和其它模块关联的唯一方式是通过模块中的上下文传入。同领域模型中的领域一样。模块内部不再用命名空间进行代码组织。模块根目录下面必须包括content.hc,module.hc。其直接目录下面的东西是开放的，其子目录下面的东西只能内部使用。
+> 模块是 `src/Modules/` 目录下的子目录，每个模块是一个独立的 IoC 容器域。模块只知接口，不知具体实现，通过 `IContext` 接口注册和获取依赖。
 
-- **边界**：模块 **owns 数据**（领域类型 = 模块内 `class`，无 `pub` = 模块私有）；对外只暴露 **`pub` API**
-- 模块是库包的基本组成单位（库 = 1+ 模块，`Kind::lib`）
-- **上下文（init 参数列表）**：模块需要外部数据/依赖时，经 `init(...)` 显式接收参数并返回上下文，模块 API 首参携带该上下文——**依赖注入式**数据连接（与 `import` 正交）
-- **隔离**：`[module]` 成员仅登记**限定名**（`Orders.xxx`），不参与包扁平命名空间；同包其它代码须限定访问
-- **跨包形态**：库包内命名空间标注 `pub [module]`；`import orders.Orders;`（整模块）后 `Orders.total(...)` 限定访问，或 `import orders.Orders.{total}` 符号选择后 `total(...)` 直调
-- **实例化**：模块多实例/按上下文区分实例的显式语法归第三块 E6 候选
+- **物理结构**：`src/Modules/X/` 目录 = 模块 X，命名空间 = `project.X`。每个模块必须包含 `context.hc`（定义 `IContext` 实现）。
+- **边界**：模块 owns 数据（领域类型 = 模块内 `class`，无 `pub` = 模块私有）；对外只暴露 **`pub` API**（接口定义和 context 结构体）
+- **模块是库包的基本组成单位**（库 = 1+ 模块，`Kind::lib`）
+- **`IContext` 接口**（`H.std.ioc` 提供）：`register<T>(impl)` 深拷贝到 Arena / `register<T>(name, impl)` / `registerFactory<T>(name, factory)` / `get<T>() -> *T`（Arena 引用，不 defer） / `get<T>(name) -> *T` / `make<T>(name) -> owned T`（调用者拥有，必须 defer）
+- **内存管理**：`get` 返回 Arena 引用（无所有权，不需要 `defer`）；`make` 返回 `owned T`（必须 `defer` 或 `move`）；`register` 深拷贝到 Arena，调用者管理原实例
+- **Context 层级委托**：子 context 持有父 context 引用，解析不到时向上委托。每个 context 背靠 Arena 分配器，context 销毁时所有通过它创建的对象一并销毁。
+- **模块面向接口编程**：模块只知接口，不知具体实现。注册什么就用什么。接口定义在提供该模块中，使用方通过 `import` 引入。
+- **模块间连接**：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交。
+- **`[module]` 特性标记已移除**（由 `src/Modules/` 目录结构替代）
+
+#### 引导流程示例
+
+```hc
+// src/main.hc
+import H.std.{io};
+import H.std.ioc.{IContext, AppContext};
+import myapp.Auth.{AuthContext, IUserService};
+
+fn main() !void {
+    var app_ctx = AppContext.init(alloc);
+    defer app_ctx.deinit();
+    app_ctx.register(IUserService, UserService{});
+    var auth = AuthContext.init(app_ctx);
+    run(app_ctx);
+}
+```
+
+#### 测试
+
+```hc
+// tests/test_auth.hc
+import myapp.Auth.{AuthContext, IUserService};
+
+[Test] fn test_auth_service() !void {
+    var ctx = AuthContext.init(alloc);
+    defer ctx.deinit();
+    ctx.register(IUserService, MockUserService{});
+}
+```
 
 ### 13.3 导入语句 import
 
@@ -772,7 +805,7 @@ import pkg.mod;                 // 整模块导入
 
 - **`import` 是文件级导入语句**（声明可放文件任意顶层位置，导入符号作用域 = 文件）
 - **`using` 废弃**（迁移期内旧语法报错提示改用 import）
-- **导入对象 = 模块**（`[module]` 标注的命名空间或包）
+- **导入对象 = 模块**（`src/Modules/` 目录定义的模块或包）
 - **import 与上下文分工**：`import` = **符号引用**（类型/函数，API 面）；模块间**数据连接走上下文**（init 参数注入）
 - 路径形态：`包名.模块名`——`H.std` = 内置标准库根路径；用户库经 build.zon 声明后按包名引用
 - **库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）
@@ -944,12 +977,13 @@ var f: Future<R> = af(...); var v = await f;  // await 任何函数可用
 ### 16.2 源码约定
 
 - 源码 `.hc` 文件位于**包根**（与 build.zon 同目录）——同包文件**共享命名空间**（跨文件直接可见）
-- 多文件按职责拆分（如 `main.hc` / `math.hc` / `io.hc`）；命名空间（`namespace X`）组织符号；`[module]` 标注命名空间 = 模块
+- 多文件按职责拆分（如 `main.hc` / `math.hc` / `io.hc`）；命名空间（`namespace X`）组织符号；`src/Modules/` 目录定义模块（ADR-0026）
 - 目录参数形态：`hc run <目录>` / `hc build <目录>` 把目录当包加载；单文件 `hc run file.hc` = 隐式单文件包
 
 ### 16.3 测试约定
 
-- 测试 = `[test("名称")] fn`，**与源码同文件**（无独立 `test/` 目录）
+- 测试 = `[test("名称")] fn`，可**与源码同文件**（无独立 `test/` 目录），也可放在项目根目录的 `tests/` 目录下
+- `tests/` 目录不参与命名空间系统，仅由 `hc test` 发现和执行
 - `[test]` 函数可被普通代码调用/复用
 - `hc test <dir>` 递归收集 `.hc`（`study/` 设计草图目录除外）；按父目录分组（同目录 = 同包）
 - 断言五件套测试函数内隐式可用；`[test]` 函数内隐式 `test_io` + `alloc`

@@ -7,9 +7,9 @@ import H.std.{io};
 //   - 同一套 await 代码在 Threaded（默认）/ Evented 下运行
 //   - await = 阻塞等待（Threaded） vs 协作挂起（Evented），语义一致（双模式承诺）
 
-async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
+async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !&[u8] where T: Io {
     var body = try io.net.get(url);
-    return String.from(body, alloc);
+    return body;
 }
 
 fn main() !void {
@@ -24,7 +24,7 @@ fn main() !void {
     io.print("{} {}\n", r1.len, r2.len);
 }
 
-[test] fn evented_runtime_demo() !void {
+[Test] fn evented_runtime_demo() !void {
     // S4 演示型（Q-T6）：fetch 依赖真实网络（io.net.get），不在测试中执行；
     // 事件循环语义验证在 M5 运行时测试套件中覆盖
     try expect(true);

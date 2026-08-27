@@ -1,11 +1,4 @@
-//! G3/mem：装箱胖指针携带 alloc 引用（data + vtbl + alloc 三字宽）
-//!
-//! 覆盖设计文档 `08-mem-allocator-design.md` §6 G3 差距落地：
-//! - `box(v)` 单参形态回退全局 alloc（修复旧实现 1 参 ArityMismatch 潜在缺陷）
-//! - `box(v, alloc)` / `box(v, arena)` 显式携带分配器引用（不再忽略第二参）
-//! - `p.alloc()` 返回携带的分配器（三字宽胖指针的 alloc 字）
-//! - 装箱 class → `*I` 胖指针：接口方法分派鸭子类型达 pointee
-//! - `p.*` 解引用读/写穿透、与普通值比较经 pointee
+//! hc-rt/tests/box.rs
 
 use hc_rt::Interp;
 
@@ -57,7 +50,7 @@ fn box_auto_release_on_scope_exit() {
     // Q14：Boxed 值离开作用域自动释放（在块内装箱，块外不可用）
     run_ok(
         "[test] fn t() !void {\n\
-         var outer = 0;\n\
+         var mut outer = 0;\n\
          {\n\
              var p = box(42);\n\
              outer = p.*;\n\
@@ -96,20 +89,21 @@ fn box_interface_dispatch() {
              fn area(self: *Self) f32 { return pi * self.r * self.r; }\n\
          }\n\
          fn total_area(shapes: &Vec<*IShape>) f32 {\n\
-             var total = 0.0;\n\
+             var mut total = 0.0;\n\
              for (shapes) |s| {\n\
                  total += s.area();\n\
              }\n\
              return total;\n\
          }\n\
-         [test] fn t() !void {\n\
-             var rect = Rect{ w = 3.0, h = 4.0 };\n\
-             var circ = Circle{ r = 2.0 };\n\
-             var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);\n\
-             shapes.append(box(rect, alloc));\n\
-             shapes.append(box(circ, alloc));\n\
-             var total = total_area(&shapes);\n\
-             try expect(total > 24.55 and total < 24.57);\n\
+         [test] fn t() !void {
+             var rect = Rect{ w = 3.0, h = 4.0 };
+             var circ = Circle{ r = 2.0 };
+             var mut shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+             defer shapes.deinit();
+             shapes.append(box(rect, alloc));
+             shapes.append(box(circ, alloc));
+             var total = total_area(&shapes);
+             try expect(total > 24.55 and total < 24.57);
          }\n",
     );
 }

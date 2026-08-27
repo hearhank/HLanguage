@@ -19,5 +19,6 @@ fn main() !void {
 
 [test("格式化输入运行")] fn format_entry_runs() !void {
     var a: owned Vec<String> = [];
+    defer a.deinit();
     try main();   // S2：格式串全部合法，运行不抛错
 }

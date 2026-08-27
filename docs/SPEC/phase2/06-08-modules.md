@@ -1,57 +1,185 @@
 # H 语言规范：模块与包
 
-> 对应实现模块：07 第一块语言系统 M1 前端（模块）。
+> 2026-08-25 重构（ADR-0026）：移除 `[module]` 特性标记，改用 `src/Modules/` 目录结构 + `IContext` IoC 容器。
 
 ## 命名空间
 
-- **`namespace Math { ... }`**（Q21 定案，C# 式）：块式分组——**可跨文件**、一文件多组
-- 同包跨命名空间访问经 `import`（见下节）；`pub` 管**包边界**：跨包可见需 `pub` + 依赖声明
-- **命名（2026-08-17 补定）**：命名空间名 `PascalCase`（首字母大写，缩写词全大写，如 `namespace TCP`）；类型名同（`Point`/`HTTPRequest`）；标识符（变量/函数/方法/字段/参数）`snake_case`；常量 `SCREAMING_SNAKE`——见 `01-language-design.md` §10
-- **`[module]` 特性标注 = 模块声明（2026-08-17 定案）**：命名空间打 `[module]` 标记即声明为**模块**——内容与其它命名空间**隔离**（不参与同包共享命名空间）；需要其它库的数据时经**上下文（init 参数列表）**初始化注入（Q11/F2；约定见下节「模块(domain)约定」，实例化语法归第三块 E6）
+**文件路径即命名空间**——不再使用 C# 式块式 `namespace { }` 声明。规则：
+- 根入口文件 `src/main.hc` 的命名空间 = **项目名称**（build.zon 的 `name` 字段）
+- 标准库的根命名空间 = `H.std`
+- 子目录文件的命名空间 = `{上级命名空间}.{当前文件夹名称}`
+- 示例：`src/main.hc` → `{项目名}`；`src/Modules/Auth/interfaces.hc` → `{项目名}.Auth`
+- 文件内不写 `namespace` 关键字时，自动归属上述路径命名空间
+- 文件内写 `namespace abc { }` 时，**覆盖**默认路径命名空间，指定为 `abc`
+- `namespace` 关键字仍可用于**显式覆盖**默认路径命名空间
+- **命名规范**：命名空间名 `PascalCase`
+_Avoid_: 一文件多命名空间
 
-## 模块(domain)约定（组 H3 落地 2026-08-17）
+## 模块系统（`src/Modules/` 目录驱动）
 
-`[module]` 标注的命名空间 = **领域模块（domain）**——按业务领域组织代码的最小独立单元（`examples/05-tools/91-orders-domain.hc` 全绿示范）。约定：
+`[module]` 特性标记已移除，模块由 `src/Modules/` 目录结构定义（ADR-0026）。
 
-- **边界**：模块 **owns 数据**（领域类型 = 模块内 `class`，无 `pub` = 模块私有，扁平/跨包不可见）；对外只暴露 **`pub` API**（函数/类型）。模块是库包的基本组成单位（库 = 1+ 模块，`Kind::lib`，见「包形态」节）。
-- **上下文（init 参数列表）**：模块需要外部数据/依赖时，经 **`init(...)` 显式接收参数并返回上下文**（如 `OrderCtx`），模块 API 首参携带该上下文。此为**依赖注入式**数据连接——与 `import`（符号引用/API 面）**正交**（Q24）：`import` 引入类型/函数，上下文注入数据/依赖。
-- **隔离（当前实现）**：`[module]` 成员仅登记**限定名**（`Orders.xxx`），不参与包扁平命名空间——同包其它代码须限定访问（扁平调用 `total(...)` → `UndefinedName`）；模块内互引亦用限定名（`Orders.LineItem` / `Orders.total`）。
-- **跨包形态**：库包内命名空间标注 **`pub [module]`**；应用 `import orders.Orders;`（整模块）后 `Orders.total(...)` 限定访问，或 `import orders.Orders.{total}` 符号选择后 `total(...)` 直调。**非 `pub` 的 `[module]` 命名空间跨包不可见**（`pub` = 包边界）。
-- **命名**：模块名 `PascalCase`（同命名空间规范）。
-- **实例化**：模块多实例/按上下文区分实例的显式语法归**第三块 E6 候选**；第二部分以工程约定落地（init 上下文 + API 首参）。
+### 物理结构
 
-## 导入语句 import（2026-08-17 定案，ADR-0010——取代 using，推翻「无文件级 import」）
+```
+src/
+├── main.hc              # 入口，命名空间 = 项目名
+├── Modules/
+│   ├── Auth/             # 模块，命名空间 = project.Auth
+│   │   ├── context.hc    # 模块 context（IContext 实现）
+│   │   ├── interfaces.hc # 公开接口定义
+│   │   └── services.hc   # 内部实现
+│   └── Storage/          # 模块，命名空间 = project.Storage
+│       ├── context.hc
+│       ├── interfaces.hc
+│       └── storage.hc
+└── utils/                # 普通代码（非模块）
+    └── helpers.hc
+tests/                    # 项目根目录，测试文件
+├── test_auth.hc
+└── test_storage.hc
+```
+
+### 模块定义规则
+
+1. **`src/Modules/` 下的每个子目录 = 一个模块**。子目录名即模块名，编译器自动发现，无需手动声明。
+2. **模块目录仅支持扁平结构**，不支持嵌套子模块。嵌套应通过独立包实现。
+3. **每个模块必须定义 context**（`src/Modules/X/context.hc`），实现 `IContext` 接口。纯工具函数应放在 `src/` 下的非 `Modules/` 目录中。
+4. **模块内非 `pub` 符号对外不可见**。模块的公开 API = context 结构体 + 接口定义。
+5. **模块与标准库外的对象交流必须通过 context**。标准库（`H.std`）可直接 `import` 使用。
+
+### IContext 接口与 IoC 容器
+
+`IContext` 接口定义在 `H.std.ioc` 中，提供 IoC 容器能力：
+
+```h
+interface IContext {
+    fn register<T>(self, impl: T);                             // 注册单例（深拷贝到 Arena）
+    fn register<T>(self, name: &[u8], impl: T);                // 命名单例
+    fn registerFactory<T>(self, name: &[u8], factory: fn(ctx: &IContext) -> T);
+    fn get<T>(self) -> *T;                                     // 获取 Arena 引用（无所有权，不 defer）
+    fn get<T>(self, name: &[u8]) -> *T;                        // 按名获取 Arena 引用
+    fn make<T>(self, name: &[u8]) -> owned T;                  // 创建新实例（调用者拥有，必须 defer）
+}
+
+**内存管理规则**：
+- `get<T>()` 返回 `*T`（Arena 引用，无所有权，不需要 `defer`）
+- `make<T>(name)` 返回 `owned T`（调用者拥有，必须 `defer` 或 `move`）
+- `register<T>(impl)` 在 Arena 中深拷贝一份，原实例由调用者自己管理
+- `registerFactory<T>(name, fn)` 工厂首次调用结果缓存到 Arena，后续 `get` 返回缓存引用；`make<T>(name)` 每次调用工厂创建新实例
+
+### Context 层级委托
+
+```
+AppContext (应用域，H.std.ioc.AppContext)
+ ├── 注册全局服务（Database, Logger, Config...）
+ ├── AuthContext (模块子域，继承 AppContext)
+ │    ├── 注册模块特有服务
+ │    └── get<T>() 未找到 → 委托 AppContext 查找
+ └── StorageContext (模块子域，继承 AppContext)
+      └── get<T>() 未找到 → 委托 AppContext 查找
+```
+
+- 子 context 持有父 context 引用，解析不到时向上委托
+- 每个 context 背靠 Arena 分配器，context 销毁时所有通过它创建的对象一并销毁
+- `IContext` 接口和 `AppContext` 实现在 `H.std.ioc` 模块中提供
+
+### 模块面向接口编程
+
+- 模块只知接口，不知具体实现。注册什么就用什么。
+- 接口定义在提供该接口的模块中（如 `src/Modules/Auth/interfaces.hc`），使用方通过 `import project.Auth.{IUserService}` 引入接口类型。
+- 模块内类型直接创建外部类型 → 编译错误。
+- 模块间连接：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交。
+
+### 引导流程
+
+```h
+// src/main.hc
+import H.std.{io};
+import H.std.ioc.{IContext, AppContext};
+import myapp.Auth.{AuthContext, IUserService};
+import myapp.Storage.{StorageContext, IFileService};
+
+fn main() !void {
+    // 1. 创建应用级 context
+    var app_ctx = AppContext.init(alloc);
+    defer app_ctx.deinit();
+
+    // 2. 注册全局服务
+    app_ctx.register(IUserService, UserService{});
+    app_ctx.register(IFileService, FileService{});
+
+    // 3. 初始化模块（注册到父 context 的子域）
+    var auth = AuthContext.init(app_ctx);
+    var storage = StorageContext.init(app_ctx);
+
+    // 4. 运行应用
+    run(app_ctx);
+}
+```
+
+### 初始化与生命周期
+
+- 初始化即注册：`AuthContext.init(app_ctx)` 将模块注册到父 context
+- 懒加载实例化：`get<T>()` 按需创建对象，对象随 context 销毁
+- 同一接口可注册多个实现，通过 `name` 区分
+- 工厂方法接收 context 引用，可在工厂内部解析依赖
+
+### 测试
+
+```h
+// tests/test_auth.hc
+import myapp.Auth.{AuthContext, IUserService};
+
+[Test] fn test_auth_service() !void {
+    var ctx = AuthContext.init(alloc);
+    defer ctx.deinit();
+    // 注入 mock 实现
+    ctx.register(IUserService, MockUserService{});
+    // 测试模块逻辑
+}
+```
+
+## 导入语句 import
+
+文件级导入语句（2026-08-17 定案，ADR-0010——取代 using）：
 
 ```hc
 import H.std.{io as my};        // 符号选择 + as 别名（重名重命名）
 import H.std.net.{http, tcp};   // 多符号选择
 import pkg.mod;                 // 整模块导入
+import pkg.mod as m;            // 整模块 + 别名
 ```
 
-- **`import` 是文件级导入语句**（声明可放文件任意顶层位置，导入符号作用域 = 文件）；**`using` 废弃**（迁移期内旧语法报错提示改用 import）；**导入对象 = 模块**（`[module]` 标注的命名空间或包）
-- **import 与上下文分工（Q24 定案）**：`import` = **符号引用**（类型/函数，API 面）；模块间**数据连接走上下文**（init 参数注入，依赖注入式）——两者正交
-- 路径形态：`包名.模块名`——`H.std` = 内置标准库根路径；用户库经 build.zon 声明后按包名引用（如 `import jsonlib;`）；`pkg.mod.{a, b}` 选择导入 + `as 别名` 显式改名（重名重命名）
-- **库符号访问规则**：库函数可直接调用（`my.print("...")`）；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）；**值类型栈上分配，经 `alloc` 堆上分配**
-- **冲突规则**（沿 2026-08-14 可见性定案）：通配/整模块导入遇同名冲突 → 编译错误；显式 `import pkg.mod.{name}`（非通配）优先级高于通配；`as 别名` 显式改名引入（作用域内有效）
+- **`import` 是文件级导入语句**；**`using` 废弃**（解析到 `using` 直接报错提示改用 import）
+- **`H.std`** = 内置标准库根路径，用户库经 build.zon 声明后按依赖名引用
+- **依赖解析顺序**：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录
+- **重名冲突规则**：同名导入符号冲突 → 编译错误，用户必须用 `as` 显式消歧
+- **库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）
+- **import 与上下文分工**：`import` = **符号引用**（类型/函数，API 面）；模块间**数据连接走 context**（依赖注入式）——两者正交
 
-## 可见性（2026-08-14 定案）
+## 可见性
 
-- **默认私有**（`pub` 显式导出——显式优于隐式）；同模块内可访问
-- `import pkg.mod.{a, b as 别名}` 显式改名引入（作用域内有效）；显式 `import pkg.mod.{name}`（非通配）优先级高于通配；通配导入遇同名冲突 → **编译错误**
-- `pub` 是包（模块）边界——跨包只暴露 `pub` 项
+- **默认私有**（`pub` 显式导出）；同包内 `pub` 项可见
+- 跨包只暴露 `pub` 项
+- 模块内非 `pub` 符号对外不可见（模块边界）
 
-## 编译单元 / 文件模型（2026-08-14 定案；2026-08-17 修订入口/导入）
+## 编译单元 / 文件模型
 
-- **目录 = 包（package）**——包内全部 `.hc` 文件**共享命名空间**（同包跨文件直接可见，Q21 跨文件成立）
+- **目录 = 包（package）**——包内全部 `.hc` 文件共享命名空间
 - 跨包访问：`import pkg.mod` + `build.zon` 依赖声明
-- `hc build` 编译包内全部文件；`hc run file.hc` 单文件脚本运行（隐式单文件包）；`hc run <目录>` 目录包运行（入口 = `main.hc` 或首个 `.hc`，见 `09-part2-execution.md` 组 C）
-- **文件级 `import` 语句（2026-08-17 定案，ADR-0010）**——取代 2026-08-14「无文件级 import（C# 式）」定案；文件 = 物理单元 + 文件级导入的库引用形态
-- **入口**：`fn main() !void`——main 不再注入 io（2026-08-17，ADR-0010）；`args` 由运行时注入（0 号 = 程序名）；**`io.args()` 取消**（命令行参数仅经入口注入）；io/alloc 为标准库模块与预导入环境（`import H.std.{io}` 显式引用）
-- **包形态（2026-08-17 定案；C3/C4 落地）**：**应用** = 含 `main` 的包（`Kind::exe`，产出可运行 exe）；**库** = **不含 main** 的包（`Kind::lib`，代码集合 = 1+ 模块，不单独运行；产出 **lib 静态库**（`hc build`，编译时链接进 exe）或 **dll 动态库**（`hc build --dll`，exe 运行时加载），构建参数选择 = `--dll` 标志）——分层：包（应用/库）→ 模块（`[module]` 标注）→ 命名空间（组织代码）
+- `hc build` 编译包内全部文件；`hc run file.hc` 单文件脚本运行（隐式单文件包）；`hc run <目录>` 目录包运行
+- **入口**：`fn main() !void`——`io`/`alloc` 为标准库模块与预导入环境（`import H.std.{io}` 显式引用）
 
 ## 包管理
 
-- 包管理器内置编译器；**依赖清单 = H 数据字面量**（Q26）：`const build = Build{ name = ..., deps = [...], ... }`（构建时校验版本与指纹）
-- **build 文件 = `build.zon`**（2026-08-14 定案）：内容为 H 数据字面量——包名/版本/作者 + 依赖列表（名称/来源/版本/哈希指纹）+ 构建选项；`hc pkg add ns/pkg@ver` 写依赖
-- **供应链安全（评审 C3）**：依赖包 `script` 块执行前指纹校验 + 来源审计
-- 官方注册中心（自托管 MVP → 治理规则；第三块 E5）
+- 包管理器内置编译器
+- **包形态**：应用（`Kind::exe`，含 `main`）/ 库（`Kind::lib`，无 `main`，1+ 模块）
+- 库产出：**lib 静态库**（编译时链接进 exe）或 **dll 动态库**（exe 运行时加载）
+- **依赖清单** = H 数据字面量（`const build = Build{ ... }`，build.zon 式）
+- 官方注册中心；`hc build` / `hc cc`（系统库自带、静态链接默认）
+
+## `.hs` 脚本导入
+
+`.hs` 文件使用 `import "path/to/file.hs"` 引用其他 `.hs` 文件。Parser 扩展：`import` 后跟字符串字面量 → 文件引用（AST 新增 `Decl::ImportFile` 变体）；跟标识符路径 → 模块引用（既有 `Decl::Import`）。脚本项目不需要 `build.zon`。
+_Avoid_: 混用 `.hs` 文件引用与 `.hc` 模块引用

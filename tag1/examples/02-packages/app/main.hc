@@ -13,6 +13,6 @@ fn main() !void {
     io.print("jsonlib.parse = {}\n", n);
 }
 
-[test] fn cross_package_pub_call() !void {
+[Test] fn cross_package_pub_call() !void {
     try expect_eq(parse("{}"), 42);
 }

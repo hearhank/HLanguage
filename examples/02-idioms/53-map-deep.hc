@@ -14,7 +14,7 @@ fn main() !void {
     io.print("has pear = {}\n", m.contains("pear"));     // false
 
     // 遍历（键值对捕获）
-    var total = 0;
+    var mut total = 0;
     for (m) |kv| {
         total += kv.value;
     }
@@ -24,11 +24,11 @@ fn main() !void {
     io.print("size = {}\n", m.len);
 }
 
-[test] fn map_iterate_and_remove() !void {
+[Test] fn map_iterate_and_remove() !void {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("apple", 5);
     m.put("banana", 7);
-    var total = 0;
+    var mut total = 0;
     for (m) |kv| {
         total += kv.value;
     }

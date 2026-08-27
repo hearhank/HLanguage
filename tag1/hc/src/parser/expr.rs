@@ -1,4 +1,4 @@
-//! Parser 表达式解析：优先级爬升 + 后缀 / 前缀 / 主表达式。
+//! 表达式解析：二元/一元/调用/字段/索引/闭包/if/switch 等表达式
 
 use super::*;
 use crate::ast::*;
@@ -746,6 +746,29 @@ impl Parser {
                             ty: name,
                             ty_args,
                             fields,
+                            span: start.merge(&end),
+                        });
+                    }
+                    // 容器字面量：Vec<i32>[1, 2, 3] → ContainerLit（ADR-0027）
+                    if self.at(&TokenKind::LBracket) {
+                        self.advance();
+                        let mut items = Vec::new();
+                        if !self.at(&TokenKind::RBracket) {
+                            loop {
+                                items.push(self.parse_expr()?);
+                                if self.at(&TokenKind::Comma) {
+                                    self.advance();
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        self.expect(&TokenKind::RBracket, "`]` after container literal")?;
+                        let end = self.span();
+                        return Ok(Expr::ContainerLit {
+                            ty: name,
+                            ty_args,
+                            items,
                             span: start.merge(&end),
                         });
                     }

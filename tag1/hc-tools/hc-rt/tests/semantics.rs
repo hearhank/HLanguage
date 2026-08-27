@@ -90,12 +90,12 @@ class Point { x: f32, y: f32 }
 
 #[test]
 fn table_construct_and_index() {
-    // M8：Table<T>.init(alloc, rows, cols, init) + t[i, j] 多参索引
+    // M8：Table<T>.init(rows, cols, init, alloc) + t[i, j] 多参索引
     run_ok(
         "[test] fn t() !void {
-    var tbl = Table<i32>.init(alloc, 3, 4, 0);
+    var tbl = Table<i32>.init(3, 4, 0, alloc);
     try expect_eq(tbl[1, 2], 0);
-    var t2 = Table<i32>.init(alloc, 2, 2, 7);
+    var t2 = Table<i32>.init(2, 2, 7, alloc);
     try expect_eq(t2[0, 0], 7);
     try expect_eq(t2[1, 1], 7);
 }\n",
@@ -292,9 +292,10 @@ fn m22_table_double_index_ok() {
 #[test]
 fn m22_continuous_rejects_ref_field() {
     // 存储形态验证：[continuous] 含引用字段 → 编译错误
+    // String 是值类型（64 字节栈内联），Vec 是引用类型
     run_compile_error(
         "[continuous]
-class Bad { s: String }
+class Bad { s: Vec<i32> }
 [test] fn t() !void {}\n",
         "non-value field",
     );
@@ -480,7 +481,7 @@ fn m22_slice_range_index() {
 
 // ---------- M2.5 Debug 悬垂标记验收 ----------
 
-const DANGLING_SRC: &str = "fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    fill(&mut buf, alloc);\n    var d = buf[0];\n    var x = d.*;\n}\n";
+const DANGLING_SRC: &str = "[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    {\n        var temp: i32 = 7;\n        buf.append(&temp);\n    }\n    var d = buf[0];\n    var x = d.*;\n}\n";
 
 #[test]
 fn m25_dangling_access_rejected_debug() {
@@ -502,7 +503,7 @@ fn m25_dangling_access_rejected_debug() {
 #[test]
 fn m25_dangling_hold_not_accessed_ok() {
     // 取出/持有悬垂引用不抛错；只有解引用访问才触发（Q18：取指针不抛错）
-    let src = "fn fill(buf: *mut Vec<*i32>, alloc: Allocator) void {\n    var temp: i32 = 7;\n    buf.append(&temp);\n}\n[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    fill(&mut buf, alloc);\n    try expect_eq(buf.len, 1);\n}\n";
+    let src = "[test] fn t() !void {\n    var mut buf = Vec<*i32>.init(alloc);\n    {\n        var temp: i32 = 7;\n        buf.append(&temp);\n    }\n    try expect_eq(buf.len, 1);\n}\n";
     run_ok(src);
 }
 

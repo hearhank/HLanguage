@@ -5,22 +5,22 @@ import H.std.{io};
 //   - 并行发起：Future 列表（Q19 await 任何函数可用）
 //   - 全部等待并汇总（Go 协程方向，B2）
 
-async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !String where T: Io {
+async fn fetch<T>(io: *T, url: &[u8], alloc: Allocator) !&[u8] where T: Io {
     var body = try io.net.get(url);
-    return String.from(body, alloc);
+    return body;
 }
 
 fn main() !void {
     var urls = ["https://a.example.com", "https://b.example.com", "https://c.example.com"];
 
     // 批量发起（并行）
-    var futures = Vec<Future<!String>>.init(alloc);
+    var futures = Vec<Future<!&[u8]>>.init(alloc);
     for (urls) |u| {
         futures.append(fetch(&io, u, alloc));
     }
 
     // 全部等待并汇总
-    var total = 0;
+    var mut total = 0;
     for (futures) |f| {
         var body = try await f;
         total += body.len;
@@ -28,7 +28,7 @@ fn main() !void {
     io.print("total bytes = {}\n", total);
 }
 
-[test] fn batch_async_demo() !void {
+[Test] fn batch_async_demo() !void {
     // S4 演示型（Q-T6）：fetch 依赖真实网络，不在测试中执行；
     // Future 并行发起/汇总断言留 M5 运行时测试
     try expect(true);

@@ -7,7 +7,7 @@ import H.std.{io};
 //   - 数组 = 引用类型（B3）：传参走引用，复制需显式
 
 fn sum_row(row: &[i32]) i32 {
-    var total = 0;
+    var mut total = 0;
     for (row) |v| {
         total += v;
     }
@@ -33,18 +33,18 @@ fn main() !void {
     // var bad = [[1, 2], [3, 4, 5]];  // 错误（Q42）
 }
 
-[test] fn multi_dimensional_arrays() !void {
+[Test] fn multi_dimensional_arrays() !void {
     var grid = [[1, 2], [3, 4]];
     try expect_eq(grid[1][0], 3);
     try expect_eq(grid.len, 2);
 }
 
-[test] fn sum_row_test() !void {
+[Test] fn sum_row_test() !void {
     var flat = [1, 2, 3];
     try expect_eq(sum_row(&flat), 6);
 }
 
-[test] fn explicit_array_type() !void {
+[Test] fn explicit_array_type() !void {
     var matrix: [2][2]i32 = [[5, 6], [7, 8]];
     try expect_eq(matrix[0][1], 6);
 }

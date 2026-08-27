@@ -1,8 +1,20 @@
+//! IR 降级实现：AST → IR 指令的降级转换
+//!
+//! 定义：枚举：ErrPath
+//! 定义：结构体：LowerCtx, LoopCtx, DeferRecord
+
 use super::*;
 
 pub fn lower(program: &Program) -> Result<IrModule, IrError> {
-    let errors = crate::errorcodes::collect(program, 0);
     let types = build_type_table(program);
+    lower_with_types(program, types)
+}
+
+/// 使用外部提供的类型表降级程序（用于多文件合并时共享类型定义）。
+/// 类型表应包含所有文件的类型定义，使跨文件类型引用（如 `using` 导入的命名空间类）
+/// 在降级时能够解析。
+pub fn lower_with_types(program: &Program, types: TypeTable) -> Result<IrModule, IrError> {
+    let errors = crate::runtime::errorcodes::collect(program, 0);
     let funcs = collect_func_names(program);
     let mut globals = collect_globals(program);
     // Phase 7：隐式环境名（alloc/io/pi/Vec…）按全局处理——`io.print` 等限定名根标识符
@@ -35,6 +47,8 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
             module.continuous.insert(n.clone());
         }
     }
+    // ADR-0027：类型→接口映射表（编译期接口分派）
+    module.type_implements = collect_type_implements(program);
     for d in &program.decls {
         lower_decl(
             d,
@@ -80,6 +94,30 @@ pub(crate) fn collect_globals(program: &Program) -> HashSet<String> {
     let mut set = HashSet::new();
     collect_globals_in(&program.decls, &mut set);
     set
+}
+
+/// ADR-0027：扫描所有类声明，收集类型→接口映射表
+/// 例如 `class Vec<T> : ICollection<T> { ... }` → {"Vec": ["ICollection"]}
+pub(crate) fn collect_type_implements(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    collect_type_implements_in(&program.decls, &mut map);
+    map
+}
+
+fn collect_type_implements_in(decls: &[Decl], map: &mut HashMap<String, Vec<String>>) {
+    for d in decls {
+        match d {
+            Decl::Class { name, ifaces, .. } => {
+                for iface in ifaces {
+                    if let Type::Named(n, _) = iface.strip() {
+                        map.entry(name.clone()).or_default().push(n.to_string());
+                    }
+                }
+            }
+            Decl::Namespace { decls, .. } => collect_type_implements_in(decls, map),
+            _ => {}
+        }
+    }
 }
 
 /// C3：文件级 import 展开表——(符号选择 bound → 完整限定名, 整模块 bound → 包路径)。
@@ -752,6 +790,7 @@ pub(crate) fn lower_default_const(e: &Expr, errors: &ErrorCodeTable) -> Option<I
             name: name.clone(),
             code: errors.code_of(name).unwrap_or(0),
         }),
+        Expr::ContainerLit { .. } => None,
         _ => None,
     }
 }
@@ -961,18 +1000,84 @@ impl<'a> LowerCtx<'a> {
             }
         }
     }
-    /// 单条 defer 守卫 + 内联体 + 排空。体无控制流（降级期硬错误保证），可多次安全发射。
+    /// 单条 defer 守卫 + 内联体 + 排空。体允许含控制流（如 `defer try f()`），
+    /// 续块标签确保 PopDefer 在 LLVM 后端始终位于合法基本块中。
+    /// 体中的标签（Label/JumpIfErr/Jump 等）在每次发射时重新分配唯一 ID，
+    /// 避免同一 DeferRecord 在多个退出点发射时产生重复标签。
     pub(crate) fn emit_defer_guarded(&mut self, rec: &DeferRecord) {
         let l_skip = self.new_label();
+        let l_cont = self.new_label();
         self.push(IrInst::JumpIfNotDefer {
             id: rec.id,
             label: l_skip,
         });
-        for inst in &rec.body {
+        // 重映射体中的标签（Label/JumpIfErr/Jump 等），使每次发射获得唯一标签 ID
+        let remapped = self.remap_body_labels(&rec.body);
+        for inst in &remapped {
             self.push(inst.clone());
         }
+        // 续块标签：体可能含 Return 终止了当前块，PopDefer 需在合法基本块中
+        self.label(l_cont);
         self.push(IrInst::PopDefer { id: rec.id });
         self.label(l_skip);
+    }
+
+    /// 重映射指令序列中的标签（Label 定义 + Jump/JumpIfErr/JumpIfNotDefer 等引用），
+    /// 使每次发射获得唯一标签 ID。体中的 Label 指令使用 new_label() 分配新 ID，
+    /// 所有引用旧标签的指令同步更新。
+    fn remap_body_labels(&mut self, body: &[IrInst]) -> Vec<IrInst> {
+        use std::collections::HashMap;
+        // 收集体中的 Label 定义，分配新 ID
+        let mut label_map: HashMap<usize, usize> = HashMap::new();
+        for inst in body {
+            if let IrInst::Label { id } = inst {
+                label_map.entry(*id).or_insert_with(|| self.new_label());
+            }
+        }
+        if label_map.is_empty() {
+            return body.to_vec();
+        }
+        // 重映射每条指令中的标签引用
+        body.iter()
+            .map(|inst| self.map_inst_labels(inst, &label_map))
+            .collect()
+    }
+
+    /// 重映射单条指令中的标签引用（Label 定义 + 跳转目标）。
+    fn map_inst_labels(&self, inst: &IrInst, map: &HashMap<usize, usize>) -> IrInst {
+        macro_rules! remap {
+            ($id:expr) => {{
+                map.get(&$id).copied().unwrap_or($id)
+            }};
+        }
+        match inst {
+            IrInst::Label { id } => IrInst::Label { id: remap!(*id) },
+            IrInst::Jump { label } => IrInst::Jump {
+                label: remap!(*label),
+            },
+            IrInst::JumpIf { temp, label } => IrInst::JumpIf {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfNot { temp, label } => IrInst::JumpIfNot {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfNull { temp, label } => IrInst::JumpIfNull {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfErr { temp, label } => IrInst::JumpIfErr {
+                temp: *temp,
+                label: remap!(*label),
+            },
+            IrInst::JumpIfNotDefer { id, label } => IrInst::JumpIfNotDefer {
+                id: *id,
+                label: remap!(*label),
+            },
+            // 不含标签引用的指令，直接克隆
+            _ => inst.clone(),
+        }
     }
     /// 当前作用域绑定（遮蔽时分配新槽，旧绑定保留在外层）
     pub(crate) fn bind(&mut self, name: &str, slot: usize) {
@@ -1551,6 +1656,43 @@ impl<'a> LowerCtx<'a> {
                     items: item_ts,
                 });
             }
+            Expr::ContainerLit {
+                ty,
+                ty_args,
+                items,
+                span,
+                ..
+            } => {
+                // ContainerLiteral: Vec<T>[1, 2, 3] → MakeArr(items) + Vec.init(alloc, arr)
+                if ty == "Vec" || ty == "Deque" {
+                    // Lower each item
+                    let mut item_temps = Vec::new();
+                    for it in items {
+                        item_temps.push(self.lower_expr(it));
+                    }
+                    // Create array of items
+                    let arr_t = self.alloc_slot();
+                    self.push(IrInst::MakeArr {
+                        temp: arr_t,
+                        items: item_temps,
+                    });
+                    // Create Vec from array: CallBuiltin("Vec.init", [alloc, arr])
+                    let alloc_t = self.alloc_slot();
+                    // Load alloc from implicit env
+                    self.push(IrInst::LoadGlobal {
+                        temp: alloc_t,
+                        name: "alloc".to_string(),
+                    });
+                    self.push(IrInst::CallBuiltin {
+                        name: "Vec.init".to_string(),
+                        args: vec![alloc_t, arr_t],
+                        temp: t,
+                    });
+                    return t;
+                }
+                self.fail_void(t, &format!("unknown container literal type `{ty}`"), span);
+                return t;
+            }
             Expr::NamedLit {
                 ty,
                 ty_args,
@@ -1558,6 +1700,55 @@ impl<'a> LowerCtx<'a> {
                 span,
                 ..
             } => {
+                // Map<K,V>{k = v, ...} 容器字面量（ADR-0027）
+                if ty == "Map" {
+                    let alloc_t = self.alloc_slot();
+                    self.push(IrInst::LoadGlobal {
+                        temp: alloc_t,
+                        name: "alloc".to_string(),
+                    });
+                    self.push(IrInst::CallBuiltin {
+                        name: "Map.init".to_string(),
+                        args: vec![alloc_t],
+                        temp: t,
+                    });
+                    for (key, val_expr) in fields {
+                        let key_t = self.alloc_slot();
+                        self.push(IrInst::Const {
+                            temp: key_t,
+                            val: IrConst::Str(key.clone()),
+                        });
+                        let val_t = self.lower_expr(val_expr);
+                        let discard_t = self.alloc_slot();
+                        self.push(IrInst::CallMethod {
+                            temp: discard_t,
+                            base: t,
+                            method: "put".to_string(),
+                            args: vec![key_t, val_t],
+                        });
+                    }
+                    return t;
+                }
+                // Vec<T>{} / Deque<T>{} 空容器字面量（ADR-0027）
+                if ty == "Vec" || ty == "Deque" {
+                    let alloc_t = self.alloc_slot();
+                    self.push(IrInst::LoadGlobal {
+                        temp: alloc_t,
+                        name: "alloc".to_string(),
+                    });
+                    self.push(IrInst::CallBuiltin {
+                        name: "Vec.init".to_string(),
+                        args: if fields.is_empty() {
+                            vec![alloc_t]
+                        } else {
+                            // 非空字段暂不支持（Vec<T>{a = 1} 无意义）
+                            self.fail_void(t, &format!("容器 `{ty}` 的字面量不允许命名字段"), span);
+                            return t;
+                        },
+                        temp: t,
+                    });
+                    return t;
+                }
                 // E1.2 组 D：泛型应用 `Pair<i32>{...}` → 惰性具体化后按具体化名构造。
                 // 具体化失败（实参个数/形态不符）→ 硬错误。
                 let ty = if ty_args.is_empty() {
@@ -2724,6 +2915,7 @@ impl<'a> LowerCtx<'a> {
                 let mut b2 = bindings.clone();
                 self.eval_const_block(b, &mut b2).ok().flatten()
             }
+            Expr::ContainerLit { .. } => None,
             _ => None,
         }
     }
@@ -2821,6 +3013,19 @@ impl<'a> LowerCtx<'a> {
                             t
                         }
                     },
+                };
+                // M3 语法糖：`var s: String = "hello"` → `String.from("hello")`
+                let t = if matches!(ty, Some(Type::Named(n, _)) if n == "String") && init.is_some()
+                {
+                    let t2 = self.alloc_slot();
+                    self.push(IrInst::Call {
+                        name: "String.from".into(),
+                        args: vec![t],
+                        temp: t2,
+                    });
+                    t2
+                } else {
+                    t
                 };
                 // [continuous] 值语义（P11d）：声明类型为连续类，或未标注类型且初始
                 // 值为标识符 → 赋值前 DeepCopy（后者由运行时门判定，仅连续类深拷贝）。
@@ -3145,12 +3350,11 @@ impl<'a> LowerCtx<'a> {
         let _ = self.lower_expr(e);
         let mut body = self.pending.take().expect("pending 缓冲已初始化");
         self.pending = prev;
-        // 2) 体含控制流指令 → 硬错误（带 label 指令重复发射冲突；对齐「硬错误 > 静默误编译」）
-        if body.iter().any(|i| is_control_flow_inst(i)) {
-            self.fail(
-                "`defer`/`errdefer` 体不允许控制流（如 `defer try f()`）",
-                span,
-            );
+        // 2) 体含 defer 管理指令 → 硬错误（PushDefer/PopDefer/JumpIfNotDefer
+        //    重复发射会导致运行期守卫错乱）。跳转/标签/Return 等由 new_label()
+        //    保证唯一性，安全可重复发射（如 `defer try f()`）。
+        if body.iter().any(|i| is_defer_admin_inst(i)) {
+            self.fail("`defer`/`errdefer` 体不允许嵌套 defer 管理指令", span);
             body.clear(); // 避免污染退出点发射
         }
         // 3) 主流登记

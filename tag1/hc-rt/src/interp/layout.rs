@@ -1,3 +1,5 @@
+//! 内存布局：struct/enum 的内存布局计算与字段偏移
+
 use super::*;
 
 impl Interp {
@@ -650,10 +652,10 @@ impl Interp {
             }
             Value::Float(f) => f.to_le_bytes().to_vec(),
             Value::Bool(b) => vec![if *b { 1 } else { 0 }],
-            Value::Str(s) => {
-                let b = s.borrow();
+            Value::String(s) => {
+                let b = s.as_slice();
                 let mut out = (b.len() as u64).to_le_bytes().to_vec();
-                out.extend_from_slice(&b);
+                out.extend_from_slice(b);
                 out
             }
             Value::Class(c) => {
@@ -672,8 +674,8 @@ impl Interp {
             Value::Int(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
-            Value::Str(s) => {
-                let s = String::from_utf8_lossy(&s.borrow()).to_string();
+            Value::String(s) => {
+                let s = String::from_utf8_lossy(s.as_slice()).to_string();
                 format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
             Value::Arr(a) => {
@@ -783,8 +785,8 @@ impl Interp {
             pos += 1;
             let (val, vlen) = self.parse_json_value(&s[pos..])?;
             pos += vlen;
-            if let Value::Str(ks) = key {
-                out.insert(String::from_utf8_lossy(&ks.borrow()).to_string(), val);
+            if let Value::String(ks) = key {
+                out.insert(String::from_utf8_lossy(ks.as_slice()).to_string(), val);
             }
             while pos < b.len() && b[pos].is_ascii_whitespace() {
                 pos += 1;
@@ -973,7 +975,7 @@ impl Interp {
                     .collect();
                 Value::class(&d.name, fields)
             }
-            Value::Str(s) => Value::Str(Rc::new(RefCell::new(s.borrow().clone()))),
+            Value::String(s) => Value::String(s.clone()),
             Value::Ptr(p) => Value::Ptr(Rc::new(RefCell::new(self.deep_copy(p.borrow().clone())))),
             // 装箱胖指针：data 深拷贝（新 cell），vtbl/alloc 原样携带
             Value::Boxed(b) => {
@@ -1307,7 +1309,12 @@ impl Interp {
                     let _ = tx.send((1, 0, 0, test_out));
                 }
                 Err(e) => {
-                    test_out.push(format!("[FAIL] {} (error.{})", display_clone, e.name));
+                    let msg = if e.message.is_empty() {
+                        format!("[FAIL] {} (error.{})", display_clone, e.name)
+                    } else {
+                        format!("[FAIL] {} (error.{}: {})", display_clone, e.name, e.message)
+                    };
+                    test_out.push(msg);
                     let _ = tx.send((0, 1, 0, test_out));
                 }
             }

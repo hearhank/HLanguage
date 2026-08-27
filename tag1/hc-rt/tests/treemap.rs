@@ -1,8 +1,4 @@
-//! A6 标准库数据结构：TreeMap 有序映射验收测试
-//!
-//! API：`io.treemap.init()` → TreeMap → `.insert(key, value) void` /
-//! `.get(key) ?V` / `.contains(key) bool` / `.len() usize` /
-//! `.is_empty() bool` / `.clear()`
+//! hc-rt/tests/treemap.rs
 
 use hc_rt::Interp;
 

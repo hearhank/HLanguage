@@ -32,7 +32,7 @@ fn main() !void {
     }
 }
 
-[test] fn enum_instantiation() !void {
+[Test] fn enum_instantiation() !void {
     var v: Value = Value{int = 42};
     var label = switch (v) {
         int => |i| i,
@@ -42,7 +42,7 @@ fn main() !void {
     try expect_eq(label, 42);
 }
 
-[test] fn payloadless_constant() !void {
+[Test] fn payloadless_constant() !void {
     var n: Value = Value.none;
     try expect(switch (n) {
         none => true,

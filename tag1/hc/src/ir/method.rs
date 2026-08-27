@@ -1,3 +1,5 @@
+//! 方法调用 IR 降级：方法表查找与方法调用的 IR 指令生成
+
 use super::*;
 
 pub(crate) fn call_scalar_method_ir(
@@ -238,20 +240,42 @@ pub(crate) fn call_alloc_method_ir(
         // alloc.init(T)：类型名参数建空实例（tag1 IR 无布局表——字段型构造请用
         // 字面量 `alloc.init(T{...})`；对齐 oracle interp.rs:3865-3891 的 Ident 分支）。
         // 实参已是类实例（字面量构造）→ 原样返回（对齐 oracle 字面量分支）。
+        // alloc.init(T, n)：创建 n 个元素的数组（ADR-0027 形态 3）。
         "init" => {
-            if args.len() != 1 {
-                return Err(IrError::msg("ArityMismatch", "alloc.init expects 1 arg"));
-            }
-            match deref_value(ctx, &args[0]).clone() {
-                IrValue::Str(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
-                    name: String::from_utf8_lossy(&s).to_string(),
-                    fields: HashMap::new(),
-                })))),
-                IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
-                _ => Err(IrError::msg(
-                    "TypeError",
-                    "alloc.init expects type name or literal",
-                )),
+            if args.len() == 1 {
+                match deref_value(ctx, &args[0]).clone() {
+                    IrValue::String(s) => Ok(Some(IrValue::Class(ctx.alloc(Cell::Class {
+                        name: String::from_utf8_lossy(s.as_slice()).to_string(),
+                        fields: HashMap::new(),
+                    })))),
+                    IrValue::Class(c) => Ok(Some(IrValue::Class(c))),
+                    _ => Err(IrError::msg(
+                        "TypeError",
+                        "alloc.init expects type name or literal",
+                    )),
+                }
+            } else if args.len() == 2 {
+                // alloc.init(T, n)：创建 n 个元素的数组
+                let n = match deref_value(ctx, &args[1]) {
+                    IrValue::Int(i) => (*i).max(0) as usize,
+                    _ => {
+                        return Err(IrError::msg(
+                            "TypeError",
+                            "alloc.init(T, n) expects n as int",
+                        ))
+                    }
+                };
+                let mut items = Vec::with_capacity(n);
+                let default = IrValue::Int(0);
+                for _ in 0..n {
+                    items.push(default.clone());
+                }
+                Ok(Some(make_arr(ctx, items)))
+            } else {
+                return Err(IrError::msg(
+                    "ArityMismatch",
+                    "alloc.init expects 1 or 2 args",
+                ));
             }
         }
         "alloc" => {
@@ -276,6 +300,34 @@ pub(crate) fn call_alloc_method_ir(
             Ok(Some(str_bytes_val(out)))
         }
         "deinit" => Ok(Some(IrValue::Void)),
+        // G5/§8.3 Debug 泄漏检测：断言无泄漏——有活跃分配则返回错误
+        "assert_no_leaks" => {
+            // 检查全局 alloc 分配
+            let mut total_leaks = ctx.alloc_tracker.len();
+            let mut report = String::new();
+            for (size, line) in &ctx.alloc_tracker {
+                report.push_str(&format!("leak: line {line}: {size} bytes\n"));
+            }
+            // 检查所有 Arena 状态的块分配
+            for cell in &ctx.cells {
+                if let Cell::Arena(st) = cell {
+                    if st.live && !st.alloc_tracker.is_empty() {
+                        for (size, _) in &st.alloc_tracker {
+                            report.push_str(&format!("leak (Arena block): line 0: {size} bytes\n"));
+                        }
+                        total_leaks += st.alloc_tracker.len();
+                    }
+                }
+            }
+            if total_leaks == 0 {
+                Ok(Some(IrValue::Void))
+            } else {
+                Err(IrError::msg(
+                    "LeakDetected",
+                    format!("{} allocation(s) not freed:\n{report}", total_leaks),
+                ))
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -334,8 +386,8 @@ pub(crate) fn call_arena_method_ir(
             let v = deref_value(ctx, &args[0]).clone();
             let inst = match v {
                 // 类型名参数（未知/枚举类型回退 Const Str）→ 空 class 实例
-                IrValue::Str(s) => IrValue::Class(ctx.alloc(Cell::Class {
-                    name: String::from_utf8_lossy(&s).to_string(),
+                IrValue::String(s) => IrValue::Class(ctx.alloc(Cell::Class {
+                    name: String::from_utf8_lossy(s.as_slice()).to_string(),
                     fields: HashMap::new(),
                 })),
                 // 字面量 / 已知 class 默认字段构造（lower_alloc_init_defaults）→ 原样返回

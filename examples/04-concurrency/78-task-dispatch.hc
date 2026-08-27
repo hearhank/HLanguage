@@ -23,7 +23,7 @@ fn main() !void {
     var out = chan.init(alloc, 20);
 
     // 先发送所有任务到缓冲通道
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < 20) {
         tasks.send(i);
         i += 1;
@@ -38,7 +38,7 @@ fn main() !void {
     try t3.join();
 
     // 汇合结果
-    var total = 0;
+    var mut total = 0;
     while (true) {
         var v = out.try_recv();
         if (v) |val| {
@@ -50,10 +50,10 @@ fn main() !void {
     io.print("total = {}\n", total);   // 0²+1²+…+19² = 2470
 }
 
-[test] fn task_dispatch() !void {
+[Test] fn task_dispatch() !void {
     var tasks = chan.init(alloc, 20);
     var out = chan.init(alloc, 20);
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < 20) {
         tasks.send(i);
         i += 1;
@@ -64,7 +64,7 @@ fn main() !void {
     try t1.join();
     try t2.join();
     try t3.join();
-    var total = 0;
+    var mut total = 0;
     while (true) {
         var v = out.try_recv();
         if (v) |val| {

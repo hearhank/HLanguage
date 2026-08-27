@@ -8,7 +8,7 @@ import H.std.{io};
 fn read_numbers<T>(io: *T, path: &[u8]) !Vec<i32> where T: Io {
     var data = try io.fs.read_file(path, alloc);
     var nums = Vec<i32>.init(alloc);
-    var parts = String.from(data, alloc).split(',');
+    var parts = data.split(',');
     for (parts) |p| {
         var n = parse_int(p) orelse continue;
         nums.append(n);
@@ -26,21 +26,21 @@ fn main() !void {
     var nums = try read_numbers(&io, "data.txt");
     var evens = transform(&nums);
 
-    var sum = 0;
+    var mut sum = 0;
     for (evens) |n| {
         sum += n;
     }
     io.print("even*10 sum = {}\n", sum);
 }
 
-[test] fn data_pipeline_transform() !void {
+[Test] fn data_pipeline_transform() !void {
     var nums = Vec<i32>.init(alloc);
     nums.append(1);
     nums.append(2);
     nums.append(3);
     nums.append(4);
     var evens = transform(&nums);
-    var sum = 0;
+    var mut sum = 0;
     for (evens) |n| {
         sum += n;
     }

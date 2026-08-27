@@ -32,7 +32,7 @@ fn describe<T>(shape: *T) f32 where T: IShape {
 
 // 异构集合：接口对象（显式装箱；*Rect → *IShape 收窄待细化）
 fn total_area(shapes: &Vec<*IShape>) f32 {
-    var total = 0.0;
+    var mut total = 0.0;
     for (shapes) |s| {
         total += s.area();
     }
@@ -48,23 +48,25 @@ fn main() !void {
     io.print("circle = {}\n", describe(&circ));
 
     // 异构集合：显式装箱
-    var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var mut shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
+    defer shapes.deinit();
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     io.print("total = {}\n", total_area(&shapes));
 }
 
-[test] fn static_path_monomorphization() !void {
+[Test] fn static_path_monomorphization() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
     try expect(describe(&rect) > 11.99 and describe(&rect) < 12.01);
     try expect(describe(&circ) > 12.56 and describe(&circ) < 12.57);
 }
 
-[test] fn heterogeneous_boxing() !void {
+[Test] fn heterogeneous_boxing() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
-    var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+    var mut shapes: Vec<*IShape> = Vec<*IShape>.init(alloc);
+    defer shapes.deinit();
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);

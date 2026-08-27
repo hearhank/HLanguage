@@ -6,11 +6,11 @@ import H.std.{io};
 //   - 与「方法调用双语」（Q5）一致；接收者自动取引用
 
 class Query {
-    mut where_clause: String,
+    mut where_clause: &[u8],
     mut limit_n: i32,
 
     fn where(self: *mut Self, cond: &[u8]) *mut Self {
-        self.where_clause = String.from(cond, alloc);
+        self.where_clause = cond;
         return self;
     }
 
@@ -21,7 +21,7 @@ class Query {
 }
 
 fn main() !void {
-    var mut q: owned Query = alloc.init(Query);   // 无参构造（C1'）
+    var mut q: Query = alloc.init(Query);   // 无参构造（C1'）
 
     // 链式调用：where().limit()（*mut 链不复制——资格随链传递）
     q.where("age > 18").limit(10);
@@ -29,9 +29,9 @@ fn main() !void {
     io.print("limit = {}\n", q.limit_n);
 }
 
-[test] fn builder_chaining() !void {
-    var mut q: owned Query = alloc.init(Query);
+[Test] fn builder_chaining() !void {
+    var mut q: Query = alloc.init(Query);
     q.where("age > 18").limit(10);   // 链：*mut 资格延续（Q25）
-    try expect_eq_slices(q.where_clause.as_slice(), "age > 18");
+    try expect_eq_slices(q.where_clause, "age > 18");
     try expect_eq(q.limit_n, 10);
 }

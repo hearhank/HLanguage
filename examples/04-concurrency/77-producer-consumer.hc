@@ -8,7 +8,7 @@ import H.std.{io};
 //   - 值复制捕获：协程安全逃逸，无共享数据
 
 fn producer(ch: *chan, n: i32) void {
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < n) {
         ch.send(i * i);
         i += 1;
@@ -17,8 +17,8 @@ fn producer(ch: *chan, n: i32) void {
 }
 
 fn consumer(ch: *chan, count: i32) i32 {
-    var sum = 0;
-    var received = 0;
+    var mut sum = 0;
+    var mut received = 0;
     while (received < count) {
         sum += ch.recv();
         received += 1;
@@ -43,23 +43,27 @@ fn main() !void {
 
     // 生产者与消费者各持 &ch（通道内建线程安全）
     var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
+    defer p_thread.deinit();
     var c_thread: owned Thread<i32> = spawn(consumer, &ch, 10);
+    defer c_thread.deinit();
 
     try p_thread.join();
     var sum = try c_thread.join();
     io.print("sum = {}\n", sum);   // 0²+1²+…+9² = 285
 }
 
-[test] fn producer_consumer_sum() !void {
+[Test] fn producer_consumer_sum() !void {
     var ch = chan.init(alloc, 10);
     var p_thread: owned Thread<void> = spawn(producer, &ch, 10);
+    defer p_thread.deinit();
     var c_thread: owned Thread<i32> = spawn(consumer, &ch, 10);
+    defer c_thread.deinit();
     try p_thread.join();
     var sum = try c_thread.join();
     try expect_eq(sum, 285);   // 0²+1²+…+9²
 }
 
-[test] fn multi_producer() !void {
+[Test] fn multi_producer() !void {
     var ch = chan.init(alloc, 10);
     var t1 = spawn(send_one, &ch);
     var t2 = spawn(send_two, &ch);
@@ -67,8 +71,8 @@ fn main() !void {
     try t1.join();
     try t2.join();
     try t3.join();
-    var sum = 0;
-    var i: i32 = 0;
+    var mut sum = 0;
+    var mut i: i32 = 0;
     while (i < 3) {
         sum += ch.recv();
         i += 1;

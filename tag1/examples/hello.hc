@@ -18,6 +18,6 @@ fn main() !void {
     abc.print(&io);
 }
 
-[test] fn hello_smoke() !void {
+[Test] fn hello_smoke() !void {
     try expect(true);
 }

@@ -1,4 +1,4 @@
-//! Parser 类型声明解析：class / enum / union / interface / 路径。
+//! 类型声明解析：struct、enum、union 等复合类型声明
 
 use super::*;
 use crate::ast::*;

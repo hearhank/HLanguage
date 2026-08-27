@@ -1,9 +1,4 @@
-//! M2.7 闭包（move 捕获 + 按值返回规则）+ Phase 8 捕获精确化
-//!
-//! 捕获模型（Phase 8）：闭包只捕获**自由变量**（body 实际引用、未被体内绑定遮蔽
-//! 的外部变量，含嵌套闭包传递）——未捕获变量闭包不可见；只读/mut 捕获 = 共享槽
-//! （原绑定变更对闭包可见），`move` 捕获 = 深拷贝独立副本（含 Str/Closure 值，
-//! 闭包脱离原作用域生命周期）；非 `mut` 闭包内重绑定被捕获变量 → ReadonlyCapture。
+//! hc-rt/tests/closures.rs
 
 use hc_rt::Interp;
 
@@ -40,7 +35,7 @@ fn move_closure_captures_copy() {
     run_ok(
         r#"
 [test] fn t() !void {
-    var a = 10;
+    var mut a = 10;
     var f = move |v| v + a;
     a = 100;
     try expect_eq(f(5), 15);
@@ -55,7 +50,7 @@ fn read_closure_shares_slot() {
     run_ok(
         r#"
 [test] fn t() !void {
-    var a = 10;
+    var mut a = 10;
     var f = |v| v + a;
     a = 100;
     try expect_eq(f(5), 105);
@@ -70,7 +65,7 @@ fn mut_closure_writes_captured() {
     run_ok(
         r#"
 [test] fn t() !void {
-    var total = 0;
+    var mut total = 0;
     var acc = mut |v| { total = total + v; return total; };
     try expect_eq(acc(3), 3);
     try expect_eq(acc(4), 7);
@@ -151,7 +146,7 @@ fn mut_closure_writes_shared_capture_visible_to_nested() {
     run_ok(
         r#"
 [test] fn t() void {
-    var total = 0;
+    var mut total = 0;
     var acc = mut |v| { total = total + v; return total; };
     var read = |v| total + v;      // 只读嵌套闭包共享 total
     expect_eq(acc(3), 3);
@@ -169,7 +164,7 @@ fn move_closure_deep_copies_closure_capture() {
     run_ok(
         r#"
 [test] fn t() void {
-    var x = 1;
+    var mut x = 1;
     var inner = |v| v + x;         // inner 捕获 x（共享）
     var outer_move = move | | inner(1);  // move 捕获 inner → 深拷贝其环境副本
     x = 100;
@@ -185,7 +180,7 @@ fn read_closure_shared_capture_visible_to_nested() {
     run_ok(
         r#"
 [test] fn t() void {
-    var x = 1;
+    var mut x = 1;
     var inner = |v| v + x;
     var outer = | | inner(1);      // 非 move：inner 值共享（捕获 cell 未复制）
     x = 100;
@@ -202,7 +197,7 @@ fn nested_closure_transitive_capture() {
     run_ok(
         r#"
 [test] fn t() void {
-    var a = 1;
+    var mut a = 1;
     var b = 2;
     var f = | | {
         var g = |v| v + a;         // 只引用 a
@@ -223,7 +218,7 @@ fn move_closure_isolation_after_external_change() {
     run_ok(
         r#"
 [test] fn t() void {
-    var s = "hello";
+    var mut s = "hello";
     var shared = | | s.len();      // 只读捕获：共享槽
     var copied = move | | s.len(); // move 捕获：深拷贝独立 Str
     s = "hello world";             // 重绑定原变量

@@ -1,7 +1,4 @@
-//! M4.5 标量接口族（ICompare/INumber 族方法 + 运算符绑定）
-//!
-//! 86-scalar-interfaces 已覆盖 Int 方法形式与泛型 `.add`；此处锁定浮点方法族
-//! （IFloat：abs/pow/mod/neg/eq/lt）与泛型约束下的**运算符形式**（`+` ≡ `.add`）。
+//! hc-rt/tests/scalar.rs
 
 use hc_rt::Interp;
 
@@ -43,7 +40,7 @@ fn generic_operator_plus() {
     run_ok(
         r#"
 fn sum_plus(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| {
         total = total + v;
     }

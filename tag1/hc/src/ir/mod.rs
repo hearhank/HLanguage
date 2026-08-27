@@ -1,28 +1,14 @@
-//! M3.1 共享 IR（唯一语义源，ADR-0004）
+//! 共享 IR 模块根：线性指令集、IrModule 结构与执行引擎
 //!
-//! 线性指令 + 标签形态——字节码 VM（M3.2）与 LLVM 原生后端（M3.3）共用，
-//! 禁止各后端私语义。覆盖：标量运算 / 控制流 / 函数调用 / **错误值通道**
-//! （M2.6 传播模型：错误是值，`try`/`catch` 降级为错误值检查 + 分支）。
-//!
-//! 垂直切片范围（tag1）：标量 + bool + 字符串 + 函数/参数/局部变量 +
-//! if（语句/表达式/else-if/optional 捕获）+ while（含续步）+ return +
-//! error 字面量 + try/catch + orelse + 全局函数调用（含多级限定名）+
-//! 断言内建 + **指针**（Phase 1：`&`/`&mut` 取址、`p.*` 解引用、写穿别名）+
-//! **聚合**（Phase 2：数组/元组字面量、struct/枚举字面量与常量、字段/索引/切片
-//! 读写、`.?` 断言解包、元组解构、`move`）+
-//! **switch + range + for**（Phase 3：`MatchTest`/`IrPattern` first-match 线性链、
-//! `0..n` 区间糖、`IterMake/IterNext/IterWriteBack` 迭代含 mut 写回、无标签
-//! break/continue）。
-//! **不做**（硬错误拒绝，不静默丢弃）：defer/errdefer、带标签 break/continue
-//! （Phase 6 起）。
-//! 复杂库操作 = `CallBuiltin` 原子指令。
+//! 定义：枚举：IrConst, IrBinOp, IrUnOp, IrInst, IrPattern, IrValue, Cell, ArenaAllocErrIr, ThreadResultIr, GStateIr, GResultIr, ChannelStateIr
+//! 定义：结构体：IrModule, IrFunc, TypeTable, UnionInfo, ClassInfo, EnumInfo, ArenaStateIr, IterItem, ThreadStateIr, GoroutineIr, SchedulerInnerIr, GoroutineSchedulerIr, ChanStateIr, ChanInnerIr, Ctx, PipeIr, Frame, IrError, IrRuntime
 
+use self::comptime::Instantiated;
 use crate::ast::*;
-use crate::comptime::{self, Instantiated};
-use crate::errorcodes::ErrorCodeTable;
-use crate::regex::{parse_regex, RegexMatcher};
-use crate::rng::xorshift64;
-use crate::token::Span;
+use crate::lexer::token::Span;
+use crate::runtime::errorcodes::ErrorCodeTable;
+use crate::runtime::regex::{parse_regex, RegexMatcher};
+use crate::runtime::rng::xorshift64;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,11 +17,13 @@ use std::thread;
 
 // ---------- 子模块 ----------
 mod builtin;
+pub mod comptime;
 mod json;
 mod lower_impl;
 mod method;
 mod ops;
 mod runtime;
+pub mod string;
 mod types;
 
 pub use self::builtin::*;
@@ -44,6 +32,7 @@ pub use self::lower_impl::*;
 pub use self::method::*;
 pub use self::ops::*;
 pub use self::runtime::*;
+pub use self::string::*;
 pub use self::types::*;
 
 // ---------- IR 结构 ----------
@@ -73,6 +62,8 @@ pub struct IrModule {
     /// K1 无标签 union（扁平 + 全限定）→ 字段声明（名 + 类型，声明序）：`UnionSync`
     /// 与 `store_field` 写路径字节重解释同步用（ADR-0014）。
     pub unions: HashMap<String, Vec<(String, Type)>>,
+    /// ADR-0027：类型名 → 实现的接口名列表（编译期接口分派用）
+    pub type_implements: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -492,7 +483,8 @@ pub enum IrValue {
     Int(i128),
     Float(f64),
     Bool(bool),
-    Str(Vec<u8>),
+    /// String 值类型：堆分配的字节数组
+    String(StringDataIr),
     /// 可选值（`null` = `Opt(None)`，对齐 tree-walking `Value::Opt`）
     Opt(Option<Box<IrValue>>),
     /// 错误值（M4.2：码 + 名字；码 = M2.6 编译期错误码表，全局唯一）
@@ -553,7 +545,7 @@ impl PartialEq for IrValue {
             (IrValue::Int(a), IrValue::Int(b)) => a == b,
             (IrValue::Float(a), IrValue::Float(b)) => a == b,
             (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
-            (IrValue::Str(a), IrValue::Str(b)) => a == b,
+            (IrValue::String(a), IrValue::String(b)) => a == b,
             (IrValue::Opt(a), IrValue::Opt(b)) => a == b,
             (IrValue::Err { name: an, code: ac }, IrValue::Err { name: bn, code: bc }) => {
                 an == bn && ac == bc
@@ -673,6 +665,8 @@ pub struct ArenaStateIr {
     pub total: usize,
     /// 可用标志（`deinit` 后 false → `alloc` 抛 `ArenaDeinitialized`）
     pub live: bool,
+    /// G5/§8.3 Debug 泄漏检测：Arena 块分配登记表（bump 时登记，deinit 时清空）
+    pub alloc_tracker: Vec<(usize, u32)>,
 }
 
 impl ArenaStateIr {
@@ -682,6 +676,7 @@ impl ArenaStateIr {
             cursor: 0,
             total: 0,
             live: true,
+            alloc_tracker: vec![],
         }
     }
 
@@ -704,6 +699,8 @@ impl ArenaStateIr {
                 .try_reserve_exact(size)
                 .map_err(|_| ArenaAllocErrIr::Oom)?;
             block.resize(size, 0u8);
+            // G5/§8.3 Debug 泄漏检测：登记 Arena 块分配
+            self.alloc_tracker.push((block.len(), 0));
             self.blocks.push(block);
             self.cursor = 0;
         }
@@ -717,6 +714,7 @@ impl ArenaStateIr {
     /// deinit：清空全部块（归还 backing）、重置统计、标记不可用
     fn deinit(&mut self) {
         self.blocks.clear();
+        self.alloc_tracker.clear();
         self.cursor = 0;
         self.total = 0;
         self.live = false;
@@ -1169,7 +1167,7 @@ fn type_descr(v: &IrValue) -> String {
         IrValue::Int(_) => "i32".into(),
         IrValue::Float(_) => "f64".into(),
         IrValue::Bool(_) => "bool".into(),
-        IrValue::Str(_) => "&[u8]".into(),
+        IrValue::String(_) => "String".into(),
         IrValue::Opt(_) => "?T".into(),
         IrValue::Err { name, .. } => format!("error.{name}"),
         IrValue::Ptr(_) => "*T".into(),
@@ -1200,7 +1198,7 @@ fn match_pattern(subject: &IrValue, pat: &IrPattern) -> bool {
         (IrValue::Enum { variant, .. }, IrPattern::Ident(s)) => variant == s,
         (IrValue::Int(i), IrPattern::Int(s)) => *i == *s,
         (IrValue::Float(f), IrPattern::Float(s)) => *f == *s,
-        (IrValue::Str(st), IrPattern::Str(s)) => *st == s.as_bytes(),
+        (IrValue::String(st), IrPattern::Str(s)) => st.as_slice() == s.as_bytes(),
         (IrValue::Int(c), IrPattern::Char(pc)) => *c == *pc as i128,
         (IrValue::Err { name, .. }, IrPattern::Error(pe)) => name == pe,
         (IrValue::Bool(b), IrPattern::Ident(s)) => (*b && s == "true") || (!*b && s == "false"),
@@ -1290,7 +1288,9 @@ fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<V
                         let mut fs = HashMap::new();
                         fs.insert(
                             "key".into(),
-                            ctx.alloc(Cell::Value(IrValue::Str(k.clone().into_bytes()))),
+                            ctx.alloc(Cell::Value(IrValue::String(StringDataIr::from_bytes(
+                                k.clone().into_bytes(),
+                            )))),
                         );
                         fs.insert("value".into(), *vc);
                         let kv = ctx.alloc(Cell::Class {
@@ -1305,7 +1305,7 @@ fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<V
                     .collect();
                 Ok(items)
             } else {
-                // 用户 IIterable：next() 直到 Opt(None)/Void（tag1：next → ?T）
+                // 用户类 IIterable：next() 返回 Opt(None)/Void——tag1 的 next 返回 ?T
                 let fname = format!("{name}.next");
                 let idx = pick_func(ctx, module, &fname, &[v.clone()]).ok_or_else(|| {
                     IrError::msg(
@@ -1332,7 +1332,7 @@ fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<V
                 Ok(items)
             }
         }
-        // 集合（G4）：Map 句柄遍历 → KV 条目（key/value 字段，value 共享源字段 cell）
+        // 集合（G4）：Map 句柄 → KV 条目（key/value 字段，value 原样共享 cell）
         IrValue::Map(c) => {
             let fields = match &ctx.cells[c] {
                 Cell::Map { fields, .. } => fields.clone(),
@@ -1344,7 +1344,9 @@ fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<V
                     let mut fs = HashMap::new();
                     fs.insert(
                         "key".into(),
-                        ctx.alloc(Cell::Value(IrValue::Str(k.clone().into_bytes()))),
+                        ctx.alloc(Cell::Value(IrValue::String(StringDataIr::from_bytes(
+                            k.clone().into_bytes(),
+                        )))),
                     );
                     fs.insert("value".into(), *vc);
                     let kv = ctx.alloc(Cell::Class {
@@ -1359,7 +1361,8 @@ fn make_iter(ctx: &mut Ctx, module: &IrModule, v: &IrValue, depth: usize) -> R<V
                 .collect();
             Ok(items)
         }
-        IrValue::Str(s) => Ok(s
+        IrValue::String(s) => Ok(s
+            .as_slice()
             .iter()
             .map(|b| IterItem {
                 cell: ctx.alloc(Cell::Value(IrValue::Int(*b as i128))),
@@ -1391,7 +1394,7 @@ fn field_value(ctx: &Ctx, b: &IrValue, field: &str) -> R<IrValue> {
             }
             _ => Err(IrError::msg("NoField", format!("no field `{field}`"))),
         },
-        IrValue::Str(s) => {
+        IrValue::String(s) => {
             if field == "len" {
                 Ok(IrValue::Int(s.len() as i128))
             } else {
@@ -1463,11 +1466,12 @@ fn index_value(ctx: &Ctx, b: &IrValue, i: usize) -> R<IrValue> {
             }
             _ => Err(IrError::msg("NotIndexable", "not indexable")),
         },
-        IrValue::Str(s) => {
-            if i >= s.len() {
+        IrValue::String(s) => {
+            let bytes = s.as_slice();
+            if i >= bytes.len() {
                 return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
             }
-            Ok(IrValue::Int(s[i] as i128))
+            Ok(IrValue::Int(bytes[i] as i128))
         }
         IrValue::Slice { data, start, len } => {
             if i >= *len {
@@ -1518,13 +1522,15 @@ fn slice_of(ctx: &Ctx, b: &IrValue, lo: usize, hi: usize, open_end: bool) -> R<I
             }
             _ => Err(IrError::msg("NotIndexable", "not indexable")),
         },
-        IrValue::Str(s) => {
-            let bytes = s.clone();
+        IrValue::String(s) => {
+            let bytes = s.as_slice();
             let h = if open_end { bytes.len() } else { hi };
             if h > bytes.len() || lo > bytes.len() {
                 return Err(IrError::msg("IndexOutOfBounds", "slice out of bounds"));
             }
-            Ok(IrValue::Str(bytes[lo..h].to_vec()))
+            Ok(IrValue::String(StringDataIr::from_bytes(
+                bytes[lo..h].to_vec(),
+            )))
         }
         IrValue::Slice { data, start, len } => {
             let total = *len;
@@ -1678,7 +1684,7 @@ impl IrValue {
             IrValue::Bool(b) => *b,
             IrValue::Int(i) => *i != 0,
             IrValue::Float(f) => *f != 0.0,
-            IrValue::Str(s) => !s.is_empty(),
+            IrValue::String(s) => !s.is_empty(),
             IrValue::Opt(Some(v)) => v.as_bool(),
             // 指针恒真（对齐 tree-walking `Value::Ptr(_) => true`）
             IrValue::Ptr(_) => true,
@@ -1700,7 +1706,7 @@ impl IrValue {
                 }
             }
             IrValue::Bool(b) => b.to_string(),
-            IrValue::Str(s) => String::from_utf8_lossy(s).to_string(),
+            IrValue::String(s) => s.to_string(),
             IrValue::Opt(Some(v)) => format!("?{}", v.display(ctx)),
             IrValue::Opt(None) => "null".into(),
             IrValue::Err { name, .. } => format!("error.{name}"),
@@ -1792,7 +1798,7 @@ impl IrValue {
             (IrValue::Float(a), IrValue::Int(b)) => *a == *b as f64,
             (IrValue::Float(a), IrValue::Float(b)) => a == b,
             (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
-            (IrValue::Str(a), IrValue::Str(b)) => a == b,
+            (IrValue::String(a), IrValue::String(b)) => a == b,
             (IrValue::Opt(a), IrValue::Opt(b)) => match (a, b) {
                 (Some(x), Some(y)) => x.value_eq(ctx, y),
                 (None, None) => true,
@@ -2009,7 +2015,7 @@ impl IrRuntime {
                     .ctx
                     .args
                     .iter()
-                    .map(|a| IrValue::Str(a.clone()))
+                    .map(|a| IrValue::String(StringDataIr::from_slice(a.as_slice())))
                     .collect();
                 let alloc = implicit_env_value(&mut self.ctx, "alloc");
                 args.push(make_vec_with(&mut self.ctx, items, alloc));

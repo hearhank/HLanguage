@@ -13,7 +13,7 @@
 ## 源码约定
 
 - 源码 `.hc` 文件位于**包根**（与 build.zon 同目录）——同包文件**共享命名空间**（跨文件直接可见，Q21）
-- 多文件按职责拆分（如 `main.hc` / `math.hc` / `io.hc`）；命名空间（`namespace X`）组织符号；`[module]` 标注命名空间 = 模块（隔离 + 上下文注入，见 `06-08-modules.md` 与 H3）
+- 多文件按职责拆分（如 `main.hc` / `math.hc` / `io.hc`）；命名空间（`namespace X`）组织符号；`src/Modules/` 目录定义模块（隔离 + IoC 容器注入，见 `06-08-modules.md` 与 ADR-0026）
 - **命名**：文件 `snake_case.hc`；类型/命名空间 `PascalCase`；函数/变量 `snake_case`；常量 `SCREAMING_SNAKE`——见 `01-language-design.md` §10
 - 目录参数形态：`hc run <目录>` / `hc build <目录>` 把目录当包加载（入口 = `main.hc` 或首个 `.hc`）；单文件 `hc run file.hc` = 隐式单文件包
 

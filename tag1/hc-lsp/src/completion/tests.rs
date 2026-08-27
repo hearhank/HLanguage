@@ -1,3 +1,5 @@
+//! hc-lsp/src/completion/tests.rs
+
 use super::*;
 
 #[test]

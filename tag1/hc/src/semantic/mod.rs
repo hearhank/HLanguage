@@ -1,15 +1,14 @@
-//! 语义检查（M2.2 完整：表达式级类型检查 / 期望类型传播 / 字段与索引校验 /
-//! 存储形态验证 / 泛型 where 约束验证）
+//! 语义分析模块根：类型检查器主入口、SType 类型系统
 //!
-//! tag1 静态 pass：在解释器 load 之前运行。检查策略：**能精确判定才报错**（准确
-//! 可靠——调试友好语言要求不误报）；类型信息不足（Unknown / 泛型未单态化）时
-//! 保守放行，交由运行时诊断。
+//! 定义：枚举：SType, IntWidth, TypeKind, AllocSource
+//! 定义：结构体：TypeInfo, FnSig, VarInfo, ThreadState, Checker
 
 mod check;
 mod collect;
 mod error_infer;
 mod infer;
 mod resolve;
+pub(crate) mod trait_registry;
 mod validate;
 
 use crate::ast::*;
@@ -186,6 +185,8 @@ struct VarInfo {
     source: AllocSource,
     /// 组 G：`spawn(...)` 线程句柄状态（Q18 绑定/逃逸 + Q19 冻结窗口）
     thread: Option<ThreadState>,
+    /// 2026-08-25：变量是否声明为 `mut`（可写）
+    mut_: bool,
 }
 
 /// 线程句柄静态跟踪（协作式延迟执行：spawn 立即返回、join/detach/程序结束运行）
@@ -247,6 +248,8 @@ pub fn check_with_extern_deps(
         anytype_ret_cache: HashMap::new(),
         anytype_resolving: HashSet::new(),
         extension_of: None,
+        type_implements: HashMap::new(),
+        owned_stack: Vec::new(),
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -313,6 +316,11 @@ struct Checker {
     anytype_resolving: HashSet<(String, String)>,
     /// Q15：当前正在检查的扩展方法的目标类型名（None = 普通函数或类方法）
     extension_of: Option<String>,
+    /// ADR-0027：类型名 → 实现的接口名列表（编译期接口分派用）
+    type_implements: HashMap<String, Vec<String>>,
+    /// 2026-08-25：当前作用域中 `owned` 变量名列表（平行于 scopes）
+    /// 进入作用域 push，退出时检查未匹配的 owned 变量 → warining
+    owned_stack: Vec<Vec<String>>,
     diags: Vec<Diagnostic>,
 }
 
@@ -383,7 +391,7 @@ pub(crate) fn is_builtin_type(name: &str) -> bool {
 
 /// 内建集合类型（可迭代 / 引用语义）
 pub(crate) fn is_collection(name: &str) -> bool {
-    matches!(name, "Vec" | "Map" | "Deque" | "Table" | "String")
+    matches!(name, "Vec" | "Map" | "Deque" | "Table")
 }
 
 /// 递归收集 class 声明（namespace 内展平），供接口实现验证用

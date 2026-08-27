@@ -1,7 +1,4 @@
-//! E4：Mutex 类型测试（真 OS 并行）
-//!
-//! Mutex.init(v) 创建互斥锁，.lock() 阻塞获取锁返回内部值克隆，
-//! .try_lock() 非阻塞尝试返回 ?T。
+//! hc-rt/tests/mutex.rs
 
 use hc_rt::Interp;
 
@@ -52,7 +49,7 @@ fn mutex_lock_returns_clone() {
         r#"
 [test] fn t() !void {
     var m = Mutex.init(100);
-    var v = try m.lock();
+    var mut v = try m.lock();
     v = v + 1;
     // 重新加锁获取原始值（不受外部修改影响）
     var v2 = try m.lock();

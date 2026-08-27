@@ -1,4 +1,4 @@
-//! M2.3 推断补全：泛型 T / 指针形态 / 多路径返回 / 重载歧义
+//! hc-rt/tests/inference.rs
 
 use hc_rt::Interp;
 

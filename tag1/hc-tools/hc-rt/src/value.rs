@@ -8,6 +8,8 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 
+use crate::StringData;
+
 /// 运行时值
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -15,8 +17,8 @@ pub enum Value {
     Int(i128),
     Float(f64),
     Bool(bool),
-    /// 字节串（String / &[u8] / 静态切片）
-    Str(Rc<RefCell<Vec<u8>>>),
+    /// String 值类型（拥有所有权的字节数组，值语义，克隆即深拷贝）
+    String(StringData),
     /// 数组/集合（共享可变；元素为共享槽以支持 for 可写捕获与索引写回）
     Arr(Rc<RefCell<Vec<Rc<RefCell<Value>>>>>),
     /// 切片视图（带位置和长度的指针，H4 定案）：data[start..start+len]
@@ -175,6 +177,9 @@ pub struct ArenaState {
     pub total: usize,
     /// 可用标志（`deinit` 后 false → `alloc` 抛 `ArenaDeinitialized`）
     pub live: bool,
+    /// G5/§8.3 Debug 泄漏检测：Arena 块分配登记表（`Arena.init(alloc)` 时从 Interp 共享；
+    /// deinit 清 block 后弱引用失效自动视为释放；退出时仍存活者 = 泄漏）
+    pub alloc_tracker: Option<Rc<RefCell<Vec<LeakRecord>>>>,
 }
 
 /// 每个 Value 实例在任一时刻只被一个线程访问。spawn 时深复制值到新线程，原始线程和子线程操作各自副本，无数据竞争。
@@ -246,6 +251,7 @@ impl ArenaState {
             cursor: 0,
             total: 0,
             live: true,
+            alloc_tracker: None,
         }
     }
 
@@ -271,7 +277,16 @@ impl ArenaState {
                 .try_reserve_exact(size)
                 .map_err(|_| ArenaAllocErr::Oom)?;
             block.resize(size, 0u8);
-            self.blocks.push(Rc::new(RefCell::new(block)));
+            let block_rc = Rc::new(RefCell::new(block));
+            // G5/§8.3 Debug 泄漏检测：登记 Arena 块分配（弱引用随 deinit 失效）
+            if let Some(ref tracker) = self.alloc_tracker {
+                tracker.borrow_mut().push(LeakRecord {
+                    size: block_rc.borrow().len(),
+                    line: 0,
+                    weak: Rc::downgrade(&block_rc),
+                });
+            }
+            self.blocks.push(block_rc);
             self.cursor = 0;
         }
         let block = self.blocks.last().unwrap().clone();
@@ -569,7 +584,7 @@ impl Value {
         Value::Bool(v)
     }
     pub fn str_bytes(b: Vec<u8>) -> Value {
-        Value::Str(Rc::new(RefCell::new(b)))
+        Value::String(StringData::from_bytes(b))
     }
     pub fn str(s: &str) -> Value {
         Value::str_bytes(s.as_bytes().to_vec())
@@ -615,7 +630,7 @@ impl Value {
                 }
             }
             Value::Bool(b) => b.to_string(),
-            Value::Str(s) => String::from_utf8_lossy(&s.borrow()).to_string(),
+            Value::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
             Value::Arr(a) => {
                 let items: Vec<String> = a.borrow().iter().map(|v| v.borrow().display()).collect();
                 format!("[{}]", items.join(", "))
@@ -713,7 +728,11 @@ impl Value {
                 Ok(v) => format!("Mutex({})", v.display()),
                 Err(_) => "Mutex(<poisoned>)".to_string(),
             },
-            Value::Chan(ch) => format!("Chan({}/{})", ch.inner.lock().unwrap().queue.len(), ch.capacity),
+            Value::Chan(ch) => format!(
+                "Chan({}/{})",
+                ch.inner.lock().unwrap().queue.len(),
+                ch.capacity
+            ),
             Value::Void => "void".to_string(),
             Value::Dangling => "<dangling>".to_string(),
         }
@@ -727,7 +746,7 @@ impl Value {
             (Value::Float(a), Value::Int(b)) => *a == *b as f64,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Str(a), Value::Str(b)) => *a.borrow() == *b.borrow(),
+            (Value::String(a), Value::String(b)) => a == b,
             (Value::Arr(a), Value::Arr(b)) => {
                 let (a, b) = (a.borrow(), b.borrow());
                 a.len() == b.len()
@@ -803,6 +822,8 @@ impl Value {
             (Value::Arena(a), Value::Arena(b)) => Rc::ptr_eq(a, b),
             (Value::Allocator(a), Value::Allocator(b)) => Rc::ptr_eq(a, b),
             (Value::Bytes(a), Value::Bytes(b)) => *a.borrow() == *b.borrow(),
+            (Value::Bytes(a), Value::String(b)) => *a.borrow() == b.as_slice(),
+            (Value::String(a), Value::Bytes(b)) => a.as_slice() == *b.borrow(),
             (Value::Ptr(a), Value::Ptr(b)) => Rc::ptr_eq(a, b),
             (Value::Ptr(a), b) => a.borrow().value_eq(b),
             (a, Value::Ptr(b)) => a.value_eq(&b.borrow()),
@@ -857,7 +878,7 @@ impl Value {
             (Value::Int(a), Value::Float(b)) => Some((*a as f64) < *b),
             (Value::Float(a), Value::Int(b)) => Some(*a < *b as f64),
             (Value::Float(a), Value::Float(b)) => Some(a < b),
-            (Value::Str(a), Value::Str(b)) => Some(*a.borrow() < *b.borrow()),
+            (Value::String(a), Value::String(b)) => Some(a.as_slice() < b.as_slice()),
             (Value::Bool(a), Value::Bool(b)) => Some(a < b),
             (Value::Ptr(a), Value::Ptr(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
             (Value::Allocator(a), Value::Allocator(b)) => Some(Rc::as_ptr(a) < Rc::as_ptr(b)),
@@ -877,7 +898,7 @@ impl Value {
             Value::Boxed(_) => true,
             Value::Vec(_) => true,
             Value::Map(_) => true,
-            Value::Str(s) => !s.borrow().is_empty(),
+            Value::String(s) => !s.is_empty(),
             Value::Bytes(b) => !b.borrow().is_empty(),
             Value::Allocator(_) => true,
             _ => true,
@@ -889,7 +910,7 @@ impl Value {
             Value::Int(_) => "i128".into(),
             Value::Float(_) => "f64".into(),
             Value::Bool(_) => "bool".into(),
-            Value::Str(_) => "&[u8]".into(),
+            Value::String(_) => "String".into(),
             Value::Arr(_) => "array".into(),
             Value::Slice { .. } => "slice".into(),
             Value::Class(c) => c.borrow().name.clone(),

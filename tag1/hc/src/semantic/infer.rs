@@ -1,4 +1,4 @@
-//! 表达式类型推断（M2.2 核心）+ 校验辅助 + 调用检查 + spawn 捕获 + 变量查询。
+//! 类型推断：表达式类型推断、泛型实例化与重载决议
 
 use super::*;
 use crate::ast::*;
@@ -81,6 +81,29 @@ impl Checker {
                     .map(|it| self.expr_ty(it, scopes, None).unwrap_or(SType::Unknown))
                     .collect();
                 SType::Tuple(ts)
+            }
+            Expr::ContainerLit {
+                ty, ty_args, items, ..
+            } => {
+                // 容器字面量：推断元素类型，返回容器类型
+                let elem_exp = match expected {
+                    Some(SType::Named(n, args)) if n == ty => args.first(),
+                    _ => None,
+                };
+                let mut et: Option<SType> = None;
+                for it in items {
+                    let it_ty = self.expr_ty(it, scopes, elem_exp);
+                    if let (Some(a), Some(b)) = (&et, &it_ty) {
+                        if !self.compatible(a, b) {
+                            let _ = it.span();
+                        }
+                    }
+                    if et.is_none() {
+                        et = it_ty;
+                    }
+                }
+                // 构建容器类型名（如 Vec<i32>）
+                SType::Named(ty.clone(), ty_args.iter().map(|a| self.ty_of(a)).collect())
             }
             Expr::NamedLit {
                 ty, fields, span, ..
@@ -492,6 +515,7 @@ impl Checker {
                                     pending_fields: pending,
                                     source,
                                     thread: None,
+                                    mut_: false,
                                 },
                             );
                             last = None;
@@ -510,6 +534,8 @@ impl Checker {
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
+                // 2026-08-25：写只读变量 → 编译错误
+                self.check_mut_write(target, scopes, span);
                 target_ty.unwrap_or(SType::Unknown)
             }
             Expr::ErrorLit(_, _) => SType::ErrorUnion(None, Box::new(SType::Unknown)),
@@ -1128,6 +1154,58 @@ impl Checker {
 
     // ---------- 调用检查（重载匹配 + where 约束验证） ----------
 
+    /// 检查方法调用是否需要 `mut` 接收者（ADR-0027：容器读写权限 = 变量绑定）
+    fn check_method_mutability(
+        &mut self,
+        var_name: Option<&str>,
+        method: &str,
+        typename: &str,
+        _sigs: Option<&[FnSig]>,
+        scopes: &[HashMap<String, VarInfo>],
+        span: &Span,
+    ) {
+        // 判断方法是否需要 mut 接收者（仅内建容器类型，ADR-0027）
+        let needs_mut = match typename {
+            "Vec" | "Deque" => matches!(
+                method,
+                "append"
+                    | "push_back"
+                    | "push_front"
+                    | "pop_back"
+                    | "pop_front"
+                    | "extend"
+                    | "put"
+                    | "remove"
+                    | "clear"
+                    | "sort"
+                    | "reverse"
+                    | "append_u64"
+            ),
+            "Map" => matches!(method, "put" | "remove" | "clear"),
+            "Table" => matches!(method, "put"),
+            _ => false,
+        };
+        if !needs_mut {
+            return;
+        }
+        // 检查接收者变量是否为 mut
+        if let Some(name) = var_name {
+            let is_mut = scopes
+                .iter()
+                .rev()
+                .any(|s| s.get(name).map_or(false, |info| info.mut_));
+            if !is_mut {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!(
+                        "cannot call mutating method `{method}` on `{name}` because it is not declared `mut`; \
+                         use `var mut {name}` to make it mutable"
+                    ),
+                ));
+            }
+        }
+    }
+
     pub(crate) fn check_call(
         &mut self,
         callee: &Expr,
@@ -1211,19 +1289,38 @@ impl Checker {
                     _ => None,
                 };
                 if let Some(sigs) = method_sigs {
-                    let arg_tys: Vec<Option<SType>> =
-                        args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
-                    return self.match_overloads(
-                        &format!("{}.{}", field, field),
-                        Some(sigs),
-                        &arg_tys,
-                        args,
-                        span,
-                        expected,
-                        true,
-                    );
+                    // 检查变异方法是否需要 mut 接收者（ADR-0027）
+                    if let Some(SType::Named(tn, _)) = &dt {
+                        let vn = if let Expr::Ident(name, _) = base.as_ref() {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        };
+                        self.check_method_mutability(vn, field, tn, None, scopes, span);
+                        let arg_tys: Vec<Option<SType>> =
+                            args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
+                        return self.match_overloads(
+                            &format!("{tn}.{field}"),
+                            Some(sigs),
+                            &arg_tys,
+                            args,
+                            span,
+                            expected,
+                            true,
+                        );
+                    }
                 }
-                // 内建方法（Vec.append 等）或未知：放行
+                // 内建方法（Vec.append 等）或未知：放行前检查变异方法要求 mut
+                if let Some(SType::Named(tn, _)) = &dt {
+                    if is_builtin_type(tn) {
+                        let vn = if let Expr::Ident(name, _) = base.as_ref() {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        };
+                        self.check_method_mutability(vn, field, tn, None, scopes, span);
+                    }
+                }
                 for a in args {
                     let _ = self.expr_ty(a, scopes, None);
                 }
@@ -1242,19 +1339,42 @@ impl Checker {
                             _ => None,
                         };
                         if let Some(sigs) = method_sigs {
-                            let arg_tys: Vec<Option<SType>> =
-                                args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
-                            return self.match_overloads(
-                                &format!("{}.{}", field, field),
-                                Some(sigs),
-                                &arg_tys,
-                                args,
-                                span,
-                                expected,
-                                true,
-                            );
+                            // 检查变异方法是否需要 mut 接收者（ADR-0027）
+                            if let Some(SType::Named(tn, _)) = &dt {
+                                self.check_method_mutability(
+                                    Some(n.as_str()),
+                                    field,
+                                    tn,
+                                    None,
+                                    scopes,
+                                    span,
+                                );
+                                let arg_tys: Vec<Option<SType>> =
+                                    args.iter().map(|a| self.expr_ty(a, scopes, None)).collect();
+                                return self.match_overloads(
+                                    &format!("{tn}.{field}"),
+                                    Some(sigs),
+                                    &arg_tys,
+                                    args,
+                                    span,
+                                    expected,
+                                    true,
+                                );
+                            }
                         }
-                        // 内建方法或未知：放行
+                        // 内建方法或未知：放行前检查变异方法要求 mut
+                        if let Some(SType::Named(tn, _)) = &dt {
+                            if is_builtin_type(tn) {
+                                self.check_method_mutability(
+                                    Some(n.as_str()),
+                                    field,
+                                    tn,
+                                    None,
+                                    scopes,
+                                    span,
+                                );
+                            }
+                        }
                         for a in args {
                             let _ = self.expr_ty(a, scopes, None);
                         }
@@ -1790,7 +1910,7 @@ impl Checker {
                         false
                     } else {
                         // 同精度同具体度同期望匹配：签名不同 → 歧义（要求显式标注）
-                        if !self.sig_same(s, b.0) && !ambiguous_reported {
+                        if !self.sig_same(s, b.0, skip_self) && !ambiguous_reported {
                             self.diags.push(Diagnostic::error(
                                 span.clone(),
                                 format!(
@@ -1933,6 +2053,7 @@ impl Checker {
                         pending_fields: None,
                         source: AllocSource::Unknown,
                         thread: None,
+                        mut_: false,
                     },
                 )
             })
@@ -2132,13 +2253,14 @@ impl Checker {
     }
 
     /// 两个重载签名是否结构相同（参数类型 + 返回类型；歧义检测排除重复登记）
-    pub(crate) fn sig_same(&self, a: &FnSig, b: &FnSig) -> bool {
+    pub(crate) fn sig_same(&self, a: &FnSig, b: &FnSig, skip_self: bool) -> bool {
         if a.params.len() != b.params.len() {
             return false;
         }
-        a.params
+        let start = usize::from(skip_self);
+        a.params[start..]
             .iter()
-            .zip(b.params.iter())
+            .zip(b.params[start..].iter())
             .all(|(pa, pb)| self.ty_of(&pa.ty) == self.ty_of(&pb.ty))
             && self.ret_stype(&a.ret) == self.ret_stype(&b.ret)
     }
@@ -2714,48 +2836,60 @@ impl Checker {
         None
     }
 
+    /// 提取 Dot 链的完整标识符路径（io.fs.open → ["io", "fs", "open"]）
+    fn extract_dot_path(expr: &Expr) -> Option<Vec<String>> {
+        match expr {
+            Expr::Ident(name, _) => Some(vec![name.clone()]),
+            Expr::Dot { base, field, .. } | Expr::Field { base, field, .. } => {
+                let mut path = Self::extract_dot_path(base)?;
+                path.push(field.clone());
+                Some(path)
+            }
+            _ => None,
+        }
+    }
+
     /// 初始化表达式 → 分配来源（形态优先，类型兜底）
     pub(crate) fn infer_source(&self, init: Option<&Expr>, init_ty: Option<&SType>) -> AllocSource {
         if let Some(e) = init {
             match e {
-                // alloc.init / alloc.alloc / arena.alloc / arena.init
                 Expr::Call { callee, .. } => {
-                    if let Expr::Dot { base, field, .. } = callee.as_ref() {
-                        if let Expr::Ident(b, _) = base.as_ref() {
-                            match (b.as_str(), field.as_str()) {
-                                ("alloc", _) => return AllocSource::NonArena,
-                                ("arena", _) => return AllocSource::Arena,
+                    // 提取 Dot 链完整路径，按模式匹配
+                    if let Some(path) = Self::extract_dot_path(callee) {
+                        if path.len() >= 2 {
+                            let base = path[0].as_str();
+                            let method = path[path.len() - 1].as_str();
+                            match (base, method) {
+                                // alloc.init / alloc.alloc → NonArena
+                                ("alloc", "init" | "alloc") => return AllocSource::NonArena,
+                                // arena.alloc / arena.init → Arena
+                                ("arena", "alloc" | "init") => return AllocSource::Arena,
                                 ("Arena", "init") => return AllocSource::Arena,
-                                // 内建类型构造（String.from / Vec.init 等，Dot 形态）→ 新建对象
-                                (b, f)
-                                    if is_builtin_type(b)
-                                        && matches!(f, "init" | "from" | "new") =>
-                                {
+                                // 内建类型构造（String.from / Vec.init 等）→ 新建对象
+                                (b, "init" | "from" | "new") if is_builtin_type(b) => {
                                     return AllocSource::NonArena;
                                 }
                                 _ => {}
                             }
                         }
-                    }
-                    // 集合/内建类型构造（Field 形态：Vec.init / Table.init）
-                    if let Expr::Field { base, field, .. } = callee.as_ref() {
-                        if let Expr::Ident(b, _) = base.as_ref() {
-                            if is_builtin_type(b)
-                                && matches!(field.as_str(), "init" | "from" | "new")
-                            {
+                        // 多层 Dot 链：io.fs.open → 检查最终方法名是否已知分配模式
+                        if path.len() >= 3 {
+                            let method = path[path.len() - 1].as_str();
+                            if matches!(method, "open" | "create" | "alloc" | "init") {
                                 return AllocSource::NonArena;
                             }
                         }
                     }
-                    // copy / box：新建对象归当前作用域
+                    // copy：新建对象归当前作用域
                     if let Expr::Ident(name, _) = callee.as_ref() {
-                        if matches!(name.as_str(), "copy" | "box") {
+                        if name == "copy" {
                             return AllocSource::NonArena;
                         }
                     }
                 }
                 // 数组字面量 = 新建引用对象（作用域负责）
                 Expr::ArrayLit(..) => return AllocSource::NonArena,
+                Expr::ContainerLit { .. } => return AllocSource::NonArena,
                 _ => {}
             }
         }

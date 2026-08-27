@@ -7,10 +7,9 @@ import H.std.{io};
 
 fn search_file<T>(io: *T, path: &[u8], needle: &[u8]) !i32 where T: Io {
     var data = try io.fs.read_file(path, alloc);
-    var text = String.from(data, alloc);
-    var lines = text.split('\n');
+    var lines = data.split('\n');
 
-    var hits = 0;
+    var mut hits = 0;
     for (lines) |line| {
         if (line.find(needle)) |_| {
             io.print("{}: {}\n", path, line);
@@ -26,7 +25,7 @@ fn main() !void {
     defer dir.close();
 
     var entries = try io.fs.list_dir(&dir, alloc);
-    var total = 0;
+    var mut total = 0;
     for (entries) |entry| {
         if (!entry.is_dir and entry.name.ends_with(".hc")) {
             total += try search_file(&io, entry.name, needle);
@@ -35,7 +34,7 @@ fn main() !void {
     io.print("{} matches\n", total);
 }
 
-[test] fn grep_tool_demo() !void {
+[Test] fn grep_tool_demo() !void {
     // S4 演示型（Q-T6）：遍历当前目录 .hc 文件（外部文件系统依赖），不在测试中执行；
     // 行搜索逻辑等价断言见 52-string-deep / 56-csv-parse
     try expect(true);

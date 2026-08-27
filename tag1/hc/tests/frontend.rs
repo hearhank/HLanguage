@@ -1,4 +1,7 @@
-//! hc 编译器前端单元测试（M1/M2 验收：词法、解析、诊断）
+//! hc/tests/frontend.rs
+//!
+//! 定义：枚举：Kind
+//! 定义：结构体：Point
 
 use hc::ast::Decl;
 use hc::lexer::lex;
@@ -892,21 +895,19 @@ fn a2_sem_import_user_pkg_whole_module() {
     );
 }
 
-// ---------- A2b：模块识别（[module]）+ 命名规范（PascalCase） ----------
+// ---------- A2b：模块识别（[module] 已移除，改用 src/Modules/） ----------
 
 #[test]
-fn a2b_parse_module_trait() {
-    // `[module] namespace` → is_module=true
-    let program = parse_source("[module] namespace Orders { pub fn f() i32 { return 1; } }\n")
-        .expect("parse");
-    let Decl::Namespace {
-        name, is_module, ..
-    } = &program.decls[0]
-    else {
-        panic!("预期 Decl::Namespace: {:?}", program.decls[0]);
-    };
-    assert_eq!(name, "Orders");
-    assert!(*is_module, "[module] 标注应置 is_module");
+fn a2b_parse_module_trait_rejected() {
+    // `[module]` 已移除（ADR-0026），应报错提示改用 src/Modules/
+    let result = hc::parse_source("[module] namespace Orders { pub fn f() i32 { return 1; } }\n");
+    assert!(result.is_err(), "[module] 应报错");
+    let diags = result.unwrap_err();
+    assert!(
+        diags.iter().any(|d| d.message.contains("src/Modules/")),
+        "错误信息应提示 src/Modules/，实际: {:?}",
+        diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]

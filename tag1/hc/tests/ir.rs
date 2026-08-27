@@ -1,9 +1,9 @@
-//! M3.1 共享 IR 验收测试：lower（AST→IR）+ run_ir（参考解释器）
+//! hc/tests/ir.rs
 //!
-//! 语义锚点 = tree-walking 解释器（hc-rt）：标量/短路/if/while/return/
-//! try/catch/orelse/断言/限定名调用/作用域遮蔽/复合赋值。
+//! 定义：枚举：Color
+//! 定义：结构体：Point, Point, Point, Point, Point, Point, Point
 
-use hc::ir::{lower, run_ir, IrValue};
+use hc::ir::{lower, run_ir, IrValue, StringDataIr};
 use hc::parse_source;
 
 /// 解析 + 降级 + 执行（失败时 unwrap 给出诊断）
@@ -77,11 +77,11 @@ fn label(x: i32) &[u8] { return if (x > 5) "big" else "small"; }
 "#;
     assert_eq!(
         run(src, "label", &[IrValue::Int(7)]).unwrap(),
-        IrValue::Str(b"big".to_vec())
+        IrValue::String(StringDataIr::from_bytes(b"big".to_vec()))
     );
     assert_eq!(
         run(src, "label", &[IrValue::Int(3)]).unwrap(),
-        IrValue::Str(b"small".to_vec())
+        IrValue::String(StringDataIr::from_bytes(b"small".to_vec()))
     );
 }
 
@@ -447,11 +447,11 @@ fn deref_eq() bool {
 fn out_of_slice_constructs_are_hard_errors() {
     // P0 回归：子集外特性必须返回 Unsupported 硬错误，而非静默丢弃（此前会 void 占位/丢语句）。
     // Phase 3-6 for/switch/闭包/global/const/defer/errdefer/标签均已纳入 IR 支持面（见正例测试）；
-    // 此处仅保留仍未实现者（未知标识符 / 循环外 break / defer 体控制流）。
+    // 2026-08-26：defer 体现已支持控制流（如 `defer try f()`），标签由 new_label() 保证唯一。
+    // 此处仅保留仍未实现者（未知标识符 / 循环外 break）。
     for src in [
-        "fn f() i32 { return nosuch; }",    // 未知标识符
-        "fn f() i32 { break; }",            // break 在循环外
-        "fn f() void { defer try foo(); }", // defer 体含控制流（try → 跳转指令）
+        "fn f() i32 { return nosuch; }", // 未知标识符
+        "fn f() i32 { break; }",         // break 在循环外
     ] {
         let program = parse_source(src).unwrap_or_else(|d| panic!("parse failed ({src}): {d:?}"));
         let e = lower(&program).expect_err("预期降级失败，src 应属子集外特性");
@@ -833,11 +833,21 @@ fn pick(s: String) i32 {
         IrValue::Int(3)
     );
     assert_eq!(
-        run(src, "pick", &[IrValue::Str("a".into())]).unwrap(),
+        run(
+            src,
+            "pick",
+            &[IrValue::String(StringDataIr::from_bytes("a".into()))]
+        )
+        .unwrap(),
         IrValue::Int(1)
     );
     assert_eq!(
-        run(src, "pick", &[IrValue::Str("z".into())]).unwrap(),
+        run(
+            src,
+            "pick",
+            &[IrValue::String(StringDataIr::from_bytes("z".into()))]
+        )
+        .unwrap(),
         IrValue::Int(0)
     );
 }
@@ -1556,10 +1566,10 @@ fn t() i32 {
 
 #[test]
 fn table_init_captures_alloc_ir() {
-    // `Table<T>.init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
+    // `Table<T>.init(rows, cols, init, alloc)`（ADR-0027：分配器永远是最后一个参数）
     let src = r#"
 fn t() i32 {
-    var t = Table<i32>.init(alloc, 2, 3, 7);
+    var t = Table<i32>.init(2, 3, 7, alloc);
     if (t.len() != 2) { return 1; }
     if (t[0].len() != 3) { return 2; }
     if (t[0][1] != 7) { return 3; }

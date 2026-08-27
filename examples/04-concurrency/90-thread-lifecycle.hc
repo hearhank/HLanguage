@@ -53,19 +53,19 @@ fn main() !void {
     io.print("after join = {}, is_done = {}\n", r5, t5.is_done());   // 2 true
 }
 
-[test] fn spawn_join_value() !void {
+[Test] fn spawn_join_value() !void {
     var th = spawn(add, 6, 7);
     try expect_eq(try th.join(), 13);
     try expect_eq(th.is_done(), true);
 }
 
-[test] fn multi_arg_value_capture() !void {
+[Test] fn multi_arg_value_capture() !void {
     var base: i32 = 41;
     var th = spawn(bump, base);   // 值复制捕获（非引用）→ 逃逸安全
     try expect_eq(try th.join(), 42);
 }
 
-[test] fn cancel_then_join_cancelled() !void {
+[Test] fn cancel_then_join_cancelled() !void {
     var th = spawn(add, 1, 2);
     th.cancel();
     var r = th.join() catch 0;
@@ -73,13 +73,13 @@ fn main() !void {
     try expect_eq(th.is_done(), true);
 }
 
-[test] fn detach_runs() !void {
+[Test] fn detach_runs() !void {
     var th = spawn(add, 1, 2);
     th.detach();
     // detach 不阻塞，线程已标记为分离
 }
 
-[test] fn thread_own_alloc_q8() !void {
+[Test] fn thread_own_alloc_q8() !void {
     var n0 = alloc.leaks();
     var th = spawn(worker);
     try expect_eq(try th.join(), 8);   // worker 自身 arena bytes

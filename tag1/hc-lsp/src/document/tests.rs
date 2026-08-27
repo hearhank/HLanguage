@@ -1,3 +1,5 @@
+//! hc-lsp/src/document/tests.rs
+
 use super::*;
 
 fn make_url(s: &str) -> Url {

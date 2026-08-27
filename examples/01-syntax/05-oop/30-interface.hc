@@ -37,7 +37,7 @@ fn main() !void {
     io.print("circle area = {}\n", circ.area());
 }
 
-[test] fn interface_implementation() !void {
+[Test] fn interface_implementation() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
     try expect(rect.area() > 11.99 and rect.area() < 12.01);   // 12

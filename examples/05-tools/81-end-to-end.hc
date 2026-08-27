@@ -5,7 +5,7 @@ import H.std.{io};
 // Q25 定案（2026-08-13）：TCP 服务形态
 //   接收数据（传输）→ 反序列化（定义）→ 校验/变换（修改）→ 序列化回写（传输）→ 落盘（保存）
 
-[continuous] class Order {   // 连续内存（内建 to_bytes；脚本生成作定制通道演示）
+class Order {   // 连续内存（内建 to_bytes；脚本生成作定制通道演示）
     id: i32,
     amount: f64,
     status: OrderStatus,
@@ -65,7 +65,7 @@ fn main() !void {
     }
 }
 
-[test] fn end_to_end_demo() !void {
+[Test] fn end_to_end_demo() !void {
     // S4 演示型（Q-T6）：81 为 TCP 服务（listen 8080），且序列化样板由脚本生成（未展开）；
     // 端到端验收在 M7 以真实网络运行（04-stdlib-scope 端到端基准）
     try expect(true);

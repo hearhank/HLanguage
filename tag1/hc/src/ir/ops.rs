@@ -1,7 +1,11 @@
+//! IR 操作定义：IrInst 指令枚举与操作数类型
+
 use super::*;
 
 /// 指令是否含控制流/登记副作用——defer 体内出现即硬错误（带 label 的跳转指令
 /// 在退出点重复发射会冲突；PushDefer/PopDefer 为 defer 登记副作用）。
+/// 2026-08-26 放宽：允许 defer 体内含控制流（如 `defer try f()`），
+/// 标签由 new_label() 保证唯一，JumpIfNotDefer 守卫防止递归执行。
 pub(crate) fn is_control_flow_inst(i: &IrInst) -> bool {
     matches!(
         i,
@@ -16,6 +20,16 @@ pub(crate) fn is_control_flow_inst(i: &IrInst) -> bool {
             | IrInst::PushDefer { .. }
             | IrInst::PopDefer { .. }
             | IrInst::JumpIfNotDefer { .. }
+    )
+}
+
+/// 放宽版控制流检查：仅检查 PushDefer/PopDefer/JumpIfNotDefer 等
+/// defer 登记副作用——这些指令在 defer 体内重复发射会导致运行期守卫错乱。
+/// 跳转/标签/Return 等由 new_label() 保证唯一性，安全可重复发射。
+pub(crate) fn is_defer_admin_inst(i: &IrInst) -> bool {
+    matches!(
+        i,
+        IrInst::PushDefer { .. } | IrInst::PopDefer { .. } | IrInst::JumpIfNotDefer { .. }
     )
 }
 
@@ -402,7 +416,7 @@ pub(crate) fn value_lt(a: &IrValue, b: &IrValue) -> bool {
         (IrValue::Int(x), IrValue::Float(y)) => (*x as f64) < *y,
         (IrValue::Float(x), IrValue::Int(y)) => *x < *y as f64,
         (IrValue::Float(x), IrValue::Float(y)) => x < y,
-        (IrValue::Str(x), IrValue::Str(y)) => x < y,
+        (IrValue::String(x), IrValue::String(y)) => x.as_slice() < y.as_slice(),
         (IrValue::Bool(x), IrValue::Bool(y)) => x < y,
         // 指针序：cell 索引序（稳定全序——对齐 tree-walking 按 Rc 地址序）
         (IrValue::Ptr(x), IrValue::Ptr(y)) => x < y,

@@ -6,24 +6,24 @@ import H.std.{io};
 //   - 内建默认（Q37 C）；契约定制（字段映射/忽略）走脚本生成覆盖
 
 class Address {
-    mut city: String,
+    mut city: &[u8],
     mut zip: &[u8],
 }
 
 class Person {
-    mut name: String,
+    mut name: &[u8],
     mut age: i32,
     mut addr: owned Address,     // 嵌套 class（默认拥有，Q16）
 
-    fn to_json(self: *Self) String {
+    fn to_json(self: *Self) &[u8] {
         // 内建：递归嵌套字段序列化（{"name":...,"addr":{"city":...}}）
     }
 }
 
 fn main() !void {
-    var mut p: owned Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
-    p.name = String.from("alice", alloc);
-    p.addr.city = String.from("beijing", alloc);
+    var mut p: Person = alloc.init(Person);   // 无参构造（C1'）+ 字段赋值
+    p.name = "alice";
+    p.addr.city = "beijing";
 
     var json = p.to_json();
     io.print("{}\n", json);
@@ -32,7 +32,7 @@ fn main() !void {
     io.print("{}\n", p2.addr.city);
 }
 
-[test] fn nested_class_json_demo() !void {
+[Test] fn nested_class_json_demo() !void {
     // S4 演示型（Q-T6）：Person.to_json 为内建默认语义（示例以空体标注），
     // 递归嵌套序列化实现在标准库内建；断言留 M7 标准库测试
     try expect(true);

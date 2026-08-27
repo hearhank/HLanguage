@@ -82,8 +82,8 @@ fn box_interface_dispatch() {
          [test] fn t() !void {\n\
              var rect = Rect{ w = 3.0, h = 4.0 };\n\
              var circ = Circle{ r = 2.0 };\n\
-             var shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);\n\
-             shapes.append(box(rect, alloc));\n\
+             var mut shapes: owned Vec<*IShape> = Vec<*IShape>.init(alloc);
+             shapes.append(box(rect, alloc));
              shapes.append(box(circ, alloc));\n\
              var total = total_area(&shapes);\n\
              try expect(total > 24.55 and total < 24.57);\n\

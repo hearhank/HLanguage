@@ -1,12 +1,4 @@
-//! 组 G3：spawn 捕获规则静态检查（Q18 绑定/逃逸 + Q19 冻结窗口）。
-//!
-//! 协作式延迟执行模型下：未 join/未 detach 的线程在作用域退出时提升到根回收队列，
-//! 程序结束才运行——捕获局部引用（`&local`）会悬垂。G3 规则：
-//!   - 值复制 / `&global` / `move x` 捕获安全，任意逃逸；
-//!   - `&局部` 捕获 → 线程必须在其声明作用域内 `join()`（Q18 绑定），否则编译错误；
-//!   - 绑定场景下，spawn→join 之间写入被捕获引用目标 → 冻结违例（Q19）；
-//!   - `detach()` 运行点 = 调用处（局部仍存活）→ 允许引用捕获；
-//!   - 条件体内 join 不保证执行 → 不视为绑定（保守，仍报逃逸错误）。
+//! hc/tests/thread_capture.rs
 
 use hc::{check_semantics, parse_source};
 
@@ -28,7 +20,9 @@ fn check_err(src: &str, frag: &str) {
     let program = parse_source(src).unwrap_or_else(|d| panic!("parse: {:?}", d));
     let diags = check_semantics(&program);
     assert!(
-        diags.iter().any(|d| d.is_error() && d.message.contains(frag)),
+        diags
+            .iter()
+            .any(|d| d.is_error() && d.message.contains(frag)),
         "expected an error containing `{frag}`, got: {:?}",
         diags
     );
@@ -165,10 +159,10 @@ fn write_after_join_ok() {
         r#"
 fn touch(x: *i32) i32 { return 0; }
 fn main() {
-    var v: i32 = 1;
-    var th = spawn(touch, &v);
-    var r = th.join();
-    v = 2;
+    	var mut v: i32 = 1;
+	    var th = spawn(touch, &v);
+	    var r = th.join();
+	    v = 2;
 }
 "#,
     );

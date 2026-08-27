@@ -1,4 +1,4 @@
-import H.std.{io};
+import H.std.{io as my};
 
 // 01-hello.hc — 程序入口与 Hello World
 //
@@ -12,7 +12,7 @@ import H.std.{io};
 // 运行：脚本模式 hc run 01-hello.hc / 编译模式 hc build 后执行二进制
 
 fn main() !void {
-    io.print("hello, world\n");
+    my.print("hello, world\n");
     io.print("x = {}, y = {}\n", 42, 3.14);
 }
 

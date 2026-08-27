@@ -14,7 +14,7 @@ struct Point {   // 连续内存值类型（H1 特性标注）
 fn main() !void {
     // 标量：赋值即复制
     var a: i32 = 5;
-    var b = a;
+    var mut b = a;
     b = 10;
     io.print("a = {} (不变)\n", a);
 
@@ -32,15 +32,15 @@ fn main() !void {
     io.print("v1 len = {}, v2 len = {}\n", v1.len, v2.len);
 
     // String = u8[] 别名（Q3/Q1'）：复制走显式 copy；concat 返回新 String
-    var s1 = String.from("hi", alloc);
+    var s1 = "hi";
     var s2 = copy(&s1);               // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");         // concat 返回新 String
     io.print("{} {}\n", s1, s3);     // s1 未变
 }
 
-[test] fn scalar_and_continuous_copy() !void {
+[Test] fn scalar_and_continuous_copy() !void {
     var a: i32 = 5;
-    var b = a;
+    var mut b = a;
     b = 10;
     try expect_eq(a, 5);   // 原值不变
 
@@ -50,7 +50,7 @@ fn main() !void {
     try expect_eq(p1.x, 1.0);   // 复制互不影响
 }
 
-[test] fn collection_explicit_copy() !void {
+[Test] fn collection_explicit_copy() !void {
     var v1 = Vec<i32>.init(alloc);
     v1.append(1);
     var v2 = copy(&v1);   // 显式深拷贝（B3）
@@ -59,8 +59,8 @@ fn main() !void {
     try expect_eq(v2.len, 2);
 }
 
-[test] fn string_copy_owns() !void {
-    var s1 = String.from("hi", alloc);
+[Test] fn string_copy_owns() !void {
+    var s1 = "hi";
     var s2 = copy(&s1);   // 深复制（Q1'）：新建内存、有所有权
     var s3 = s2.concat("!");   // concat 返回新 String
     try expect_eq_slices(s1.as_slice(), "hi");   // 原变量未变

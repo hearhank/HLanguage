@@ -23,7 +23,7 @@ fn slow_square(x: i32) i32 {
 }
 
 fn main() !void {
-    var memo: owned Memo = alloc.init(Memo);   // 无参构造（C1'）
+    var memo: Memo = alloc.init(Memo);   // 无参构造（C1'）
 
     var r1 = memo.get_or_compute(5, slow_square);
     var r2 = memo.get_or_compute(5, slow_square);   // 命中缓存
@@ -31,8 +31,8 @@ fn main() !void {
     io.print("{} {} {}\n", r1, r2, r3);
 }
 
-[test] fn memoized_cache() !void {
-    var memo: owned Memo = alloc.init(Memo);
+[Test] fn memoized_cache() !void {
+    var memo: Memo = alloc.init(Memo);
     var r1 = memo.get_or_compute(5, slow_square);
     var r2 = memo.get_or_compute(5, slow_square);   // 命中缓存
     var r3 = memo.get_or_compute(7, slow_square);   // 未命中

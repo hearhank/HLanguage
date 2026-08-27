@@ -8,30 +8,30 @@ import H.std.{io};
 
 fn main() !void {
     // 拼接：方法形态
-    var name = String.from("alice", alloc);
-    var greeting = String.from("hello, ", alloc).concat(name);
+    var name = "alice";
+    var greeting = "hello, ".concat(name);
     io.print("{}\n", greeting);
 
-    // 拼接：模块函数形态（等价）
-    var g2 = String.concat(greeting, String.from("!", alloc));
+    // 拼接：方法形态（等价）
+    var g2 = greeting.concat("!");
     io.print("{}\n", g2);
 
     // == 比较内容（两个独立实例）
-    var a = String.from("abc", alloc);
-    var b = String.from("abc", alloc);
+    var a = "abc";
+    var b = "abc";
     io.print("equal = {}\n", a == b);
 }
 
-[test] fn string_concat() !void {
-    var name = String.from("alice", alloc);
-    var greeting = String.from("hello, ", alloc).concat(name);
+[Test] fn string_concat() !void {
+    var name = "alice";
+    var greeting = "hello, ".concat(name);
     try expect_eq_slices(greeting.as_slice(), "hello, alice");
-    var g2 = String.concat(greeting, String.from("!", alloc));
+    var g2 = greeting.concat("!");
     try expect_eq_slices(g2.as_slice(), "hello, alice!");
 }
 
-[test] fn content_equals() !void {
-    var a = String.from("abc", alloc);
-    var b = String.from("abc", alloc);
+[Test] fn content_equals() !void {
+    var a = "abc";
+    var b = "abc";
     try expect_eq(a == b, true);
 }

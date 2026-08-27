@@ -5,7 +5,7 @@ import H.std.{io};
 //   - orelse 默认值 / .? 断言 / if (opt) |v| 捕获（20 已示基础）
 //   - 嵌套字段 optional + 默认值链
 
-class Config {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
+class Config {
     host: ?String,
     port: ?i32,
 }
@@ -19,7 +19,7 @@ fn main() !void {
     var cfg = alloc.init(Config{host = null, port = 8080});
 
     // 可选值 + 默认值链
-    var host = cfg.host orelse String.from("localhost", alloc);
+    var host = cfg.host orelse "localhost";
     var port = cfg.port orelse 8080;
     io.print("{}:{}\n", host, port);
 
@@ -32,10 +32,10 @@ fn main() !void {
     }
 }
 
-[test] fn field_optional_default() !void {
+[Test] fn field_optional_default() !void {
     var cfg = alloc.init(Config{host = null, port = 8080});
     var port = cfg.port orelse 8080;
     try expect_eq(port, 8080);
-    var host = cfg.host orelse String.from("localhost", alloc);
+    var host = cfg.host orelse "localhost";
     try expect_eq_slices(host.as_slice(), "localhost");
 }

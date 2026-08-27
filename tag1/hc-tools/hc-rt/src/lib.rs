@@ -5,7 +5,9 @@
 //! 解释执行路径。第三块（元编程/并发/异步/自举等）归后续里程碑。
 
 pub mod interp;
+pub mod string;
 pub mod value;
 
-pub use interp::{parse_int_text, RtError, Interp};
+pub use interp::{parse_int_text, Interp, RtError};
+pub use string::StringData;
 pub use value::Value;

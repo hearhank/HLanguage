@@ -18,16 +18,19 @@ fn chan_sender(c: *chan) void {
 fn main() !void {
     // Thread 接口：spawn / join（等待协程结束，返回 !T）
     var t: owned Thread<i32> = spawn(worker, 9);
+    defer t.deinit();
     var r = try t.join();
     io.print("result = {}\n", r);
 
     // detach：显式放弃结果（协程继续，程序结束时不等待）
     var t2: owned Thread<i32> = spawn(worker, 3);
+    defer t2.deinit();
     t2.detach();
 
     // 通道（chan）：缓冲通道
     var ch = chan.init(alloc, 1);
     var sender: owned Thread<void> = spawn(chan_sender, &ch);
+    defer sender.deinit();
     try sender.join();
     var val = ch.recv();
     io.print("chan recv = {}\n", val);
@@ -42,27 +45,30 @@ fn main() !void {
 
     // is_done 状态：join 后为 true
     var t3: owned Thread<i32> = spawn(worker, 5);
+    defer t3.deinit();
     var r3 = try t3.join();
     io.print("after join = {}, is_done = {}\n", r3, t3.is_done());
 }
 
-[test] fn thread_join_value() !void {
+[Test] fn thread_join_value() !void {
     var t: owned Thread<i32> = spawn(worker, 9);
+    defer t.deinit();
     var r = try t.join();
     try expect_eq(r, 81);
     try expect_eq(t.is_done(), true);
 }
 
-[test] fn channel_send_recv() !void {
+[Test] fn channel_send_recv() !void {
     var ch = chan.init(alloc, 1);
     var sender: owned Thread<void> = spawn(chan_sender, &ch);
+    defer sender.deinit();
     try sender.join();
     var val = ch.recv();
     try expect_eq(val, 42);
     ch.close();
 }
 
-[test] fn buffered_channel() !void {
+[Test] fn buffered_channel() !void {
     var ch = chan.init(alloc, 3);
     ch.send(10);
     ch.send(20);
@@ -73,7 +79,7 @@ fn main() !void {
     ch.close();
 }
 
-[test] fn try_send_try_recv() !void {
+[Test] fn try_send_try_recv() !void {
     var ch = chan.init(alloc, 1);
     try expect_eq(ch.try_send(1), true);
     try expect_eq(ch.try_send(2), false);   // 缓冲区满
@@ -81,17 +87,18 @@ fn main() !void {
     try expect_eq(ch.try_recv(), null);      // 缓冲区空
 }
 
-[test] fn channel_close() !void {
+[Test] fn channel_close() !void {
     var ch = chan.init(alloc, 1);
     ch.close();
 }
 
-[test] fn detach_runs() !void {
+[Test] fn detach_runs() !void {
     var t: owned Thread<i32> = spawn(worker, 3);
+    defer t.deinit();
     t.detach();
 }
 
-[test] fn cancel_then_join() !void {
+[Test] fn cancel_then_join() !void {
     var t = spawn(worker, 5);
     t.cancel();
     var r = t.join() catch 0;

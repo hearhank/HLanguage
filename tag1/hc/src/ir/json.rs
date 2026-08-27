@@ -1,3 +1,5 @@
+//! JSON 序列化 IR：@toJson/@fromJson 内建的 IR 指令生成
+
 use super::*;
 
 pub(crate) fn parse_json_value_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)> {
@@ -46,9 +48,9 @@ pub(crate) fn parse_json_object_ir(ctx: &mut Ctx, s: &str) -> R<(IrValue, usize)
         pos += 1;
         let (val, vlen) = parse_json_value_ir(ctx, &s[pos..])?;
         pos += vlen;
-        if let IrValue::Str(ks) = key {
+        if let IrValue::String(ks) = key {
             fields.insert(
-                String::from_utf8_lossy(&ks).to_string(),
+                String::from_utf8_lossy(ks.as_slice()).to_string(),
                 ctx.alloc(Cell::Value(val)),
             );
         }
@@ -103,7 +105,7 @@ pub(crate) fn parse_json_string_ir(s: &str) -> R<(IrValue, usize)> {
     let mut i = 1usize;
     while i < b.len() {
         match b[i] {
-            b'"' => return Ok((IrValue::Str(out), i + 1)),
+            b'"' => return Ok((IrValue::String(StringDataIr::from_bytes(out)), i + 1)),
             b'\\' => {
                 i += 1;
                 if i >= b.len() {

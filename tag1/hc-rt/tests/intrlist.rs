@@ -1,8 +1,4 @@
-//! A6 标准库数据结构：IntrList 侵入式链表验收测试
-//!
-//! API：`io.intrlist.init()` → IntrList → `.push_front(v) usize` /
-//! `.pop_front() ?T` / `.push_back(v) usize` / `.pop_back() ?T` /
-//! `.remove(idx) ?T` / `.len() usize` / `.is_empty() bool` / `.clear()`
+//! hc-rt/tests/intrlist.rs
 
 use hc_rt::Interp;
 

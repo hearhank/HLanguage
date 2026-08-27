@@ -1,12 +1,4 @@
-//! G4/mem：集合持有分配器引用（`08-mem-allocator-design.md` §7 定案落地）
-//!
-//! 覆盖（tree-walking interp）：
-//! - `Vec<T>.init(alloc)` / `Map<K,V>.init(alloc)` / `Table<T>.init(alloc, rows, cols, init)`
-//!   把 alloc 存为内部字段，`.alloc()` 可观测（返回构造时携带的分配器引用）
-//! - 未显式传 alloc（含裸类型表达式 `Vec<i32>` 实例化）回退全局 alloc
-//! - 扩容/子对象分配走该分配器（tag1 中 items 为 Rc 存储，可观测面即 `.alloc()`；
-//!   真实后端按 §7 在扩容/销毁时经它分配/递归销毁）
-//! - 集合可遍历（Vec 句柄 / Map 句柄）
+//! hc-rt/tests/collection.rs
 
 use hc_rt::Interp;
 
@@ -74,14 +66,14 @@ fn map_init_captures_arena() {
 fn map_iterates_kv_pairs() {
     // Map 句柄可遍历：`for (m) |kv|` → kv.key / kv.value（对齐 Class("Map") 遍历）
     run_ok(
-        "[test] fn t() !void {\n    var m = Map<i32, i32>.init(alloc);\n    m.put(10, 1);\n    m.put(20, 2);\n    var sum = 0;\n    for (m) |kv| {\n        sum += kv.value;\n    }\n    try expect_eq(sum, 3);\n}\n",
+        "[test] fn t() !void {\n    var m = Map<i32, i32>.init(alloc);\n    m.put(10, 1);\n    m.put(20, 2);\n    var mut sum = 0;\n    for (m) |kv| {\n        sum += kv.value;\n    }\n    try expect_eq(sum, 3);\n}\n",
     );
 }
 
 #[test]
 fn table_init_captures_alloc() {
-    // `Table<T>.init(alloc, rows, cols, init)`：外层 Vec 持分配器引用，grid 二维
+    // `Table<T>.init(rows, cols, init, alloc)`：外层 Vec 持分配器引用，grid 二维
     run_ok(
-        "[test] fn t() !void {\n    var t = Table<i32>.init(alloc, 2, 3, 7);\n    try expect_eq(t.len(), 2);\n    try expect_eq(t[0].len(), 3);\n    try expect_eq(t[0][1], 7);\n    try expect_eq(t[1][2], 7);\n    var buf = t.alloc().alloc(8);\n    try expect_eq(buf, \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\");\n}\n",
+        "[test] fn t() !void {\n    var t = Table<i32>.init(2, 3, 7, alloc);\n    try expect_eq(t.len(), 2);\n    try expect_eq(t[0].len(), 3);\n    try expect_eq(t[0][1], 7);\n    try expect_eq(t[1][2], 7);\n    var buf = t.alloc().alloc(8);\n    try expect_eq(buf, \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\");\n}\n",
     );
 }

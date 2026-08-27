@@ -167,11 +167,11 @@ fn is_printable(cp: i32) bool {
 }
 
 // 追加 `\u{hex}`（hex 小写无前导零，对齐 Rust escape_unicode）
-fn append_unicode_escape(out: Vec<u8>, cp: i32) void {
+fn append_unicode_escape(var mut out: Vec<u8>, cp: i32) void {
     out.append('\\'); out.append('u'); out.append('{');
     var digits = "0123456789abcdef";
-    var sh: i32 = 0;
-    var tmp: i32 = cp;
+    var mut sh: i32 = 0;
+    var mut tmp: i32 = cp;
     while (tmp >= 0x10) { tmp = tmp / 16; sh += 4; }
     while (sh >= 0) {
         var idx = (cp >> sh) & 0xF;
@@ -186,9 +186,9 @@ fn append_unicode_escape(out: Vec<u8>, cp: i32) void {
 fn dbg_escape(content: Vec<u8>) Vec<u8> {
     var out = Vec<u8>.init(alloc);
     var n: i32 = @intCast(i32, content.len);
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < n) {
-        var cp = cp_at(content, i);
+        var mut cp = cp_at(content, i);
         var w = utf8_width(content[i]);
         if (cp == 0x09) { out.append('\\'); out.append('t'); }
         else if (cp == 0x0A) { out.append('\\'); out.append('n'); }
@@ -197,7 +197,7 @@ fn dbg_escape(content: Vec<u8>) Vec<u8> {
         else if (cp == 0x5C) { out.append('\\'); out.append('\\'); }
         else if (cp == 0x00) { out.append('\\'); out.append('0'); }
         else if (is_printable(cp)) {
-            var j: i32 = 0;
+            var mut j: i32 = 0;
             while (j < w) { out.append(content[i + j]); j += 1; }
         }
         else { append_unicode_escape(out, cp); }
@@ -224,9 +224,9 @@ class Lexer {
     }
 
     // 追加一个完整字符（含多字节 UTF-8）到内容缓冲并前进
-    fn append_char(self: *mut Self, content: Vec<u8>) void {
+    fn append_char(self: *mut Self, var mut content: Vec<u8>) void {
         var w = utf8_width(self.src[self.pos]);
-        var k: i32 = 0;
+        var mut k: i32 = 0;
         while (k < w) {
             content.append(self.src[self.pos + k]);
             k += 1;
@@ -234,24 +234,24 @@ class Lexer {
         self.bump();
     }
 
-    fn emit_simple(self: *mut Self, start: i32, kind: &[u8]) void {
+    fn emit_simple(self: *mut Self, start: usize, kind: &[u8]) void {
         io.print("{} {} {} {} {}\n", start, self.pos, self.line, self.col, kind);
     }
 
-    fn emit_slice_payload(self: *mut Self, start: i32, kind: &[u8], payload: &[u8]) void {
+    fn emit_slice_payload(self: *mut Self, start: usize, kind: &[u8], payload: &[u8]) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", payload);
     }
 
-    fn emit_error(self: *mut Self, start: i32, msg: &[u8]) void {
+    fn emit_error(self: *mut Self, start: usize, msg: &[u8]) void {
         io.print("{} {} {} {} Error(\"", start, self.pos, self.line, self.col);
         io.print("{}\")\n", msg);
     }
 
-    fn emit_content(self: *mut Self, start: i32, kind: &[u8], content: Vec<u8>) void {
+    fn emit_content(self: *mut Self, start: usize, kind: &[u8], content: Vec<u8>) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         var esc = dbg_escape(content);
-        var s = String.from_slice(esc, alloc);
+        var s = esc.as_slice();
         io.print("{}\")\n", s);
     }
 
@@ -263,7 +263,7 @@ class Lexer {
                 self.emit_simple(start, "Eof");
                 return;
             }
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (is_ident_start(c)) {
                 self.lex_ident(start);
             } else if (is_digit(c)) {
@@ -286,7 +286,7 @@ class Lexer {
     fn skip_ws(self: *mut Self) void {
         while (true) {
             if (self.pos >= self.n) { return; }
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (is_ws(c)) {
                 self.bump();
             } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
@@ -314,7 +314,7 @@ class Lexer {
         }
     }
 
-    fn lex_ident(self: *mut Self, start: i32) void {
+    fn lex_ident(self: *mut Self, start: usize) void {
         var s2 = self.pos;
         while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
         var name = self.src[s2..self.pos];
@@ -326,12 +326,12 @@ class Lexer {
         }
     }
 
-    fn lex_number(self: *mut Self, start: i32) void {
+    fn lex_number(self: *mut Self, start: usize) void {
         var buf = Vec<u8>.init(alloc);
-        var is_float = false;
+        var mut is_float = false;
         // 前缀 0x/0b/0o
         if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
-            var c1 = self.src[self.pos + 1];
+            var mut c1 = self.src[self.pos + 1];
             if (c1 == 'x' or c1 == 'X') {
                 buf.append('0'); buf.append('x');
                 self.bump(); self.bump();
@@ -365,7 +365,7 @@ class Lexer {
         }
         // 十进制 / 浮点
         while (self.pos < self.n) {
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (is_digit(c) or c == '_') {
                 buf.append(c);
                 self.bump();
@@ -383,9 +383,9 @@ class Lexer {
         }
         // 指数（e/E → 归一化小写 e）
         if (self.pos < self.n) {
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if ((c == 'e' or c == 'E') and self.pos + 1 < self.n) {
-                var c2 = self.src[self.pos + 1];
+                var mut c2 = self.src[self.pos + 1];
                 if (is_digit(c2) or c2 == '+' or c2 == '-') {
                     is_float = true;
                     buf.append('e');
@@ -412,11 +412,11 @@ class Lexer {
 
     fn detect_suffix(self: *mut Self) ?&[u8] {
         if (self.pos < self.n) {
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             if (c == 'i' or c == 'u' or c == 'f') {
-                var j = self.pos;
+                var mut j = self.pos;
                 while (j < self.n and self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
-                var suf = self.src[self.pos..j];
+                var mut suf = self.src[self.pos..j];
                 var slen: i32 = @intCast(i32, suf.len);
                 if (slen >= 2) {
                     var ok = is_digit(self.src[self.pos + 1]) or suf == "isize" or suf == "usize";
@@ -427,13 +427,13 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: i32, kind: &[u8], buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: usize, kind: &[u8], var mut buf: Vec<u8>) void {
         // 惰性宽度后缀
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
             if (suf) |s| {
                 var slen: i32 = @intCast(i32, s.len);
-                var k: i32 = 0;
+                var mut k: i32 = 0;
                 while (k < slen) {
                     buf.append(s[k]);
                     self.bump();
@@ -441,12 +441,12 @@ class Lexer {
                 }
             }
         }
-        var s = String.from_slice(buf, alloc);
+        var s = buf.as_slice();
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", s);
     }
 
-    fn lex_string(self: *mut Self, start: i32) void {
+    fn lex_string(self: *mut Self, start: usize) void {
         self.bump();  // 开引号
         // 原始多行字符串 """..."""
         if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
@@ -486,7 +486,7 @@ class Lexer {
                     self.emit_error(start, "unterminated string literal");
                     return;
                 }
-                var ec = self.src[self.pos];
+                var mut ec = self.src[self.pos];
                 self.bump();  // 转义字符本身（与 Rust 一致：总是先消费再判定）
                 if (ec == 'n') { content.append('\n'); }
                 else if (ec == 'r') { content.append('\r'); }
@@ -495,8 +495,8 @@ class Lexer {
                 else if (ec == '"') { content.append('"'); }
                 else if (ec == '\'') { content.append('\''); }
                 else if (ec == 'x') {
-                    var hi: i32 = -1;
-                    var lo: i32 = -1;
+                    var mut hi: i32 = -1;
+                    var mut lo: i32 = -1;
                     if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                     if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
                     if (hi < 0 or lo < 0) {
@@ -522,11 +522,11 @@ class Lexer {
                         self.emit_error(start, "invalid \\\\u escape");
                         return;
                     }
-                    var v: i64 = 0;
-                    var bad = false;
+                    var mut v: i64 = 0;
+                    var mut bad = false;
                     while (true) {
                         if (self.pos >= self.n) { bad = true; break; }
-                        var ch = self.src[self.pos];
+                        var mut ch = self.src[self.pos];
                         self.bump();  // 与 Rust 一致：先消费再判定
                         if (ch == '}') break;
                         var d: i64 = @intCast(i64, hexval(ch));
@@ -571,9 +571,9 @@ class Lexer {
         self.emit_content(start, "Str", content);
     }
 
-    fn lex_char(self: *mut Self, start: i32) void {
+    fn lex_char(self: *mut Self, start: usize) void {
         self.bump();  // 开引号
-        var val: i32 = -1;
+        var mut val: i32 = -1;
         if (self.pos >= self.n) {
             self.emit_error(start, "unterminated char literal");
             return;
@@ -584,7 +584,7 @@ class Lexer {
                 self.emit_error(start, "unterminated char literal");
                 return;
             }
-            var c = self.src[self.pos];
+            var mut c = self.src[self.pos];
             self.bump();  // 转义字符本身（与 Rust 一致：总是先消费再判定）
             if (c == 'n') { val = 0x0A; }
             else if (c == 'r') { val = 0x0D; }
@@ -592,8 +592,8 @@ class Lexer {
             else if (c == '\\') { val = 0x5C; }
             else if (c == '\'') { val = 0x27; }
             else if (c == 'x') {
-                var hi: i32 = -1;
-                var lo: i32 = -1;
+                var mut hi: i32 = -1;
+                var mut lo: i32 = -1;
                 if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                 if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
                 if (hi < 0 or lo < 0) {
@@ -628,8 +628,8 @@ class Lexer {
         io.print("{} {} {} {} Char({})\n", start, self.pos, self.line, self.col, val);
     }
 
-    fn lex_punct(self: *mut Self, start: i32) void {
-        var c = self.src[self.pos];
+    fn lex_punct(self: *mut Self, start: usize) void {
+        var mut c = self.src[self.pos];
         self.bump();
         if (c == '{') { self.emit_simple(start, "LBrace"); }
         else if (c == '}') { self.emit_simple(start, "RBrace"); }
@@ -710,9 +710,9 @@ class Lexer {
 }
 
 fn main(args:Vec<String>) !void {
-    var path = args[0];
+    var mut path = args[0];
     if (args.len >= 2) { path = args[1]; }
-    var src = try io.fs.read_file(path, alloc);
-    var lx: owned Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
+    var mut src = try io.fs.read_file(path, alloc);
+    var lx: Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
     lx.run();
 }

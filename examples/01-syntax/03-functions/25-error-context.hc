@@ -21,7 +21,7 @@ fn main() !void {
     io.print("loaded\n");
 }
 
-[test] fn error_return_trace() !void {
+[Test] fn error_return_trace() !void {
     // 真实 IO（Q-T4）：app.json 不存在 → NotFound（Debug 下错误带返回追踪）
     try expect_error(error.NotFound, load_config(io, "app.json"));
 }

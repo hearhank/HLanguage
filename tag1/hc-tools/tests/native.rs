@@ -1,7 +1,6 @@
-//! M3.3 原生后端集成测试：源码 → LLVM IR → `zig cc` → 运行可执行文件。
+//! hc-tools/tests/native.rs
 //!
-//! 依赖外部 `zig cc`（emit-.ll 驱动）；`zig` 缺失时全部测试跳过（打印 SKIP，
-//! 不失败——与纯文本发射测试 `hc::llvm` 分离，后者无外部依赖始终运行）。
+//! 定义：枚举：Color, Maybe
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -363,7 +362,7 @@ fn aggregate_array_index_and_store_native() {
     // MakeArr/Index/StoreIndex + 数组深比较
     let src = r#"
 fn main() i32 {
-    var a = [10, 20, 30];
+    var mut a = [10, 20, 30];
     if (a[0] != 10 or a[2] != 30) { return 1; }
     a[1] = 99;
     if (a[1] != 99) { return 2; }
@@ -407,7 +406,7 @@ fn aggregate_slice_view_and_alias_native() {
     // SliceOf：切片为共享视图——源数组元素写穿（元素 cell 别名）
     let src = r#"
 fn main() i32 {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     var sub = arr[1..4];
     if (sub.len != 3 or sub[0] != 2 or sub[2] != 4) { return 1; }
     arr[1] = 99;
@@ -428,7 +427,7 @@ fn aggregate_slice_store_native() {
     // StoreSlice：`arr[lo..hi] = v` 写回源数组元素
     let src = r#"
 fn main() i32 {
-    var arr = [1, 2, 3, 4, 5];
+    var mut arr = [1, 2, 3, 4, 5];
     arr[1..3] = [20, 30];
     if (arr[1] != 20 or arr[2] != 30 or arr.len != 5) { return 1; }
     return 0;
@@ -797,7 +796,7 @@ global dlog: i32 = 0;
 fn bump() void { dlog += 1; }
 fn main() i32 {
     dlog = 0;
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (true) {
         defer bump();
         i += 1;
@@ -805,7 +804,7 @@ fn main() i32 {
     }
     if (dlog != 3) { return 1; }
     dlog = 0;
-    var clog: i32 = 0;
+    var mut clog: i32 = 0;
     i = 0;
     while (i < 5) {
         defer bump();
@@ -840,7 +839,7 @@ fn maybe(ok: bool) !i32 {
 }
 fn main() i32 {
     g = 0;
-    var r = maybe(false) catch 0;
+    var mut r = maybe(false) catch 0;
     if (r != 0) { return 1; }
     if (g != 101) { return 2; }
     g = 0;
@@ -863,9 +862,9 @@ fn phase6_labeled_break_continue_native() {
     // 带标签 break/continue：标签跨多层循环定位（JumpIfNotDefer 守卫 + 目标 label）。
     let src = r#"
 fn main() i32 {
-    var s: i32 = 0;
+    var mut s: i32 = 0;
     :outer while (true) {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 10) {
             j += 1;
             if (j == 2) { break :outer; }
@@ -881,7 +880,7 @@ fn main() i32 {
     if (s != 2) { return 2; }
     s = 0;
     :outer for (0..3) |i| {
-        var j: i32 = 0;
+        var mut j: i32 = 0;
         while (j < 5) {
             j += 1;
             if (i == 1) { continue :outer; }
@@ -931,18 +930,18 @@ fn tree_vec_field_append_recursion_native() {
              value: i32,\n\
              children: Vec<Node>,
              fn total(self: *Self) i32 {\n\
-                 var sum = self.value;\n\
+                 var mut sum = self.value;\n\
                  for (self.children) |child| {\n\
                      sum += child.total();\n\
                  }\n\
                  return sum;\n\
              }\n\
          }\n\
-         [test] fn tree_recursive_composition() !void {\n\
-             var root: owned Node = Node.new(1, alloc);\n\
-             root.children.append(Node.new(2, alloc));\n\
-             root.children.append(Node.new(3, alloc));\n\
-             try expect_eq(root.total(), 6);\n\
+         [test] fn tree_recursive_composition() !void {
+             var root: Node = Node.new(1, alloc);
+             root.children.append(Node.new(2, alloc));
+             root.children.append(Node.new(3, alloc));
+             try expect_eq(root.total(), 6);
          }\n",
     );
     assert!(st.success(), "树 + Vec.append + 递归 total 原生应退出 0");

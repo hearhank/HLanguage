@@ -9,7 +9,7 @@ import H.std.{io};
 // Q23 定案（2026-08-13）：输入机制 = 隐式 types 元数据对象
 //   - types.fields("Person") 返回字段 [名, 类型] 列表；产物 = 代码字符串就地替换
 
-class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
+struct Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上）
     name: String,
     age: i32,
 }
@@ -22,11 +22,11 @@ class Person {   // 含 String 字段 → 非 Continuous（默认 class，堆上
 fn person_field_count() i32 { return 2; }
 
 fn main() !void {
-    var p = alloc.init(Person{name = String.from("alice", alloc), age = 30});   // 带参构造（C1'）
+    var p = alloc.init(Person{name = "alice", age = 30});   // 带参构造（C1'）
     io.print("person_field_count = {}\n", person_field_count());
 }
 
-[test] fn script_generation_demo() !void {
+[Test] fn script_generation_demo() !void {
     // S4 演示型（Q-T6）：person_field_count 由脚本生成（Q23 types 元数据），
     // 由本块的声明文本区间就地替换（Q17）
     try expect(person_field_count() == 2);

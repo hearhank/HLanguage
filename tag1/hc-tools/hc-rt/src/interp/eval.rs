@@ -729,8 +729,8 @@ impl Interp {
                     .map(|v| (Rc::new(RefCell::new(v)), false))
                     .collect())
             }
-            Value::Str(s) => {
-                let bytes: Vec<u8> = s.borrow().clone();
+            Value::String(s) => {
+                let bytes = s.as_slice().to_vec();
                 Ok(bytes
                     .into_iter()
                     .map(|b| (Rc::new(RefCell::new(Value::Int(b as i128))), false))
@@ -797,8 +797,12 @@ impl Interp {
                     .collect();
                 Ok(Value::arr(items))
             }
-            Value::Str(s) => {
-                let items = s.borrow().iter().map(|b| Value::Int(*b as i128)).collect();
+            Value::String(s) => {
+                let items = s
+                    .as_slice()
+                    .iter()
+                    .map(|b| Value::Int(*b as i128))
+                    .collect();
                 Ok(Value::arr(items))
             }
             Value::Class(c) if c.borrow().name == "Map" => {
@@ -926,7 +930,7 @@ impl Interp {
             (Value::Float(f), SwitchPattern::Float(s)) => {
                 Ok(*f == s.replace('_', "").parse::<f64>().unwrap_or(f64::NAN))
             }
-            (Value::Str(st), SwitchPattern::Str(s)) => Ok(*st.borrow() == s.as_bytes()),
+            (Value::String(st), SwitchPattern::Str(s)) => Ok(st.as_slice() == s.as_bytes()),
             (Value::Int(c), SwitchPattern::Char(pc)) => Ok(*c == *pc as i128),
             (Value::Err { name, .. }, SwitchPattern::Error(pe)) => Ok(name == pe),
             (Value::Bool(b), SwitchPattern::Ident(s)) => {
@@ -942,7 +946,7 @@ impl Interp {
     /// 任意字节容器 → 字节（Str / Arr(Int) / Slice 视图；57-protocol-parse 长度前缀帧）
     pub(crate) fn value_bytes(&self, v: &Value) -> Option<Vec<u8>> {
         match v {
-            Value::Str(s) => Some(s.borrow().clone()),
+            Value::String(s) => Some(s.as_slice().to_vec()),
             Value::Arr(a) => Some(
                 a.borrow()
                     .iter()

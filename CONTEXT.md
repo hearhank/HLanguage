@@ -153,54 +153,65 @@ _Avoid_: 用指针强转替代类型安全（@ptrCast 是唯一的逃生舱）
 ## 5. 内存模型（M4）
 
 **Allocator**:
-显式的内存分配器实例。分配内存的代码显式传入 Allocator；未传入时回退到全局分配器。销毁由所有权作用域负责。
+显式的内存分配器实例。分配内存的代码显式传入 Allocator；未传入时回退到全局分配器。销毁由 `defer` 显式控制。
 _Avoid_: 隐式作用域级分配器
 
 **Arena**:
-批量分配器：一次分配大量内存、统一回收（`Arena.init(alloc)` / `arena.alloc(...)` / 作用域退出自动统一回收或显式 `deinit`）。**Arena 分配的对象无所有权**（归 Arena，禁止 move——move 须对整个 Arena 进行，Q1 定案）；适用请求级生命周期（**每请求一个 arena**：长运行脚本（服务/事件循环）每轮新建 Arena、处理完整体回收，2026-08-22 定案）。**标准库提供 `mem.with_arena(fn)` 包装**：进入时建 Arena、退出时统一回收（含 deinit），减少样板（2026-08-22 定案）。
+批量分配器：一次分配大量内存、统一回收（`Arena.init(alloc)` / `arena.alloc(...)` / 显式 `deinit`）。**Arena 分配的对象无所有权**（归 Arena，禁止 move）；适用请求级生命周期（**每请求一个 arena**：长运行脚本（服务/事件循环）每轮新建 Arena、处理完整体回收）。**标准库提供 `mem.with_arena(fn)` 包装**：进入时建 Arena、退出时统一回收，减少样板。
 _Avoid_: 对 Arena 内的对象逐个 deinit
 
-**所有权 (Ownership, 2026-08-13 修订：Zig 式销毁责任模型；2026-08-14 情况全录)**:
-所有权 = **销毁责任的唯一归属**——同一时间只有一个对象（作用域或分配器）对「变量所在内存退出时销毁」负责；**不是访问权限控制**。总原则（2026-08-14）：**凡由分配器分配的对象都有所有权**；global 与 Arena 分配的对象所有权归固定对象（根作用域/Arena），**不可 move**。完整情况清单：
-- **A. 无所有权（无销毁责任）**：① 值类型（标量/Continuous）——非分配器分配，栈内存随作用域退出天然回收，无需所有权管理（2026-08-14 定案）；② 指针/切片自身——栈上地址值，随作用域自动销毁，销毁责任始终在指向的目标对象（2026-08-14 定案）；③ Arena 分配的对象——所有权归 Arena（统一回收），对象自身无所有权
-- **B. 有所有权（责任人 = 谁负责销毁）**：① 非 Arena 分配 → 默认注册**当前作用域**（退出自动销毁；`o` 冗余标注，仅适用于分配器分配的对象，Q15）；② Arena 分配 → 归 **Arena**（统一回收）；③ `global` → 归**根作用域**（程序/库，程序退出时销毁，2026-08-14 定案）；④ 复杂类型字段带 `o` → 赋值时 **move 所有权到父对象**，由父对象管理（2026-08-14 定案）；⑤ `copy()` 产生的新对象 → 新建内存、**有所有权**，默认注册当前作用域（2026-08-14 定案）
-- **C. 所有权转移（move）**：① 函数参数/返回值：销毁责任从当前作用域转移到目标作用域——**不复制数据、不移动内存、变量本身不变**；**move 后原绑定仍可访问**（内存仍有效），继续访问造成的悬垂/冲突由用户负责（2026-08-14 定案）；② 字段带 `o` 赋值 → move 到父对象；③ 线程捕获 → move 随线程；线程未结束而作用域退出 → 对象提升到根作用域，其引用字段被释放引起的指针问题由用户负责（2026-08-14 定案）；④ **禁止 move**：Arena 分配（归 Arena）、global（归根作用域）、无所有权对象（值类型/指针/切片）
-- **D. 销毁时机**：① 作用域退出 → 递归自动销毁其拥有的一切（含子对象、子对象的子对象，凡有所有权者，2026-08-14 定案）；② 根作用域退出（程序结束）→ 销毁 global 与提升上来的对象；③ Arena 统一回收；④ 显式销毁仅限少数资源（文件句柄等）→ 用 `defer` 实现（2026-08-14 定案：无通用显式销毁机制）
+**所有权 (Ownership, 2026-08-25 修订：显式 defer/move 模型替代自动销毁)**:
+所有权 = **销毁责任的唯一归属**——`owned` 标注的变量必须由 `defer` 显式释放或 `move` 转移所有权；**不是访问权限控制**。权限三要素正交：可读（默认）、可写（`mut`）、拥有（`owned`）。
+
+**变量权限**：
+| 标注 | 可读 | 可写 | 拥有 | 说明 |
+|------|------|------|------|------|
+| `T` | ✅ | ❌ | ❌ | 值类型或不可变引用 |
+| `mut T` | ✅ | ✅ | ❌ | 允许修改，无所有权 |
+| `owned T` | ✅ | ❌ | ✅ | 拥有所有权，必须 `defer` 或 `move` |
+| `owned mut T` | ✅ | ✅ | ✅ | 拥有所有权且可修改 |
+
+**规则**：
+1. **作用域不自动释放**。凡堆创建的对象、文件句柄、数据连接等外部资源，统一用 `defer` 在退出作用域时显式释放。
+2. **无 `defer` 则必须 `move`**。`owned` 变量必须匹配 `defer` 语句或将所有权 `move` 出当前作用域，否则编译错误。
+3. **栈/Arena 分配无所有权**。标量/Continuous 类型（栈上）以及 Arena 分配的对象，均无 `owned`，不需要 `defer`，由栈帧或 Arena 统一管理。
+4. **`owned` 只能 move 一次**（affine type）。move 后原变量不再拥有所有权。
+5. **`move` 转移销毁责任**。`move` 将资源的销毁责任从当前作用域转移到目标作用域——不复制数据、不移动内存。因提前释放导致的悬垂指针问题由用户负责（后期加强静态检查）。
 
 **指针自由（Zig 式）**：变量可有多个读写指针（`*mut`）与多个只读指针（`*T`）——**指针问题（悬垂/别名）由用户负责**；语言不保证唯一写者；Debug 悬垂标记为可选诊断工具（编译时选项）。
-_Avoid_: 引用计数（所有权自动按作用域销毁，无需手动 free）
+_Avoid_: 引用计数（所有权显式管理，无需引用计数）
 
 **作用域 (Scope)**:
-所有权与生命周期的基本单位。每个块是一个作用域（可视为没有名字的函数），函数是有名字的作用域。作用域退出即销毁其拥有的变量；**销毁顺序 = 声明逆序（LIFO）**（2026-08-13 Q26 定案）。
-_Avoid_: 用「函数」泛指所有作用域
+所有权与生命周期的基本单位。每个块是一个作用域（可视为没有名字的函数），函数是有名字的作用域。**作用域退出不自动销毁变量**——销毁由 `defer` 语句显式控制。**`defer` 执行顺序 = 声明逆序（LIFO）**。
+_Avoid_: 用「函数」泛指所有作用域；隐式作用域销毁
 
-**move (2026-08-13 修订；2026-08-14 补充)**:
-将变量的**销毁责任**（所有权）从一个作用域显式转移到另一个作用域（函数参数或返回值）的操作——**不复制数据、不移动内存**（**变量本身不变**：内存地址不变、原绑定仍可访问；已有指针仍指向它，继续访问造成的悬垂/冲突由用户负责——2026-08-14 定案）。合法条件：变量拥有所有权（非 Arena/global 分配）即可——**无谓词限制**（可含引用字段、可有外部指针）。**`move` 关键字仅出现在调用点**（`take(move s);` / `return move s;`，Q22b 定案）；参数侧拥有用  `owned T` 标注。转移后原作用域退出不再销毁，目标作用域负责。
+**move (2026-08-25 修订)**:
+将变量的**销毁责任**（所有权）从一个作用域显式转移到另一个作用域（函数参数或返回值）的操作——**不复制数据、不移动内存**（**变量本身不变**：内存地址不变、原绑定仍可访问；已有指针仍指向它，继续访问造成的悬垂/冲突由用户负责）。合法条件：变量拥有 `owned` 标注（非 Arena/global 分配）即可。**`move` 关键字仅出现在调用点**（`take(move s);` / `return move s;`）；参数侧拥有用 `owned T` 标注。转移后原作用域不负责释放，目标作用域负责。
 _Avoid_: 把 move 当作复制
 
-**可移动性 (Movability, 2026-08-13 修订；2026-08-14 补充)**:
-move 的唯一约束 = **拥有所有权**（非 Arena/global 分配；Arena 归 Arena、global 归根作用域，均禁止 move）。旧「内存树无外部引用（无向外/无向内引用）」谓词**取消**——指针别名自由（用户负责），不阻塞 move。
-_Avoid_: 把「有指针」当作禁 move 的理由（指针问题用户负责）
+**可移动性 (Movability, 2026-08-25 修订)**：
+move 的唯一约束 = **变量标注为 `owned`**（非 Arena/global 分配；Arena 归 Arena、global 归根作用域，均禁止 move）。指针别名自由（用户负责），不阻塞 move。
+_Avoid_: 把「有指针」当作禁 move 的理由
 
-**全局变量 (Global variable, 2026-08-14 修订)**:
-用 `global` 声明的变量，位于根作用域上下文，静态生命周期（程序运行期间存活）。**有所有权**（凡分配器分配皆有）：所有权归**根作用域**（程序/库），程序退出时销毁；**不可 move**（移出即失去全局性，且所有权不在当前作用域）；`o` 标注不用于 global（其所有权不在当前作用域而在根作用域）。**初始化时机（2026-08-14 定案；M7 修订）**：程序启动时执行（根作用域构造阶段，`main` 前）——支持运行时初始化；**跨文件按初始化表达式依赖图拓扑排序**（无依赖按文件声明序；循环依赖 = 编译错误）。
+**全局变量 (Global variable, 2026-08-25 修订)**：
+用 `global` 声明的变量，位于根作用域上下文，静态生命周期（程序运行期间存活）。**不可 move**（移出即失去全局性）。**初始化时机**：程序启动时执行（根作用域构造阶段，`main` 前）——支持运行时初始化；**跨文件按初始化表达式依赖图拓扑排序**（无依赖按文件声明序；循环依赖 = 编译错误）。
 _Avoid_: 把全局变量当作普通作用域变量
 
-**只读引用 (Read-only reference)**:
-对目标变量的只读访问视图，不授予修改权。**多个只读指针可同时存在**（与读写指针同理，2026-08-13 修订）；指针问题（悬垂）由用户负责；Debug 悬垂标记为可选诊断工具（编译时选项）。
+**只读引用 (Read-only reference)**：
+对目标变量的只读访问视图，不授予修改权。**多个只读指针可同时存在**；指针问题（悬垂）由用户负责；Debug 悬垂标记为可选诊断工具（编译时选项）。
 _Avoid_: 把引用当作安全保证（指针问题用户负责）
 
-**读写引用 (Read-write reference)**:
-对目标变量的可写访问视图（可写包含可读）。**可有多个读写指针同时存在**（唯一写者概念取消，2026-08-13 修订）；`*mut` **可复制**（「不可拷贝只能 move」取消）。**指针问题（悬垂/别名冲突）由用户负责**（Zig 式）；Debug 悬垂标记（目标销毁时标记指向它的指针，访问已标记指针 → 提示带位置）为**可选诊断工具**（编译时选项开启，非安全保证）。
+**读写引用 (Read-write reference)**：
+对目标变量的可写访问视图（可写包含可读）。**可有多个读写指针同时存在**（唯一写者概念取消）；`*mut` **可复制**。**指针问题（悬垂/别名冲突）由用户负责**（Zig 式）；Debug 悬垂标记为**可选诊断工具**（编译时选项开启，非安全保证）。
 _Avoid_: 把指针当作安全保证（指针问题用户负责）
 
-**悬垂检测 (Dangling detection)**:
-**指针问题由用户负责（Zig 式，2026-08-13 修订）**——悬垂属用户责任，语言不保证检测。**Debug 悬垂标记为可选诊断工具**（编译时选项开启：目标销毁时标记指向它的指针，访问已标记指针 → 提示带位置——帮助定位，非安全保证）。**切换粒度 = 编译单元（文件）级**（2026-08-22 定案）：CLI `hc run`/`hc test`/`hc build` 增 `--dangle=on|off|auto`（`auto` = Debug 开 / Release 关，默认；第三阶段实施项）；tag1 既有 `debug_dangling` 对齐为此；函数/引用点级留 1.x 性能优化场景。悬垂的唯一产生路径是引用逃逸到比目标更长寿的容器/全局（返回值引用被编译期禁止，Q18 定案）。
+**悬垂检测 (Dangling detection)**：
+**指针问题由用户负责（Zig 式）**——悬垂属用户责任，语言不保证检测。**Debug 悬垂标记为可选诊断工具**（编译时选项开启：目标销毁时标记指向它的指针，访问已标记指针 → 提示带位置——帮助定位，非安全保证）。**切换粒度 = 编译单元（文件）级**：CLI `hc run`/`hc test`/`hc build` 增 `--dangle=on|off|auto`（`auto` = Debug 开 / Release 关，默认）。悬垂的唯一产生路径是引用逃逸到比目标更长寿的容器/全局（返回值引用被编译期禁止）。
 _Avoid_: 把悬垂检测当安全保证（它是诊断工具）
 
-**defer**:
-在创建/获取资源处显式声明的清理语句：作用域退出时执行（Zig 式）。`errdefer` 仅在错误返回路径执行。**多个 defer 按 LIFO 执行**（后声明先执行，2026-08-13 Q21 定案——与资源创建顺序成镜像）。保证清理动作在创建处可见（不用隐式析构）。
-_Avoid_: 隐式 RAII 析构（H 不用）
+**defer (2026-08-25 修订：主销毁机制)**：
+**主销毁机制**——所有 `owned` 变量必须通过 `defer` 在退出作用域时显式释放。`defer` 在作用域退出时执行（正常路径和错误路径均执行）。`errdefer` 仅在错误返回路径执行。**多个 `defer` 按 LIFO 执行**（后声明先执行，与资源创建顺序成镜像）。保证清理动作在创建处可见（不用隐式析构）。
+_Avoid_: 隐式 RAII 析构（H 不用）；把 defer 当少数资源的特例
 
 ## 6. 元编程（M3）
 
@@ -275,25 +286,50 @@ _Avoid_: 普通函数用 anyerror 偷懒
 内置终止原语（2026-08-13 Q-S2 定案）：不可恢复运行时错误（Debug 悬垂标记开启时访问已标记悬垂指针）调用 `@panic("消息", 位置)`——打印消息 + 位置（Debug 带堆栈）后 **abort 终止**；**不执行 defer 清理**、**无 unwind/recover**（回卷是隐式控制流，不引入）；测试环境内 panic → 该测试记 FAIL（不终止整个 hc test）。
 _Avoid_: 用 panic 替代 error union（可恢复错误走 `E!T`）
 
-## 10. 模块与包（M1/M8，2026-08-23 重构）
+## 10. 模块与包（M1/M8，2026-08-25 重构：ADR-0026）
 
-**命名空间 (Namespace, 2026-08-23 重构)**:
+### 目录结构
+
+```
+project/
+├── src/
+│   ├── main.hc              # 入口，命名空间 = 项目名
+│   ├── Modules/
+│   │   ├── Auth/             # 模块，命名空间 = project.Auth
+│   │   │   ├── context.hc    # 模块 context（IContext 实现）
+│   │   │   ├── interfaces.hc # 公开接口定义
+│   │   │   └── services.hc   # 内部实现
+│   │   └── Storage/          # 模块，命名空间 = project.Storage
+│   │       ├── context.hc
+│   │       ├── interfaces.hc
+│   │       └── storage.hc
+│   └── utils/                # 普通代码（非模块）
+│       └── helpers.hc
+tests/                        # 项目根目录，测试文件
+├── test_auth.hc
+└── test_storage.hc
+```
+
+### 命名空间 (Namespace)
+
 **文件路径即命名空间**——不再使用 C# 式块式 `namespace { }` 声明。规则：
 - 根入口文件 `src/main.hc` 的命名空间 = **项目名称**（build.zon 的 `name` 字段）
 - 标准库的根命名空间 = `H.std`
 - 子目录文件的命名空间 = `{上级命名空间}.{当前文件夹名称}`
-- 示例：`src/math/algebra.hc` → `{项目名}.math`（`main.hc` 的命名空间为 `{项目名}`，`math` 文件夹追加为 `{项目名}.math`）
+- 示例：`src/main.hc` → `{项目名}`；`src/Modules/Auth/services.hc` → `{项目名}.Auth`
 - 文件内不写 `namespace` 关键字时，自动归属上述路径命名空间
 - 文件内写 `namespace abc { }` 时，**覆盖**默认路径命名空间，指定为 `abc`
 - 编译时按命名空间将同空间文件编译在一起
 - `namespace` 关键字仍可用于**显式覆盖**默认路径命名空间
 _Avoid_: 一文件多命名空间
 
-**引入 (using, 已废弃 → 将移除)**:
+### 引入 (using, 已废弃 → 将移除)
+
 `using Math;` 引入命名空间（2026-08-13 Q21 定案）——**2026-08-17 被 `import` 取代**（ADR-0010），**2026-08-23 决定移除**（解析到 `using` 直接报错）。
 _Avoid_: 通配符式隐式引入一切
 
-**导入 (import)**:
+### 导入 (import)
+
 文件级导入语句（2026-08-17 定案，ADR-0010——取代 using，推翻「无文件级 import」）：
 - `import pkg.mod.{sym as 别名}` — 符号选择 + `as` 重名重命名
 - `import pkg.mod;` — 整模块导入
@@ -302,41 +338,193 @@ _Avoid_: 通配符式隐式引入一切
 `H.std` = 内置标准库根路径，用户库经 build.zon 声明后按依赖名引用。**依赖解析顺序**：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。**重名冲突规则**：同名导入符号冲突 → 编译错误，用户必须用 `as` 显式消歧。**库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）。
 _Avoid_: 多套导入机制并存
 
-**`[module]` 特性标记 (2026-08-23 定案)**:
-`[module]` 是编译时特性标记（类似 `[test]` / `[Continuous]`），作用于文件级命名空间：
-- **不写 `[module]`**：该文件所在文件夹的**所有子文件夹内容编译为私有**（对外不可见）；当前文件夹内容编译为**公开**
-- **标记 `[module]`**：当前文件内容编译为公开；子文件夹内容编译为私有。对外部调用者来说，**该模块无子命名空间可见**
-- `[module]` 标记的文件必须定义 `context`（见下文）
-- 模块是高度集中的功能集，有明确的边界和依赖
+### 模块系统（ADR-0026，2026-08-25 定案）
 
-**`context`**：语言级关键字，**每个 `[module]` 只能有一个 `context`**。`context` 是模块的 `global` 变量，模块内所有类型默认可访问。设计参考：**Windows IOC 容器模式**——
-  - **接口注册**：`context.register(Interface, Implementation)`，在 `main` 中填充
-  - **IoC 反转实例化**：模块内部通过 `context.new(Interface, args...)` 实例化对象，由 context 解析依赖图
-  - **接口不可实例化**，但可继承（含默认实现）
-  - **类型安全**：`context.get(name: String, T: type) ?T` 通过 comptime 类型参数获得类型安全
-  - **初始化顺序**：`main` 中显式控制，编译器不做自动排序
-- 模块内类型直接创建外部类型 → 编译错误
-- 模块间连接：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交
+`[module]` 特性标记已移除，模块由 `src/Modules/` 目录结构定义。
 
-**程序环境 (io 模块)**:
+**模块定义规则**：
+- `src/Modules/` 下的每个子目录 = 一个模块。子目录名即模块名，编译器自动发现，无需手动声明。
+- 模块目录仅支持扁平结构，不支持嵌套子模块。嵌套应通过独立包实现。
+- 每个模块必须定义 context（`src/Modules/X/context.hc`），实现 `IContext` 接口。
+- 纯工具函数应放在 `src/` 下的非 `Modules/` 目录中，不放在模块目录下。
+- 模块内非 `pub` 符号对外不可见。模块的公开 API = context 结构体 + 接口定义。
+
+**模块与标准库**：
+- 标准库（`H.std`）可直接 `import` 使用。
+- 模块与标准库以外的对象交流，必须通过 context。
+
+### IContext 接口与 IoC 容器
+
+`IContext` 接口定义在 `H.std.ioc` 中，提供 IoC 容器能力：
+
+```h
+interface IContext {
+    fn register<T>(self, impl: T);                             // 注册单例（深拷贝到 Arena）
+    fn register<T>(self, name: &[u8], impl: T);                // 命名单例
+    fn registerFactory<T>(self, name: &[u8], factory: fn(ctx: &IContext) -> T);
+    fn get<T>(self) -> *T;                                     // 获取 Arena 引用（无所有权，不 defer）
+    fn get<T>(self, name: &[u8]) -> *T;                        // 按名获取 Arena 引用
+    fn make<T>(self, name: &[u8]) -> owned T;                  // 创建新实例（调用者拥有，必须 defer）
+}
+
+**内存管理规则**：
+- `get<T>()` 返回 `*T`（Arena 引用，无所有权，不需要 `defer`）
+- `make<T>(name)` 返回 `owned T`（调用者拥有，必须 `defer` 或 `move`）
+- `register<T>(impl)` 在 Arena 中深拷贝一份，原实例由调用者自己管理
+- `registerFactory<T>(name, fn)` 工厂首次调用结果缓存到 Arena，后续 `get` 返回缓存引用；`make<T>(name)` 每次调用工厂创建新实例
+
+**Context 层级委托**：
+- `AppContext`（应用域）→ `ModuleContext`（模块子域），子 context 持有父 context 引用
+- 子 context 解析不到时向上委托给父 context
+- 每个 context 背靠 Arena 分配器，context 销毁时所有通过它创建的对象一并销毁
+
+**模块面向接口编程**：
+- 模块只知接口，不知具体实现。注册什么就用什么。
+- 接口定义在提供该接口的模块中（如 `src/Modules/Auth/interfaces.hc`），使用方通过 `import project.Auth.{IUserService}` 引入。
+- 模块内类型直接创建外部类型 → 编译错误。
+- 模块间连接：`import` = 符号引用（类型/函数，API 面）；`context` = 数据/依赖注入——两者正交。
+
+**引导流程示例**：
+
+```h
+// src/main.hc
+import H.std.{io};
+import H.std.ioc.{IContext, AppContext};
+import myapp.Auth.{AuthContext, IUserService};
+import myapp.Storage.{StorageContext, IFileService};
+
+fn main() !void {
+    var app_ctx = AppContext.init(alloc);
+    defer app_ctx.deinit();
+
+    // 注册全局服务
+    app_ctx.register(IUserService, UserService{});
+    app_ctx.register(IFileService, FileService{});
+
+    // 初始化模块（注册到父 context 的子域）
+    var auth = AuthContext.init(app_ctx);
+    var storage = StorageContext.init(app_ctx);
+
+    run(app_ctx);
+}
+```
+
+**初始化与生命周期**：
+- 初始化即注册：`AuthContext.init(app_ctx)` 将模块注册到父 context
+- 懒加载实例化：`get<T>()` 按需创建对象，对象随 context 销毁
+- 同一接口可注册多个实现，通过 `name` 区分
+- 工厂方法接收 context 引用，可在工厂内部解析依赖
+
+### 程序环境 (io 模块)
+
 标准库模块形态的程序环境句柄（2026-08-17 定案，ADR-0010）：`io.print`/`io.fs.*`/`io.net.*`/`io.time.*`/`io.text.*`/`io.rng.*`/`io.storage.*`/`io.archive.*`/`io.ipc.*`/`io.env(n)`/`io.stdin`/`stdout`/`stderr`/`io.exit(ExitType, code)` 均为模块函数 + 模块内环境状态；经 `import H.std.{io}` 引入。`H.std` 是标准库的统一导入路径。`Io` 接口保留（并发 E2 的 `Io.threaded()/evented()`）。
 _Avoid_: 把程序环境当全局可变状态泄漏
 
-**应用程序 (Application, 2026-08-17 定案)**:
+### 应用程序 (Application)
+
 含 `main` 入口函数的包（build.zon `Kind::exe`）——编译产出可运行的 exe（平台原生形态）。与库相对：库不含 main（见库）。
 _Avoid_: 把库当应用运行
 
-**库 (Library, 2026-08-23 定案)**:
+### 库 (Library)
+
 不含 `main` 入口的包（build.zon `Kind::lib`）——代码集合（1+ 模块），**不单独运行**；产出形态构建参数选择：**lib 静态库**（编译时链接进 exe）或 **dll 动态库**（exe 运行时加载）。
 _Avoid_: 库内写 main 入口
 
-**包与依赖 (Package & deps, 2026-08-23 细化)**:
+### 包与依赖 (Package & deps)
+
 包管理器内置编译器；**包形态 = 应用（`Kind::exe`，含 main）/ 库（`Kind::lib`，无 main，1+ 模块，产出 lib/dll）**；依赖清单 = **H 数据字面量**（`const build = Build{ ... }`，build.zon 式）。**依赖解析**：`import <name>.<sym>` 中 `<name>` 对应 build.zon 依赖声明的 `name` 字段。解析顺序：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。官方注册中心；`hc build` / `hc cc`（M8 工具链，系统库自带、静态链接默认）。
 _Avoid_: 隐藏系统依赖
 
-**`.hs` 脚本导入 (2026-08-23 定案)**:
+### `.hs` 脚本导入
+
 `.hs` 文件使用 `import "path/to/file.hs"` 引用其他 `.hs` 文件。Parser 扩展：`import` 后跟字符串字面量 → 文件引用（AST 新增 `Decl::ImportFile` 变体）；跟标识符路径 → 模块引用（既有 `Decl::Import`）。文件引用与标准库引用是同一 `import` 语句的两种形态，parser 按引号检测区分。脚本项目不需要 `build.zon`。
 _Avoid_: 混用 `.hs` 文件引用与 `.hc` 模块引用
+
+### 测试目录
+
+项目根目录的 `tests/` 目录用于存放测试文件：
+- `tests/` 不参与命名空间系统，仅由 `hc test` 发现和执行
+- 测试文件通过 `import` 引入被测模块的接口
+- 测试中可注入 mock 实现：
+
+```h
+// tests/test_auth.hc
+import myapp.Auth.{AuthContext, IUserService};
+
+[Test] fn test_auth_service() !void {
+    var ctx = AuthContext.init(alloc);
+    defer ctx.deinit();
+    ctx.register(IUserService, MockUserService{});
+    // ...
+}
+```
+
+## 12. 容器与初始化器（2026-08-26 定案，ADR-0027）
+
+**容器 (Container)**:
+持有元素所有权的动态集合类型（Vec / Deque / Map / Table）。容器默认 owning——元素所有权归容器，容器销毁时一并释放元素内存。容器不持有元素时（借用语义）通过切片 `&[T]` / `&mut [T]` 表达，不是容器类型。
+_避免_: 把切片当作容器
+
+**容器初始化器统一规则 (Container init convention, ADR-0027)**:
+所有容器使用 `init` 方法创建，遵循以下规则：
+1. 分配器永远是**最后一个参数**（可省略，回退全局 alloc）
+2. `var mut` 可变绑定 → 可空构造，后续追加元素
+3. `var` 只读绑定 → 建议提供初值（空容器产生编译警告）
+4. 所有数据通过 `move` 进入容器（值类型自动拷贝）
+
+| 容器 | init 签名 | 说明 |
+|------|-----------|------|
+| `Vec<T>` | `.init()` | 空 Vec，默认 allocator |
+| | `.init(alloc)` | 空 Vec，显式 allocator |
+| | `.init(cap)` | 预分配容量，默认 allocator |
+| | `.init(cap, alloc)` | 预分配容量，显式 allocator |
+| | `.init([items])` | 从数组字面量，默认 allocator |
+| | `.init([items], alloc)` | 从数组字面量，显式 allocator |
+| `Deque<T>` | 同 Vec | 方法集额外有 push_front/pop_front |
+| `Map<K,V>` | `.init()` | 空 Map，默认 allocator |
+| | `.init(alloc)` | 空 Map，显式 allocator |
+| | `.init({k = v, ...})` | 花括号 KV 字面量，默认 allocator |
+| | `.init({k = v, ...}, alloc)` | 花括号 KV 字面量，显式 allocator |
+| `Table<T>` | `.init(rows, cols, val)` | 统一初始值，默认 allocator |
+| | `.init(rows, cols, val, alloc)` | 统一初始值，显式 allocator |
+| | `.init([[items]])` | 从二维数组，默认 allocator |
+| | `.init([[items]], alloc)` | 从二维数组，显式 allocator |
+| | `.init_with(rows, cols, fn)` | 回调构造，默认 allocator |
+| | `.init_with(rows, cols, fn, alloc)` | 回调构造，显式 allocator |
+
+_避免_: 分配器放在第一个参数；容器类型参数中加 `owned`/`mut`
+
+**元素读写权限 (Element mutability)**:
+容器元素的读写权限与容器变量本身的 `var`/`var mut` 绑定：
+- `var v = Vec<i32>.init(alloc, [1, 2, 3])` — 容器只读，元素只读（`v[0] = 5` 编译错误）
+- `var mut v = Vec<i32>.init(alloc)` — 容器可变，元素可读写（`v.append(5)` 允许）
+此为简化设计：不再需要类型参数级别的 `owned`/`mut` 标注。
+_避免_: 在容器类型参数中加 `owned mut T`（容器统一默认 owning）
+
+**alloc.init 三形态 (Three forms of alloc.init, ADR-0027)**:
+堆分配原语 `alloc.init` 有三种形态，覆盖所有堆分配场景：
+
+```h
+// 形态 1：类型实例，零初始化
+var mut p: *T = alloc.init(T);
+
+// 形态 2：类型实例，带字段初始化
+var mut p: *T = alloc.init(T{ field = "value" });
+
+// 形态 3：数组，n 个元素
+var mut a: *[T, n] = alloc.init(T, n);
+```
+
+三者与容器 `init` 方法正交：`alloc.init` 是底层分配原语，容器 `init` 是高级构造器（内部使用 allocator 管理存储）。
+_避免_: 用 `alloc.init` 创建容器（容器有自己的 `init` 方法）
+
+**容器字面量 (Container literals)**:
+- `Vec<T>[1, 2, 3]` — 方括号字面量（IR 降级器待实现）
+- `Map<K,V>{"k" = v}` — 花括号 KV 字面量，`=` 分隔键值
+- 数组字面量 `[1, 2, 3]` 保持现有语法，始终是 owning 引用类型
+
+**A6 数据结构 (A6 data structures)**:
+RingBuf / PageMem / IntrList / TreeMap / Bitmap 保持 `io.*` 命名空间访问，不纳入统一容器初始化设计。
 
 ## 11. 工具链（M8）
 

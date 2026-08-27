@@ -11,7 +11,7 @@ fn main() !void {
 
     // 分词 + 统计（修改数据）
     var counts = Map<&[u8], i32>.init(alloc);
-    var words = String.from(data, alloc).split(' ');
+    var words = data.split(' ');
     for (words) |w| {
         if (w.len > 0) {
             counts.put(w, (counts.get(w) orelse 0) + 1);
@@ -26,6 +26,6 @@ fn main() !void {
 }
 
 // S4 演示型（Q-T6）：统计逻辑等价断言见 32-collections / 53-map-deep
-[test] fn wordcount_demo() !void {
+[Test] fn wordcount_demo() !void {
     try expect(true);
 }
