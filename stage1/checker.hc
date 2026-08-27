@@ -1,0 +1,2282 @@
+// ============================================================
+// stage1/checker.hc — H 版语义分析（K3：E7 自举渐进路线 · 语义阶段）
+//
+// 双实现对照：本文件与 Rust 参考语义分析（tag1/hc/src/semantic/）
+// 对同一源码输出同一诊断格式，差异即 bug。
+// Rust 参考实现长期保留（自举失败风险对策）。
+//
+// 用法：hc run stage1/checker.hc <file.hc>
+//
+// 输出格式：
+//   成功：OK
+//   失败：error:line:col: message
+// ============================================================
+
+import H.std.{io};
+
+// ============================================================
+// 辅助函数
+// ============================================================
+
+fn is_digit(b: u8) bool {
+    return b >= '0' and b <= '9';
+}
+fn is_hex(b: u8) bool {
+    return is_digit(b) or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F');
+}
+fn is_bin(b: u8) bool {
+    return b == '0' or b == '1';
+}
+fn is_oct(b: u8) bool {
+    return b >= '0' and b <= '7';
+}
+fn is_alpha(b: u8) bool {
+    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
+}
+fn is_alnum(b: u8) bool {
+    return is_digit(b) or is_alpha(b);
+}
+fn is_ident_start(b: u8) bool {
+    return is_alpha(b) or b == '_';
+}
+fn is_ident_cont(b: u8) bool {
+    if (is_alnum(b) or b == '_') return true;
+    if (b >= 0xE4 and b <= 0xE9) return true;
+    return false;
+}
+fn is_ws(b: u8) bool {
+    return b == 0x20 or b == 0x09 or b == 0x0A or b == 0x0D or b == 0x0B or b == 0x0C;
+}
+fn utf8_width(b: u8) i32 {
+    if (b < 0x80) return 1;
+    if (b < 0xE0) return 2;
+    if (b < 0xF0) return 3;
+    return 4;
+}
+fn hexval(b: u8) i32 {
+    if (is_digit(b)) return @intCast(i32, b) - '0';
+    if (b >= 'a' and b <= 'f') return @intCast(i32, b) - 'a' + 10;
+    if (b >= 'A' and b <= 'F') return @intCast(i32, b) - 'A' + 10;
+    return -1;
+}
+fn vec_from_slice(s: &[u8]) Vec<u8> {
+    var v = Vec<u8>.init(alloc);
+    var mut i: usize = 0;
+    while (i < s.len) {
+        v.append(s[i]);
+        i += 1;
+    }
+    return v;
+}
+fn slice_eq(a: &[u8], b: &[u8]) bool {
+    if (a.len != b.len) return false;
+    var mut i: usize = 0;
+    while (i < a.len) {
+        if (a[i] != b[i]) return false;
+        i += 1;
+    }
+    return true;
+}
+
+// ============================================================
+// 关键字字典
+// ============================================================
+
+fn build_kw_map() Map<&[u8], &[u8]> {
+    var m = Map<&[u8], &[u8]>.init(alloc);
+    m.put("and", "KwAnd");
+    m.put("anytype", "KwAnytype");
+    m.put("async", "KwAsync");
+    m.put("await", "KwAwait");
+    m.put("break", "KwBreak");
+    m.put("catch", "KwCatch");
+    m.put("class", "KwClass");
+    m.put("comptime", "KwComptime");
+    m.put("const", "KwConst");
+    m.put("continue", "KwContinue");
+    m.put("defer", "KwDefer");
+    m.put("else", "KwElse");
+    m.put("enum", "KwEnum");
+    m.put("errdefer", "KwErrdefer");
+    m.put("export", "KwExport");
+    m.put("extern", "KwExtern");
+    m.put("false", "KwFalse");
+    m.put("fn", "KwFn");
+    m.put("for", "KwFor");
+    m.put("global", "KwGlobal");
+    m.put("if", "KwIf");
+    m.put("import", "KwImport");
+    m.put("interface", "KwInterface");
+    m.put("move", "KwMove");
+    m.put("mut", "KwMut");
+    m.put("namespace", "KwNamespace");
+    m.put("null", "KwNull");
+    m.put("or", "KwOr");
+    m.put("orelse", "KwOrelse");
+    m.put("owned", "KwOwned");
+    m.put("pub", "KwPub");
+    m.put("return", "KwReturn");
+    m.put("script", "KwScript");
+    m.put("spawn", "KwSpawn");
+    m.put("switch", "KwSwitch");
+    m.put("tree", "KwTree");
+    m.put("true", "KwTrue");
+    m.put("try", "KwTry");
+    m.put("type", "KwType");
+    m.put("union", "KwUnion");
+    m.put("using", "KwUsing");
+    m.put("var", "KwVar");
+    m.put("void", "KwVoid");
+    m.put("where", "KwWhere");
+    m.put("while", "KwWhile");
+    return m;
+}
+
+fn build_rev_kw_map() Map<&[u8], &[u8]> {
+    var m = Map<&[u8], &[u8]>.init(alloc);
+    m.put("KwAnd", "and");
+    m.put("KwAnytype", "anytype");
+    m.put("KwAsync", "async");
+    m.put("KwAwait", "await");
+    m.put("KwBreak", "break");
+    m.put("KwCatch", "catch");
+    m.put("KwClass", "class");
+    m.put("KwComptime", "comptime");
+    m.put("KwConst", "const");
+    m.put("KwContinue", "continue");
+    m.put("KwDefer", "defer");
+    m.put("KwElse", "else");
+    m.put("KwEnum", "enum");
+    m.put("KwErrdefer", "errdefer");
+    m.put("KwExport", "export");
+    m.put("KwExtern", "extern");
+    m.put("KwFalse", "false");
+    m.put("KwFn", "fn");
+    m.put("KwFor", "for");
+    m.put("KwGlobal", "global");
+    m.put("KwIf", "if");
+    m.put("KwImport", "import");
+    m.put("KwInterface", "interface");
+    m.put("KwMove", "move");
+    m.put("KwMut", "mut");
+    m.put("KwNamespace", "namespace");
+    m.put("KwNull", "null");
+    m.put("KwOr", "or");
+    m.put("KwOrelse", "orelse");
+    m.put("KwOwned", "owned");
+    m.put("KwPub", "pub");
+    m.put("KwReturn", "return");
+    m.put("KwScript", "script");
+    m.put("KwSpawn", "spawn");
+    m.put("KwSwitch", "switch");
+    m.put("KwTree", "tree");
+    m.put("KwTrue", "true");
+    m.put("KwTry", "try");
+    m.put("KwType", "type");
+    m.put("KwUnion", "union");
+    m.put("KwUsing", "using");
+    m.put("KwVar", "var");
+    m.put("KwVoid", "void");
+    m.put("KwWhere", "where");
+    m.put("KwWhile", "while");
+    return m;
+}
+
+// ============================================================
+// Token 与词法分析器（Lexer）
+// ============================================================
+
+class Token {
+    kind: &[u8],
+    text: Vec<u8>,
+    start: usize,
+    end: usize,
+    line: i32,
+    col: i32,
+}
+
+class Lexer {
+    src: &[u8],
+    n: usize,
+    mut pos: usize,
+    mut line: i32,
+    mut col: i32,
+    mut tokens: Vec<Token>,
+    kw_map: Map<&[u8], &[u8]>,
+
+    fn kw_of(self: *mut Self, name: &[u8]) ?&[u8] {
+        if (self.kw_map.contains(name)) {
+            return self.kw_map.get(name).?;
+        }
+        return null;
+    }
+
+    fn bump(self: *mut Self) void {
+        if (self.src[self.pos] == '\n') {
+            self.line += 1;
+            self.col = 1;
+        } else {
+            self.col += 1;
+        }
+        var c = self.src[self.pos];
+        if (c < 0x80) { self.pos += 1; }
+        else if (c < 0xE0) { self.pos += 2; }
+        else if (c < 0xF0) { self.pos += 3; }
+        else { self.pos += 4; }
+    }
+
+    fn push_token(self: *mut Self, kind: &[u8], text: Vec<u8>, start: usize) void {
+        var tok = Token{
+            kind = kind,
+            text = text,
+            start = start,
+            end = self.pos,
+            line = self.line,
+            col = self.col,
+        };
+        self.tokens.append(tok);
+    }
+
+    fn push_simple(self: *mut Self, kind: &[u8], start: usize) void {
+        var empty = Vec<u8>.init(alloc);
+        self.push_token(kind, empty, start);
+    }
+
+    fn run(self: *mut Self) void {
+        while (true) {
+            self.skip_ws();
+            var start = self.pos;
+            if (self.pos >= self.n) {
+                self.push_simple("Eof", start);
+                return;
+            }
+            var mut c = self.src[self.pos];
+            if (is_ident_start(c)) {
+                self.lex_ident(start);
+            } else if (is_digit(c)) {
+                self.lex_number(start);
+            } else if (c == '"') {
+                self.lex_string(start);
+            } else if (c == '\'') {
+                self.lex_char(start);
+            } else if (c == '@') {
+                self.bump();
+                var s2 = self.pos;
+                while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+                var txt = vec_from_slice(self.src[s2..self.pos]);
+                self.push_token("AtBuiltin", txt, start);
+            } else {
+                self.lex_punct(start);
+            }
+        }
+    }
+
+    fn skip_ws(self: *mut Self) void {
+        while (true) {
+            if (self.pos >= self.n) { return; }
+            var mut c = self.src[self.pos];
+            if (is_ws(c)) {
+                self.bump();
+            } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
+                while (self.pos < self.n and self.src[self.pos] != '\n') { self.bump(); }
+            } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '*') {
+                self.bump();
+                self.bump();
+                while (true) {
+                    if (self.pos >= self.n) { return; }
+                    if (self.src[self.pos] == '*' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
+                        self.bump();
+                        self.bump();
+                        break;
+                    }
+                    self.bump();
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn lex_ident(self: *mut Self, start: usize) void {
+        var s2 = self.pos;
+        while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+        var name = self.src[s2..self.pos];
+        var kw = self.kw_of(name);
+        if (kw) |k| {
+            self.push_simple(k, start);
+        } else {
+            var txt = vec_from_slice(name);
+            self.push_token("Ident", txt, start);
+        }
+    }
+
+    fn lex_number(self: *mut Self, start: usize) void {
+        var buf = Vec<u8>.init(alloc);
+        var mut is_float = false;
+        if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
+            var mut c1 = self.src[self.pos + 1];
+            if (c1 == 'x' or c1 == 'X') {
+                buf.append('0'); buf.append('x');
+                self.bump(); self.bump();
+                while (self.pos < self.n and (is_hex(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                    buf.append(self.src[self.pos]);
+                    self.bump();
+                }
+                self.finish_number(start, "Int", buf);
+                return;
+            }
+            if (c1 == 'b' or c1 == 'B') {
+                buf.append('0'); buf.append('b');
+                self.bump(); self.bump();
+                while (self.pos < self.n and (is_bin(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                    buf.append(self.src[self.pos]);
+                    self.bump();
+                }
+                self.finish_number(start, "Int", buf);
+                return;
+            }
+            if (c1 == 'o' or c1 == 'O') {
+                buf.append('0'); buf.append('o');
+                self.bump(); self.bump();
+                while (self.pos < self.n and (is_oct(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                    buf.append(self.src[self.pos]);
+                    self.bump();
+                }
+                self.finish_number(start, "Int", buf);
+                return;
+            }
+        }
+        while (self.pos < self.n) {
+            var mut c = self.src[self.pos];
+            if (is_digit(c) or c == '_') {
+                buf.append(c);
+                self.bump();
+            } else if (c == '.' and self.pos + 1 < self.n and is_digit(self.src[self.pos + 1])) {
+                is_float = true;
+                buf.append('.');
+                self.bump();
+                while (self.pos < self.n and (is_digit(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                    buf.append(self.src[self.pos]);
+                    self.bump();
+                }
+            } else {
+                break;
+            }
+        }
+        if (self.pos < self.n) {
+            var mut c = self.src[self.pos];
+            if ((c == 'e' or c == 'E') and self.pos + 1 < self.n) {
+                var mut c2 = self.src[self.pos + 1];
+                if (is_digit(c2) or c2 == '+' or c2 == '-') {
+                    is_float = true;
+                    buf.append('e');
+                    self.bump();
+                    if (self.pos < self.n and (self.src[self.pos] == '+' or self.src[self.pos] == '-')) {
+                        buf.append(self.src[self.pos]);
+                        self.bump();
+                    }
+                    while (self.pos < self.n and (is_digit(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                        buf.append(self.src[self.pos]);
+                        self.bump();
+                    }
+                }
+            }
+        }
+        if (is_float) { self.finish_number(start, "Float", buf); }
+        else { self.finish_number(start, "Int", buf); }
+    }
+
+    fn is_suffix_cont(self: *mut Self, b: u8) bool {
+        return is_digit(b) or is_alpha(b) or (b >= 0xE4 and b <= 0xE9);
+    }
+
+    fn detect_suffix(self: *mut Self) ?&[u8] {
+        if (self.pos < self.n) {
+            var mut c = self.src[self.pos];
+            if (c == 'i' or c == 'u' or c == 'f') {
+                var mut j = self.pos;
+                while (j < self.n and self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
+                var mut suf = self.src[self.pos..j];
+                if (suf.len >= 2) {
+                    var ok = is_digit(self.src[self.pos + 1]) or suf == "isize" or suf == "usize";
+                    if (ok) return suf;
+                }
+            }
+        }
+        return null;
+    }
+
+    fn finish_number(self: *mut Self, start: usize, kind: &[u8], buf: Vec<u8>) void {
+        var mut txt = vec_from_slice(buf);
+        if (self.pos < self.n) {
+            var suf = self.detect_suffix();
+            if (suf) |s| {
+                var mut k: usize = 0;
+                while (k < s.len) {
+                    txt.append(s[k]);
+                    self.bump();
+                    k += 1;
+                }
+            }
+        }
+        self.push_token(kind, txt, start);
+    }
+
+    fn lex_string(self: *mut Self, start: usize) void {
+        self.bump();
+        if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
+            self.bump();
+            self.bump();
+            var content = Vec<u8>.init(alloc);
+            while (true) {
+                if (self.pos >= self.n) { return; }
+                if (self.src[self.pos] == '"' and self.pos + 2 < self.n and self.src[self.pos + 1] == '"' and self.src[self.pos + 2] == '"') {
+                    self.bump(); self.bump(); self.bump();
+                    break;
+                }
+                var w = utf8_width(self.src[self.pos]);
+                var mut k = 0;
+                while (k < w) {
+                    content.append(self.src[self.pos + k]);
+                    k += 1;
+                }
+                self.bump();
+            }
+            self.push_token("Str", content, start);
+            return;
+        }
+        var content = Vec<u8>.init(alloc);
+        while (true) {
+            if (self.pos >= self.n) { return; }
+            if (self.src[self.pos] == '"') {
+                self.bump();
+                break;
+            }
+            if (self.src[self.pos] == '\\') {
+                self.bump();
+                if (self.pos >= self.n) { return; }
+                var mut ec = self.src[self.pos];
+                self.bump();
+                if (ec == 'n') { content.append('\n'); }
+                else if (ec == 'r') { content.append('\r'); }
+                else if (ec == 't') { content.append('\t'); }
+                else if (ec == '\\') { content.append('\\'); }
+                else if (ec == '"') { content.append('"'); }
+                else if (ec == '\'') { content.append('\''); }
+                else if (ec == 'x') {
+                    var mut hi: i32 = -1; var mut lo: i32 = -1;
+                    if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
+                    if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
+                    if (hi >= 0 and lo >= 0) {
+                        var byte: i32 = hi * 16 + lo;
+                        if (byte < 0x80) { content.append(@intCast(u8, byte)); }
+                        else {
+                            content.append(@intCast(u8, 0xC0 + (byte >> 6)));
+                            content.append(@intCast(u8, 0x80 + (byte & 0x3F)));
+                        }
+                    }
+                }
+                else if (ec == 'u') {
+                    if (self.pos >= self.n) { return; }
+                    var mut brace = self.src[self.pos]; self.bump();
+                    if (brace == '{') {
+                        var mut v: i64 = 0;
+                        while (true) {
+                            if (self.pos >= self.n) { break; }
+                            var mut ch = self.src[self.pos]; self.bump();
+                            if (ch == '}') break;
+                            var d: i64 = @intCast(i64, hexval(@intCast(u8, ch)));
+                            if (d < 0) break;
+                            v = v * 16 + d;
+                        }
+                        if (v < 0x80) { content.append(@intCast(u8, v)); }
+                        else if (v < 0x800) {
+                            content.append(@intCast(u8, 0xC0 + (v >> 6)));
+                            content.append(@intCast(u8, 0x80 + (v & 0x3F)));
+                        }
+                        else if (v < 0x10000) {
+                            content.append(@intCast(u8, 0xE0 + (v >> 12)));
+                            content.append(@intCast(u8, 0x80 + ((v >> 6) & 0x3F)));
+                            content.append(@intCast(u8, 0x80 + (v & 0x3F)));
+                        }
+                        else {
+                            content.append(@intCast(u8, 0xF0 + (v >> 18)));
+                            content.append(@intCast(u8, 0x80 + ((v >> 12) & 0x3F)));
+                            content.append(@intCast(u8, 0x80 + ((v >> 6) & 0x3F)));
+                            content.append(@intCast(u8, 0x80 + (v & 0x3F)));
+                        }
+                    }
+                }
+            }
+            else {
+                var w = utf8_width(self.src[self.pos]);
+                var mut k = 0;
+                while (k < w) {
+                    content.append(self.src[self.pos + k]);
+                    k += 1;
+                }
+                self.bump();
+            }
+        }
+        self.push_token("Str", content, start);
+    }
+
+    fn lex_char(self: *mut Self, start: usize) void {
+        self.bump();
+        var mut val: i32 = -1;
+        if (self.pos >= self.n) { return; }
+        if (self.src[self.pos] == '\\') {
+            self.bump();
+            if (self.pos >= self.n) { return; }
+            var mut c = self.src[self.pos]; self.bump();
+            if (c == 'n') { val = 0x0A; }
+            else if (c == 'r') { val = 0x0D; }
+            else if (c == 't') { val = 0x09; }
+            else if (c == '\\') { val = 0x5C; }
+            else if (c == '\'') { val = 0x27; }
+            else if (c == 'x') {
+                var mut hi: i32 = -1; var mut lo: i32 = -1;
+                if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
+                if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
+                if (hi >= 0 and lo >= 0) { val = hi * 16 + lo; }
+            }
+        } else {
+            if (self.src[self.pos] >= 0x80) { return; }
+            val = @intCast(i32, self.src[self.pos]);
+            self.bump();
+        }
+        if (self.pos >= self.n) { return; }
+        var mut close = self.src[self.pos]; self.bump();
+        if (close == '\'') {
+            var txt = Vec<u8>.init(alloc);
+            txt.append(@intCast(u8, val));
+            self.push_token("Char", txt, start);
+        }
+    }
+
+    fn lex_punct(self: *mut Self, start: usize) void {
+        var mut c = self.src[self.pos];
+        self.bump();
+        if (c == '{') { self.push_simple("LBrace", start); }
+        else if (c == '}') { self.push_simple("RBrace", start); }
+        else if (c == '(') { self.push_simple("LParen", start); }
+        else if (c == ')') { self.push_simple("RParen", start); }
+        else if (c == '[') { self.push_simple("LBracket", start); }
+        else if (c == ']') { self.push_simple("RBracket", start); }
+        else if (c == ';') { self.push_simple("Semi", start); }
+        else if (c == ',') { self.push_simple("Comma", start); }
+        else if (c == '.') {
+            if (self.pos < self.n and self.src[self.pos] == '.') { self.bump(); self.push_simple("DotDot", start); }
+            else if (self.pos < self.n and self.src[self.pos] == '*') { self.bump(); self.push_simple("DotStar", start); }
+            else { self.push_simple("Dot", start); }
+        }
+        else if (c == ':') { self.push_simple("Colon", start); }
+        else if (c == '=') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("EqEq", start); }
+            else if (self.pos < self.n and self.src[self.pos] == '>') { self.bump(); self.push_simple("FatArrow", start); }
+            else { self.push_simple("Eq", start); }
+        }
+        else if (c == '!') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("Ne", start); }
+            else { self.push_simple("Bang", start); }
+        }
+        else if (c == '<') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("Le", start); }
+            else if (self.pos < self.n and self.src[self.pos] == '<') { self.bump(); self.push_simple("Shl", start); }
+            else { self.push_simple("Lt", start); }
+        }
+        else if (c == '>') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("Ge", start); }
+            else if (self.pos < self.n and self.src[self.pos] == '>') { self.bump(); self.push_simple("Shr", start); }
+            else { self.push_simple("Gt", start); }
+        }
+        else if (c == '+') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("PlusEq", start); }
+            else { self.push_simple("Plus", start); }
+        }
+        else if (c == '-') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("MinusEq", start); }
+            else { self.push_simple("Minus", start); }
+        }
+        else if (c == '*') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("StarEq", start); }
+            else { self.push_simple("Star", start); }
+        }
+        else if (c == '/') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("SlashEq", start); }
+            else { self.push_simple("Slash", start); }
+        }
+        else if (c == '%') {
+            if (self.pos < self.n and self.src[self.pos] == '%') { self.bump(); self.push_simple("PercentPercent", start); }
+            else { self.push_simple("Percent", start); }
+        }
+        else if (c == '&') {
+            if (self.pos < self.n and self.src[self.pos] == '&') { self.bump(); self.push_simple("KwAnd", start); }
+            else if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("AmpEq", start); }
+            else { self.push_simple("Amp", start); }
+        }
+        else if (c == '|') {
+            if (self.pos < self.n and self.src[self.pos] == '|') { self.bump(); self.push_simple("PipePipe", start); }
+            else if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("PipeEq", start); }
+            else { self.push_simple("Pipe", start); }
+        }
+        else if (c == '^') {
+            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("CaretEq", start); }
+            else { self.push_simple("Caret", start); }
+        }
+        else if (c == '~') { self.push_simple("Tilde", start); }
+        else if (c == '?') { self.push_simple("Question", start); }
+        else if (c == '_') { self.push_simple("Underscore", start); }
+        else {
+            self.push_simple("Error", start);
+            self.push_simple("Error", start);
+        }
+    }
+}
+
+// ============================================================
+// AST 节点
+// ============================================================
+
+class AstNode {
+    kind: &[u8],
+    props: Vec<u8>,
+    children: Vec<AstNode>,
+}
+
+fn make_node(kind: &[u8]) AstNode {
+    var n = AstNode{
+        kind = kind,
+        props = Vec<u8>.init(alloc),
+        children = Vec<AstNode>.init(alloc),
+    };
+    return n;
+}
+
+fn node_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
+    node.props.append('|');
+    var mut i: usize = 0;
+    while (i < key.len) {
+        node.props.append(key[i]);
+        i += 1;
+    }
+    node.props.append('=');
+    i = 0;
+    while (i < val.len) {
+        node.props.append(val[i]);
+        i += 1;
+    }
+}
+
+fn node_add_child(node: *mut AstNode, child: AstNode) void {
+    node.children.append(child);
+}
+
+fn quoted_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
+    node.props.append('|');
+    var mut i: usize = 0;
+    while (i < key.len) {
+        node.props.append(key[i]);
+        i += 1;
+    }
+    node.props.append('=');
+    node.props.append('"');
+    i = 0;
+    while (i < val.len) {
+        node.props.append(val[i]);
+        i += 1;
+    }
+    node.props.append('"');
+}
+
+// 从 props 中提取属性值（key=value 格式，用 | 分隔）
+fn get_prop(props: &[u8], key: &[u8]) ?&[u8] {
+    var mut i: usize = 0;
+    var n = props.len;
+    while (i < n) {
+        if (props[i] == '|') { i += 1; }
+        if (i + key.len < n) {
+            var mut match_key = true;
+            var mut j: usize = 0;
+            while (j < key.len) {
+                if (props[i + j] != key[j]) { match_key = false; break; }
+                j += 1;
+            }
+            if (match_key and props[i + key.len] == '=') {
+                var mut val_start = i + key.len + 1;
+                var mut skip_quote = false;
+                if (val_start < n and props[val_start] == '"') {
+                    skip_quote = true;
+                    val_start += 1;
+                }
+                var mut val_end = val_start;
+                while (val_end < n) {
+                    if (skip_quote and props[val_end] == '"') { break; }
+                    if (!skip_quote and props[val_end] == '|') { break; }
+                    val_end += 1;
+                }
+                return props[val_start..val_end];
+            }
+        }
+        while (i < n and props[i] != '|') { i += 1; }
+    }
+    return null;
+}
+
+// 检查属性是否存在
+fn has_prop(props: &[u8], key: &[u8]) bool {
+    var v = get_prop(props, key);
+    return v != null;
+}
+
+// ============================================================
+// 解析器（Parser）
+// ============================================================
+
+class Parser {
+    tokens: Vec<Token>,
+    mut pos: usize,
+    n: usize,
+    rev_kw_map: Map<&[u8], &[u8]>,
+
+    fn peek(self: *mut Self) &[u8] {
+        var tok = self.tokens[self.pos];
+        return tok.kind;
+    }
+
+    fn peek_n(self: *mut Self, n: usize) &[u8] {
+        var mut idx = self.pos + n;
+        if (idx >= self.n) { idx = self.n - 1; }
+        var tok = self.tokens[idx];
+        return tok.kind;
+    }
+
+    fn peek_text(self: *mut Self) &[u8] {
+        var tok = self.tokens[self.pos];
+        return tok.text.as_slice();
+    }
+
+    fn at(self: *mut Self, kind: &[u8]) bool {
+        return self.peek() == kind;
+    }
+
+    fn text_eq(self: *mut Self, s: &[u8]) bool {
+        return self.peek_text() == s;
+    }
+
+    fn at_any(self: *mut Self, kinds: &[&[u8]]) bool {
+        var mut i: usize = 0;
+        while (i < kinds.len) {
+            if (self.at(kinds[i])) return true;
+            i += 1;
+        }
+        return false;
+    }
+
+    fn advance(self: *mut Self) Token {
+        var t = self.tokens[self.pos];
+        if (self.pos < self.n - 1) { self.pos += 1; }
+        return t;
+    }
+
+    fn expect(self: *mut Self, kind: &[u8]) bool {
+        if (self.at(kind)) {
+            self.advance();
+            return true;
+        }
+        return false;
+    }
+
+    fn expect_ident(self: *mut Self) &[u8] {
+        if (self.at("Ident")) {
+            var txt = self.peek_text();
+            self.advance();
+            return txt;
+        }
+        // 关键字也可作标识符（如 `type` 作字段名）
+        var txt = self.peek_text();
+        self.advance();
+        return txt;
+    }
+
+    fn expect_name_or_keyword(self: *mut Self) &[u8] {
+        var k = self.peek();
+        if (k == "Ident") {
+            var txt = self.peek_text();
+            self.advance();
+            return txt;
+        }
+        // 关键字可作点号字段名，用反向字典 O(1) 查找
+        var txt = self.peek_text();
+        if (self.rev_kw_map.contains(k)) {
+            var name = self.rev_kw_map.get(k).?;
+            self.advance();
+            return name;
+        }
+        return txt;
+    }
+
+    // ---------- 程序入口 ----------
+
+    fn parse_program(self: *mut Self) AstNode {
+        var prog = make_node("Program");
+        while (!self.at("Eof")) {
+            var decl = self.parse_decl();
+            node_add_child(&prog, decl);
+        }
+        return prog;
+    }
+
+    // ---------- 声明解析 ----------
+
+    fn parse_decl(self: *mut Self) AstNode {
+        var mut is_pub = false;
+        if (self.at("KwPub")) { is_pub = true; self.advance(); }
+        var mut is_export = false;
+        if (self.at("KwExport")) { is_export = true; self.advance(); }
+        var traits = Vec<&[u8]>.init(alloc);
+        while (self.at("LBracket")) {
+            var t = self.parse_trait();
+            if (t) |tr| { traits.append(tr); }
+        }
+
+        var k = self.peek();
+        if (k == "KwGlobal") {
+            self.advance();
+            return self.parse_global(is_pub);
+        }
+        if (k == "KwConst") {
+            self.advance();
+            return self.parse_const(is_pub);
+        }
+        if (k == "KwAsync") {
+            self.advance();
+            self.expect("KwFn");
+            return self.finish_fn_decl(traits, is_pub, true, is_export);
+        }
+        if (k == "KwExtern") {
+            self.advance();
+            return self.parse_extern_fn(is_pub);
+        }
+        if (k == "KwFn") {
+            self.advance();
+            return self.finish_fn_decl(traits, is_pub, false, is_export);
+        }
+        if (k == "KwClass" or k == "KwTree") {
+            self.advance();
+            return self.parse_class(is_pub);
+        }
+        if (k == "KwEnum") {
+            self.advance();
+            return self.parse_enum(is_pub);
+        }
+        if (k == "KwUnion") {
+            self.advance();
+            return self.parse_union(is_pub);
+        }
+        if (k == "KwInterface") {
+            self.advance();
+            return self.parse_interface(is_pub);
+        }
+        if (k == "KwNamespace") {
+            self.advance();
+            var name = self.expect_ident();
+            self.expect("LBrace");
+            var ns = make_node("Namespace");
+            node_add_prop(&ns, "name", name);
+            if (is_pub) { node_add_prop(&ns, "pub", "true"); }
+            while (!self.at("RBrace") and !self.at("Eof")) {
+                var d = self.parse_decl();
+                node_add_child(&ns, d);
+            }
+            self.expect("RBrace");
+            return ns;
+        }
+        if (k == "KwUsing") {
+            self.advance();
+            var path = self.parse_path();
+            var mut alias: ?&[u8] = null;
+            if (self.at("Ident") and self.peek_text() == "as") {
+                self.advance();
+                alias = self.expect_ident();
+            }
+            self.expect("Semi");
+            var u = make_node("Using");
+            node_add_prop(&u, "path", path);
+            if (alias) |a| { node_add_prop(&u, "alias", a); }
+            return u;
+        }
+        if (k == "KwImport") {
+            self.advance();
+            var path = self.parse_import_path();
+            var mut select: ?Vec<AstNode> = null;
+            if (self.at("Dot") and self.peek_n(1) == "LBrace") {
+                self.advance(); // .
+                self.advance(); // {
+                var syms = Vec<AstNode>.init(alloc);
+                while (true) {
+                    var name = self.expect_ident();
+                    var mut alias: ?&[u8] = null;
+                    if (self.at("Ident") and self.peek_text() == "as") {
+                        self.advance();
+                        alias = self.expect_ident();
+                    }
+                    var s = make_node("ImportSelect");
+                    node_add_prop(&s, "name", name);
+                    if (alias) |a| { node_add_prop(&s, "alias", a); }
+                    syms.append(s);
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RBrace");
+                select = syms;
+            }
+            var mut alias: ?&[u8] = null;
+            if (select == null and self.at("Ident") and self.peek_text() == "as") {
+                self.advance();
+                alias = self.expect_ident();
+            }
+            self.expect("Semi");
+            var imp = make_node("Import");
+            node_add_prop(&imp, "path", path);
+            if (alias) |a| { node_add_prop(&imp, "alias", a); }
+            return imp;
+        }
+        if (k == "KwScript") {
+            self.advance();
+            self.parse_block();
+            var sc = make_node("Script");
+            return sc;
+        }
+        if (k == "KwComptime") {
+            self.advance();
+            self.parse_block();
+            var cp = make_node("Comptime");
+            return cp;
+        }
+        self.advance();
+        return make_node("UnknownDecl");
+    }
+
+    fn parse_trait(self: *mut Self) ?&[u8] {
+        self.expect("LBracket");
+        var name = self.expect_ident();
+        if (name == "continuous") { self.expect("RBracket"); return "continuous"; }
+        if (name == "pad") { self.expect("RBracket"); return "pad"; }
+        if (name == "module") { self.expect("RBracket"); return "module"; }
+        if (name == "test") {
+            if (self.at("LParen")) {
+                self.advance();
+                if (self.at("Str")) { self.advance(); }
+                self.expect("RParen");
+            }
+            self.expect("RBracket");
+            return "test";
+        }
+        if (name == "align") {
+            self.expect("LParen");
+            self.parse_type();
+            self.expect("RParen");
+            self.expect("RBracket");
+            return "align";
+        }
+        self.expect("RBracket");
+        return null;
+    }
+
+    fn parse_global(self: *mut Self, is_pub: bool) AstNode {
+        var name = self.expect_ident();
+        var g = make_node("Global");
+        node_add_prop(&g, "name", name);
+        if (is_pub) { node_add_prop(&g, "pub", "true"); }
+        if (self.at("Colon")) {
+            self.advance();
+            self.parse_type();
+        }
+        if (self.at("Eq")) {
+            self.advance();
+            self.parse_expr();
+            node_add_prop(&g, "has_init", "true");
+        }
+        self.expect("Semi");
+        return g;
+    }
+
+    fn parse_const(self: *mut Self, is_pub: bool) AstNode {
+        var name = self.expect_ident();
+        var c = make_node("Const");
+        node_add_prop(&c, "name", name);
+        if (is_pub) { node_add_prop(&c, "pub", "true"); }
+        if (self.at("Ident") and self.peek_text() == "error" and self.peek_n(1) == "LBrace") {
+            self.advance();
+            self.advance();
+            while (!self.at("RBrace") and !self.at("Eof")) {
+                self.expect_ident();
+                if (self.at("Comma")) { self.advance(); }
+            }
+            self.expect("RBrace");
+            self.expect("Semi");
+            return c;
+        }
+        self.expect("Eq");
+        self.parse_expr();
+        self.expect("Semi");
+        return c;
+    }
+
+    fn finish_fn_decl(self: *mut Self, traits: Vec<&[u8]>, is_pub: bool, is_async: bool, is_export: bool) AstNode {
+        var name = self.expect_ident();
+        var f = make_node("Fn");
+        node_add_prop(&f, "name", name);
+        if (is_pub) { node_add_prop(&f, "pub", "true"); }
+        if (is_async) { node_add_prop(&f, "async", "true"); }
+        if (is_export) { node_add_prop(&f, "exported", "true"); }
+        var mut i: usize = 0;
+        while (i < traits.len) {
+            if (traits[i] == "test") {
+                node_add_prop(&f, "test", "true");
+            }
+            i += 1;
+        }
+        if (self.at("Lt")) {
+            self.advance();
+            while (!self.at("Gt") and !self.at("Eof")) {
+                self.expect_ident();
+                if (self.at("Comma")) { self.advance(); }
+            }
+            self.expect("Gt");
+        }
+        self.expect("LParen");
+        if (!self.at("RParen")) {
+            while (true) {
+                var p = self.parse_param();
+                node_add_child(&f, p);
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+        }
+        self.expect("RParen");
+        if (self.at("Bang")) {
+            self.advance();
+            if (self.at("Ident") or self.at("KwVoid")) {
+                var mut ret_ty = self.peek_text();
+                self.advance();
+                var r = make_node("ret:");
+                var mut k: usize = 0;
+                while (k < ret_ty.len) {
+                    r.props.append(ret_ty[k]);
+                    k += 1;
+                }
+                node_add_child(&f, r);
+            } else {
+                self.parse_type();
+            }
+        } else if (self.at("KwVoid") or self.at("Ident")) {
+            var mut ret_ty = self.peek_text();
+            if (ret_ty.len == 0) {
+                if (self.at("KwVoid")) { ret_ty = "void"; }
+            }
+            self.advance();
+            var r = make_node("ret:");
+            var mut k: usize = 0;
+            while (k < ret_ty.len) {
+                r.props.append(ret_ty[k]);
+                k += 1;
+            }
+            node_add_child(&f, r);
+        }
+        if (self.at("KwWhere")) {
+            self.advance();
+            while (!self.at("LBrace") and !self.at("Semi") and !self.at("Eof")) {
+                self.parse_type();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+        }
+        if (self.at("Semi")) {
+            self.advance();
+            node_add_prop(&f, "extern", "true");
+            return f;
+        }
+        var body = self.parse_block();
+        node_add_child(&f, body);
+        return f;
+    }
+
+    fn parse_extern_fn(self: *mut Self, is_pub: bool) AstNode {
+        self.expect("KwFn");
+        var name = self.expect_ident();
+        var f = make_node("Fn");
+        node_add_prop(&f, "name", name);
+        node_add_prop(&f, "extern", "true");
+        if (is_pub) { node_add_prop(&f, "pub", "true"); }
+        self.expect("LParen");
+        if (!self.at("RParen")) {
+            while (true) {
+                var p = self.parse_param();
+                node_add_child(&f, p);
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+        }
+        self.expect("RParen");
+        if (self.at("Bang")) {
+            self.advance();
+            if (self.at("Ident") or self.at("KwVoid")) {
+                var ret_ty = self.peek_text();
+                self.advance();
+                var r = make_node("ret:");
+                var mut k: usize = 0;
+                while (k < ret_ty.len) {
+                    r.props.append(ret_ty[k]);
+                    k += 1;
+                }
+                node_add_child(&f, r);
+            } else {
+                self.parse_type();
+            }
+        } else if (self.at("KwVoid") or self.at("Ident")) {
+            var ret_ty = self.peek_text();
+            self.advance();
+            var r = make_node("ret:");
+            var mut k: usize = 0;
+            while (k < ret_ty.len) {
+                r.props.append(ret_ty[k]);
+                k += 1;
+            }
+            node_add_child(&f, r);
+        }
+        self.expect("Semi");
+        return f;
+    }
+
+    fn parse_param(self: *mut Self) AstNode {
+        var name = self.expect_ident();
+        self.expect("Colon");
+        var p = make_node("Param");
+        node_add_prop(&p, "name", name);
+        if (self.at("Ident") or self.at("KwVoid")) {
+            var ty = self.peek_text();
+            self.advance();
+            if (ty.len > 0) {
+                quoted_add_prop(&p, "ty", ty);
+            } else {
+                quoted_add_prop(&p, "ty", "void");
+            }
+        } else {
+            self.parse_type();
+        }
+        if (self.at("Eq")) {
+            self.advance();
+            self.parse_expr();
+            node_add_prop(&p, "has_default", "true");
+        }
+        return p;
+    }
+
+    fn parse_class(self: *mut Self, is_pub: bool) AstNode {
+        var name = self.expect_ident();
+        var cls = make_node("Class");
+        node_add_prop(&cls, "name", name);
+        if (is_pub) { node_add_prop(&cls, "pub", "true"); }
+        if (self.at("LParen")) {
+            self.advance();
+            while (!self.at("RParen") and !self.at("Eof")) {
+                self.parse_type();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+            self.expect("RParen");
+        }
+        while (self.at("LBracket")) {
+            self.parse_trait();
+        }
+        self.expect("LBrace");
+        while (!self.at("RBrace") and !self.at("Eof")) {
+            if (self.peek() == "LBracket" or self.peek() == "KwPub" or self.peek() == "KwFn") {
+                self.parse_method(cls);
+            } else {
+                self.parse_field(cls);
+            }
+        }
+        self.expect("RBrace");
+        return cls;
+    }
+
+    fn parse_field(self: *mut Self, cls: AstNode) void {
+        var mut is_fpub = false;
+        if (self.at("KwPub")) { is_fpub = true; self.advance(); }
+        var name = self.expect_ident();
+        self.expect("Colon");
+        self.parse_type();
+        self.expect("Semi");
+    }
+
+    fn parse_method(self: *mut Self, cls: AstNode) void {
+        while (self.at("LBracket")) { self.parse_trait(); }
+        var mut is_pub = false;
+        if (self.at("KwPub")) { is_pub = true; self.advance(); }
+        self.expect("KwFn");
+        var name = self.expect_ident();
+        if (self.at("Lt")) {
+            self.advance();
+            while (!self.at("Gt") and !self.at("Eof")) {
+                self.expect_ident();
+                if (self.at("Comma")) { self.advance(); }
+            }
+            self.expect("Gt");
+        }
+        self.expect("LParen");
+        if (!self.at("RParen")) {
+            while (true) {
+                var _ = self.parse_param();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+        }
+        self.expect("RParen");
+        if (self.at("Bang")) {
+            self.advance();
+            self.parse_type();
+        } else if (self.at("KwVoid") or self.at("Ident")) {
+            self.advance();
+        }
+        var body = self.parse_block();
+    }
+
+    fn parse_enum(self: *mut Self, is_pub: bool) AstNode {
+        var name = self.expect_ident();
+        var e = make_node("Enum");
+        node_add_prop(&e, "name", name);
+        if (is_pub) { node_add_prop(&e, "pub", "true"); }
+        self.expect("LBrace");
+        while (!self.at("RBrace") and !self.at("Eof")) {
+            var vname = self.expect_ident();
+            var v = make_node("Variant");
+            node_add_prop(&v, "name", vname);
+            if (self.at("LParen")) {
+                self.advance();
+                self.parse_type();
+                self.expect("RParen");
+            }
+            node_add_child(&e, v);
+            if (self.at("Comma")) { self.advance(); }
+        }
+        self.expect("RBrace");
+        return e;
+    }
+
+    fn parse_union(self: *mut Self, is_pub: bool) AstNode {
+        var name = self.expect_ident();
+        var u = make_node("Union");
+        node_add_prop(&u, "name", name);
+        if (is_pub) { node_add_prop(&u, "pub", "true"); }
+        self.expect("LBrace");
+        while (!self.at("RBrace") and !self.at("Eof")) {
+            var fname = self.expect_ident();
+            self.expect("Colon");
+            self.parse_type();
+            self.expect("Semi");
+        }
+        self.expect("RBrace");
+        return u;
+    }
+
+    fn parse_interface(self: *mut Self, is_pub: bool) AstNode {
+        var name = self.expect_ident();
+        var iface = make_node("Interface");
+        node_add_prop(&iface, "name", name);
+        if (is_pub) { node_add_prop(&iface, "pub", "true"); }
+        self.expect("LBrace");
+        while (!self.at("RBrace") and !self.at("Eof")) {
+            self.expect("KwFn");
+            var mname = self.expect_ident();
+            self.expect("LParen");
+            if (!self.at("RParen")) {
+                while (true) {
+                    var _ = self.parse_param();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+            }
+            self.expect("RParen");
+            if (self.at("Bang")) {
+                self.advance();
+                self.parse_type();
+            } else if (self.at("KwVoid") or self.at("Ident")) {
+                self.advance();
+            }
+            self.expect("Semi");
+        }
+        self.expect("RBrace");
+        return iface;
+    }
+
+    fn parse_path(self: *mut Self) Vec<u8> {
+        var parts = Vec<u8>.init(alloc);
+        var first = self.expect_ident();
+        var mut i: usize = 0;
+        while (i < first.len) {
+            parts.append(first[i]);
+            i += 1;
+        }
+        while (self.at("Dot")) {
+            self.advance();
+            parts.append('.');
+            var seg = self.expect_name_or_keyword();
+            var mut j: usize = 0;
+            while (j < seg.len) {
+                parts.append(seg[j]);
+                j += 1;
+            }
+        }
+        return parts;
+    }
+
+    fn parse_import_path(self: *mut Self) Vec<u8> {
+        return self.parse_path();
+    }
+
+    // ============================================================
+    // 类型解析
+    // ============================================================
+
+    fn parse_type(self: *mut Self) void {
+        if (self.at("KwOwned")) {
+            self.advance();
+            self.parse_type();
+            return;
+        }
+        if (self.at("Star")) {
+            self.advance();
+            if (self.at("KwMut")) { self.advance(); }
+            self.parse_type();
+            return;
+        }
+        if (self.at("Amp")) {
+            self.advance();
+            if (self.at("KwMut")) { self.advance(); }
+            if (self.at("LBracket")) {
+                self.advance();
+                self.parse_type();
+                self.expect("RBracket");
+            } else {
+                self.parse_type();
+            }
+            return;
+        }
+        if (self.at("Question")) {
+            self.advance();
+            self.parse_type();
+            return;
+        }
+        if (self.at("Bang")) {
+            self.advance();
+            self.parse_type();
+            return;
+        }
+        self.parse_type_base();
+        if (self.at("Bang")) {
+            self.advance();
+            self.parse_type();
+        }
+    }
+
+    fn parse_type_base(self: *mut Self) void {
+        if (self.at("Ident")) {
+            var name = self.peek_text();
+            self.advance();
+            if (self.at("LParen")) {
+                self.advance();
+                while (!self.at("RParen") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RParen");
+            }
+            if (self.at("Lt")) {
+                self.advance();
+                while (!self.at("Gt") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("Gt");
+            }
+        } else if (self.at("LBracket")) {
+            self.advance();
+            self.parse_expr();
+            self.expect("RBracket");
+            self.parse_type();
+        } else if (self.at("LParen")) {
+            self.advance();
+            while (!self.at("RParen") and !self.at("Eof")) {
+                self.parse_type();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+            self.expect("RParen");
+        } else if (self.at("KwClass")) {
+            self.advance();
+            self.expect("LBrace");
+            if (!self.at("RBrace")) {
+                while (true) {
+                    self.expect_ident();
+                    self.expect("Colon");
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+            }
+            self.expect("RBrace");
+        } else {
+            self.advance();
+        }
+    }
+
+    // ============================================================
+    // 语句解析
+    // ============================================================
+
+    fn parse_block(self: *mut Self) AstNode {
+        var b = make_node("Block");
+        self.expect("LBrace");
+        while (!self.at("RBrace") and !self.at("Eof")) {
+            var stmt = self.parse_stmt();
+            node_add_child(&b, stmt);
+        }
+        self.expect("RBrace");
+        return b;
+    }
+
+    fn parse_stmt(self: *mut Self) AstNode {
+        if (self.at("Colon")) {
+            self.advance();
+            if (self.at("Ident")) { self.advance(); }
+            if (self.at("KwWhile") or self.at("KwFor")) { }
+        }
+        var k = self.peek();
+        if (k == "LBrace") {
+            return self.parse_block();
+        }
+        if (k == "Semi") {
+            self.advance();
+            return make_node("Empty");
+        }
+        if (k == "KwVar") {
+            self.advance();
+            return self.parse_var_decl();
+        }
+        if (k == "KwConst") {
+            self.advance();
+            var name = self.expect_ident();
+            self.expect("Eq");
+            self.parse_expr();
+            self.expect("Semi");
+            var c = make_node("ConstDecl");
+            node_add_prop(&c, "name", name);
+            return c;
+        }
+        if (k == "KwIf") {
+            return self.parse_if_stmt();
+        }
+        if (k == "KwWhile") {
+            return self.parse_while_stmt();
+        }
+        if (k == "KwFor") {
+            return self.parse_for_stmt();
+        }
+        if (k == "KwSwitch") {
+            return self.parse_switch_stmt();
+        }
+        if (k == "KwReturn") {
+            self.advance();
+            var r = make_node("Return");
+            if (!self.at("Semi")) {
+                var val = self.parse_expr();
+                node_add_child(&r, val);
+            }
+            self.expect("Semi");
+            return r;
+        }
+        if (k == "KwBreak") {
+            self.advance();
+            var b = make_node("Break");
+            self.expect("Semi");
+            return b;
+        }
+        if (k == "KwContinue") {
+            self.advance();
+            var c = make_node("Continue");
+            self.expect("Semi");
+            return c;
+        }
+        if (k == "KwDefer") {
+            self.advance();
+            self.parse_expr();
+            self.expect("Semi");
+            return make_node("Defer");
+        }
+        if (k == "KwErrdefer") {
+            self.advance();
+            self.parse_expr();
+            self.expect("Semi");
+            return make_node("Errdefer");
+        }
+        var e = self.parse_expr();
+        self.expect("Semi");
+        var es = make_node("ExprStmt");
+        node_add_child(&es, e);
+        return es;
+    }
+
+    fn parse_var_decl(self: *mut Self) AstNode {
+        var mut is_mut = false;
+        if (self.at("KwMut")) { is_mut = true; self.advance(); }
+        var name = self.expect_ident();
+        var v = make_node("VarDecl");
+        node_add_prop(&v, "name", name);
+        if (is_mut) { node_add_prop(&v, "mut", "true"); }
+        if (self.at("Colon")) {
+            self.advance();
+            if (self.at("Ident") or self.at("KwVoid")) {
+                var ty = self.peek_text();
+                self.advance();
+                if (ty.len > 0) {
+                    quoted_add_prop(&v, "ty", ty);
+                } else {
+                    quoted_add_prop(&v, "ty", "void");
+                }
+            } else {
+                self.parse_type();
+            }
+        }
+        if (self.at("Eq")) {
+            self.advance();
+            self.parse_expr();
+            node_add_prop(&v, "has_init", "true");
+        }
+        self.expect("Semi");
+        return v;
+    }
+
+    fn parse_if_stmt(self: *mut Self) AstNode {
+        self.advance();
+        var ifn = make_node("If");
+        self.expect("LParen");
+        var cond = self.parse_expr();
+        node_add_child(&ifn, cond);
+        if (self.at("Pipe")) {
+            self.advance();
+            var cap = self.expect_ident();
+            self.expect("Pipe");
+        }
+        if (self.at("Pipe")) {
+            self.advance();
+            var err = self.expect_ident();
+            self.expect("Pipe");
+        }
+        self.expect("RParen");
+        var then_b = self.parse_block();
+        node_add_child(&ifn, then_b);
+        if (self.at("KwElse")) {
+            self.advance();
+            if (self.at("KwIf")) {
+                var else_if = self.parse_if_stmt();
+                node_add_child(&ifn, else_if);
+            } else {
+                var else_b = self.parse_block();
+                node_add_child(&ifn, else_b);
+            }
+        }
+        return ifn;
+    }
+
+    fn parse_while_stmt(self: *mut Self) AstNode {
+        self.advance();
+        var wn = make_node("While");
+        self.expect("LParen");
+        var cond = self.parse_expr();
+        node_add_child(&wn, cond);
+        if (self.at("Pipe")) {
+            self.advance();
+            var cap = self.expect_ident();
+            self.expect("Pipe");
+        }
+        self.expect("RParen");
+        if (self.at("Colon") and self.peek_n(1) == "LParen") {
+            self.advance();
+            self.expect("LParen");
+            self.parse_expr();
+            self.expect("RParen");
+        }
+        var body = self.parse_block();
+        node_add_child(&wn, body);
+        return wn;
+    }
+
+    fn parse_for_stmt(self: *mut Self) AstNode {
+        self.advance();
+        var for_node = make_node("For");
+        self.expect("LParen");
+        if (self.at("KwMut")) { self.advance(); }
+        var cap = self.expect_ident();
+        self.expect("Pipe");
+        var iter = self.parse_expr();
+        node_add_child(&for_node, iter);
+        self.expect("RParen");
+        var body = self.parse_block();
+        node_add_child(&for_node, body);
+        return for_node;
+    }
+
+    fn parse_switch_stmt(self: *mut Self) AstNode {
+        self.advance();
+        var sn = make_node("Switch");
+        self.expect("LParen");
+        var subj = self.parse_expr();
+        node_add_child(&sn, subj);
+        self.expect("RParen");
+        self.expect("LBrace");
+        while (!self.at("RBrace") and !self.at("Eof")) {
+            var arm = self.parse_switch_arm();
+            node_add_child(&sn, arm);
+        }
+        self.expect("RBrace");
+        return sn;
+    }
+
+    fn parse_switch_arm(self: *mut Self) AstNode {
+        var arm = make_node("SwitchArm");
+        while (!self.at("FatArrow") and !self.at("RBrace") and !self.at("Eof")) {
+            var pat = self.parse_switch_pattern();
+            node_add_child(&arm, pat);
+            if (self.at("Comma")) { self.advance(); break; }
+        }
+        self.expect("FatArrow");
+        if (self.at("KwIf")) {
+            self.advance();
+            self.parse_expr();
+        }
+        if (self.at("LBrace")) {
+            var body = self.parse_block();
+            node_add_child(&arm, body);
+        } else {
+            var e = self.parse_expr();
+            var es = make_node("ExprStmt");
+            node_add_child(&es, e);
+            node_add_child(&arm, es);
+        }
+        if (self.at("Comma")) { self.advance(); }
+        return arm;
+    }
+
+    fn parse_switch_pattern(self: *mut Self) AstNode {
+        var p = make_node("Pattern");
+        if (self.at("KwElse")) {
+            self.advance();
+            node_add_prop(&p, "else", "true");
+        } else if (self.at("Dot")) {
+            self.advance();
+            var name = self.expect_ident();
+            node_add_prop(&p, "error", name);
+        } else if (self.at("Ident")) {
+            var name = self.peek_text();
+            self.advance();
+            if (self.at("Dot")) {
+                self.advance();
+                var err = self.expect_ident();
+                node_add_prop(&p, "error", err);
+            } else {
+                node_add_prop(&p, "ident", name);
+            }
+        } else if (self.at("Int")) {
+            var txt = self.peek_text();
+            self.advance();
+            node_add_prop(&p, "int", txt);
+        } else if (self.at("Float")) {
+            var txt = self.peek_text();
+            self.advance();
+            node_add_prop(&p, "float", txt);
+        } else if (self.at("Str")) {
+            var txt = self.peek_text();
+            self.advance();
+            node_add_prop(&p, "str", txt);
+        } else if (self.at("Char")) {
+            var txt = self.peek_text();
+            self.advance();
+            node_add_prop(&p, "char", txt);
+        } else {
+            self.advance();
+        }
+        return p;
+    }
+
+    // ============================================================
+    // 表达式解析
+    // ============================================================
+
+    fn parse_expr(self: *mut Self) AstNode {
+        return self.parse_or();
+    }
+
+    fn parse_or(self: *mut Self) AstNode {
+        var mut l = self.parse_and();
+        while (self.at("KwOr") or self.at("PipePipe")) {
+            self.advance();
+            var r = self.parse_and();
+            var b = make_node("Binary");
+            node_add_prop(&b, "op", "Or");
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_and(self: *mut Self) AstNode {
+        var mut l = self.parse_range();
+        while (self.at("KwAnd")) {
+            self.advance();
+            var r = self.parse_range();
+            var b = make_node("Binary");
+            node_add_prop(&b, "op", "And");
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_range(self: *mut Self) AstNode {
+        var mut l = self.parse_comparison();
+        if (self.at("DotDot")) {
+            self.advance();
+            var r = self.parse_comparison();
+            var b = make_node("Binary");
+            node_add_prop(&b, "op", "Range");
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_comparison(self: *mut Self) AstNode {
+        var mut l = self.parse_bitor();
+        var cmp_op = self.peek();
+        if (cmp_op == "EqEq" or cmp_op == "Ne" or cmp_op == "Lt" or cmp_op == "Le" or cmp_op == "Gt" or cmp_op == "Ge") {
+            self.advance();
+            var r = self.parse_bitor();
+            var b = make_node("Binary");
+            if (cmp_op == "EqEq") { node_add_prop(&b, "op", "Eq"); }
+            else { node_add_prop(&b, "op", cmp_op); }
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_bitor(self: *mut Self) AstNode {
+        var mut l = self.parse_bitxor();
+        while (self.at("Pipe")) {
+            self.advance();
+            var r = self.parse_bitxor();
+            var b = make_node("Binary");
+            node_add_prop(&b, "op", "BitOr");
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_bitxor(self: *mut Self) AstNode {
+        var mut l = self.parse_bitand();
+        while (self.at("Caret")) {
+            self.advance();
+            var r = self.parse_bitand();
+            var b = make_node("Binary");
+            node_add_prop(&b, "op", "BitXor");
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_bitand(self: *mut Self) AstNode {
+        var mut l = self.parse_shift();
+        while (self.at("Amp")) {
+            self.advance();
+            var r = self.parse_shift();
+            var b = make_node("Binary");
+            node_add_prop(&b, "op", "BitAnd");
+            node_add_child(&b, l);
+            node_add_child(&b, r);
+            l = b;
+        }
+        return l;
+    }
+
+    fn parse_shift(self: *mut Self) AstNode {
+        var mut l = self.parse_addsub();
+        while (true) {
+            var opname = self.peek();
+            if (opname == "Shl" or opname == "Shr") {
+                self.advance();
+                var r = self.parse_addsub();
+                var b = make_node("Binary");
+                node_add_prop(&b, "op", opname);
+                node_add_child(&b, l);
+                node_add_child(&b, r);
+                l = b;
+            } else { break; }
+        }
+        return l;
+    }
+
+    fn parse_addsub(self: *mut Self) AstNode {
+        var mut l = self.parse_muldiv();
+        while (true) {
+            var opname = self.peek();
+            if (opname == "Plus" or opname == "Minus") {
+                self.advance();
+                var r = self.parse_muldiv();
+                var b = make_node("Binary");
+                if (opname == "Plus") { node_add_prop(&b, "op", "Add"); }
+                else { node_add_prop(&b, "op", "Sub"); }
+                node_add_child(&b, l);
+                node_add_child(&b, r);
+                l = b;
+            } else { break; }
+        }
+        return l;
+    }
+
+    fn parse_muldiv(self: *mut Self) AstNode {
+        var mut l = self.parse_unary();
+        while (true) {
+            var opname = self.peek();
+            if (opname == "Star" or opname == "Slash" or opname == "Percent" or opname == "PercentPercent") {
+                self.advance();
+                var r = self.parse_unary();
+                var b = make_node("Binary");
+                if (opname == "Star") { node_add_prop(&b, "op", "Mul"); }
+                else if (opname == "Slash") { node_add_prop(&b, "op", "Div"); }
+                else if (opname == "Percent") { node_add_prop(&b, "op", "Mod"); }
+                else { node_add_prop(&b, "op", "ModMod"); }
+                node_add_child(&b, l);
+                node_add_child(&b, r);
+                l = b;
+            } else { break; }
+        }
+        return l;
+    }
+
+    fn parse_unary(self: *mut Self) AstNode {
+        var k = self.peek();
+        if (k == "Minus") {
+            self.advance();
+            var mut e = self.parse_unary();
+            var u = make_node("Unary");
+            node_add_prop(&u, "op", "Neg");
+            node_add_child(&u, e);
+            return u;
+        }
+        if (k == "Bang") {
+            self.advance();
+            var mut e = self.parse_unary();
+            var u = make_node("Unary");
+            node_add_prop(&u, "op", "Not");
+            node_add_child(&u, e);
+            return u;
+        }
+        if (k == "Tilde") {
+            self.advance();
+            var mut e = self.parse_unary();
+            var u = make_node("Unary");
+            node_add_prop(&u, "op", "BitNot");
+            node_add_child(&u, e);
+            return u;
+        }
+        if (k == "Amp") {
+            self.advance();
+            var mut is_mut = false;
+            if (self.at("KwMut")) { is_mut = true; self.advance(); }
+            var mut e = self.parse_unary();
+            var a = make_node("AddrOf");
+            if (is_mut) { node_add_prop(&a, "mut", "true"); }
+            node_add_child(&a, e);
+            return a;
+        }
+        if (k == "KwTry") {
+            self.advance();
+            var mut e = self.parse_unary();
+            var t = make_node("Try");
+            node_add_child(&t, e);
+            return t;
+        }
+        if (k == "KwAwait") {
+            self.advance();
+            var mut e = self.parse_unary();
+            var a = make_node("Await");
+            node_add_child(&a, e);
+            return a;
+        }
+        if (k == "KwSpawn") {
+            self.advance();
+            var args = self.parse_call_args();
+            var c = make_node("Call");
+            var callee = make_node("Ident");
+            node_add_prop(&callee, "name", "spawn");
+            node_add_child(&c, callee);
+            var mut i: usize = 0;
+            while (i < args.len) {
+                node_add_child(&c, args[i]);
+                i += 1;
+            }
+            return c;
+        }
+        if (k == "KwMove") {
+            self.advance();
+            if (self.at("Pipe") or (self.at("KwMut") and self.peek_n(1) == "Pipe")) {
+                return self.parse_closure();
+            }
+            var mut e = self.parse_unary();
+            var m = make_node("Move");
+            node_add_child(&m, e);
+            return m;
+        }
+        return self.parse_postfix();
+    }
+
+    fn parse_closure(self: *mut Self) AstNode {
+        var c = make_node("Closure");
+        var mut is_mut = false;
+        var is_move = false;
+        if (self.at("KwMut")) { is_mut = true; self.advance(); }
+        self.expect("Pipe");
+        if (!self.at("Pipe")) {
+            while (true) {
+                var p = self.expect_ident();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+        }
+        self.expect("Pipe");
+        if (self.at("LBrace")) {
+            var body = self.parse_block();
+            node_add_child(&c, body);
+        } else {
+            var mut e = self.parse_expr();
+            var es = make_node("ExprStmt");
+            node_add_child(&es, e);
+            node_add_child(&c, es);
+        }
+        return c;
+    }
+
+    fn parse_postfix(self: *mut Self) AstNode {
+        var mut e = self.parse_primary();
+        while (true) {
+            if (self.at("Dot")) {
+                // 方法调用或字段访问
+                self.advance();
+                var name = self.expect_name_or_keyword();
+                if (self.at("LParen")) {
+                    // 方法调用
+                    var args = self.parse_call_args();
+                    var call = make_node("Call");
+                    var dot = make_node("DotCall");
+                    node_add_prop(&dot, "method", name);
+                    node_add_child(&dot, e);
+                    node_add_child(&call, dot);
+                    var mut i: usize = 0;
+                    while (i < args.len) {
+                        node_add_child(&call, args[i]);
+                        i += 1;
+                    }
+                    e = call;
+                } else {
+                    // 字段访问
+                    var field = make_node("Field");
+                    node_add_prop(&field, "name", name);
+                    node_add_child(&field, e);
+                    e = field;
+                }
+            } else if (self.at("LParen")) {
+                var args = self.parse_call_args();
+                var call = make_node("Call");
+                node_add_child(&call, e);
+                var mut i: usize = 0;
+                while (i < args.len) {
+                    node_add_child(&call, args[i]);
+                    i += 1;
+                }
+                e = call;
+            } else if (self.at("LBracket")) {
+                self.advance();
+                var idx = self.parse_expr();
+                self.expect("RBracket");
+                var index = make_node("Index");
+                node_add_child(&index, e);
+                node_add_child(&index, idx);
+                e = index;
+            } else if (self.at("Bang")) {
+                self.advance();
+                var unwrap = make_node("Unwrap");
+                node_add_child(&unwrap, e);
+                e = unwrap;
+            } else {
+                break;
+            }
+        }
+        return e;
+    }
+
+    fn parse_call_args(self: *mut Self) Vec<AstNode> {
+        self.expect("LParen");
+        var args = Vec<AstNode>.init(alloc);
+        if (!self.at("RParen")) {
+            while (true) {
+                var arg = self.parse_expr();
+                args.append(arg);
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+        }
+        self.expect("RParen");
+        return args;
+    }
+
+    fn parse_primary(self: *mut Self) AstNode {
+        var k = self.peek();
+        if (k == "Int") {
+            var txt = self.peek_text();
+            self.advance();
+            var n = make_node("IntLit");
+            quoted_add_prop(&n, "text", txt);
+            return n;
+        }
+        if (k == "Float") {
+            var txt = self.peek_text();
+            self.advance();
+            var n = make_node("FloatLit");
+            quoted_add_prop(&n, "text", txt);
+            return n;
+        }
+        if (k == "Str") {
+            var txt = self.peek_text();
+            self.advance();
+            var s = make_node("StrLit");
+            quoted_add_prop(&s, "text", txt);
+            return s;
+        }
+        if (k == "Char") {
+            var txt = self.peek_text();
+            self.advance();
+            var c = make_node("CharLit");
+            quoted_add_prop(&c, "text", txt);
+            return c;
+        }
+        if (k == "KwTrue") {
+            self.advance();
+            var b = make_node("BoolLit");
+            node_add_prop(&b, "val", "true");
+            return b;
+        }
+        if (k == "KwFalse") {
+            self.advance();
+            var b = make_node("BoolLit");
+            node_add_prop(&b, "val", "false");
+            return b;
+        }
+        if (k == "KwNull") {
+            self.advance();
+            return make_node("NullLit");
+        }
+        if (k == "KwVoid") {
+            self.advance();
+            return make_node("VoidLit");
+        }
+        if (k == "AtBuiltin") {
+            var txt = self.peek_text();
+            self.advance();
+            var b = make_node("AtBuiltin");
+            quoted_add_prop(&b, "name", txt);
+            if (self.at("LParen")) {
+                var args = self.parse_call_args();
+                var mut i: usize = 0;
+                while (i < args.len) {
+                    node_add_child(&b, args[i]);
+                    i += 1;
+                }
+            }
+            return b;
+        }
+        if (k == "Ident") {
+            var name = self.peek_text();
+            self.advance();
+            var id = make_node("Ident");
+            quoted_add_prop(&id, "name", name);
+            return id;
+        }
+        if (k == "LParen") {
+            self.advance();
+            var e = self.parse_expr();
+            self.expect("RParen");
+            return e;
+        }
+        if (k == "LBracket") {
+            self.advance();
+            var arr = make_node("ArrayLit");
+            if (!self.at("RBracket")) {
+                while (true) {
+                    var elem = self.parse_expr();
+                    node_add_child(&arr, elem);
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+            }
+            self.expect("RBracket");
+            return arr;
+        }
+        if (k == "KwIf") {
+            self.advance();
+            var ife = make_node("IfExpr");
+            self.expect("LParen");
+            var cond = self.parse_expr();
+            node_add_child(&ife, cond);
+            self.expect("RParen");
+            var then_e = self.parse_expr();
+            node_add_child(&ife, then_e);
+            self.expect("KwElse");
+            var else_e = self.parse_expr();
+            node_add_child(&ife, else_e);
+            return ife;
+        }
+        if (k == "KwSwitch") {
+            self.advance();
+            var switch_expr = make_node("SwitchExpr");
+            self.expect("LParen");
+            var subj = self.parse_expr();
+            node_add_child(&switch_expr, subj);
+            self.expect("RParen");
+            self.expect("LBrace");
+            while (!self.at("RBrace") and !self.at("Eof")) {
+                var arm = self.parse_switch_arm();
+                node_add_child(&switch_expr, arm);
+            }
+            self.expect("RBrace");
+            return switch_expr;
+        }
+        // 未知 → 空节点
+        self.advance();
+        return make_node("Unknown");
+    }
+}
+
+// ============================================================
+// 语义检查器（Checker）
+// ============================================================
+
+// 检查器状态
+class Checker {
+    // 诊断信息（错误消息列表）
+    diags: Vec<Vec<u8>>,
+    // 源码（用于行号定位）
+    src: Vec<u8>,
+    // 行号表（从源码构建）
+    line_starts: Vec<usize>,
+
+    // 初始化：从源码构建行号表
+    fn init(self: *mut Self, src: Vec<u8>) void {
+        self.src = src;
+        // 构建行号表
+        self.line_starts.append(0);
+        var mut i: usize = 0;
+        while (i < src.len) {
+            if (src[i] == '\n') {
+                self.line_starts.append(i + 1);
+            }
+            i += 1;
+        }
+    }
+
+    // 添加错误
+    fn error(self: *mut Self, msg: Vec<u8>) void {
+        self.diags.append(msg);
+    }
+
+    // 检查程序
+    fn check_program(self: *mut Self, prog: AstNode) void {
+        var mut i: usize = 0;
+        while (i < prog.children.len) {
+            self.check_decl(prog.children[i]);
+            i += 1;
+        }
+    }
+
+    // 检查声明
+    fn check_decl(self: *mut Self, decl: AstNode) void {
+        // 后续任务将在此展开具体的检查逻辑
+        // 当前骨架仅验证 AST 结构完整性
+    }
+
+    // 输出诊断结果
+    fn report(self: *mut Self) void {
+        if (self.diags.len == 0) {
+            io.print("OK\n");
+        } else {
+            var mut i: usize = 0;
+            while (i < self.diags.len) {
+                io.print("{}\n", self.diags[i].as_slice());
+                i += 1;
+            }
+        }
+    }
+}
+
+// ============================================================
+// 入口
+// ============================================================
+
+fn main(args: Vec<String>) !void {
+    var mut path = args[0];
+    if (args.len >= 2) { path = args[1]; }
+    var mut src = try io.fs.read_file(path, alloc);
+
+    // 构建关键字字典
+    var kw_map = build_kw_map();
+    var rev_kw_map = build_rev_kw_map();
+
+    // 词法分析
+    var lx: Lexer = alloc.init(Lexer{
+        src = src, n = src.len,
+        pos = 0, line = 1, col = 1,
+        tokens = Vec<Token>.init(alloc),
+        kw_map = kw_map,
+    });
+    lx.run();
+
+    // 语法分析
+    var parser: Parser = alloc.init(Parser{
+        tokens = lx.tokens, pos = 0,
+        n = lx.tokens.len,
+        rev_kw_map = rev_kw_map,
+    });
+    var ast = parser.parse_program();
+
+    // 语义检查
+    var checker: Checker = alloc.init(Checker{
+        diags = Vec<Vec<u8>>.init(alloc),
+        src = Vec<u8>.init(alloc),
+        line_starts = Vec<usize>.init(alloc),
+    });
+    checker.init(src);
+    checker.check_program(ast);
+    checker.report();
+}
