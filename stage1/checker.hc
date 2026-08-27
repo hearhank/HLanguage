@@ -1543,18 +1543,21 @@ class Parser {
             if (self.at("Ident") or self.at("KwVoid")) {
                 var ty = self.peek_text();
                 self.advance();
-                if (ty.len > 0) {
-                    quoted_add_prop(&v, "ty", ty);
-                } else {
-                    quoted_add_prop(&v, "ty", "void");
-                }
+                // 存储类型名作为子节点，kind 直接设为类型名
+                var tn = AstNode{
+                    kind = ty,
+                    props = Vec<u8>.init(alloc),
+                    children = Vec<AstNode>.init(alloc),
+                };
+                node_add_child(&v, tn);
             } else {
                 self.parse_type();
             }
         }
         if (self.at("Eq")) {
             self.advance();
-            self.parse_expr();
+            var init_expr = self.parse_expr();
+            node_add_child(&v, init_expr);
             node_add_prop(&v, "has_init", "true");
         }
         self.expect("Semi");
@@ -1727,9 +1730,10 @@ class Parser {
             self.advance();
             var r = self.parse_and();
             var b = make_node("Binary");
-            node_add_prop(&b, "op", "Or");
             node_add_child(&b, l);
             node_add_child(&b, r);
+            var opn = make_node("Or");
+            node_add_child(&b, opn);
             l = b;
         }
         return l;
@@ -1741,9 +1745,10 @@ class Parser {
             self.advance();
             var r = self.parse_range();
             var b = make_node("Binary");
-            node_add_prop(&b, "op", "And");
             node_add_child(&b, l);
             node_add_child(&b, r);
+            var opn = make_node("And");
+            node_add_child(&b, opn);
             l = b;
         }
         return l;
@@ -1755,9 +1760,10 @@ class Parser {
             self.advance();
             var r = self.parse_comparison();
             var b = make_node("Binary");
-            node_add_prop(&b, "op", "Range");
             node_add_child(&b, l);
             node_add_child(&b, r);
+            var opn = make_node("Range");
+            node_add_child(&b, opn);
             l = b;
         }
         return l;
@@ -1770,10 +1776,10 @@ class Parser {
             self.advance();
             var r = self.parse_bitor();
             var b = make_node("Binary");
-            if (cmp_op == "EqEq") { node_add_prop(&b, "op", "Eq"); }
-            else { node_add_prop(&b, "op", cmp_op); }
             node_add_child(&b, l);
             node_add_child(&b, r);
+            if (cmp_op == "EqEq") { var opn = make_node("Eq"); node_add_child(&b, opn); }
+            else { var opn = make_node(cmp_op); node_add_child(&b, opn); }
             l = b;
         }
         return l;
@@ -1785,9 +1791,10 @@ class Parser {
             self.advance();
             var r = self.parse_bitxor();
             var b = make_node("Binary");
-            node_add_prop(&b, "op", "BitOr");
             node_add_child(&b, l);
             node_add_child(&b, r);
+            var opn = make_node("BitOr");
+            node_add_child(&b, opn);
             l = b;
         }
         return l;
@@ -1799,9 +1806,10 @@ class Parser {
             self.advance();
             var r = self.parse_bitand();
             var b = make_node("Binary");
-            node_add_prop(&b, "op", "BitXor");
             node_add_child(&b, l);
             node_add_child(&b, r);
+            var opn = make_node("BitXor");
+            node_add_child(&b, opn);
             l = b;
         }
         return l;
@@ -1813,9 +1821,10 @@ class Parser {
             self.advance();
             var r = self.parse_shift();
             var b = make_node("Binary");
-            node_add_prop(&b, "op", "BitAnd");
             node_add_child(&b, l);
             node_add_child(&b, r);
+            var opn = make_node("BitAnd");
+            node_add_child(&b, opn);
             l = b;
         }
         return l;
@@ -1829,9 +1838,10 @@ class Parser {
                 self.advance();
                 var r = self.parse_addsub();
                 var b = make_node("Binary");
-                node_add_prop(&b, "op", opname);
                 node_add_child(&b, l);
                 node_add_child(&b, r);
+                var opn = make_node(opname);
+                node_add_child(&b, opn);
                 l = b;
             } else { break; }
         }
@@ -1846,10 +1856,10 @@ class Parser {
                 self.advance();
                 var r = self.parse_muldiv();
                 var b = make_node("Binary");
-                if (opname == "Plus") { node_add_prop(&b, "op", "Add"); }
-                else { node_add_prop(&b, "op", "Sub"); }
                 node_add_child(&b, l);
                 node_add_child(&b, r);
+                if (opname == "Plus") { var opn = make_node("Add"); node_add_child(&b, opn); }
+                else { var opn = make_node("Sub"); node_add_child(&b, opn); }
                 l = b;
             } else { break; }
         }
@@ -1864,12 +1874,12 @@ class Parser {
                 self.advance();
                 var r = self.parse_unary();
                 var b = make_node("Binary");
-                if (opname == "Star") { node_add_prop(&b, "op", "Mul"); }
-                else if (opname == "Slash") { node_add_prop(&b, "op", "Div"); }
-                else if (opname == "Percent") { node_add_prop(&b, "op", "Mod"); }
-                else { node_add_prop(&b, "op", "ModMod"); }
                 node_add_child(&b, l);
                 node_add_child(&b, r);
+                if (opname == "Star") { var opn = make_node("Mul"); node_add_child(&b, opn); }
+                else if (opname == "Slash") { var opn = make_node("Div"); node_add_child(&b, opn); }
+                else if (opname == "Percent") { var opn = make_node("Mod"); node_add_child(&b, opn); }
+                else { var opn = make_node("ModMod"); node_add_child(&b, opn); }
                 l = b;
             } else { break; }
         }
@@ -2405,6 +2415,141 @@ class Checker {
         return make_ty("unknown");
     }
 
+    // 从 props 中解析类型注解
+    fn resolve_ty(self: *mut Self, props: &[u8]) SType {
+        var ty_prop = get_prop(props, "ty");
+        if (ty_prop) |t| {
+            return self.ty_of(t);
+        }
+        return make_ty("unknown");
+    }
+
+    // 从子节点中解析类型注解
+    fn resolve_ty_children(self: *mut Self, children: Vec<AstNode>) SType {
+        var mut ci: usize = 0;
+        while (ci < children.len) {
+            var child = children[ci];
+            if (child.kind == "TypeName") {
+                var tn = get_prop(child.props, "name");
+                if (tn) |t| {
+                    return self.ty_of(t);
+                }
+                break;
+            }
+            ci += 1;
+        }
+        return make_ty("unknown");
+    }
+
+    // 类型兼容性检查：值类型是否兼容于期望类型
+    fn is_compatible(self: *mut Self, val_ty: SType, expect_ty: SType) bool {
+        var vk = val_ty.kind.as_slice();
+        var ek = expect_ty.kind.as_slice();
+        // comptime_int 兼容任何整数类型
+        if (vk == "comptime_int") {
+            if (ek == "i8" or ek == "i16" or
+                ek == "i32" or ek == "i64" or
+                ek == "i128" or ek == "isize" or
+                ek == "u8" or ek == "u16" or
+                ek == "u32" or ek == "u64" or
+                ek == "u128" or ek == "usize" or
+                ek == "comptime_int") return true;
+        }
+        // 相同类型
+        if (vk == ek) return true;
+        return false;
+    }
+
+    // 获取表达式类型
+    fn type_of_expr(self: *mut Self, expr: AstNode) SType {
+        var k = expr.kind;
+        if (k == "IntLit") { return make_ty("comptime_int"); }
+        if (k == "FloatLit") { return make_ty("float"); }
+        if (k == "BoolLit") { return make_ty("bool"); }
+        if (k == "StrLit") { return make_ty("str"); }
+        if (k == "CharLit") { return make_ty("u8"); }
+        if (k == "NullLit") { return make_ty("null"); }
+        if (k == "VoidLit") { return make_ty("void"); }
+        if (k == "Ident") {
+            var name = get_prop(expr.props, "name");
+            if (name) |n| {
+                // 在作用域中查找变量类型
+                var found = self.lookup(n);
+                if (found) |info| { return info.ty; }
+                // 在类型注册表中查找
+                if (self.types.contains(n)) { return self.types.get(n); }
+                // 函数名 → 函数类型
+                if (self.funcs.contains(n)) { return make_ty("fn"); }
+                // 内建名称
+                if (self.is_builtin_name(n)) {
+                    if (n == "true" or n == "false") return make_ty("bool");
+                    if (n == "null") return make_ty("null");
+                    if (n == "void") return make_ty("void");
+                    // 其他内建名（alloc, io 等）→ unknown
+                }
+            }
+            return make_ty("unknown");
+        }
+        if (k == "Binary") {
+            if (expr.children.len >= 3) {
+                var op = expr.children[2].kind;
+                var l = self.type_of_expr(expr.children[0]);
+                var r = self.type_of_expr(expr.children[1]);
+                // 逻辑运算符返回 bool
+                if (op == "And" or op == "Or") {
+                    return make_ty("bool");
+                }
+                // 比较运算符返回 bool
+                if (op == "Eq" or op == "Ne" or op == "Lt" or
+                    op == "Le" or op == "Gt" or op == "Ge") {
+                    return make_ty("bool");
+                }
+                // 算术运算符：如果任一操作数是 float，结果 float
+                if (l.kind.as_slice() == "float" or r.kind.as_slice() == "float") return make_ty("float");
+                // 否则 return comptime_int（后续会收窄）
+                return make_ty("comptime_int");
+            }
+            return make_ty("unknown");
+        }
+        if (k == "Unary") {
+            if (expr.children.len > 0) {
+                return self.type_of_expr(expr.children[0]);
+            }
+            return make_ty("unknown");
+        }
+        if (k == "Call") {
+            // 检查是否是函数调用
+            if (expr.children.len > 0) {
+                var callee = expr.children[0];
+                if (callee.kind == "Ident") {
+                    var name = get_prop(callee.props, "name");
+                    if (name) |n| {
+                        // 在函数注册表中查找
+                        if (self.funcs.contains(n)) {
+                            var sig = self.funcs.get(n);
+                            return sig.ret_type;
+                        }
+                        // 内建函数
+                        if (n == "expect" or n == "expect_eq") return make_ty("void");
+                        if (n == "@intCast" or n == "@floatCast") return make_ty("unknown");
+                    }
+                }
+            }
+            return make_ty("unknown");
+        }
+        if (k == "ArrayLit") { return make_ty("array"); }
+        if (k == "AtBuiltin") { return make_ty("unknown"); }
+        if (k == "Field") { return make_ty("unknown"); }
+        if (k == "Index") { return make_ty("unknown"); }
+        if (k == "Unwrap") {
+            if (expr.children.len > 0) {
+                return self.type_of_expr(expr.children[0]);
+            }
+            return make_ty("unknown");
+        }
+        return make_ty("unknown");
+    }
+
     // 检查程序（两遍：收集 + 检查）
     fn check_program(self: *mut Self, prog: AstNode) void {
         // 第一遍：收集所有声明
@@ -2517,9 +2662,7 @@ class Checker {
             if (child.kind == "Param") {
                 var pname = get_prop(child.props, "name");
                 if (pname) |n| {
-                    var mut param_ty = make_ty("unknown");
-                    var pty = get_prop(child.props, "ty");
-                    if (pty) |t| { param_ty = self.ty_of(t); }
+                    var param_ty = self.resolve_ty(child.props);
                     var info = VarInfo{
                         ty = param_ty,
                         source = AllocSource.Unknown,
@@ -2591,18 +2734,32 @@ class Checker {
     // 检查变量声明
     fn check_var_decl(self: *mut Self, stmt: AstNode) void {
         var name = get_prop(stmt.props, "name");
+        // 解析类型注解：第一个子节点的 kind 是类型名（如 "i32"）
+        var mut ty = make_ty("unknown");
+        if (stmt.children.len > 0) {
+            var first = stmt.children[0];
+            var candidate = self.ty_of(first.kind);
+            var ck = candidate.kind.as_slice();
+            if (ck != "unknown" and ck != "generic") {
+                ty = candidate;
+            }
+        }
+        // 判断是否有初始值表达式
+        var mut has_init = false;
+        if (stmt.children.len > 1) {
+            has_init = true;
+        } else if (stmt.children.len == 1) {
+            var first = stmt.children[0];
+            var candidate = self.ty_of(first.kind);
+            var ck = candidate.kind.as_slice();
+            if (ck == "unknown" or ck == "generic") {
+                has_init = true;
+            }
+        }
+        // 检查 mut
         var mut is_mut = false;
         var m = get_prop(stmt.props, "mut");
         if (m) |_| { is_mut = true; }
-        var mut has_init = false;
-        var hi = get_prop(stmt.props, "has_init");
-        if (hi) |_| { has_init = true; }
-        // 解析类型注解
-        var mut ty = make_ty("unknown");
-        var ty_prop = get_prop(stmt.props, "ty");
-        if (ty_prop) |t| {
-            ty = self.ty_of(t);
-        }
         if (name) |n| {
             var info = VarInfo{
                 ty = ty,
@@ -2611,8 +2768,31 @@ class Checker {
             };
             self.register(n, info);
         }
+        // 检查初始值表达式类型（初始值是最后一个子节点）
         if (has_init and stmt.children.len > 0) {
-            self.check_expr(stmt.children[0]);
+            var last_idx = stmt.children.len - 1;
+            var init_type = self.type_of_expr(stmt.children[last_idx]);
+            var tk = ty.kind.as_slice();
+            var ik = init_type.kind.as_slice();
+            if (tk != "unknown" and ik != "unknown") {
+                if (!self.is_compatible(init_type, ty)) {
+                    var msg = Vec<u8>.init(alloc);
+                    msg.append('t'); msg.append('y'); msg.append('p'); msg.append('e');
+                    msg.append(' '); msg.append('m'); msg.append('i'); msg.append('s');
+                    msg.append('m'); msg.append('a'); msg.append('t'); msg.append('c');
+                    msg.append('h'); msg.append(':'); msg.append(' ');
+                    msg.append('e'); msg.append('x'); msg.append('p'); msg.append('e');
+                    msg.append('c'); msg.append('t'); msg.append('e'); msg.append('d');
+                    msg.append(' ');
+                    var mut ki: usize = 0;
+                    while (ki < ty.kind.len) { msg.append(ty.kind[ki]); ki += 1; }
+                    msg.append(','); msg.append(' ');
+                    msg.append('g'); msg.append('o'); msg.append('t'); msg.append(' ');
+                    ki = 0;
+                    while (ki < init_type.kind.len) { msg.append(init_type.kind[ki]); ki += 1; }
+                    self.error(msg);
+                }
+            }
         }
     }
 
