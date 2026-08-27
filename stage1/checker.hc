@@ -2460,6 +2460,35 @@ class Checker {
         return false;
     }
 
+    // 推断分配来源
+    fn infer_source(self: *mut Self, expr: AstNode) AllocSource {
+        var k = expr.kind;
+        // 字面量 = 无所有权
+        if (k == "IntLit" or k == "FloatLit" or k == "BoolLit" or
+            k == "StrLit" or k == "CharLit" or k == "NullLit" or k == "VoidLit") {
+            return AllocSource.None;
+        }
+        // 数组字面量 = 堆分配
+        if (k == "ArrayLit") {
+            return AllocSource.NonArena;
+        }
+        // 函数调用 = 堆分配
+        if (k == "Call") {
+            return AllocSource.NonArena;
+        }
+        // 标识符 = 继承来源
+        if (k == "Ident") {
+            var name = get_prop(expr.props, "name");
+            if (name) |n| {
+                var found = self.lookup(n);
+                if (found) |info| {
+                    return info.source;
+                }
+            }
+        }
+        return AllocSource.Unknown;
+    }
+
     // 获取表达式类型
     fn type_of_expr(self: *mut Self, expr: AstNode) SType {
         var k = expr.kind;
@@ -2760,10 +2789,16 @@ class Checker {
         var mut is_mut = false;
         var m = get_prop(stmt.props, "mut");
         if (m) |_| { is_mut = true; }
+        // 推断分配来源
+        var mut source = AllocSource.Unknown;
+        if (has_init and stmt.children.len > 0) {
+            var last_idx = stmt.children.len - 1;
+            source = self.infer_source(stmt.children[last_idx]);
+        }
         if (name) |n| {
             var info = VarInfo{
                 ty = ty,
-                source = AllocSource.Unknown,
+                source = source,
                 mut_ = is_mut,
             };
             self.register(n, info);
@@ -2771,6 +2806,8 @@ class Checker {
         // 检查初始值表达式类型（初始值是最后一个子节点）
         if (has_init and stmt.children.len > 0) {
             var last_idx = stmt.children.len - 1;
+            // 检查表达式中的标识符引用和所有权
+            self.check_expr(stmt.children[last_idx]);
             var init_type = self.type_of_expr(stmt.children[last_idx]);
             var tk = ty.kind.as_slice();
             var ik = init_type.kind.as_slice();
@@ -2908,7 +2945,38 @@ class Checker {
                 self.check_expr(expr.children[i]);
                 i += 1;
             }
-        } else if (k == "AddrOf" or k == "Try" or k == "Await" or k == "Move") {
+        } else if (k == "Move") {
+            if (expr.children.len > 0) {
+                var inner = expr.children[0];
+                self.check_expr(inner);
+                // 检查 move 目标是否有所有权
+                if (inner.kind == "Ident") {
+                    var name = get_prop(inner.props, "name");
+                    if (name) |n| {
+                        var found = self.lookup(n);
+                        if (found) |info| {
+                            if (info.source == AllocSource.None) {
+                                var msg = Vec<u8>.init(alloc);
+                                msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
+                                msg.append(':'); msg.append(' ');
+                                msg.append('c'); msg.append('a'); msg.append('n'); msg.append('n'); msg.append('o'); msg.append('t');
+                                msg.append(' '); msg.append('m'); msg.append('o'); msg.append('v'); msg.append('e');
+                                msg.append(' '); msg.append('`');
+                                var mut j: usize = 0;
+                                while (j < n.len) { msg.append(n[j]); j += 1; }
+                                msg.append('`'); msg.append(':'); msg.append(' ');
+                                msg.append('v'); msg.append('a'); msg.append('l'); msg.append('u'); msg.append('e');
+                                msg.append(' '); msg.append('t'); msg.append('y'); msg.append('p'); msg.append('e');
+                                msg.append(' '); msg.append('h'); msg.append('a'); msg.append('s');
+                                msg.append(' '); msg.append('n'); msg.append('o'); msg.append(' ');
+                                msg.append('o'); msg.append('w'); msg.append('n'); msg.append('e'); msg.append('r'); msg.append('s'); msg.append('h'); msg.append('i'); msg.append('p');
+                                self.error(msg);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (k == "AddrOf" or k == "Try" or k == "Await") {
             if (expr.children.len > 0) {
                 self.check_expr(expr.children[0]);
             }
