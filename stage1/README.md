@@ -47,6 +47,9 @@
 | `if_while_matches_rust_reference` | `12-if-while.hc` | if/while 语句 |
 | `ownership_move_detected` | `21-ownership.hc` | 所有权分析（move 检测） |
 | `error_set_detected` | `22-error-set.hc` | 错误集分析（错误字面量检测） |
+| `integration_strings_matches_rust_reference` | `04-strings.hc` | 字符串字面量对照 |
+| `integration_undefined_matches_rust_reference` | `16-undefined.hc` | 带类型注解的未定义变量对照 |
+| `integration_debug_files_matches_rust_reference` | `19-get-prop-test.hc`, `20-debug-ty.hc` | 调试文件对照 |
 
 运行方式：`cargo test --release -p hc-tools --test k3_checker`
 

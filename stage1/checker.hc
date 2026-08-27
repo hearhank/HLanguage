@@ -2828,9 +2828,37 @@ class Checker {
         // 检查初始值表达式类型（初始值是最后一个子节点）
         if (has_init and stmt.children.len > 0) {
             var last_idx = stmt.children.len - 1;
-            // 检查表达式中的标识符引用和所有权
-            self.check_expr(stmt.children[last_idx]);
-            var init_type = self.type_of_expr(stmt.children[last_idx]);
+            var init_expr = stmt.children[last_idx];
+            // 检查 move 操作
+            if (init_expr.kind == "Move" and init_expr.children.len > 0) {
+                var inner = init_expr.children[0];
+                if (inner.kind == "Ident") {
+                    var name = get_prop(inner.props, "name");
+                    if (name) |n| {
+                        var found = self.lookup(n);
+                        if (found) |info| {
+                            if (info.source == AllocSource.None) {
+                                var msg = Vec<u8>.init(alloc);
+                                msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
+                                msg.append(':'); msg.append(' ');
+                                msg.append('c'); msg.append('a'); msg.append('n'); msg.append('n'); msg.append('o'); msg.append('t');
+                                msg.append(' '); msg.append('m'); msg.append('o'); msg.append('v'); msg.append('e');
+                                msg.append(' '); msg.append('`');
+                                var mut j: usize = 0;
+                                while (j < n.len) { msg.append(n[j]); j += 1; }
+                                msg.append('`'); msg.append(':'); msg.append(' ');
+                                msg.append('v'); msg.append('a'); msg.append('l'); msg.append('u'); msg.append('e');
+                                msg.append(' '); msg.append('t'); msg.append('y'); msg.append('p'); msg.append('e');
+                                msg.append(' '); msg.append('h'); msg.append('a'); msg.append('s');
+                                msg.append(' '); msg.append('n'); msg.append('o'); msg.append(' ');
+                                msg.append('o'); msg.append('w'); msg.append('n'); msg.append('e'); msg.append('r'); msg.append('s'); msg.append('h'); msg.append('i'); msg.append('p');
+                                self.error(msg);
+                            }
+                        }
+                    }
+                }
+            }
+            var init_type = self.type_of_expr(init_expr);
             var tk = ty.kind.as_slice();
             var ik = init_type.kind.as_slice();
             if (tk != "unknown" and ik != "unknown") {

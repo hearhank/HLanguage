@@ -182,6 +182,48 @@ fn error_set_detected() {
     );
 }
 
+/// 批量对照测试：对多个语料文件运行 assert_checker_matches
+fn batch_checker_matches(h_checker: &Path, files: &[&Path]) {
+    for f in files {
+        assert_checker_matches(h_checker, f);
+    }
+}
+
+#[test]
+fn integration_strings_matches_rust_reference() {
+    // 04-strings.hc — 字符串字面量
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/04-strings.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
+    assert_checker_matches(&h_checker, &corpus);
+}
+
+#[test]
+fn integration_undefined_matches_rust_reference() {
+    // 16-undefined.hc — 带类型注解的未定义变量（H checker 应与 Rust 参考一致）
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/16-undefined.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
+    assert_checker_matches(&h_checker, &corpus);
+}
+
+#[test]
+fn integration_debug_files_matches_rust_reference() {
+    // 19-get-prop-test.hc + 20-debug-ty.hc — 调试文件
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let files = [
+        root.join("stage1/corpus/19-get-prop-test.hc"),
+        root.join("stage1/corpus/20-debug-ty.hc"),
+    ];
+    let refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
+    batch_checker_matches(&h_checker, &refs);
+}
+
 #[test]
 fn if_while_matches_rust_reference() {
     // Task 8: if/while/for 语句——H 版 checker 输出应与 Rust 参考一致
