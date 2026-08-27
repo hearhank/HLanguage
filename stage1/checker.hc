@@ -2204,37 +2204,37 @@ enum IntWidth {
 // 具体类型：int|float|bool|void|str|named|ptr|slice|optional|error_union|tuple|array|infer|generic|unknown
 class SType {
     kind: Vec<u8>,
+    // 命名类型
+    type_name: Vec<u8>,
+    type_args: Vec<SType>,
+    // 指针类型
+    pointee: ?SType,
+    ptr_mut: bool,
+    // 切片类型
+    elem_type: ?SType,
+    // 数组类型
+    array_len: i64,
+    // 错误联合类型
+    error_set_type: ?SType,
+    inner_type: ?SType,
+    // 元组类型
+    elem_types: Vec<SType>,
 }
 
 // 创建基本类型
-fn ty_int(width: IntWidth) SType {
-    var t = SType{kind = Vec<u8>.init(alloc)};
-    if (width == IntWidth.I8) { t.kind = vec_from_slice("i8"); }
-    else if (width == IntWidth.I16) { t.kind = vec_from_slice("i16"); }
-    else if (width == IntWidth.I32) { t.kind = vec_from_slice("i32"); }
-    else if (width == IntWidth.I64) { t.kind = vec_from_slice("i64"); }
-    else if (width == IntWidth.I128) { t.kind = vec_from_slice("i128"); }
-    else if (width == IntWidth.ISize) { t.kind = vec_from_slice("isize"); }
-    else if (width == IntWidth.U8) { t.kind = vec_from_slice("u8"); }
-    else if (width == IntWidth.U16) { t.kind = vec_from_slice("u16"); }
-    else if (width == IntWidth.U32) { t.kind = vec_from_slice("u32"); }
-    else if (width == IntWidth.U64) { t.kind = vec_from_slice("u64"); }
-    else if (width == IntWidth.U128) { t.kind = vec_from_slice("u128"); }
-    else if (width == IntWidth.USize) { t.kind = vec_from_slice("usize"); }
-    else { t.kind = vec_from_slice("comptime_int"); }
-    return t;
-}
-fn ty_float() SType { return SType{kind = vec_from_slice("float")}; }
-fn ty_bool() SType { return SType{kind = vec_from_slice("bool")}; }
-fn ty_void() SType { return SType{kind = vec_from_slice("void")}; }
-fn ty_str() SType { return SType{kind = vec_from_slice("str")}; }
-fn ty_named(name: &[u8]) SType { return SType{kind = vec_from_slice(name)}; }
-fn ty_infer() SType { return SType{kind = vec_from_slice("infer")}; }
-fn ty_unknown() SType { return SType{kind = vec_from_slice("unknown")}; }
-
-// 类型比较
-fn type_eq(a: SType, b: SType) bool {
-    return a.kind == b.kind;
+fn make_ty(kind: &[u8]) SType {
+    return SType{
+        kind = vec_from_slice(kind),
+        type_name = Vec<u8>.init(alloc),
+        type_args = Vec<SType>.init(alloc),
+        pointee = null,
+        ptr_mut = false,
+        elem_type = null,
+        array_len = 0,
+        error_set_type = null,
+        inner_type = null,
+        elem_types = Vec<SType>.init(alloc),
+    };
 }
 
 // 分配来源
@@ -2366,6 +2366,45 @@ class Checker {
         return null;
     }
 
+    // 类型解析：将类型名字符串转换为 SType
+    fn ty_of(self: *mut Self, name: &[u8]) SType {
+        // 内建整数类型
+        if (name == "i8") return make_ty("i8");
+        if (name == "i16") return make_ty("i16");
+        if (name == "i32") return make_ty("i32");
+        if (name == "i64") return make_ty("i64");
+        if (name == "i128") return make_ty("i128");
+        if (name == "isize") return make_ty("isize");
+        if (name == "u8") return make_ty("u8");
+        if (name == "u16") return make_ty("u16");
+        if (name == "u32") return make_ty("u32");
+        if (name == "u64") return make_ty("u64");
+        if (name == "u128") return make_ty("u128");
+        if (name == "usize") return make_ty("usize");
+        if (name == "comptime_int") return make_ty("comptime_int");
+        // 内建浮点类型
+        if (name == "f16" or name == "f32" or name == "f64" or name == "f128") return make_ty("float");
+        // 内建其他类型
+        if (name == "bool") return make_ty("bool");
+        if (name == "void") return make_ty("void");
+        if (name == "String") return make_ty("str");
+        if (name == "type" or name == "anytype") return make_ty("type");
+        // 内建集合类型
+        if (name == "Vec" or name == "Deque" or name == "Map" or name == "Table") return make_ty(name);
+        if (name == "Allocator" or name == "ExitType") return make_ty(name);
+        if (name == "Future") return make_ty(name);
+        // 在类型注册表中查找
+        if (self.types.contains(name)) {
+            return self.types.get(name);
+        }
+        // 大写开头 → 泛型参数
+        if (name.len > 0 and name[0] >= 'A' and name[0] <= 'Z') {
+            return make_ty("generic");
+        }
+        // 未知类型
+        return make_ty("unknown");
+    }
+
     // 检查程序（两遍：收集 + 检查）
     fn check_program(self: *mut Self, prog: AstNode) void {
         // 第一遍：收集所有声明
@@ -2410,7 +2449,7 @@ class Checker {
     fn collect_class(self: *mut Self, decl: AstNode) void {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
-            var ty = SType{kind = vec_from_slice(n)};
+            var ty = make_ty(n);
             self.register_type(n, ty);
         }
     }
@@ -2419,7 +2458,7 @@ class Checker {
     fn collect_enum(self: *mut Self, decl: AstNode) void {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
-            var ty = SType{kind = vec_from_slice(n)};
+            var ty = make_ty(n);
             self.register_type(n, ty);
         }
     }
@@ -2428,7 +2467,7 @@ class Checker {
     fn collect_union(self: *mut Self, decl: AstNode) void {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
-            var ty = SType{kind = vec_from_slice(n)};
+            var ty = make_ty(n);
             self.register_type(n, ty);
         }
     }
@@ -2437,7 +2476,7 @@ class Checker {
     fn collect_interface(self: *mut Self, decl: AstNode) void {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
-            var ty = SType{kind = vec_from_slice(n)};
+            var ty = make_ty(n);
             self.register_type(n, ty);
         }
     }
@@ -2448,7 +2487,7 @@ class Checker {
         if (name) |n| {
             var sig = FnSig{
                 param_types = Vec<SType>.init(alloc),
-                ret_type = SType{kind = vec_from_slice("unknown")},
+                ret_type = make_ty("unknown"),
             };
             self.register_func(n, sig);
         }
@@ -2478,8 +2517,11 @@ class Checker {
             if (child.kind == "Param") {
                 var pname = get_prop(child.props, "name");
                 if (pname) |n| {
+                    var mut param_ty = make_ty("unknown");
+                    var pty = get_prop(child.props, "ty");
+                    if (pty) |t| { param_ty = self.ty_of(t); }
                     var info = VarInfo{
-                        ty = SType{kind = vec_from_slice("unknown")},
+                        ty = param_ty,
                         source = AllocSource.Unknown,
                         mut_ = false,
                     };
@@ -2537,7 +2579,7 @@ class Checker {
             var name = get_prop(stmt.props, "name");
             if (name) |n| {
                 var info = VarInfo{
-                    ty = SType{kind = vec_from_slice("unknown")},
+                    ty = make_ty("unknown"),
                     source = AllocSource.Unknown,
                     mut_ = false,
                 };
@@ -2555,9 +2597,15 @@ class Checker {
         var mut has_init = false;
         var hi = get_prop(stmt.props, "has_init");
         if (hi) |_| { has_init = true; }
+        // 解析类型注解
+        var mut ty = make_ty("unknown");
+        var ty_prop = get_prop(stmt.props, "ty");
+        if (ty_prop) |t| {
+            ty = self.ty_of(t);
+        }
         if (name) |n| {
             var info = VarInfo{
-                ty = SType{kind = vec_from_slice("unknown")},
+                ty = ty,
                 source = AllocSource.Unknown,
                 mut_ = is_mut,
             };
