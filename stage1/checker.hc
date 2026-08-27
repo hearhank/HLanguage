@@ -2359,14 +2359,95 @@ class Checker {
         return null;
     }
 
-    // 检查程序
+    // 检查程序（两遍：收集 + 检查）
     fn check_program(self: *mut Self, prog: AstNode) void {
+        // 第一遍：收集所有声明
+        self.collect_program(prog);
+        // 第二遍：检查
         var mut i: usize = 0;
         while (i < prog.children.len) {
             self.check_decl(prog.children[i]);
             i += 1;
         }
     }
+
+    // ========== 收集阶段（第一遍） ==========
+
+    // 收集所有声明
+    fn collect_program(self: *mut Self, prog: AstNode) void {
+        var mut i: usize = 0;
+        while (i < prog.children.len) {
+            self.collect_decl(prog.children[i]);
+            i += 1;
+        }
+    }
+
+    // 收集单个声明
+    fn collect_decl(self: *mut Self, decl: AstNode) void {
+        var k = decl.kind;
+        if (k == "Class") { self.collect_class(decl); }
+        else if (k == "Enum") { self.collect_enum(decl); }
+        else if (k == "Union") { self.collect_union(decl); }
+        else if (k == "Interface") { self.collect_interface(decl); }
+        else if (k == "Fn") { self.collect_fn(decl); }
+        else if (k == "Namespace") {
+            var mut i: usize = 0;
+            while (i < decl.children.len) {
+                self.collect_decl(decl.children[i]);
+                i += 1;
+            }
+        }
+    }
+
+    // 收集 class 声明
+    fn collect_class(self: *mut Self, decl: AstNode) void {
+        var name = get_prop(decl.props, "name");
+        if (name) |n| {
+            var ty = SType{kind = vec_from_slice(n)};
+            self.register_type(vec_from_slice(n), ty);
+        }
+    }
+
+    // 收集 enum 声明
+    fn collect_enum(self: *mut Self, decl: AstNode) void {
+        var name = get_prop(decl.props, "name");
+        if (name) |n| {
+            var ty = SType{kind = vec_from_slice(n)};
+            self.register_type(vec_from_slice(n), ty);
+        }
+    }
+
+    // 收集 union 声明
+    fn collect_union(self: *mut Self, decl: AstNode) void {
+        var name = get_prop(decl.props, "name");
+        if (name) |n| {
+            var ty = SType{kind = vec_from_slice(n)};
+            self.register_type(vec_from_slice(n), ty);
+        }
+    }
+
+    // 收集 interface 声明
+    fn collect_interface(self: *mut Self, decl: AstNode) void {
+        var name = get_prop(decl.props, "name");
+        if (name) |n| {
+            var ty = SType{kind = vec_from_slice(n)};
+            self.register_type(vec_from_slice(n), ty);
+        }
+    }
+
+    // 收集 fn 声明
+    fn collect_fn(self: *mut Self, decl: AstNode) void {
+        var name = get_prop(decl.props, "name");
+        if (name) |n| {
+            var sig = FnSig{
+                param_types = Vec<SType>.init(alloc),
+                ret_type = SType{kind = vec_from_slice("unknown")},
+            };
+            self.register_func(vec_from_slice(n), sig);
+        }
+    }
+
+    // ========== 检查阶段（第二遍） ==========
 
     // 检查声明
     fn check_decl(self: *mut Self, decl: AstNode) void {

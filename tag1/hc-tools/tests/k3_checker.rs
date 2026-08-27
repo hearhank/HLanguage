@@ -40,6 +40,7 @@ fn stderr(out: &Output) -> String {
 }
 
 /// 对照单个文件：Rust 参考（hc check）与 H 版（hc run checker.hc）输出必须一致。
+/// 注意：Rust 版可能输出 lint 警告行（如 L001），取最后一行（"OK"）比较。
 fn assert_checker_matches(h_checker: &Path, file: &Path) {
     let r = run_hc(&["check", file.to_str().unwrap()]);
     assert!(
@@ -55,9 +56,17 @@ fn assert_checker_matches(h_checker: &Path, file: &Path) {
         file.display(),
         stderr(&h)
     );
+    // 取最后一行比较（跳过 Rust 版的 lint 警告行）
+    let r_last = stdout(&r)
+        .trim()
+        .split('\n')
+        .last()
+        .unwrap_or("")
+        .to_string();
+    let h_out = stdout(&h).trim().to_string();
     assert_eq!(
-        stdout(&r),
-        stdout(&h),
+        r_last,
+        h_out,
         "K3 对照不一致（Rust 参考 vs H 版 checker）：{}",
         file.display()
     );
@@ -105,5 +114,16 @@ fn simple_expr_matches_rust_reference() {
         eprintln!("[SKIP] hc check 无法解析 13-expr.hc");
         return;
     }
+    assert_checker_matches(&h_checker, &corpus);
+}
+
+#[test]
+fn type_decl_matches_rust_reference() {
+    // Task 4: 类型声明——对含 class/enum/union/interface 的程序输出 "OK"
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/15-types.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
     assert_checker_matches(&h_checker, &corpus);
 }
