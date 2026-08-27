@@ -15,6 +15,3 @@ union Data {
 interface Iterable {
     fn next() ?i32;
 }
-fn main() void {
-    var p: Point = Point{x = 1, y = 2};
-}

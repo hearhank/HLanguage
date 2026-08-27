@@ -127,3 +127,19 @@ fn type_decl_matches_rust_reference() {
 
     assert_checker_matches(&h_checker, &corpus);
 }
+
+#[test]
+fn undefined_name_detected() {
+    // Task 5: 未定义名称检测——H 版 checker 应报告错误
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/17-undefined-simple.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
+    let h = run_hc(&["run", h_checker.to_str().unwrap(), corpus.to_str().unwrap()]);
+    let h_out = stdout(&h);
+    assert!(
+        h_out.contains("undefined name"),
+        "H checker 应报告 undefined name，实际输出：{h_out}"
+    );
+}

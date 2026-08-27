@@ -2263,6 +2263,12 @@ class FnSig {
 // 语义检查器（Checker）
 // ============================================================
 
+// 作用域条目
+class ScopeEntry {
+    name: &[u8],
+    info: VarInfo,
+}
+
 // 检查器状态
 class Checker {
     // 诊断信息（错误消息列表）
@@ -2271,17 +2277,18 @@ class Checker {
     src: Vec<u8>,
     // 行号表（从源码构建）
     line_starts: Vec<usize>,
-    // 作用域栈（每个作用域是一个名字→VarInfo 的映射）
-    scopes: Vec<Map<Vec<u8>, VarInfo>>,
+    // 作用域条目（扁平存储，从后向前查找）
+    scopes: Vec<ScopeEntry>,
+    // 每个作用域边界（push 时的 scopes.len）
+    scope_sizes: Vec<usize>,
     // 类型注册表（名字→类型信息）
-    types: Map<Vec<u8>, SType>,
+    types: Map<&[u8], SType>,
     // 函数注册表（名字→函数签名）
-    funcs: Map<Vec<u8>, FnSig>,
+    funcs: Map<&[u8], FnSig>,
 
     // 初始化：从源码构建行号表
     fn init(self: *mut Self, src: Vec<u8>) void {
         self.src = src;
-        // 构建行号表
         self.line_starts.append(0);
         var mut i: usize = 0;
         while (i < src.len) {
@@ -2290,7 +2297,6 @@ class Checker {
             }
             i += 1;
         }
-        // 初始化全局作用域
         self.push_scope();
     }
 
@@ -2301,32 +2307,33 @@ class Checker {
 
     // 推入新作用域
     fn push_scope(self: *mut Self) void {
-        var m = Map<Vec<u8>, VarInfo>.init(alloc);
-        self.scopes.append(m);
+        self.scope_sizes.append(self.scopes.len);
     }
 
     // 弹出作用域
     fn pop_scope(self: *mut Self) void {
-        if (self.scopes.len > 0) {
-            self.scopes.pop();
+        if (self.scope_sizes.len > 0) {
+            var mut target = self.scope_sizes[self.scope_sizes.len - 1];
+            self.scope_sizes.remove(self.scope_sizes.len - 1);
+            while (self.scopes.len > target) {
+                self.scopes.remove(self.scopes.len - 1);
+            }
         }
     }
 
     // 在当前作用域注册名字
-    fn register(self: *mut Self, name: Vec<u8>, info: VarInfo) void {
-        if (self.scopes.len > 0) {
-            var mut scope = self.scopes[self.scopes.len - 1];
-            scope.put(name, info);
-        }
+    fn register(self: *mut Self, name: &[u8], info: VarInfo) void {
+        var entry = ScopeEntry{name = name, info = info};
+        self.scopes.append(entry);
     }
 
     // 从当前作用域栈查找名字（从最内层向外查找）
-    fn lookup(self: *mut Self, name: Vec<u8>) ?VarInfo {
+    fn lookup(self: *mut Self, name: &[u8]) ?VarInfo {
         var mut i: i64 = @intCast(i64, self.scopes.len) - 1;
         while (i >= 0) {
-            var scope = self.scopes[@intCast(usize, i)];
-            if (scope.contains(name)) {
-                return scope.get(name);
+            var entry = self.scopes[@intCast(usize, i)];
+            if (entry.name == name) {
+                return entry.info;
             }
             i -= 1;
         }
@@ -2334,12 +2341,12 @@ class Checker {
     }
 
     // 注册类型
-    fn register_type(self: *mut Self, name: Vec<u8>, ty: SType) void {
+    fn register_type(self: *mut Self, name: &[u8], ty: SType) void {
         self.types.put(name, ty);
     }
 
     // 查找类型
-    fn lookup_type(self: *mut Self, name: Vec<u8>) ?SType {
+    fn lookup_type(self: *mut Self, name: &[u8]) ?SType {
         if (self.types.contains(name)) {
             return self.types.get(name);
         }
@@ -2347,12 +2354,12 @@ class Checker {
     }
 
     // 注册函数
-    fn register_func(self: *mut Self, name: Vec<u8>, sig: FnSig) void {
+    fn register_func(self: *mut Self, name: &[u8], sig: FnSig) void {
         self.funcs.put(name, sig);
     }
 
     // 查找函数
-    fn lookup_func(self: *mut Self, name: Vec<u8>) ?FnSig {
+    fn lookup_func(self: *mut Self, name: &[u8]) ?FnSig {
         if (self.funcs.contains(name)) {
             return self.funcs.get(name);
         }
@@ -2404,7 +2411,7 @@ class Checker {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
             var ty = SType{kind = vec_from_slice(n)};
-            self.register_type(vec_from_slice(n), ty);
+            self.register_type(n, ty);
         }
     }
 
@@ -2413,7 +2420,7 @@ class Checker {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
             var ty = SType{kind = vec_from_slice(n)};
-            self.register_type(vec_from_slice(n), ty);
+            self.register_type(n, ty);
         }
     }
 
@@ -2422,7 +2429,7 @@ class Checker {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
             var ty = SType{kind = vec_from_slice(n)};
-            self.register_type(vec_from_slice(n), ty);
+            self.register_type(n, ty);
         }
     }
 
@@ -2431,7 +2438,7 @@ class Checker {
         var name = get_prop(decl.props, "name");
         if (name) |n| {
             var ty = SType{kind = vec_from_slice(n)};
-            self.register_type(vec_from_slice(n), ty);
+            self.register_type(n, ty);
         }
     }
 
@@ -2443,7 +2450,7 @@ class Checker {
                 param_types = Vec<SType>.init(alloc),
                 ret_type = SType{kind = vec_from_slice("unknown")},
             };
-            self.register_func(vec_from_slice(n), sig);
+            self.register_func(n, sig);
         }
     }
 
@@ -2451,8 +2458,313 @@ class Checker {
 
     // 检查声明
     fn check_decl(self: *mut Self, decl: AstNode) void {
-        // 后续任务将在此展开具体的检查逻辑
-        // 当前骨架仅验证 AST 结构完整性
+        var k = decl.kind;
+        if (k == "Fn") { self.check_fn(decl); }
+        else if (k == "Namespace") {
+            var mut i: usize = 0;
+            while (i < decl.children.len) {
+                self.check_decl(decl.children[i]);
+                i += 1;
+            }
+        }
+    }
+
+    // 检查函数声明
+    fn check_fn(self: *mut Self, decl: AstNode) void {
+        self.push_scope();
+        var mut i: usize = 0;
+        while (i < decl.children.len) {
+            var child = decl.children[i];
+            if (child.kind == "Param") {
+                var pname = get_prop(child.props, "name");
+                if (pname) |n| {
+                    var info = VarInfo{
+                        ty = SType{kind = vec_from_slice("unknown")},
+                        source = AllocSource.Unknown,
+                        mut_ = false,
+                    };
+                    self.register(n, info);
+                }
+            }
+            i += 1;
+        }
+        i = 0;
+        while (i < decl.children.len) {
+            var child = decl.children[i];
+            if (child.kind == "Block") {
+                self.check_block(child);
+            }
+            i += 1;
+        }
+        self.pop_scope();
+    }
+
+    // 检查块
+    fn check_block(self: *mut Self, block: AstNode) void {
+        self.push_scope();
+        var mut i: usize = 0;
+        while (i < block.children.len) {
+            self.check_stmt(block.children[i]);
+            i += 1;
+        }
+        self.pop_scope();
+    }
+
+    // 检查语句
+    fn check_stmt(self: *mut Self, stmt: AstNode) void {
+        var k = stmt.kind;
+        if (k == "Block") {
+            self.check_block(stmt);
+        } else if (k == "VarDecl") {
+            self.check_var_decl(stmt);
+        } else if (k == "If") {
+            self.check_if(stmt);
+        } else if (k == "While") {
+            self.check_while(stmt);
+        } else if (k == "For") {
+            self.check_for(stmt);
+        } else if (k == "Switch") {
+            self.check_switch(stmt);
+        } else if (k == "Return") {
+            self.check_return(stmt);
+        } else if (k == "ExprStmt") {
+            if (stmt.children.len > 0) {
+                self.check_expr(stmt.children[0]);
+            }
+        } else if (k == "Defer" or k == "Errdefer") {
+        } else if (k == "Empty" or k == "Break" or k == "Continue") {
+        } else if (k == "ConstDecl") {
+            var name = get_prop(stmt.props, "name");
+            if (name) |n| {
+                var info = VarInfo{
+                    ty = SType{kind = vec_from_slice("unknown")},
+                    source = AllocSource.Unknown,
+                    mut_ = false,
+                };
+                self.register(n, info);
+            }
+        }
+    }
+
+    // 检查变量声明
+    fn check_var_decl(self: *mut Self, stmt: AstNode) void {
+        var name = get_prop(stmt.props, "name");
+        var mut is_mut = false;
+        var m = get_prop(stmt.props, "mut");
+        if (m) |_| { is_mut = true; }
+        var mut has_init = false;
+        var hi = get_prop(stmt.props, "has_init");
+        if (hi) |_| { has_init = true; }
+        if (name) |n| {
+            var info = VarInfo{
+                ty = SType{kind = vec_from_slice("unknown")},
+                source = AllocSource.Unknown,
+                mut_ = is_mut,
+            };
+            self.register(n, info);
+        }
+        if (has_init and stmt.children.len > 0) {
+            self.check_expr(stmt.children[0]);
+        }
+    }
+
+    // 检查 if 语句
+    fn check_if(self: *mut Self, stmt: AstNode) void {
+        if (stmt.children.len > 0) {
+            self.check_expr(stmt.children[0]);
+        }
+        if (stmt.children.len > 1) {
+            var then_block = stmt.children[1];
+            if (then_block.kind == "Block") {
+                self.check_block(then_block);
+            }
+        }
+        if (stmt.children.len > 2) {
+            var else_block = stmt.children[2];
+            if (else_block.kind == "Block") {
+                self.check_block(else_block);
+            } else if (else_block.kind == "If") {
+                self.check_if(else_block);
+            }
+        }
+    }
+
+    // 检查 while 语句
+    fn check_while(self: *mut Self, stmt: AstNode) void {
+        if (stmt.children.len > 0) {
+            self.check_expr(stmt.children[0]);
+        }
+        if (stmt.children.len > 1) {
+            var body = stmt.children[1];
+            if (body.kind == "Block") {
+                self.check_block(body);
+            }
+        }
+    }
+
+    // 检查 for 语句
+    fn check_for(self: *mut Self, stmt: AstNode) void {
+        if (stmt.children.len > 0) {
+            self.check_expr(stmt.children[0]);
+        }
+        if (stmt.children.len > 1) {
+            var body = stmt.children[1];
+            if (body.kind == "Block") {
+                self.check_block(body);
+            }
+        }
+    }
+
+    // 检查 switch 语句
+    fn check_switch(self: *mut Self, stmt: AstNode) void {
+        if (stmt.children.len > 0) {
+            self.check_expr(stmt.children[0]);
+        }
+        var mut i: usize = 1;
+        while (i < stmt.children.len) {
+            var arm = stmt.children[i];
+            if (arm.kind == "SwitchArm") {
+                var mut j: usize = 0;
+                while (j < arm.children.len) {
+                    self.check_expr(arm.children[j]);
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    // 检查 return 语句
+    fn check_return(self: *mut Self, stmt: AstNode) void {
+        if (stmt.children.len > 0) {
+            self.check_expr(stmt.children[0]);
+        }
+    }
+
+    // 检查表达式
+    fn check_expr(self: *mut Self, expr: AstNode) void {
+        var k = expr.kind;
+        if (k == "Ident") {
+            self.check_ident(expr);
+        } else if (k == "Binary") {
+            if (expr.children.len >= 2) {
+                self.check_expr(expr.children[0]);
+                self.check_expr(expr.children[1]);
+            }
+        } else if (k == "Unary") {
+            if (expr.children.len > 0) {
+                self.check_expr(expr.children[0]);
+            }
+        } else if (k == "Call") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        } else if (k == "Field") {
+            if (expr.children.len > 0) {
+                self.check_expr(expr.children[0]);
+            }
+        } else if (k == "Index") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        } else if (k == "AddrOf" or k == "Try" or k == "Await" or k == "Move") {
+            if (expr.children.len > 0) {
+                self.check_expr(expr.children[0]);
+            }
+        } else if (k == "ArrayLit") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        } else if (k == "IfExpr") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        } else if (k == "SwitchExpr") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        } else if (k == "Closure") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                if (expr.children[i].kind == "Block") {
+                    self.check_block(expr.children[i]);
+                } else {
+                    self.check_expr(expr.children[i]);
+                }
+                i += 1;
+            }
+        } else if (k == "DotCall") {
+            if (expr.children.len > 0) {
+                self.check_expr(expr.children[0]);
+            }
+        } else if (k == "Unwrap") {
+            if (expr.children.len > 0) {
+                self.check_expr(expr.children[0]);
+            }
+        } else if (k == "AtBuiltin") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        }
+    }
+
+    // 检查标识符引用
+    fn check_ident(self: *mut Self, expr: AstNode) void {
+        var name = get_prop(expr.props, "name");
+        if (name) |n| {
+            if (self.is_builtin_name(n)) { return; }
+            if (self.types.contains(n)) { return; }
+            if (self.funcs.contains(n)) { return; }
+            var found = self.lookup(n);
+            if (found) |_| { return; }
+            var msg = Vec<u8>.init(alloc);
+            msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
+            msg.append(':'); msg.append(' ');
+            msg.append('u'); msg.append('n'); msg.append('d'); msg.append('e'); msg.append('f');
+            msg.append('i'); msg.append('n'); msg.append('e'); msg.append('d');
+            msg.append(' '); msg.append('n'); msg.append('a'); msg.append('m'); msg.append('e');
+            msg.append(' '); msg.append('`');
+            var mut j: usize = 0;
+            while (j < n.len) {
+                msg.append(n[j]);
+                j += 1;
+            }
+            msg.append('`');
+            self.error(msg);
+        }
+    }
+
+    // 判断是否为内建名称
+    fn is_builtin_name(self: *mut Self, name: &[u8]) bool {
+        if (name == "alloc" or name == "page_allocator") return true;
+        if (name == "io" or name == "stdout" or name == "stderr") return true;
+        if (name == "true" or name == "false" or name == "null" or name == "void") return true;
+        if (name == "pi") return true;
+        if (name == "Vec" or name == "Deque" or name == "Map" or name == "Table") return true;
+        if (name == "String" or name == "Allocator" or name == "ExitType") return true;
+        if (name == "Pipe" or name == "Tee" or name == "Funnel" or name == "Hub") return true;
+        if (name == "i8" or name == "i16" or name == "i32" or name == "i64" or name == "i128") return true;
+        if (name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "u128") return true;
+        if (name == "isize" or name == "usize") return true;
+        if (name == "f16" or name == "f32" or name == "f64" or name == "f128") return true;
+        if (name == "bool" or name == "void") return true;
+        if (name == "comptime_int" or name == "comptime_float") return true;
+        if (name == "type" or name == "anytype") return true;
+        if (name == "Future") return true;
+        if (name == "expect" or name == "expect_eq") return true;
+        return false;
     }
 
     // 输出诊断结果
@@ -2504,9 +2816,10 @@ fn main(args: Vec<String>) !void {
         diags = Vec<Vec<u8>>.init(alloc),
         src = Vec<u8>.init(alloc),
         line_starts = Vec<usize>.init(alloc),
-        scopes = Vec<Map<Vec<u8>, VarInfo>>.init(alloc),
-        types = Map<Vec<u8>, SType>.init(alloc),
-        funcs = Map<Vec<u8>, FnSig>.init(alloc),
+        scopes = Vec<ScopeEntry>.init(alloc),
+        scope_sizes = Vec<usize>.init(alloc),
+        types = Map<&[u8], SType>.init(alloc),
+        funcs = Map<&[u8], FnSig>.init(alloc),
     });
     checker.init(src);
     checker.check_program(ast);
