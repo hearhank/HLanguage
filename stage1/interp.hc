@@ -2618,6 +2618,13 @@ fn mk_null() Value {
         obj = null, name = "",
     };
 }
+fn mk_vec(items: Vec<Value>) Value {
+    return Value{
+        kind = "vec", i = 0, f = 0.0, s = "",
+        vec = items, map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
 
 // 环境条目
 class EnvEntry {
@@ -2841,6 +2848,7 @@ fn as_f(v: Value) f64 {
 class Interp {
     prog: AstNode,
     env: Env,
+    mut flow: &[u8],   // "" 正常 | "break" | "continue"（循环消费）
 
     // 找 main 并执行其体
     fn run_main(self: *mut Self) void {
@@ -2869,10 +2877,20 @@ class Interp {
         self.env.push_scope();
         var mut i: usize = 0;
         while (i < blk.children.len) {
+            if (self.flow.len > 0) { break; }
             self.exec_stmt(blk.children[i]);
             i += 1;
         }
         self.env.pop_scope();
+    }
+
+    // 执行块或单语句（if/while/for 体两种形态）
+    fn exec_sub(self: *mut Self, node: AstNode) void {
+        if (node.kind == "Block") {
+            self.exec_block(node);
+        } else {
+            self.exec_stmt(node);
+        }
     }
 
     fn exec_stmt(self: *mut Self, stmt: AstNode) void {
@@ -2890,6 +2908,46 @@ class Interp {
             if (stmt.children.len > 0) {
                 self.eval_expr(stmt.children[0]);
             }
+        } else if (k == "If") {
+            var cv = self.eval_expr(stmt.children[0]);
+            if (self.truthy(cv)) {
+                self.exec_sub(stmt.children[1]);
+            } else if (stmt.children.len >= 3) {
+                self.exec_sub(stmt.children[2]);
+            }
+        } else if (k == "While") {
+            while (true) {
+                var cv = self.eval_expr(stmt.children[0]);
+                if (!self.truthy(cv)) { break; }
+                self.exec_sub(stmt.children[1]);
+                if (self.flow.len > 0) {
+                    var was_break = slice_eq(self.flow, "break");
+                    self.flow = "";
+                    if (was_break) { break; }
+                }
+            }
+        } else if (k == "For") {
+            var itv = self.eval_expr(stmt.children[0]);
+            if (itv.kind == "vec") {
+                var pl = get_prop(stmt.props, "payload");
+                var mut n: usize = 0;
+                while (n < itv.vec.len) {
+                    self.env.push_scope();
+                    if (pl) |p| { self.env.declare(p, itv.vec[n]); }
+                    self.exec_sub(stmt.children[1]);
+                    self.env.pop_scope();
+                    if (self.flow.len > 0) {
+                        var was_break = slice_eq(self.flow, "break");
+                        self.flow = "";
+                        if (was_break) { break; }
+                    }
+                    n += 1;
+                }
+            }
+        } else if (k == "Break") {
+            self.flow = "break";
+        } else if (k == "Continue") {
+            self.flow = "continue";
         }
     }
 
@@ -2922,6 +2980,15 @@ class Interp {
             return mk_bool(false);
         }
         if (k == "NullLit") { return mk_null(); }
+        if (k == "ArrayLit") {
+            var items = Vec<Value>.init(alloc);
+            var mut ai: usize = 0;
+            while (ai < e.children.len) {
+                items.append(self.eval_expr(e.children[ai]));
+                ai += 1;
+            }
+            return mk_vec(items);
+        }
         if (k == "Ident") {
             var t = get_prop(e.props, "name");
             if (t) |nm| {
@@ -3225,6 +3292,7 @@ fn main(args: Vec<String>) !void {
             entries = Vec<EnvEntry>.init(alloc),
             scope_sizes = Vec<usize>.init(alloc),
         }),
+        flow = "",
     });
     it.run_main();
 }

@@ -92,7 +92,7 @@
 | C1 | ✅ | 下一提交 | interp.hc 骨架落地（源自 parser.hc 副本，内嵌 lexer/parser）：main 读文件 → parse → AST 就绪打印 OK（无求值）；`--dump-ast` 与 checker.hc 同约定（args[1] 开关、args[2] 文件）；验收：10/10 语料 parse OK、interp.hc 过 checker 自检；证据存 stage1/k4test/（interp-c1-parse.txt） |
 | C2 | ✅ | 下一提交 | Value 模型（class+kind 字符串分发对齐 checker 模式：int/float/bool/str/void/vec/map/obj/fnref/null；obj 用字段平行数组避 Value→Env→Value 环）+ Env 作用域栈（扁平存储 + size 回滚 + 逆序线性查找/就地赋值）；main 增 `--self-test` 自检 7 项全 ok；01 语料 parse 不受影响；interp.hc 过 checker 自检 |
 | C3 | ✅ | 下一提交 | 表达式求值落地：字面量/Ident/Unary/ Binary（短路）/赋值（`Eq`/`PlusEq`/`MinusEq`/`StarEq`/`SlashEq`，解糖 binop）+ `io.print/println`（`{}` 占位符）；`append_bytes` 补入（非内置，checker.hc 同款）；**修正 parser 副本两处求值面缺陷**：① Call 头是 `Field|field=`（非 DotCall/method）、StrLit/BoolLit prop 名为 `value`；② parse_var_decl 把 init 表达式 `parse_expr()` 丢弃未入树（已修：init 作末子节点）；**锁定两条 H 语义**（后续任务必须遵守）：切片 `==` 不可用于运行时堆子切片（props 派生值），必须逐字节 `slice_eq`（checker.hc 同款）；`@intCast` 仅收 Int（float→int 无内建），append_float 重写为无 cast 算法（10 的幂标定+逐位减法+digit_ch 比较链）；10/10 语料与真实 hc 实测基线存 k4test/；01/02 摘除 ignore（k4 2 passed/8 ignored）；回归全绿：自检 7/7、checker 查 interp OK、k3 15 项、示例门 161/0/1 |
-| C4 | 🔴 | — | |
+| C4 | ✅ | 下一提交 | 控制流落地：If/else（parse_block_or_stmt 两形态体）、While、For（vec 迭代 + payload 载荷声明）、Break/Continue（Interp.flow 信号字段传播，循环消费；块循环遇 flow 早退）；ArrayLit 求值（mk_vec）；03 摘除 ignore（k4 3 passed/7 ignored）；回归全绿：01/02 对照、checker 查 interp OK、自检 7/7 |
 | C5 | 🔴 | — | |
 | C6 | 🔴 | — | |
 | C7 | 🔴 | — | |

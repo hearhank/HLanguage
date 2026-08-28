@@ -100,7 +100,6 @@ fn c02_vars_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c03_control_matches_rust_reference() {
     assert_corpus_pair("03-control.hc");
 }
