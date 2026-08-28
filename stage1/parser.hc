@@ -726,6 +726,29 @@ class Parser {
         return tok.kind;
     }
 
+    // 判定 `Ident<` 是否为泛型实参（匹配 `>` 后跟 . ( { 时为真；否则视为小于号）
+    // 遇语句边界（; { } and or if/while/for/return 等）即判定非泛型，避免跨语句误扫；
+    // Shr（>>）在深度 ≥2 时视为嵌套泛型闭合
+    fn generic_args_ahead(self: *mut Self) bool {
+        var mut i: usize = self.pos + 1;
+        var mut depth: usize = 1;
+        while (i < self.n and depth > 0) {
+            var k2 = self.tokens[i].kind;
+            if (k2 == "Lt") { depth += 1; }
+            else if (k2 == "Gt") { depth -= 1; }
+            else if (k2 == "Shr") {
+                if (depth < 2) { return false; }
+                depth -= 2;
+            }
+            else if (k2 == "Semi" or k2 == "LBrace" or k2 == "RBrace" or k2 == "KwAnd" or k2 == "KwOr" or k2 == "KwIf" or k2 == "KwWhile" or k2 == "KwFor" or k2 == "KwReturn" or k2 == "KwFn" or k2 == "KwClass") { return false; }
+            i += 1;
+        }
+        if (depth != 0) { return false; }
+        if (i >= self.n) { return false; }
+        var nk = self.tokens[i].kind;
+        return nk == "Dot" or nk == "LParen" or nk == "LBrace";
+    }
+
     fn peek_text(self: *mut Self) &[u8] {
         var tok = self.tokens[self.pos];
         return tok.text.as_slice();
@@ -2320,6 +2343,38 @@ class Parser {
             }
             var id = make_node("Ident");
             node_add_prop(&id, "name", name[0..name.len]);
+            // 类字面量：Type{field = val, ...}
+            if (self.at("LBrace")) {
+                self.advance();
+                var cl = make_node("ClassLit");
+                node_add_prop(&cl, "name", name[0..name.len]);
+                while (!self.at("RBrace") and !self.at("Eof")) {
+                    var fname = self.expect_name_or_keyword();
+                    var fi = make_node("FieldInit");
+                    node_add_prop(&fi, "name", fname);
+                    if (self.at("Eq")) {
+                        self.advance();
+                        var vexpr = self.parse_expr();
+                        node_add_child(&fi, vexpr);
+                    }
+                    node_add_child(&cl, fi);
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RBrace");
+                return cl;
+            }
+            // 泛型类型表达式：Vec<u8>.init(...) / Vec<Vec<u8>>.init（仅当匹配 `>` 后跟 . ( { 时消费，避免误吞小于号）
+            if (self.at("Lt") and self.generic_args_ahead()) {
+                self.advance();
+                while (!self.at("Gt") and !self.at("Shr") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                if (self.at("Shr")) { self.advance(); }
+                else { self.expect("Gt"); }
+            }
             // 它后面可能跟泛型实参：Type(T1)
             if (self.at("LParen") and self.peek_n(1) != "RParen" and self.peek_n(1) != "Star" and self.peek_n(1) != "Slash" and self.peek_n(1) != "Plus" and self.peek_n(1) != "Minus") {
                 // 可能是类型构造或函数调用，由 parse_postfix 处理

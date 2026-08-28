@@ -780,6 +780,29 @@ class Parser {
         return tok.kind;
     }
 
+    // 判定 `Ident<` 是否为泛型实参（匹配 `>` 后跟 . ( { 时为真；否则视为小于号）
+    // 遇语句边界（; { } and or if/while/for/return 等）即判定非泛型，避免跨语句误扫；
+    // Shr（>>）在深度 ≥2 时视为嵌套泛型闭合
+    fn generic_args_ahead(self: *mut Self) bool {
+        var mut i: usize = self.pos + 1;
+        var mut depth: usize = 1;
+        while (i < self.n and depth > 0) {
+            var k2 = self.tokens[i].kind;
+            if (k2 == "Lt") { depth += 1; }
+            else if (k2 == "Gt") { depth -= 1; }
+            else if (k2 == "Shr") {
+                if (depth < 2) { return false; }
+                depth -= 2;
+            }
+            else if (k2 == "Semi" or k2 == "LBrace" or k2 == "RBrace" or k2 == "KwAnd" or k2 == "KwOr" or k2 == "KwIf" or k2 == "KwWhile" or k2 == "KwFor" or k2 == "KwReturn" or k2 == "KwFn" or k2 == "KwClass") { return false; }
+            i += 1;
+        }
+        if (depth != 0) { return false; }
+        if (i >= self.n) { return false; }
+        var nk = self.tokens[i].kind;
+        return nk == "Dot" or nk == "LParen" or nk == "LBrace";
+    }
+
     fn peek_text(self: *mut Self) &[u8] {
         var tok = self.tokens[self.pos];
         return tok.text.as_slice();
@@ -2234,6 +2257,38 @@ class Parser {
         if (k == "Ident") {
             var name = self.peek_text();
             self.advance();
+            // 类字面量：Type{field = val, ...}
+            if (self.at("LBrace")) {
+                self.advance();
+                var cl = make_node("ClassLit");
+                quoted_add_prop(&cl, "name", name);
+                while (!self.at("RBrace") and !self.at("Eof")) {
+                    var fname = self.expect_name_or_keyword();
+                    var fi = make_node("FieldInit");
+                    quoted_add_prop(&fi, "name", fname);
+                    if (self.at("Eq")) {
+                        self.advance();
+                        var vexpr = self.parse_expr();
+                        node_add_child(&fi, vexpr);
+                    }
+                    node_add_child(&cl, fi);
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RBrace");
+                return cl;
+            }
+            // 泛型类型表达式：Vec<u8>.init(...) / Vec<Vec<u8>>.init（仅当匹配 `>` 后跟 . ( { 时消费，避免误吞小于号）
+            if (self.at("Lt") and self.generic_args_ahead()) {
+                self.advance();
+                while (!self.at("Gt") and !self.at("Shr") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                if (self.at("Shr")) { self.advance(); }
+                else { self.expect("Gt"); }
+            }
             var id = make_node("Ident");
             quoted_add_prop(&id, "name", name);
             return id;
@@ -3166,6 +3221,18 @@ class Checker {
         var k = expr.kind;
         if (k == "Ident") {
             self.check_ident(expr);
+        } else if (k == "ClassLit") {
+            // 只检查各字段初始化值；字段名不作标识符查析（宽容，避免与参考实现诊断分歧）
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                var fi = expr.children[i];
+                var mut j: usize = 0;
+                while (j < fi.children.len) {
+                    self.check_expr(fi.children[j]);
+                    j += 1;
+                }
+                i += 1;
+            }
         } else if (k == "Binary") {
             if (expr.children.len >= 2) {
                 self.check_expr(expr.children[0]);

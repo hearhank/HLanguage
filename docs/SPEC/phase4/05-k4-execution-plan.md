@@ -84,7 +84,7 @@
 | A1 | ✅ | 下一提交 | FieldDecl 节点落地（ty 存 props 对齐 Param 模式，非 children）；显式消费 KwMut（expect_ident 无条件推进是失步引擎）；逗号/分号容错；parser.hc 与 checker.hc 内嵌副本同步修改；K3 14 项+示例门 161 全绿 |
 | A2 | ✅ | 下一提交 | 方法节点经 finish_fn_decl 入树（prop method=类名）；验证中发现并同步修复整链解析缺陷：① parse_block 缺 `{` 时不再吞语句到任意 `}`（失控根因）；② 新增 parse_block_or_stmt 支持无括号 if/while/for 体；③ 载荷捕获 `) \|v\|` 移到右括号后（45 处用法，原先从未生效）；④ 参数/返回类型的泛型实参消费 + var mut 前缀；⑤ 合并重复 import 分支（`.{io}` 选择集）。自检误报 lexer 690→**4**、parser 1616→**13**、checker 2387→**40**；剩余几乎全为 ClassLit 字段名泄漏（→A4） |
 | A3 | ✅ | 下一提交 | check_decl 增加 Class 分支；check_class 遍历方法逐个 check_fn；Checker 增 current_class 字段，check_fn 内注册 self（显式 self 参数随后覆盖）；cls/pa2 探针方法体 0 误报；K3 14 项+示例门 161 全绿 |
-| A4 | 🔴 | — | 含 ClassLit 表达式解析（A0 发现 #2/#4） |
+| A4 | ✅ | 下一提交 | ClassLit 表达式解析（Ident+`{` → ClassLit+FieldInit 子节点，parser/checker 双副本同步）+ checker 宽容分支（只查字段值表达式）；泛型类型表达式修复：新增 `generic_args_ahead` 前瞻（匹配 `>` 后跟 `.`/`(`/`{` 才判定泛型；遇 `;`/`{`/`}`/`and`/`or`/if/while/for/return 等语句边界即否决，防跨语句误扫；`Shr` 深度≥2 视为嵌套闭合），解决 `Vec<u8>.init`/`Vec<Vec<u8>>.init` 在表达式位被比较运算吞 `<`（checker main 的 `Vec<Vec<u8>>.init` 泄漏 7 个字段名+`init`，即本项最后 8 误报）。三源自检全部归零：lexer 690→**0** / parser 1616→**0** / checker 2387→**0**；探针 3 + K3 14 项 + 示例门 161 全绿 |
 | A5 | 🔴 | — | 原目标（顶层函数误报）已被 A2 修复消解（hexval/utf8_width 不再误报）；剩余验证并入 A6 |
 | A6 | 🔴 | — | |
 | B1 | 🔴 | — | |
