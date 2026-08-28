@@ -87,7 +87,7 @@
 | A4 | ✅ | 下一提交 | ClassLit 表达式解析（Ident+`{` → ClassLit+FieldInit 子节点，parser/checker 双副本同步）+ checker 宽容分支（只查字段值表达式）；泛型类型表达式修复：新增 `generic_args_ahead` 前瞻（匹配 `>` 后跟 `.`/`(`/`{` 才判定泛型；遇 `;`/`{`/`}`/`and`/`or`/if/while/for/return 等语句边界即否决，防跨语句误扫；`Shr` 深度≥2 视为嵌套闭合），解决 `Vec<u8>.init`/`Vec<Vec<u8>>.init` 在表达式位被比较运算吞 `<`（checker main 的 `Vec<Vec<u8>>.init` 泄漏 7 个字段名+`init`，即本项最后 8 误报）。三源自检全部归零：lexer 690→**0** / parser 1616→**0** / checker 2387→**0**；探针 3 + K3 14 项 + 示例门 161 全绿 |
 | A5 | 🔴 | — | 原目标（顶层函数误报）已被 A2 修复消解（hexval/utf8_width 不再误报）；剩余验证并入 A6 |
 | A6 | ✅ | 下一提交 | 三源自检 0/0/0 由 k3 断言锁死：self_check_completes_on_stage1_sources 从「不中止」升级为「零误报」（输出恰为 OK），防回退；探针 pa2/cls/pc 固化为语料（新增 probes_check_ok 回归测试，k3 14→15 项）；`cargo test --workspace` 全绿 |
-| B1 | 🔴 | — | |
+| B1 | ✅ | 下一提交 | `stage1/exec-corpus/` 10 个递进语料（各 ≤60 行，首注释声明覆盖面+预期 stdout，真实 hc 实测登记）；全部被 stage1 checker 判 OK（顺带修复 check_for 未注册 for 载荷绑定的缺口，清零 03/05/10 的 8 条 undefined 误报）；AST 缺口扫描（k4test/ast-unknown-scan.txt）锁定 C 组解析工作量：赋值语句 `=`/复合 `+=`（C3）、`.?` 后缀（C6/C9）、`orelse` 表达式（C9）、`catch` 表达式（C9）；`try` 已可解析。测试输出/基线存 stage1/k4test/ |
 | B2 | 🔴 | — | |
 | C1 | 🔴 | — | |
 | C2 | 🔴 | — | |

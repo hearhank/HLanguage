@@ -1,0 +1,20 @@
+== 01-arith.hc
+0
+== 02-vars.hc
+5
+== 03-control.hc
+3
+== 04-fn-rec.hc
+0
+== 05-vec.hc
+3
+== 06-string.hc
+0
+== 07-class.hc
+2
+== 08-map.hc
+5
+== 09-errors.hc
+3
+== 10-comprehensive.hc
+5

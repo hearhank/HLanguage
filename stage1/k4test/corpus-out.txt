@@ -1,0 +1,68 @@
+== 01-arith.hc
+7
+13
+2
+3
+-3
+3.5
+true
+false
+true
+== 02-vars.hc
+24
+15
+100
+7
+== 03-control.hc
+25
+big
+10
+1
+2
+4
+== 04-fn-rec.hc
+55
+120
+30
+== 05-vec.hc
+3
+20
+30
+60
+10
+20
+30
+== 06-string.hc
+5
+101
+ell
+hello world
+true
+0
+1
+42
+== 07-class.hc
+2
+7
+5
+== 08-map.hc
+5
+true
+false
+2
+9
+0
+== 09-errors.hc
+42
+0
+7
+5
+== 10-comprehensive.hc
+12
+3
+4
+2
+-1
+small
+mid
+24

@@ -3149,7 +3149,21 @@ class Checker {
         if (stmt.children.len > 1) {
             var body = stmt.children[1];
             if (body.kind == "Block") {
-                self.check_block(body);
+                // 迭代载荷 `for (xs) \|x\| {...}`：载荷绑定仅限循环体作用域
+                var p = get_prop(stmt.props, "payload");
+                if (p) |pn| {
+                    self.push_scope();
+                    var info = VarInfo{
+                        ty = make_ty("unknown"),
+                        source = AllocSource.Unknown,
+                        mut_ = false,
+                    };
+                    self.register(pn, info);
+                    self.check_block(body);
+                    self.pop_scope();
+                } else {
+                    self.check_block(body);
+                }
             }
         }
     }
