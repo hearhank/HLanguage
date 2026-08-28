@@ -8,7 +8,7 @@
 |------|------|------|
 | K1 Lexer | `lexer.hc` | ✅ 已完成（6621 token 零 diff） |
 | K2 Parser | `parser.hc` | ✅ 已完成（性能已优化，解析自身 ~1s） |
-| **K3 语义分析** | **`checker.hc`** | **🟡 推进中（8/11 任务完成）** |
+| **K3 语义分析** | **`checker.hc`** | **✅ 已完成（11/11 任务完成，13 项对照测试全部通过）** |
 | K4 后端 | — | 🔴 待实现 |
 | K5 自举闭环 | — | 🔴 待实现 |
 | K6 可复现构建 | — | 🔴 待实现 |
@@ -17,7 +17,7 @@
 
 `stage1/checker.hc` 是 H 版语义分析器（语义阶段），与 Rust 参考实现（`hc check`）逐项对照，差异即 bug。
 
-### 已完成任务（8/11）
+### 已完成任务（11/11）
 
 | # | 任务 | 状态 |
 |---|------|------|
@@ -31,11 +31,11 @@
 | 8 | 语句类型检查（if/while/for 条件检查） | ✅ |
 | 9 | 所有权分析（分配来源/move/引用逃逸） | ✅ |
 | 10 | 错误集分析（错误集推断/错误码表） | ✅ |
-| 11 | 集成验证（全部语料对照 + 修复不匹配） | ⏳ |
+| 11 | 集成验证（全部语料对照 + 修复不匹配） | ✅ |
 
 ### 对照测试
 
-测试位于 `tag1/hc-tools/tests/k3_checker.rs`，当前 6 项测试全部通过：
+测试位于 `tag1/hc-tools/tests/k3_checker.rs`，当前 13 项测试全部通过：
 
 | 测试 | 语料文件 | 说明 |
 |------|---------|------|
@@ -46,7 +46,9 @@
 | `undefined_name_detected` | `17-undefined-simple.hc` | 未定义名称检测 |
 | `if_while_matches_rust_reference` | `12-if-while.hc` | if/while 语句 |
 | `ownership_move_detected` | `21-ownership.hc` | 所有权分析（move 检测） |
+| `reference_escape_detected` | `23-ref-escape.hc` | 引用逃逸检测（return &局部） |
 | `error_set_detected` | `22-error-set.hc` | 错误集分析（错误字面量检测） |
+| `type_error_detected` | `18-type-error.hc` | 类型错误检测 |
 | `integration_strings_matches_rust_reference` | `04-strings.hc` | 字符串字面量对照 |
 | `integration_undefined_matches_rust_reference` | `16-undefined.hc` | 带类型注解的未定义变量对照 |
 | `integration_debug_files_matches_rust_reference` | `19-get-prop-test.hc`, `20-debug-ty.hc` | 调试文件对照 |

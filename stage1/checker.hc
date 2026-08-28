@@ -78,6 +78,15 @@ fn slice_eq(a: &[u8], b: &[u8]) bool {
     return true;
 }
 
+// 追加字节切片到 Vec<u8>（用于构建错误消息）
+fn append_bytes(msg: *mut Vec<u8>, s: &[u8]) void {
+    var mut i: usize = 0;
+    while (i < s.len) {
+        msg.*.append(s[i]);
+        i += 1;
+    }
+}
+
 // ============================================================
 // 关键字字典
 // ============================================================
@@ -2983,6 +2992,25 @@ class Checker {
         if (stmt.children.len > 0) {
             var expr = stmt.children[0];
             self.check_expr(expr);
+            // 检查是否返回局部变量引用（引用逃逸检测）
+            if (expr.kind == "AddrOf" and expr.children.len > 0) {
+                var inner = expr.children[0];
+                if (inner.kind == "Ident") {
+                    var name = get_prop(inner.props, "name");
+                    if (name) |n| {
+                        // 若标识符为作用域内局部变量/参数 → 引用逃逸
+                        var found = self.lookup(n);
+                        if (found) |_| {
+                            var msg = Vec<u8>.init(alloc);
+                            append_bytes(&msg, "error: cannot return reference to `");
+                            var mut j: usize = 0;
+                            while (j < n.len) { msg.append(n[j]); j += 1; }
+                            append_bytes(&msg, "`: reference escapes function scope");
+                            self.error(msg);
+                        }
+                    }
+                }
+            }
             // 检查是否返回错误字面量但函数没有声明错误联合返回类型
             if (expr.kind == "Field" and expr.children.len > 0) {
                 var base = expr.children[0];
@@ -2992,18 +3020,7 @@ class Checker {
                         if (slice_eq(n, "error")) {
                             if (!self.current_fn_ret_is_error_union) {
                                 var msg = Vec<u8>.init(alloc);
-                                msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
-                                msg.append(':'); msg.append(' ');
-                                msg.append('c'); msg.append('a'); msg.append('n'); msg.append('n'); msg.append('o'); msg.append('t');
-                                msg.append(' '); msg.append('r'); msg.append('e'); msg.append('t'); msg.append('u'); msg.append('r'); msg.append('n');
-                                msg.append(' '); msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
-                                msg.append(' '); msg.append('l'); msg.append('i'); msg.append('t'); msg.append('e'); msg.append('r'); msg.append('a'); msg.append('l');
-                                msg.append(':'); msg.append(' '); msg.append('f'); msg.append('u'); msg.append('n'); msg.append('c'); msg.append('t'); msg.append('i'); msg.append('o'); msg.append('n');
-                                msg.append(' '); msg.append('d'); msg.append('o'); msg.append('e'); msg.append('s'); msg.append(' ');
-                                msg.append('n'); msg.append('o'); msg.append('t'); msg.append(' ');
-                                msg.append('d'); msg.append('e'); msg.append('c'); msg.append('l'); msg.append('a'); msg.append('r'); msg.append('e');
-                                msg.append(' '); msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r'); msg.append(' ');
-                                msg.append('u'); msg.append('n'); msg.append('i'); msg.append('o'); msg.append('n');
+                                append_bytes(&msg, "error: cannot return error literal: function does not declare error union");
                                 self.error(msg);
                             }
                         }

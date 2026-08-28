@@ -234,3 +234,41 @@ fn if_while_matches_rust_reference() {
 
     assert_checker_matches(&h_checker, &corpus);
 }
+
+#[test]
+fn reference_escape_detected() {
+    // Task 9: 引用逃逸检测——H 版 checker 应报告返回局部变量引用错误
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/23-ref-escape.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
+    let h = run_hc(&["run", h_checker.to_str().unwrap(), corpus.to_str().unwrap()]);
+    let h_out = stdout(&h);
+    assert!(
+        h_out.contains("cannot return reference to `x`"),
+        "H checker 应报告 reference escape，实际输出：{h_out}"
+    );
+    // 只报告一行错误
+    assert_eq!(
+        h_out.trim().split('\n').count(),
+        1,
+        "H checker 应只报告一行错误，实际输出：{h_out}"
+    );
+}
+
+#[test]
+fn type_error_detected() {
+    // Task 11: 类型错误检测——H 版 checker 应报告类型不匹配错误
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let corpus = root.join("stage1/corpus/18-type-error.hc");
+    assert!(corpus.is_file(), "语料文件缺失：{}", corpus.display());
+
+    let h = run_hc(&["run", h_checker.to_str().unwrap(), corpus.to_str().unwrap()]);
+    let h_out = stdout(&h);
+    assert!(
+        h_out.contains("type mismatch"),
+        "H checker 应报告 type mismatch，实际输出：{h_out}"
+    );
+}
