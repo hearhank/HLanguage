@@ -2491,22 +2491,15 @@ pub(crate) fn call_io_method_ir(
 /// 内建方法（对齐 oracle `call_builtin_method` interp.rs:3511-4027 全量面：标量/Str/Arr/
 /// Map/Alloc/Arena/Io/Fs/Time/Net/TcpConn/TcpListener/File + iter/filter/map + 序列化）。
 /// 返回 `Ok(None)` = 非内建方法（调用方回退到 `{Type}.{method}` 用户方法表）。
-pub(crate) fn call_builtin_method(
+/// String 方法组：拼接/切片/查找/替换/大小写等字符串域操作
+fn call_string_method_ir(
     ctx: &mut Ctx,
-    module: &IrModule,
-    self_v: &IrValue,
+    s: &StringDataIr,
     method: &str,
     args: &[IrValue],
 ) -> R<Option<IrValue>> {
-    let self_v = deref_value(ctx, self_v).clone();
-    // 标量方法（INumber/ICompare 族：a.add(b) ≡ a + b）
-    if matches!(self_v, IrValue::Int(_) | IrValue::Float(_)) {
-        if let Some(v) = call_scalar_method_ir(ctx, &self_v, method, args)? {
-            return Ok(Some(v));
-        }
-    }
-    match (&self_v, method) {
-        (IrValue::String(s), "concat") => {
+    match method {
+        "concat" => {
             let other = args
                 .first()
                 .ok_or_else(|| IrError::msg("ArityMismatch", "concat"))?;
@@ -2519,13 +2512,13 @@ pub(crate) fn call_builtin_method(
                 _ => Err(IrError::msg("TypeError", "concat expects &[u8]")),
             }
         }
-        (IrValue::String(s), "as_slice") => Ok(Some(IrValue::String(StringDataIr::from_bytes(
+        "as_slice" => Ok(Some(IrValue::String(StringDataIr::from_bytes(
             s.as_slice().to_vec(),
         )))),
-        (IrValue::String(s), "into_array") => Ok(Some(IrValue::String(StringDataIr::from_bytes(
+        "into_array" => Ok(Some(IrValue::String(StringDataIr::from_bytes(
             s.as_slice().to_vec(),
         )))),
-        (IrValue::String(s), "split") => {
+        "split" => {
             let sep_v = deref_value(
                 ctx,
                 args.get(0)
@@ -2556,13 +2549,13 @@ pub(crate) fn call_builtin_method(
             out.push(str_bytes_val(data[start..].to_vec()));
             Ok(Some(make_arr(ctx, out)))
         }
-        (IrValue::String(s), "to_bytes") => {
+        "to_bytes" => {
             let bytes = s.as_slice();
             let mut out = (bytes.len() as u64).to_le_bytes().to_vec();
             out.extend_from_slice(bytes);
             Ok(Some(str_bytes_val(out)))
         }
-        (IrValue::String(s), "find") => {
+        "find" => {
             let needle_v = deref_value(
                 ctx,
                 args.get(0)
@@ -2586,7 +2579,7 @@ pub(crate) fn call_builtin_method(
                 None => IrValue::Opt(None),
             }))
         }
-        (IrValue::String(s), "substring") => {
+        "substring" => {
             let lo = int_arg_ir(ctx, args, 0)?;
             let hi = int_arg_ir(ctx, args, 1)?;
             let (lo, hi) = (lo.max(0) as usize, hi.max(0) as usize);
@@ -2594,7 +2587,7 @@ pub(crate) fn call_builtin_method(
             let sub = s.as_slice()[lo.min(hi)..hi].to_vec();
             Ok(Some(str_bytes_val(sub)))
         }
-        (IrValue::String(s), "replace") => {
+        "replace" => {
             let from_b = str_arg_ir(ctx, args, 0)?;
             let to_b = str_arg_ir(ctx, args, 1)?;
             let data = s.as_slice().to_vec();
@@ -2616,9 +2609,9 @@ pub(crate) fn call_builtin_method(
             }
             Ok(Some(str_bytes_val(out)))
         }
-        (IrValue::String(s), "len") => Ok(Some(IrValue::Int(s.len() as i128))),
+        "len" => Ok(Some(IrValue::Int(s.len() as i128))),
         // G2（io 差异项）：to_upper/to_lower——ASCII 大小写转换（非 ASCII 字节不变）
-        (IrValue::String(s), "to_upper") | (IrValue::String(s), "to_lower") => {
+        "to_upper" | "to_lower" => {
             let upper = method == "to_upper";
             let out: Vec<u8> = s
                 .as_slice()
@@ -2633,10 +2626,22 @@ pub(crate) fn call_builtin_method(
                 .collect();
             Ok(Some(str_bytes_val(out)))
         }
-        (IrValue::Arr(c), "len") => Ok(Some(IrValue::Int(ctx.elems_len(*c) as i128))),
-        (IrValue::Arr(c), "as_slice") => {
+        _ => Ok(None),
+    }
+}
+
+/// Arr 方法组：增删改查等集合基础操作
+fn call_array_method_ir(
+    ctx: &mut Ctx,
+    c: usize,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match method {
+        "len" => Ok(Some(IrValue::Int(ctx.elems_len(c) as i128))),
+        "as_slice" => {
             let cells = &ctx.cells;
-            let bytes = match &cells[*c] {
+            let bytes = match &cells[c] {
                 Cell::Elems(elems) => elems
                     .iter()
                     .filter_map(|cid| match &cells[*cid] {
@@ -2648,52 +2653,52 @@ pub(crate) fn call_builtin_method(
             };
             Ok(Some(IrValue::String(StringDataIr::from_bytes(bytes))))
         }
-        (IrValue::Arr(c), "append") => {
+        "append" => {
             let v = args
                 .first()
                 .ok_or_else(|| IrError::msg("ArityMismatch", "append"))?
                 .clone();
             let nc = ctx.alloc(Cell::Value(v));
-            match &mut ctx.cells[*c] {
+            match &mut ctx.cells[c] {
                 Cell::Elems(e) => e.push(nc),
                 _ => return Err(IrError::msg("TypeError", "append expects array")),
             }
             Ok(Some(IrValue::Void))
         }
-        (IrValue::Arr(c), "push_back") => {
+        "push_back" => {
             let v = args
                 .first()
                 .ok_or_else(|| IrError::msg("ArityMismatch", "push_back"))?
                 .clone();
             let nc = ctx.alloc(Cell::Value(v));
-            match &mut ctx.cells[*c] {
+            match &mut ctx.cells[c] {
                 Cell::Elems(e) => e.push(nc),
                 _ => return Err(IrError::msg("TypeError", "push_back expects array")),
             }
             Ok(Some(IrValue::Void))
         }
-        (IrValue::Arr(c), "push_front") => {
+        "push_front" => {
             let v = args
                 .first()
                 .ok_or_else(|| IrError::msg("ArityMismatch", "push_front"))?
                 .clone();
             let nc = ctx.alloc(Cell::Value(v));
-            match &mut ctx.cells[*c] {
+            match &mut ctx.cells[c] {
                 Cell::Elems(e) => e.insert(0, nc),
                 _ => return Err(IrError::msg("TypeError", "push_front expects array")),
             }
             Ok(Some(IrValue::Void))
         }
-        (IrValue::Arr(c), "pop_back") => {
-            let popped = match &mut ctx.cells[*c] {
+        "pop_back" => {
+            let popped = match &mut ctx.cells[c] {
                 Cell::Elems(e) => e.pop(),
                 _ => None,
             };
             let v = popped.map(|ec| ctx.cell_value(ec).clone());
             Ok(Some(opt_val(v)))
         }
-        (IrValue::Arr(c), "pop_front") => {
-            let popped = match &mut ctx.cells[*c] {
+        "pop_front" => {
+            let popped = match &mut ctx.cells[c] {
                 Cell::Elems(e) => {
                     if e.is_empty() {
                         None
@@ -2706,33 +2711,33 @@ pub(crate) fn call_builtin_method(
             let v = popped.map(|ec| ctx.cell_value(ec).clone());
             Ok(Some(opt_val(v)))
         }
-        (IrValue::Arr(c), "front") => {
-            let v = match &ctx.cells[*c] {
+        "front" => {
+            let v = match &ctx.cells[c] {
                 Cell::Elems(e) => e.first().map(|ec| ctx.cell_value(*ec).clone()),
                 _ => None,
             };
             Ok(Some(opt_val(v)))
         }
-        (IrValue::Arr(c), "back") => {
-            let v = match &ctx.cells[*c] {
+        "back" => {
+            let v = match &ctx.cells[c] {
                 Cell::Elems(e) => e.last().map(|ec| ctx.cell_value(*ec).clone()),
                 _ => None,
             };
             Ok(Some(opt_val(v)))
         }
-        (IrValue::Arr(c), "get") => {
+        "get" => {
             let i = as_index(
                 ctx,
                 args.get(0)
                     .ok_or_else(|| IrError::msg("ArityMismatch", "get"))?,
             )?;
-            let v = match &ctx.cells[*c] {
+            let v = match &ctx.cells[c] {
                 Cell::Elems(e) => e.get(i).map(|ec| ctx.cell_value(*ec).clone()),
                 _ => None,
             };
             Ok(Some(opt_val(v)))
         }
-        (IrValue::Arr(c), "put") => {
+        "put" => {
             let i = as_index(
                 ctx,
                 args.get(0)
@@ -2743,7 +2748,7 @@ pub(crate) fn call_builtin_method(
                 .ok_or_else(|| IrError::msg("ArityMismatch", "put"))?
                 .clone();
             let nc = ctx.alloc(Cell::Value(v));
-            match &mut ctx.cells[*c] {
+            match &mut ctx.cells[c] {
                 Cell::Elems(e) => {
                     if i >= e.len() {
                         return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
@@ -2754,13 +2759,13 @@ pub(crate) fn call_builtin_method(
                 _ => Err(IrError::msg("TypeError", "put expects array")),
             }
         }
-        (IrValue::Arr(c), "remove") => {
+        "remove" => {
             let i = as_index(
                 ctx,
                 args.get(0)
                     .ok_or_else(|| IrError::msg("ArityMismatch", "remove"))?,
             )?;
-            let removed = match &mut ctx.cells[*c] {
+            let removed = match &mut ctx.cells[c] {
                 Cell::Elems(e) => {
                     if i >= e.len() {
                         return Err(IrError::msg("IndexOutOfBounds", "index out of bounds"));
@@ -2774,7 +2779,7 @@ pub(crate) fn call_builtin_method(
                 None => Err(IrError::msg("TypeError", "remove expects array")),
             }
         }
-        (IrValue::Arr(c), "extend") => {
+        "extend" => {
             let v = deref_value(
                 ctx,
                 args.first()
@@ -2787,7 +2792,7 @@ pub(crate) fn call_builtin_method(
                         Cell::Elems(e) => e.clone(),
                         _ => return Err(IrError::msg("TypeError", "extend expects array")),
                     };
-                    match &mut ctx.cells[*c] {
+                    match &mut ctx.cells[c] {
                         Cell::Elems(e) => {
                             e.extend_from_slice(&src_elems);
                             Ok(Some(IrValue::Void))
@@ -2800,7 +2805,7 @@ pub(crate) fn call_builtin_method(
                     for &byte in s.as_slice() {
                         new_cells.push(ctx.alloc(Cell::Value(IrValue::Int(byte as i128))));
                     }
-                    match &mut ctx.cells[*c] {
+                    match &mut ctx.cells[c] {
                         Cell::Elems(e) => {
                             e.extend_from_slice(&new_cells);
                             Ok(Some(IrValue::Void))
@@ -2811,7 +2816,7 @@ pub(crate) fn call_builtin_method(
                 _ => Err(IrError::msg("TypeError", "extend expects array or bytes")),
             }
         }
-        (IrValue::Arr(c), "append_u64") => {
+        "append_u64" => {
             let n = match deref_value(
                 ctx,
                 args.first()
@@ -2824,7 +2829,7 @@ pub(crate) fn call_builtin_method(
             for byte in n.to_le_bytes() {
                 new_cells.push(ctx.alloc(Cell::Value(IrValue::Int(byte as i128))));
             }
-            match &mut ctx.cells[*c] {
+            match &mut ctx.cells[c] {
                 Cell::Elems(e) => {
                     e.extend_from_slice(&new_cells);
                     Ok(Some(IrValue::Void))
@@ -2832,8 +2837,20 @@ pub(crate) fn call_builtin_method(
                 _ => Err(IrError::msg("TypeError", "append_u64 expects array")),
             }
         }
+        _ => Ok(None),
+    }
+}
+
+/// Arr 构造/字节组（G4）：`init(alloc)` 空容器、from_bytes/to_bytes 序列化
+fn call_array_bytes_method_ir(
+    ctx: &mut Ctx,
+    c: usize,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match method {
         // G4：`Vec(T).init(alloc)`——集合空容器，捕获分配器引用（缺省回退全局 alloc）
-        (IrValue::Arr(_), "init") => {
+        "init" => {
             let alloc_v = args
                 .first()
                 .cloned()
@@ -2857,7 +2874,7 @@ pub(crate) fn call_builtin_method(
             };
             Ok(Some(make_vec_with(ctx, items, alloc_v)))
         }
-        (IrValue::Arr(_), "from_bytes") => {
+        "from_bytes" => {
             let b = str_arg_ir(ctx, args, 0)?;
             if b.len() < 8 {
                 return Err(IrError::msg("InvalidBytes", "truncated byte data"));
@@ -2878,11 +2895,11 @@ pub(crate) fn call_builtin_method(
             let alloc = implicit_env_value(ctx, "alloc");
             Ok(Some(make_vec_with(ctx, items, alloc)))
         }
-        (IrValue::Arr(c), "to_bytes") => {
+        "to_bytes" => {
             // 集合 → 字节（u64 LE 元素数前缀 + 逐元素 value_to_bytes，对齐 oracle
             // interp.rs:3959-3969）。IR 的 value_to_bytes_ir 覆盖标量/字符串子集，
             // 聚合元素序列化为空（Phase 7 取舍）。
-            let elems = match &ctx.cells[*c] {
+            let elems = match &ctx.cells[c] {
                 Cell::Elems(e) => e.clone(),
                 _ => return Err(IrError::msg("TypeError", "to_bytes expects array")),
             };
@@ -2892,6 +2909,170 @@ pub(crate) fn call_builtin_method(
                 out.extend(value_to_bytes_ir(ctx, &v));
             }
             Ok(Some(str_bytes_val(out)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// 通用迭代器方法组：iter/filter/map（任意可迭代值，E4）
+fn call_iter_method_ir(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match method {
+        "iter" => Ok(Some(iter_to_arr_ir(ctx, module, self_v, 0)?)),
+        "filter" => {
+            let f = deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "filter"))?,
+            )
+            .clone();
+            let src = iter_to_arr_ir(ctx, module, self_v, 0)?;
+            let mut out = Vec::new();
+            for item in arr_items(ctx, &src)? {
+                if call_closure_bool_ir(ctx, module, &f, &[item.clone()])? {
+                    out.push(item);
+                }
+            }
+            Ok(Some(make_arr(ctx, out)))
+        }
+        "map" => {
+            let f = deref_value(
+                ctx,
+                args.first()
+                    .ok_or_else(|| IrError::msg("ArityMismatch", "map"))?,
+            )
+            .clone();
+            let src = iter_to_arr_ir(ctx, module, self_v, 0)?;
+            let mut out = Vec::new();
+            for item in arr_items(ctx, &src)? {
+                let mapped = call_closure_value_ir(ctx, module, &f, &[item])?;
+                out.push(mapped);
+            }
+            Ok(Some(make_arr(ctx, out)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// 同步原语方法组：Mutex lock/try_lock、Chan send/recv/try_send/try_recv/close（E4）
+fn call_sync_method_ir(
+    module: &IrModule,
+    self_v: &IrValue,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    match (self_v, method) {
+        (IrValue::Mutex(m), "lock") => match m.lock() {
+            Ok(v) => Ok(Some(v.clone())),
+            Err(_) => Err(IrError::msg("MutexPoisoned", "Mutex is poisoned")),
+        },
+        (IrValue::Mutex(m), "try_lock") => match m.try_lock() {
+            Ok(v) => Ok(Some(IrValue::Opt(Some(Box::new(v.clone()))))),
+            Err(_) => Ok(Some(IrValue::Opt(None))),
+        },
+        (IrValue::Chan(ch), "send") => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "send"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            if inner.closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            while inner.queue.len() >= ch.capacity && !inner.closed {
+                inner = ch.send_cond.wait(inner).unwrap();
+            }
+            if inner.closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            inner.queue.push_back(args[0].clone());
+            ch.recv_cond.notify_one();
+            Ok(Some(IrValue::Void))
+        }
+        (IrValue::Chan(ch), "recv") => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "recv"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            while inner.queue.is_empty() && !inner.closed {
+                inner = ch.recv_cond.wait(inner).unwrap();
+            }
+            if inner.queue.is_empty() && inner.closed {
+                return Ok(Some(err_val(module, "Closed")));
+            }
+            let v = inner.queue.pop_front().unwrap();
+            ch.send_cond.notify_one();
+            Ok(Some(v))
+        }
+        (IrValue::Chan(ch), "try_send") => {
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "try_send"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            if inner.closed || inner.queue.len() >= ch.capacity {
+                return Ok(Some(IrValue::Bool(false)));
+            }
+            inner.queue.push_back(args[0].clone());
+            ch.recv_cond.notify_one();
+            Ok(Some(IrValue::Bool(true)))
+        }
+        (IrValue::Chan(ch), "try_recv") => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "try_recv"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            if let Some(v) = inner.queue.pop_front() {
+                ch.send_cond.notify_one();
+                Ok(Some(opt_val(Some(v))))
+            } else {
+                Ok(Some(IrValue::Opt(None)))
+            }
+        }
+        (IrValue::Chan(ch), "close") => {
+            if !args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "close"));
+            }
+            let mut inner = ch.inner.lock().unwrap();
+            inner.closed = true;
+            ch.send_cond.notify_all();
+            ch.recv_cond.notify_all();
+            Ok(Some(IrValue::Void))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub(crate) fn call_builtin_method(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    self_v: &IrValue,
+    method: &str,
+    args: &[IrValue],
+) -> R<Option<IrValue>> {
+    let self_v = deref_value(ctx, self_v).clone();
+    // 标量方法（INumber/ICompare 族：a.add(b) ≡ a + b）
+    if matches!(self_v, IrValue::Int(_) | IrValue::Float(_)) {
+        if let Some(v) = call_scalar_method_ir(ctx, &self_v, method, args)? {
+            return Ok(Some(v));
+        }
+    }
+    match (&self_v, method) {
+        (
+            IrValue::String(s),
+            "concat" | "as_slice" | "into_array" | "split" | "to_bytes" | "find" | "substring"
+            | "replace" | "len" | "to_upper" | "to_lower",
+        ) => call_string_method_ir(ctx, s, method, args),
+        (
+            IrValue::Arr(c),
+            "len" | "as_slice" | "append" | "push_back" | "push_front" | "pop_back" | "pop_front"
+            | "front" | "back" | "get" | "put" | "remove" | "extend" | "append_u64",
+        ) => call_array_method_ir(ctx, *c, method, args),
+        (IrValue::Arr(c), "init" | "from_bytes" | "to_bytes") => {
+            call_array_bytes_method_ir(ctx, *c, method, args)
         }
         (IrValue::Slice { len, .. }, "len") => Ok(Some(IrValue::Int(*len as i128))),
         // G4：`Map(K,V).init(alloc)`——集合空容器，捕获分配器引用（缺省回退全局 alloc）
@@ -3023,114 +3204,10 @@ pub(crate) fn call_builtin_method(
             "class to_bytes requires type layout (not in IR runtime)",
         )),
         (IrValue::Class(_), "to_json") => Ok(Some(str_val(&value_to_json_ir(ctx, &self_v)))),
-        (_, "iter") => Ok(Some(iter_to_arr_ir(ctx, module, &self_v, 0)?)),
-        (_, "filter") => {
-            let f = deref_value(
-                ctx,
-                args.first()
-                    .ok_or_else(|| IrError::msg("ArityMismatch", "filter"))?,
-            )
-            .clone();
-            let src = iter_to_arr_ir(ctx, module, &self_v, 0)?;
-            let mut out = Vec::new();
-            for item in arr_items(ctx, &src)? {
-                if call_closure_bool_ir(ctx, module, &f, &[item.clone()])? {
-                    out.push(item);
-                }
-            }
-            Ok(Some(make_arr(ctx, out)))
-        }
-        (_, "map") => {
-            let f = deref_value(
-                ctx,
-                args.first()
-                    .ok_or_else(|| IrError::msg("ArityMismatch", "map"))?,
-            )
-            .clone();
-            let src = iter_to_arr_ir(ctx, module, &self_v, 0)?;
-            let mut out = Vec::new();
-            for item in arr_items(ctx, &src)? {
-                let mapped = call_closure_value_ir(ctx, module, &f, &[item])?;
-                out.push(mapped);
-            }
-            Ok(Some(make_arr(ctx, out)))
-        }
-        // E4：Mutex 方法 lock/try_lock
-        (IrValue::Mutex(m), "lock") => match m.lock() {
-            Ok(v) => Ok(Some(v.clone())),
-            Err(_) => Err(IrError::msg("MutexPoisoned", "Mutex is poisoned")),
-        },
-        (IrValue::Mutex(m), "try_lock") => match m.try_lock() {
-            Ok(v) => Ok(Some(IrValue::Opt(Some(Box::new(v.clone()))))),
-            Err(_) => Ok(Some(IrValue::Opt(None))),
-        },
-        // E4：chan<T> 方法
-        (IrValue::Chan(ch), "send") => {
-            if args.len() != 1 {
-                return Err(IrError::msg("ArityMismatch", "send"));
-            }
-            let mut inner = ch.inner.lock().unwrap();
-            if inner.closed {
-                return Ok(Some(err_val(module, "Closed")));
-            }
-            while inner.queue.len() >= ch.capacity && !inner.closed {
-                inner = ch.send_cond.wait(inner).unwrap();
-            }
-            if inner.closed {
-                return Ok(Some(err_val(module, "Closed")));
-            }
-            inner.queue.push_back(args[0].clone());
-            ch.recv_cond.notify_one();
-            Ok(Some(IrValue::Void))
-        }
-        (IrValue::Chan(ch), "recv") => {
-            if !args.is_empty() {
-                return Err(IrError::msg("ArityMismatch", "recv"));
-            }
-            let mut inner = ch.inner.lock().unwrap();
-            while inner.queue.is_empty() && !inner.closed {
-                inner = ch.recv_cond.wait(inner).unwrap();
-            }
-            if inner.queue.is_empty() && inner.closed {
-                return Ok(Some(err_val(module, "Closed")));
-            }
-            let v = inner.queue.pop_front().unwrap();
-            ch.send_cond.notify_one();
-            Ok(Some(v))
-        }
-        (IrValue::Chan(ch), "try_send") => {
-            if args.len() != 1 {
-                return Err(IrError::msg("ArityMismatch", "try_send"));
-            }
-            let mut inner = ch.inner.lock().unwrap();
-            if inner.closed || inner.queue.len() >= ch.capacity {
-                return Ok(Some(IrValue::Bool(false)));
-            }
-            inner.queue.push_back(args[0].clone());
-            ch.recv_cond.notify_one();
-            Ok(Some(IrValue::Bool(true)))
-        }
-        (IrValue::Chan(ch), "try_recv") => {
-            if !args.is_empty() {
-                return Err(IrError::msg("ArityMismatch", "try_recv"));
-            }
-            let mut inner = ch.inner.lock().unwrap();
-            if let Some(v) = inner.queue.pop_front() {
-                ch.send_cond.notify_one();
-                Ok(Some(opt_val(Some(v))))
-            } else {
-                Ok(Some(IrValue::Opt(None)))
-            }
-        }
-        (IrValue::Chan(ch), "close") => {
-            if !args.is_empty() {
-                return Err(IrError::msg("ArityMismatch", "close"));
-            }
-            let mut inner = ch.inner.lock().unwrap();
-            inner.closed = true;
-            ch.send_cond.notify_all();
-            ch.recv_cond.notify_all();
-            Ok(Some(IrValue::Void))
+        (_, "iter" | "filter" | "map") => call_iter_method_ir(ctx, module, &self_v, method, args),
+        // E4：Mutex/Chan 同步原语方法
+        (IrValue::Mutex(_), _) | (IrValue::Chan(_), _) => {
+            call_sync_method_ir(module, &self_v, method, args)
         }
         _ => Ok(None),
     }
