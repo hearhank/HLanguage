@@ -1,0 +1,96 @@
+Program
+  Fn|name=main
+    ret: 
+    Block
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Add
+            IntLit|text=1
+            Binary|op=Mul
+              IntLit|text=2
+              IntLit|text=3
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Add
+            Binary|op=Mul
+              Binary|op=Add
+                IntLit|text=1
+                IntLit|text=2
+              IntLit|text=4
+            IntLit|text=1
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Div
+            IntLit|text=7
+            IntLit|text=3
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Mod
+            IntLit|text=7
+            IntLit|text=4
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Add
+            Unary|op=Neg
+              IntLit|text=5
+            IntLit|text=2
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Add
+            FloatLit|text=1.5
+            FloatLit|text=2.0
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Gt
+            IntLit|text=3
+            IntLit|text=2
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=Eq
+            IntLit|text=2
+            IntLit|text=3
+      ExprStmt
+        Call
+          Field|field=print
+            Ident|name=io
+          StrLit|value={}
+
+          Binary|op=And
+            Binary|op=Lt
+              IntLit|text=1
+              IntLit|text=2
+            Binary|op=Eq
+              IntLit|text=3
+              IntLit|text=3

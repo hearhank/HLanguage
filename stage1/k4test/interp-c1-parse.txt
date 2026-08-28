@@ -1,0 +1,10 @@
+01-arith.hc: OK
+02-vars.hc: OK
+03-control.hc: OK
+04-fn-rec.hc: OK
+05-vec.hc: OK
+06-string.hc: OK
+07-class.hc: OK
+08-map.hc: OK
+09-errors.hc: OK
+10-comprehensive.hc: OK
