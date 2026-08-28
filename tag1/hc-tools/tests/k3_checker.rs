@@ -274,13 +274,13 @@ fn type_error_detected() {
 }
 
 /// 自举吃狗粮回归：checker.hc 必须能完整检查 stage1 三个自举源文件
-/// （lexer/parser/checker 自身），不触发解释器级错误中止。
+/// （lexer/parser/checker 自身），且零误报（输出恰为 "OK"）。
 ///
 /// 历史 bug（2026-08-29 修复）：type_of_expr/ty_of 对 `Map.get` 返回的 `?SType`/`?FnSig`
 /// 未解包直接取字段（`sig.ret_type`）→ 解释器 `error.NoField at 0:0` 响亮中止；
 /// 解析器丢弃 `|payload|` 绑定名 → 自检时载荷变量全部误报 undefined。
-/// 注：输出的诊断行（`error: ...`）是 checker 自身能力缺口（类/方法/字段建模不全），
-/// 不属本测试断言范围，由 K4 计划 K3.5 任务收敛。
+/// 诊断收敛（K3.5/A 组）已完成：三源自检误报 lexer 690→0 / parser 1616→0 /
+/// checker 2387→0，本断言锁死归零状态，防止回退。
 fn assert_self_check_completes(h_checker: &Path, target: &Path) {
     let h = run_hc(&["run", h_checker.to_str().unwrap(), target.to_str().unwrap()]);
     let err = stderr(&h);
@@ -296,18 +296,18 @@ fn assert_self_check_completes(h_checker: &Path, target: &Path) {
         target.display()
     );
     let out = stdout(&h);
-    assert!(!out.is_empty(), "checker 无输出（{}）", target.display());
-    assert!(
-        !out.contains("error."),
-        "输出含解释器级错误（{}）：{}",
+    assert_eq!(
+        out.trim(),
+        "OK",
+        "自检应零误报（OK），实际输出（{}）：{}",
         target.display(),
-        out.lines().find(|l| l.contains("error.")).unwrap_or("")
+        out.trim()
     );
 }
 
 #[test]
 fn self_check_completes_on_stage1_sources() {
-    // 吃狗粮：checker.hc 检查 lexer.hc / parser.hc / checker.hc 自身，必须完整跑完
+    // 吃狗粮：checker.hc 检查 lexer.hc / parser.hc / checker.hc 自身，必须零误报
     let root = repo_root();
     let h_checker = root.join("stage1/checker.hc");
     let targets = [
@@ -318,5 +318,22 @@ fn self_check_completes_on_stage1_sources() {
     for t in targets.iter() {
         assert!(t.is_file(), "自举源文件缺失：{}", t.display());
         assert_self_check_completes(&h_checker, t);
+    }
+}
+
+#[test]
+fn probes_check_ok() {
+    // A6：探针固化为语料——pa2（类方法）/cls（self 注册）/pc（纯字段）
+    // 必须零误报，锁死类/方法/ClassLit 建模的收敛成果
+    let root = repo_root();
+    let h_checker = root.join("stage1/checker.hc");
+    let probes = [
+        root.join("stage1/probes/pa2.hc"),
+        root.join("stage1/probes/cls.hc"),
+        root.join("stage1/probes/pc.hc"),
+    ];
+    for p in probes.iter() {
+        assert!(p.is_file(), "探针文件缺失：{}", p.display());
+        assert_self_check_completes(&h_checker, p);
     }
 }

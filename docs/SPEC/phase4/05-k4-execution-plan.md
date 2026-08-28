@@ -86,7 +86,7 @@
 | A3 | ✅ | 下一提交 | check_decl 增加 Class 分支；check_class 遍历方法逐个 check_fn；Checker 增 current_class 字段，check_fn 内注册 self（显式 self 参数随后覆盖）；cls/pa2 探针方法体 0 误报；K3 14 项+示例门 161 全绿 |
 | A4 | ✅ | 下一提交 | ClassLit 表达式解析（Ident+`{` → ClassLit+FieldInit 子节点，parser/checker 双副本同步）+ checker 宽容分支（只查字段值表达式）；泛型类型表达式修复：新增 `generic_args_ahead` 前瞻（匹配 `>` 后跟 `.`/`(`/`{` 才判定泛型；遇 `;`/`{`/`}`/`and`/`or`/if/while/for/return 等语句边界即否决，防跨语句误扫；`Shr` 深度≥2 视为嵌套闭合），解决 `Vec<u8>.init`/`Vec<Vec<u8>>.init` 在表达式位被比较运算吞 `<`（checker main 的 `Vec<Vec<u8>>.init` 泄漏 7 个字段名+`init`，即本项最后 8 误报）。三源自检全部归零：lexer 690→**0** / parser 1616→**0** / checker 2387→**0**；探针 3 + K3 14 项 + 示例门 161 全绿 |
 | A5 | 🔴 | — | 原目标（顶层函数误报）已被 A2 修复消解（hexval/utf8_width 不再误报）；剩余验证并入 A6 |
-| A6 | 🔴 | — | |
+| A6 | ✅ | 下一提交 | 三源自检 0/0/0 由 k3 断言锁死：self_check_completes_on_stage1_sources 从「不中止」升级为「零误报」（输出恰为 OK），防回退；探针 pa2/cls/pc 固化为语料（新增 probes_check_ok 回归测试，k3 14→15 项）；`cargo test --workspace` 全绿 |
 | B1 | 🔴 | — | |
 | B2 | 🔴 | — | |
 | C1 | 🔴 | — | |
