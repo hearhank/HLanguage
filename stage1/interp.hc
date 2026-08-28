@@ -2482,10 +2482,198 @@ class AstDumper {
 }
 
 // ============================================================
+// C2：值模型与环境
+// ============================================================
+
+// 运行时值（class+kind 字符串分发，对齐 checker.hc 现行模式；
+// 不用枚举负载，规避免 HO 限制）
+class Value {
+    kind: &[u8],          // "int"|"float"|"bool"|"str"|"void"|"vec"|"map"|"obj"|"fnref"|"null"
+    i: i64,               // int / bool（0|1）
+    f: f64,               // float
+    s: &[u8],             // str（指向存活内存的切片）
+    vec: Vec<Value>,      // vec（未用为空）
+    map: Map<&[u8], Value>,   // map（未用为空）
+    obj: ?ObjInst,        // obj（C8 填充）
+    name: &[u8],          // fnref 目标函数名
+}
+
+// class 实例（字段平行数组，避免 Value→Env→Value 环）
+class ObjInst {
+    cls: &[u8],
+    field_names: Vec<&[u8]>,
+    field_vals: Vec<Value>,
+}
+
+fn mk_int(v: i64) Value {
+    return Value{
+        kind = "int", i = v, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+fn mk_float(v: f64) Value {
+    return Value{
+        kind = "float", i = 0, f = v, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+fn mk_bool(b: bool) Value {
+    var mut iv: i64 = 0;
+    if (b) { iv = 1; }
+    return Value{
+        kind = "bool", i = iv, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+fn mk_str(s: &[u8]) Value {
+    return Value{
+        kind = "str", i = 0, f = 0.0, s = s,
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+fn mk_void() Value {
+    return Value{
+        kind = "void", i = 0, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+fn mk_null() Value {
+    return Value{
+        kind = "null", i = 0, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+
+// 环境条目
+class EnvEntry {
+    name: &[u8],
+    val: Value,
+}
+
+// 作用域栈环境（对齐 checker.hc：扁平存储 + size 回滚 + 逆序线性查找）
+class Env {
+    entries: Vec<EnvEntry>,
+    scope_sizes: Vec<usize>,
+
+    // 推入新作用域
+    fn push_scope(self: *mut Self) void {
+        self.scope_sizes.append(self.entries.len);
+    }
+
+    // 弹出作用域
+    fn pop_scope(self: *mut Self) void {
+        if (self.scope_sizes.len > 0) {
+            var mut target = self.scope_sizes[self.scope_sizes.len - 1];
+            self.scope_sizes.remove(self.scope_sizes.len - 1);
+            while (self.entries.len > target) {
+                self.entries.remove(self.entries.len - 1);
+            }
+        }
+    }
+
+    // 在当前作用域声明名字
+    fn declare(self: *mut Self, name: &[u8], val: Value) void {
+        self.entries.append(EnvEntry{name = name, val = val});
+    }
+
+    // 查找名字（从最内层向外）
+    fn lookup(self: *mut Self, name: &[u8]) ?Value {
+        var mut i: i64 = @intCast(i64, self.entries.len) - 1;
+        while (i >= 0) {
+            var entry = self.entries[@intCast(usize, i)];
+            if (entry.name == name) {
+                return entry.val;
+            }
+            i -= 1;
+        }
+        return null;
+    }
+
+    // 就地赋值（找到同名绑定即覆盖；返回是否成功）
+    fn assign(self: *mut Self, name: &[u8], val: Value) bool {
+        var mut i: i64 = @intCast(i64, self.entries.len) - 1;
+        while (i >= 0) {
+            if (self.entries[@intCast(usize, i)].name == name) {
+                self.entries[@intCast(usize, i)] = EnvEntry{name = name, val = val};
+                return true;
+            }
+            i -= 1;
+        }
+        return false;
+    }
+}
+
+// ============================================================
 // 入口
 // ============================================================
 
 fn main(args: Vec<String>) !void {
+    // --self-test：C2 值模型 + 环境单元自检
+    if (args.len >= 2 and args[1].as_slice() == "--self-test") {
+        var env: Env = alloc.init(Env{
+            entries = Vec<EnvEntry>.init(alloc),
+            scope_sizes = Vec<usize>.init(alloc),
+        });
+        env.push_scope();
+        env.declare("a", mk_int(42));
+        env.push_scope();
+        env.declare("b", mk_str("hi"));
+        // 内层可见外层
+        var va = env.lookup("a");
+        if (va) |v| {
+            if (v.kind == "int" and v.i == 42) { io.print("lookup-outer ok\n"); }
+            else { io.print("lookup-outer FAIL\n"); }
+        } else { io.print("lookup-outer missing FAIL\n"); }
+        // 就地赋值（内层覆盖外层绑定）
+        var ok = env.assign("a", mk_int(43));
+        if (ok) {
+            var va2 = env.lookup("a");
+            if (va2) |v2| {
+                if (v2.i == 43) { io.print("assign ok\n"); }
+                else { io.print("assign FAIL\n"); }
+            } else { io.print("assign missing FAIL\n"); }
+        } else { io.print("assign FAIL\n"); }
+        // 内层独有绑定随 pop 消失
+        env.pop_scope();
+        var vb = env.lookup("b");
+        if (vb) |v| {
+            io.print("scope-escape FAIL\n");
+        } else { io.print("scope-pop ok\n"); }
+        // 外层赋值结果保留（43），遮蔽语义：pop 后仍见 43
+        var va3 = env.lookup("a");
+        if (va3) |v3| {
+            if (v3.i == 43) { io.print("outer-preserved ok\n"); }
+            else { io.print("outer-preserved FAIL\n"); }
+        } else { io.print("outer-preserved missing FAIL\n"); }
+        // 容器值构造
+        var vv = Vec<Value>.init(alloc);
+        vv.append(mk_int(1));
+        vv.append(mk_int(2));
+        if (vv.len == 2 and vv[1].i == 2) { io.print("vec-value ok\n"); }
+        else { io.print("vec-value FAIL\n"); }
+        var mm = Map<&[u8], Value>.init(alloc);
+        mm.put("k", mk_str("v"));
+        var mv = mm.get("k");
+        if (mv) |mval| {
+            if (mval.kind == "str") { io.print("map-value ok\n"); }
+            else { io.print("map-value FAIL\n"); }
+        } else { io.print("map-value missing FAIL\n"); }
+        // 其余构造器烟雾
+        var vf = mk_float(1.5);
+        var vbool = mk_bool(true);
+        var vn = mk_null();
+        var vd = mk_void();
+        if (vf.f == 1.5 and vbool.i == 1 and vn.kind == "null" and vd.kind == "void") {
+            io.print("ctors ok\n");
+        } else { io.print("ctors FAIL\n"); }
+        return;
+    }
     // --dump-ast 调试模式：args[1] 为模式开关（args[0] 是程序自身路径），与 checker.hc 约定一致
     if (args.len >= 3 and args[1].as_slice() == "--dump-ast") {
         var mut dsrc = try io.fs.read_file(args[2], alloc);

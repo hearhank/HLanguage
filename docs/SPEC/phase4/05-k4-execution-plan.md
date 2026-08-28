@@ -90,7 +90,7 @@
 | B1 | ✅ | 下一提交 | `stage1/exec-corpus/` 10 个递进语料（各 ≤60 行，首注释声明覆盖面+预期 stdout，真实 hc 实测登记）；全部被 stage1 checker 判 OK（顺带修复 check_for 未注册 for 载荷绑定的缺口，清零 03/05/10 的 8 条 undefined 误报）；AST 缺口扫描（k4test/ast-unknown-scan.txt）锁定 C 组解析工作量：赋值语句 `=`/复合 `+=`（C3）、`.?` 后缀（C6/C9）、`orelse` 表达式（C9）、`catch` 表达式（C9）；`try` 已可解析。测试输出/基线存 stage1/k4test/ |
 | B2 | ✅ | 下一提交 | `tag1/hc-tools/tests/k4_interp.rs` 骨架入库：逐语料断言 `hc run interp.hc <f>` stdout == `hc run <f>` stdout；10 个测试全 `#[ignore]`（当前 0 passed/10 ignored，门禁不受影响），按 C 组任务标注摘除点（C3→01/02、C4→03、C5→04、C6→05/08、C7→06、C8→07、C9→09、C10→10） |
 | C1 | ✅ | 下一提交 | interp.hc 骨架落地（源自 parser.hc 副本，内嵌 lexer/parser）：main 读文件 → parse → AST 就绪打印 OK（无求值）；`--dump-ast` 与 checker.hc 同约定（args[1] 开关、args[2] 文件）；验收：10/10 语料 parse OK、interp.hc 过 checker 自检；证据存 stage1/k4test/（interp-c1-parse.txt） |
-| C2 | 🔴 | — | |
+| C2 | ✅ | 下一提交 | Value 模型（class+kind 字符串分发对齐 checker 模式：int/float/bool/str/void/vec/map/obj/fnref/null；obj 用字段平行数组避 Value→Env→Value 环）+ Env 作用域栈（扁平存储 + size 回滚 + 逆序线性查找/就地赋值）；main 增 `--self-test` 自检 7 项全 ok；01 语料 parse 不受影响；interp.hc 过 checker 自检 |
 | C3 | 🔴 | — | |
 | C4 | 🔴 | — | |
 | C5 | 🔴 | — | |
