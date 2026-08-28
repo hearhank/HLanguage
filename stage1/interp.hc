@@ -698,6 +698,57 @@ fn quoted_add_prop(node: *mut AstNode, key: &[u8], val: &[u8]) void {
     node.props.append('"');
 }
 
+// 逐字节切片比较（与 checker.hc 同实现；== 对运行时堆子切片不可靠）
+fn slice_eq(a: &[u8], b: &[u8]) bool {
+    if (a.len != b.len) return false;
+    var mut i: usize = 0;
+    while (i < a.len) {
+        if (a[i] != b[i]) return false;
+        i += 1;
+    }
+    return true;
+}
+
+// 从 props 中提取属性值（key=value 格式，用 | 分隔；与 checker.hc 同实现）
+fn get_prop(props: &[u8], key: &[u8]) ?&[u8] {
+    var mut i: usize = 0;
+    var n = props.len;
+    while (i < n) {
+        if (props[i] == '|') { i += 1; }
+        if (i + key.len < n) {
+            var mut match_key = true;
+            var mut j: usize = 0;
+            while (j < key.len) {
+                if (props[i + j] != key[j]) { match_key = false; break; }
+                j += 1;
+            }
+            if (match_key and props[i + key.len] == '=') {
+                var mut val_start = i + key.len + 1;
+                var mut skip_quote = false;
+                if (val_start < n and props[val_start] == '"') {
+                    skip_quote = true;
+                    val_start += 1;
+                }
+                var mut val_end = val_start;
+                while (val_end < n) {
+                    if (skip_quote and props[val_end] == '"') { break; }
+                    if (!skip_quote and props[val_end] == '|') { break; }
+                    val_end += 1;
+                }
+                return props[val_start..val_end];
+            }
+        }
+        while (i < n and props[i] != '|') { i += 1; }
+    }
+    return null;
+}
+
+// 检查属性是否存在
+fn has_prop(props: &[u8], key: &[u8]) bool {
+    var v = get_prop(props, key);
+    return v != null;
+}
+
 // ============================================================
 // 解析器（Parser）
 // ============================================================
@@ -1610,8 +1661,25 @@ class Parser {
             self.expect("Semi");
             return make_node("Errdefer");
         }
-        // 默认：表达式语句
+        // 默认：表达式语句（含赋值：target = / += / -= / *= / /= value）
         var e = self.parse_expr();
+        var ak = self.peek();
+        if (ak == "Eq" or ak == "PlusEq" or ak == "MinusEq" or ak == "StarEq" or ak == "SlashEq") {
+            self.advance();
+            var rhs = self.parse_expr();
+            var a = make_node("Assign");
+            if (ak == "Eq") { node_add_prop(&a, "op", "Eq"); }
+            else if (ak == "PlusEq") { node_add_prop(&a, "op", "PlusEq"); }
+            else if (ak == "MinusEq") { node_add_prop(&a, "op", "MinusEq"); }
+            else if (ak == "StarEq") { node_add_prop(&a, "op", "StarEq"); }
+            else { node_add_prop(&a, "op", "SlashEq"); }
+            node_add_child(&a, e);
+            node_add_child(&a, rhs);
+            self.expect("Semi");
+            var aes = make_node("ExprStmt");
+            node_add_child(&aes, a);
+            return aes;
+        }
         self.expect("Semi");
         var es = make_node("ExprStmt");
         node_add_child(&es, e);
@@ -1641,7 +1709,8 @@ class Parser {
         }
         if (self.at("Eq")) {
             self.advance();
-            self.parse_expr();
+            var init = self.parse_expr();
+            node_add_child(&v, init);
             node_add_prop(&v, "has_init", "true");
         }
         self.expect("Semi");
@@ -2587,7 +2656,7 @@ class Env {
         var mut i: i64 = @intCast(i64, self.entries.len) - 1;
         while (i >= 0) {
             var entry = self.entries[@intCast(usize, i)];
-            if (entry.name == name) {
+            if (slice_eq(entry.name, name)) {
                 return entry.val;
             }
             i -= 1;
@@ -2599,13 +2668,442 @@ class Env {
     fn assign(self: *mut Self, name: &[u8], val: Value) bool {
         var mut i: i64 = @intCast(i64, self.entries.len) - 1;
         while (i >= 0) {
-            if (self.entries[@intCast(usize, i)].name == name) {
+            if (slice_eq(self.entries[@intCast(usize, i)].name, name)) {
                 self.entries[@intCast(usize, i)] = EnvEntry{name = name, val = val};
                 return true;
             }
             i -= 1;
         }
         return false;
+    }
+}
+
+// ============================================================
+// C3：表达式求值（字面量/标识符/算术/比较/逻辑短路/赋值 + io.print）
+// ============================================================
+
+// 十进制（含 0x 十六进制、下划线分隔）文本 → i64
+fn parse_int_text(txt: &[u8]) i64 {
+    var mut i: usize = 0;
+    var mut neg = false;
+    if (i < txt.len and txt[i] == '-') { neg = true; i += 1; }
+    var mut base: i64 = 10;
+    if (i + 1 < txt.len and txt[i] == '0' and (txt[i + 1] == 'x' or txt[i + 1] == 'X')) {
+        base = 16;
+        i += 2;
+    }
+    var mut v: i64 = 0;
+    while (i < txt.len) {
+        var b = txt[i];
+        if (b == '_') { i += 1; continue; }
+        var d = hexval(b);
+        if (d < 0 or @intCast(i64, d) >= base) { break; }
+        v = v * base + @intCast(i64, d);
+        i += 1;
+    }
+    if (neg) { v = -v; }
+    return v;
+}
+
+// 十进制浮点文本 → f64（不含指数；语料所需切片）
+fn parse_float_text(txt: &[u8]) f64 {
+    var mut i: usize = 0;
+    var mut neg = false;
+    if (i < txt.len and txt[i] == '-') { neg = true; i += 1; }
+    var mut v: f64 = 0.0;
+    while (i < txt.len and txt[i] >= '0' and txt[i] <= '9') {
+        v = v * 10.0 + @intCast(f64, txt[i] - '0');
+        i += 1;
+    }
+    if (i < txt.len and txt[i] == '.') {
+        i += 1;
+        var mut scale: f64 = 0.1;
+        while (i < txt.len and txt[i] >= '0' and txt[i] <= '9') {
+            v = v + @intCast(f64, txt[i] - '0') * scale;
+            scale = scale * 0.1;
+            i += 1;
+        }
+    }
+    if (neg) { v = -v; }
+    return v;
+}
+
+// 字节串追加（与 checker.hc 同款辅助）
+fn append_bytes(out: *mut Vec<u8>, s: &[u8]) void {
+    var mut i: usize = 0;
+    while (i < s.len) {
+        out.*.append(s[i]);
+        i += 1;
+    }
+}
+
+// i64 追加为十进制字节
+fn append_int(v: i64, out: *mut Vec<u8>) void {
+    var mut u = v;
+    if (u < 0) {
+        out.*.append('-');
+        u = -u;
+    }
+    if (u == 0) {
+        out.*.append('0');
+        return;
+    }
+    var tmp = Vec<u8>.init(alloc);
+    while (u > 0) {
+        tmp.append(@intCast(u8, u % 10) + '0');
+        u = u / 10;
+    }
+    var mut i: i64 = @intCast(i64, tmp.len) - 1;
+    while (i >= 0) {
+        out.*.append(tmp[@intCast(usize, i)]);
+        i -= 1;
+    }
+}
+
+// f64 位数字 → 字符（H 无 float→int 转换内建，用比较链替代）
+fn digit_ch(d: f64) u8 {
+    if (d < 0.5) { return '0'; }
+    if (d < 1.5) { return '1'; }
+    if (d < 2.5) { return '2'; }
+    if (d < 3.5) { return '3'; }
+    if (d < 4.5) { return '4'; }
+    if (d < 5.5) { return '5'; }
+    if (d < 6.5) { return '6'; }
+    if (d < 7.5) { return '7'; }
+    if (d < 8.5) { return '8'; }
+    return '9';
+}
+
+// f64 追加为最短十进制（整数部分 + 去尾零小数；与 Rust Display 对齐到语料所需切片）。
+// 无 float→int cast：10 的幂标定 + 逐位减法提取
+fn append_float(v: f64, out: *mut Vec<u8>) void {
+    var mut x = v;
+    if (x < 0.0) {
+        out.*.append('-');
+        x = -x;
+    }
+    if (x < 1.0) {
+        out.*.append('0');
+    } else {
+        var mut p = 1.0;
+        while (p * 10.0 <= x) { p *= 10.0; }
+        while (p >= 1.0) {
+            var mut d = 0.0;
+            while (x >= p) { x -= p; d += 1.0; }
+            out.*.append(digit_ch(d));
+            p /= 10.0;
+        }
+    }
+    if (x <= 0.0) { return; }
+    // 小数位先入局部缓冲再统一去尾零
+    var frac_buf = Vec<u8>.init(alloc);
+    var mut n: usize = 0;
+    while (n < 12 and x > 0.0000000000001) {
+        x *= 10.0;
+        var mut d = 0.0;
+        while (x >= 1.0) { x -= 1.0; d += 1.0; }
+        frac_buf.append(digit_ch(d));
+        n += 1;
+    }
+    while (frac_buf.len > 0 and frac_buf[frac_buf.len - 1] == '0') {
+        frac_buf.remove(frac_buf.len - 1);
+    }
+    if (frac_buf.len > 0) {
+        out.*.append('.');
+        var mut i: usize = 0;
+        while (i < frac_buf.len) {
+            out.*.append(frac_buf[i]);
+            i += 1;
+        }
+    }
+}
+
+// 值 → 可打印字节（对齐 Rust 参考 stdout 格式）
+fn append_value(v: Value, out: *mut Vec<u8>) void {
+    if (v.kind == "int") { append_int(v.i, out); }
+    else if (v.kind == "float") { append_float(v.f, out); }
+    else if (v.kind == "bool") {
+        if (v.i == 1) { append_bytes(out, "true"); }
+        else { append_bytes(out, "false"); }
+    }
+    else if (v.kind == "str") { append_bytes(out, v.s); }
+    else if (v.kind == "null") { append_bytes(out, "null"); }
+    else if (v.kind == "void") { }
+}
+
+// 取 Value 的 f64 视图（int 提升为 float）——须在 Interp 之前定义（单遍编译）
+fn as_f(v: Value) f64 {
+    if (v.kind == "float") { return v.f; }
+    return @intCast(f64, v.i);
+}
+
+// 执行器（C3：表达式面；控制流 C4、函数 C5、容器 C6+ 递增）
+class Interp {
+    prog: AstNode,
+    env: Env,
+
+    // 找 main 并执行其体
+    fn run_main(self: *mut Self) void {
+        var mut i: usize = 0;
+        while (i < self.prog.children.len) {
+            var decl = self.prog.children[i];
+            if (decl.kind == "Fn") {
+                var name = get_prop(decl.props, "name");
+                if (name) |nm| {
+                    if (slice_eq(nm, "main") and decl.children.len > 0) {
+                        var body = decl.children[decl.children.len - 1];
+                        if (body.kind == "Block") {
+                            self.env.push_scope();
+                            self.exec_block(body);
+                            self.env.pop_scope();
+                        }
+                        return;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    fn exec_block(self: *mut Self, blk: AstNode) void {
+        self.env.push_scope();
+        var mut i: usize = 0;
+        while (i < blk.children.len) {
+            self.exec_stmt(blk.children[i]);
+            i += 1;
+        }
+        self.env.pop_scope();
+    }
+
+    fn exec_stmt(self: *mut Self, stmt: AstNode) void {
+        var k = stmt.kind;
+        if (k == "VarDecl") {
+            var name = get_prop(stmt.props, "name");
+            if (name) |nm| {
+                var mut v = mk_void();
+                if (has_prop(stmt.props, "has_init") and stmt.children.len > 0) {
+                    v = self.eval_expr(stmt.children[stmt.children.len - 1]);
+                }
+                self.env.declare(nm, v);
+            }
+        } else if (k == "ExprStmt") {
+            if (stmt.children.len > 0) {
+                self.eval_expr(stmt.children[0]);
+            }
+        }
+    }
+
+    fn truthy(self: *mut Self, v: Value) bool {
+        if (v.kind == "bool") { return v.i == 1; }
+        if (v.kind == "int") { return v.i != 0; }
+        return false;
+    }
+
+    fn eval_expr(self: *mut Self, e: AstNode) Value {
+        var k = e.kind;
+        if (k == "IntLit") {
+            var t = get_prop(e.props, "text");
+            if (t) |txt| { return mk_int(parse_int_text(txt)); }
+            return mk_int(0);
+        }
+        if (k == "FloatLit") {
+            var t = get_prop(e.props, "text");
+            if (t) |txt| { return mk_float(parse_float_text(txt)); }
+            return mk_float(0.0);
+        }
+        if (k == "StrLit") {
+            var t = get_prop(e.props, "value");
+            if (t) |txt| { return mk_str(txt); }
+            return mk_str("");
+        }
+        if (k == "BoolLit") {
+            var t = get_prop(e.props, "value");
+            if (t) |txt| { return mk_bool(slice_eq(txt, "true")); }
+            return mk_bool(false);
+        }
+        if (k == "NullLit") { return mk_null(); }
+        if (k == "Ident") {
+            var t = get_prop(e.props, "name");
+            if (t) |nm| {
+                var v = self.env.lookup(nm);
+                if (v) |val| { return val; }
+            }
+            return mk_void();
+        }
+        if (k == "Unary") {
+            if (e.children.len > 0) {
+                var v = self.eval_expr(e.children[0]);
+                var op = get_prop(e.props, "op");
+                if (op) |o| {
+                    if (slice_eq(o, "Neg")) {
+                        if (v.kind == "float") { return mk_float(-v.f); }
+                        return mk_int(-v.i);
+                    }
+                    if (slice_eq(o, "Not")) { return mk_bool(!self.truthy(v)); }
+                }
+                return v;
+            }
+            return mk_void();
+        }
+        if (k == "Binary") {
+            return self.eval_binary(e);
+        }
+        if (k == "Assign") {
+            return self.eval_assign(e);
+        }
+        if (k == "Call") {
+            return self.eval_call(e);
+        }
+        return mk_void();
+    }
+
+    fn eval_binary(self: *mut Self, e: AstNode) Value {
+        var op = get_prop(e.props, "op");
+        if (op) |o| {
+            // 逻辑短路：And/Or 先算左值即判
+            if (slice_eq(o, "And")) {
+                var l = self.eval_expr(e.children[0]);
+                if (!self.truthy(l)) { return mk_bool(false); }
+                var r = self.eval_expr(e.children[1]);
+                return mk_bool(self.truthy(r));
+            }
+            if (slice_eq(o, "Or")) {
+                var l = self.eval_expr(e.children[0]);
+                if (self.truthy(l)) { return mk_bool(true); }
+                var r = self.eval_expr(e.children[1]);
+                return mk_bool(self.truthy(r));
+            }
+            var l = self.eval_expr(e.children[0]);
+            var r = self.eval_expr(e.children[1]);
+            return self.binop(o, l, r);
+        }
+        return mk_void();
+    }
+
+    fn binop(self: *mut Self, o: &[u8], l: Value, r: Value) Value {
+        var lfl = l.kind == "float";
+        var rfl = r.kind == "float";
+        if (slice_eq(o, "Eq")) {
+            if (l.kind == "str" and r.kind == "str") { return mk_bool(slice_eq(l.s, r.s)); }
+            if (lfl or rfl) { return mk_bool(as_f(l) == as_f(r)); }
+            return mk_bool(l.i == r.i);
+        }
+        if (slice_eq(o, "Ne")) {
+            if (l.kind == "str" and r.kind == "str") { return mk_bool(!slice_eq(l.s, r.s)); }
+            if (lfl or rfl) { return mk_bool(!(as_f(l) == as_f(r))); }
+            return mk_bool(!(l.i == r.i));
+        }
+        if (lfl or rfl) {
+            var a = as_f(l);
+            var b = as_f(r);
+            if (slice_eq(o, "Lt")) { return mk_bool(a < b); }
+            if (slice_eq(o, "Le")) { return mk_bool(a <= b); }
+            if (slice_eq(o, "Gt")) { return mk_bool(a > b); }
+            if (slice_eq(o, "Ge")) { return mk_bool(a >= b); }
+            if (slice_eq(o, "Add")) { return mk_float(a + b); }
+            if (slice_eq(o, "Sub")) { return mk_float(a - b); }
+            if (slice_eq(o, "Mul")) { return mk_float(a * b); }
+            if (slice_eq(o, "Div")) { return mk_float(a / b); }
+            return mk_void();
+        }
+        if (slice_eq(o, "Lt")) { return mk_bool(l.i < r.i); }
+        if (slice_eq(o, "Le")) { return mk_bool(l.i <= r.i); }
+        if (slice_eq(o, "Gt")) { return mk_bool(l.i > r.i); }
+        if (slice_eq(o, "Ge")) { return mk_bool(l.i >= r.i); }
+        if (slice_eq(o, "Add")) { return mk_int(l.i + r.i); }
+        if (slice_eq(o, "Sub")) { return mk_int(l.i - r.i); }
+        if (slice_eq(o, "Mul")) { return mk_int(l.i * r.i); }
+        if (slice_eq(o, "Div")) { return mk_int(l.i / r.i); }
+        if (slice_eq(o, "Mod")) { return mk_int(l.i % r.i); }
+        return mk_void();
+    }
+
+    fn eval_assign(self: *mut Self, e: AstNode) Value {
+        var op = get_prop(e.props, "op");
+        if (op) |o| {
+            var target = e.children[0];
+            var name = get_prop(target.props, "name");
+            if (name) |nm| {
+                if (slice_eq(o, "Eq")) {
+                    var v = self.eval_expr(e.children[1]);
+                    self.env.assign(nm, v);
+                    return v;
+                }
+                // 复合赋值：target = target OP value
+                var cur = self.eval_expr(target);
+                var rv = self.eval_expr(e.children[1]);
+                if (slice_eq(o, "PlusEq")) {
+                    var v = self.binop("Add", cur, rv);
+                    self.env.assign(nm, v);
+                    return v;
+                }
+                if (slice_eq(o, "MinusEq")) {
+                    var v = self.binop("Sub", cur, rv);
+                    self.env.assign(nm, v);
+                    return v;
+                }
+                if (slice_eq(o, "StarEq")) {
+                    var v = self.binop("Mul", cur, rv);
+                    self.env.assign(nm, v);
+                    return v;
+                }
+                if (slice_eq(o, "SlashEq")) {
+                    var v = self.binop("Div", cur, rv);
+                    self.env.assign(nm, v);
+                    return v;
+                }
+            }
+        }
+        return mk_void();
+    }
+
+    // 调用：C3 仅内建 io.print / io.println；用户函数 C5
+    fn eval_call(self: *mut Self, e: AstNode) Value {
+        if (e.children.len == 0) { return mk_void(); }
+        var head = e.children[0];
+        if (head.kind == "Field") {
+            var method = get_prop(head.props, "field");
+            var mut base_name: &[u8] = "";
+            if (head.children.len > 0 and head.children[0].kind == "Ident") {
+                var bn = get_prop(head.children[0].props, "name");
+                if (bn) |bnm| { base_name = bnm; }
+            }
+            if (slice_eq(base_name, "io")) {
+                if (method) |m| {
+                    if (slice_eq(m, "print") or slice_eq(m, "println")) {
+                        self.builtin_print(e, m == "println");
+                        return mk_void();
+                    }
+                }
+            }
+        }
+        return mk_void();
+    }
+
+    // "{}" 占位符格式化输出（与 Rust 参考 stdout 对齐）
+    fn builtin_print(self: *mut Self, call: AstNode, newline: bool) void {
+        var out = Vec<u8>.init(alloc);
+        var mut fmtv = mk_str("");
+        var mut argi: usize = 2;
+        if (call.children.len > 1) {
+            fmtv = self.eval_expr(call.children[1]);
+        }
+        var mut i: usize = 0;
+        var s = fmtv.s;
+        while (i < s.len) {
+            if (s[i] == '{' and i + 1 < s.len and s[i + 1] == '}') {
+                if (argi < call.children.len) {
+                    append_value(self.eval_expr(call.children[argi]), &mut out);
+                    argi += 1;
+                }
+                i += 2;
+                continue;
+            }
+            out.append(s[i]);
+            i += 1;
+        }
+        if (newline) { out.append('\n'); }
+        io.print("{}", out.as_slice());
     }
 }
 
@@ -2720,5 +3218,13 @@ fn main(args: Vec<String>) !void {
         rev_kw_map = rev_kw_map,
     });
     var ast = parser.parse_program();
-    io.print("OK\n");
+    // C3：求值（main 入口；控制流 C4、函数 C5 递增）
+    var it: Interp = alloc.init(Interp{
+        prog = ast,
+        env = alloc.init(Env{
+            entries = Vec<EnvEntry>.init(alloc),
+            scope_sizes = Vec<usize>.init(alloc),
+        }),
+    });
+    it.run_main();
 }

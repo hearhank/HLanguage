@@ -90,13 +90,11 @@ fn assert_corpus_pair(name: &str) {
 }
 
 #[test]
-#[ignore]
 fn c01_arith_matches_rust_reference() {
     assert_corpus_pair("01-arith.hc");
 }
 
 #[test]
-#[ignore]
 fn c02_vars_matches_rust_reference() {
     assert_corpus_pair("02-vars.hc");
 }

@@ -1,0 +1,8 @@
+5
+101
+ell
+hello world
+true
+0
+1
+42
