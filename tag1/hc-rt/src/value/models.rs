@@ -1,0 +1,41 @@
+//! Value 类型定义（ADR-0028：类型放 models/，一类型一文件，文件名 = 类型名 snake_case）
+
+mod alloc_block;
+mod alloc_err;
+mod allocator_impl;
+mod allocator_trait;
+mod arena_alloc_err;
+mod arena_state;
+mod boxed_data;
+mod chan_inner;
+mod chan_state;
+mod class_data;
+mod closure_data;
+mod context_state;
+mod lazy_iter_data;
+mod lazy_op;
+mod leak_record;
+mod map_data;
+mod pool_state;
+mod value;
+mod vec_data;
+
+pub use alloc_block::*;
+pub use alloc_err::*;
+pub use allocator_impl::*;
+pub use allocator_trait::*;
+pub use arena_alloc_err::*;
+pub use arena_state::*;
+pub use boxed_data::*;
+pub use chan_inner::*;
+pub use chan_state::*;
+pub use class_data::*;
+pub use closure_data::*;
+pub use context_state::*;
+pub use lazy_iter_data::*;
+pub use lazy_op::*;
+pub use leak_record::*;
+pub use map_data::*;
+pub use pool_state::*;
+pub use value::*;
+pub use vec_data::*;
