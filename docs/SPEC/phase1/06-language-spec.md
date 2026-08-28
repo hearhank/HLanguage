@@ -42,7 +42,7 @@ script { ... }  /  comptime { ... }                   // 元编程双轨（第�
 | `06-05-interfaces.md` | 接口、标量接口族（ICompare/INumber）、迭代契约、序列化内建 | M2 语义 / M4 内建 |
 | `06-06-ownership.md` | 所有权与内存模型 | M2/M4 运行时 |
 | `06-07-errors.md` | 错误处理（error union、错误码、@panic） | M2/M4 运行时 |
-| `06-08-modules.md` | 模块与包（namespace/using/pub/build.zon） | M1 模块 |
+| `06-08-modules.md` | 模块与包（namespace/import/pub/build.zon） | M1 模块 |
 | `06-09-meta.md` | 元编程（script / comptime） | 第三块 E1 |
 | `06-10-concurrency.md` | 并发与异步（四模式、线程、Future） | 第三块 E2 |
 | `06-13-project-structure.md` | 项目结构与代码管理约定（hc init / 源码测试依赖约定） | 第二部分组 H |

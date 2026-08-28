@@ -8,7 +8,7 @@
   - 声明：`var` `const` `fn` `global` `test`
   - 控制流：`if` `else` `while` `for` `break` `continue` `return` `switch` `defer` `errdefer`
   - 类型构造：`class` `enum` `tree` `interface` `where`（R-5 补充：接口约束子句；`struct` 已合并入 class，2026-08-14）
-  - 模块：`namespace` `import` `pub`（`using` 已移除，2026-08-28：报错提示改用 import）
+  - 模块：`namespace` `import` `pub`
   - 内存/所有权：`o` `move`
   - 操作：`and` `or` `try` `catch` `orelse`
   - 元编程：`script` `comptime` `anytype` `type`

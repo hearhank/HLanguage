@@ -51,7 +51,7 @@ graph TD
 | M1.1 Lexer | token 流 | 关键字全集（`class`/`enum`/`tree`/`interface`/`where`/`o`/`move`/`script`/`comptime` 等）+ `box`/`copy` + `@` 前缀内建；运算符全集（`%%`、`..`、`=>`、`\|x\|`、`\|\|`）；字符（`'x'` = u8）/字符串（`"..."` 转义 + `"""..."""` 多行原始）/数字字面量（惰性宽度 + 0x/0b/0o）；注释 `//` `///` `/* */`；全 token 带位置 |
 | M1.2 Parser | AST 构建 | 表达式优先级表（Q4）；语句/声明；类型标注（`o`/`*`/`*mut`/`&[T]`/`&mut [T]`/`?T`/`E!T`/元组 `(T1,T2)`）；`where` 子句；switch（穷举 + 捕获 + else 兜底）；if/while 双向捕获（Q9/Q10）；`defer`/`errdefer`；`[test]` 特性标记（Q-R11）；`class`/`enum`（合一式）/`interface`（冒号标注）/`tree`/`namespace` |
 | M1.3 诊断 | 错误报告 | 多错误收集、精确位置、颜色分级；接入 `@compileError` |
-| M1.4 | 模块（**M1.4 完整**，2026-08-16） | `namespace`（跨文件/一文件多组）+ `using`（含 `as 别名`）+ 兄弟文件符号登记；**语义检查器跨文件符号**（`check_semantics_extern`：外部类型/函数/错误集/namespace 并入——限定名 `Orders.Line` 字段校验、`Math.square` 调用可查）；**using 导入**（语义 + 运行时：函数 + **类型** + 全局，扁平名直接可用，自身定义优先）；目录 = 包（test/run/check 加载同目录兄弟）；pub 解析保留（同包即达，跨包见 build.zon） |
+| M1.4 | 模块（**M1.4 完整**，2026-08-16） | `namespace`（跨文件/一文件多组）+ `import`（含 `as 别名`，ADR-0010）+ 兄弟文件符号登记；**语义检查器跨文件符号**（`check_semantics_extern`：外部类型/函数/错误集/namespace 并入——限定名 `Orders.Line` 字段校验、`Math.square` 调用可查）；**import 导入**（语义 + 运行时：函数 + **类型** + 全局，扁平名直接可用，自身定义优先）；目录 = 包（test/run/check 加载同目录兄弟）；pub 解析保留（同包即达，跨包见 build.zon） |
 
 ### M2 语义（类型 + 所有权 + 错误集 + 函数）
 
@@ -229,7 +229,7 @@ graph TD
 |---|---|---|
 | M0.1 | cargo 三 crate 工作区 | `hc`（前端）/ `hc-rt`（运行时）/ `hc-tools`（CLI）；零外部依赖，可编译 |
 | M1.1 | Lexer | 关键字全集、运算符（含 `%%`/`..`/`=>`/`|x|`/`||`/`^=`）、`@` 前缀、字符串/`"""` 原始串/字符、数字（进制+后缀+`_`）、注释、位置 |
-| M1.2 | Parser + AST | 变量/常量/global/函数/`[test("名称")]`/class/enum/interface/namespace/using/特性标注 `[continuous] [pad] [align]`；if/while/for/switch/defer/errdefer；闭包；元组解构；错误集别名；`alloc.init` 双形态；尾随逗号；关键字变体/方法名 |
+| M1.2 | Parser + AST | 变量/常量/global/函数/`[test("名称")]`/class/enum/interface/namespace/import/特性标注 `[continuous] [pad] [align]`；if/while/for/switch/defer/errdefer；闭包；元组解构；错误集别名；`alloc.init` 双形态；尾随逗号；关键字变体/方法名 |
 | M1.3 | 诊断 | 多错误收集、行/列位置、源码行指示 |
 | M2.1 | 名称解析（**M2.1 完整**，2026-08-16） | 作用域链、函数登记（重载池）、类型登记、**接口三用途真实实现**（① implements 标注 = 方法契约验证，含超接口递归 ② where T: 约束调用点验证 ③ 编译可验证——签名兼容精确判定；内建接口 ICompare/INumber/IInt/IUint/IFloat/IIterable/Io 跳过契约检查） |
 | M2.2 | 类型检查（**M2.2 完整**，2026-08-16） | 标量/String/数组/切片/元组/可选/错误联合/指针；**表达式级类型检查**（全部 Expr 变体静态推断）；**期望类型传播**（var 初始化/赋值/return/调用实参/二元运算/条件/迭代）；**字段与索引校验**（NamedLit 字段存在/必填/类型/未知、元组越界、Table 双整数索引）；**存储形态验证**（[continuous] 字段全值类型否则编译错误）；**运算符接口族检查**（算术→INumber、位→整数、序/等→ICompare）；**泛型 where 约束调用点验证**（标量→INumber 族、class→冒号标注接口） |
@@ -251,7 +251,7 @@ graph TD
 | M5.5 | 工具 | `io.time.now()`（毫秒）/`sleep`（ms）；`sort`（含比较器闭包）、`binary_search`、`sqrt`、`math` 命名空间、`parse_int`/`parse_float`、parser 辅助内建 |
 | M6.1 | 测试 | `[test("名称")]` 测试函数收集运行（显示名 = 名称 ?? 函数名）；断言五件套；`[PASS]/[FAIL]/[SKIP]` + 汇总；失败非零退出码；`test_io`/`alloc` 注入 |
 | M7.1 | CLI | `hc run`（tree-walking 全语言）/ `hc run <file.hbc>`（字节码 VM，M3.2）/ `hc run --ir`（IR 参考解释器）/ `hc test`（含 `--mode=compile` 原生交叉验证，Q-T5）/ `hc check` / `hc build`（**同目录 = 包，多文件合并静态链接**；原生 LLVM；zig 缺失回退 HBC2 字节码 + 启动器）；**库形态**（2026-08-17，C3/C4：`Kind::lib` → `lib{name}.a` 静态归档（`hc build`）或 `{name}.dll` 动态库（`hc build --dll`，自包含 helper + exe 链接 dll 运行时加载）+ `.sym` 符号表；**库无 main 校验**；exe 链接本地依赖端到端） |
-| M7.2 | build.zon 包基础（**已落地**，2026-08-16） | `build.zon` 清单解析（`hc-tools/src/buildzon.rs`：`const build = Build{ name, version, kind, files, deps }` 数据字面量 → Manifest，含尾逗号数组/十六进制 fingerprint/`Kind.exe/lib/script`）；**pub 边界过滤**（AST `Decl`/`FieldDecl` 加 `pub` 字段；语义 `collect_decl_prefixed_filter` + 运行时 `register_*_filter`/`exec_decl_top_filter` 跨包仅登记 `pub` 项）；**本地依赖装载**（`Interp::load_dep` + `hc check/run/test` 经 `load_manifest_deps_into`/`load_deps_into` 递归装载带 `path` 的依赖、visited 防环；无 path 注册中心依赖告警跳过）；`using pkg.xxx` / `pkg.xxx` 跨包访问；示例 `tag1/examples/02-packages/` |
+| M7.2 | build.zon 包基础（**已落地**，2026-08-16） | `build.zon` 清单解析（`hc-tools/src/buildzon.rs`：`const build = Build{ name, version, kind, files, deps }` 数据字面量 → Manifest，含尾逗号数组/十六进制 fingerprint/`Kind.exe/lib/script`）；**pub 边界过滤**（AST `Decl`/`FieldDecl` 加 `pub` 字段；语义 `collect_decl_prefixed_filter` + 运行时 `register_*_filter`/`exec_decl_top_filter` 跨包仅登记 `pub` 项）；**本地依赖装载**（`Interp::load_dep` + `hc check/run/test` 经 `load_manifest_deps_into`/`load_deps_into` 递归装载带 `path` 的依赖、visited 防环；无 path 注册中心依赖告警跳过）；`import pkg.xxx` / `pkg.xxx` 跨包访问；示例 `tag1/examples/02-packages/` |
 | **M2.2+** | **语义检查器**（2026-08-15 梯队 1） | 静态 pass（`hc/src/semantic.rs`，load 前运行）：**标量宽度检查**（`var g: u8 = 256` 编译期报错）、**引用赋值禁止**（`var w: Vec<i32> = v` 报错——要求 `copy(&v)` 或指针）、连续类型赋值放行、**错误集成员检查**（return `error.X` 必须属于函数错误集）、**definite assignment（C7）**（`alloc.init(T)` 无参构造后字段未全赋值即 return → 编译期报错）、类型元数据收集 |
 | **M4.3+** | **@ 内建补充**（2026-08-15） | `@intFromEnum`/`@enumFromInt`（变体序 ↔ 枚举，M4.3 子集） |
 | **M8** | **Table 类型**（2026-08-15） | `Table(T).init(alloc, rows, cols, init)` 构造 + `t[i, j]` 多参索引（仅 Table 合法） |
@@ -336,7 +336,7 @@ graph TD
 
 | 模块 | 功能 | 归口 |
 |---|---|---|
-| M1.4 | 跨文件模块（包内文件共享命名空间）——**已落地**（2026-08-16：外部符号语义检查 + using 类型/全局导入；见已实现表） | M1.4/M7.2 |
+| M1.4 | 跨文件模块（包内文件共享命名空间）——**已落地**（2026-08-16：外部符号语义检查 + import 类型/全局导入；见已实现表） | M1.4/M7.2 |
 | M2.2 完整 | 类型检查完整（表达式级类型检查、期望类型传播、表/元组/连续类型字段校验）——**2026-08-16 已落地**（见已实现表） | M2 |
 | M2.4/M2.5 | 所有权编译时检查、Debug 悬垂标记——**2026-08-16 已落地**（见已实现表） | M2.4/M2.5/M4.7 |
 | M2.6 | 错误码表（包 ID + 包内码）——**2026-08-16 已落地**（见已实现表） | M2.6 |

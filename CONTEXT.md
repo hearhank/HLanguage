@@ -323,17 +323,14 @@ tests/                        # 项目根目录，测试文件
 - `namespace` 关键字仍可用于**显式覆盖**默认路径命名空间
 _Avoid_: 一文件多命名空间
 
-### 引入 (using, 已移除)
-
-`using Math;` 引入命名空间（2026-08-13 Q21 定案）——**2026-08-17 被 `import` 取代**（ADR-0010），**2026-08-23 决定移除，2026-08-28 实施**（解析到 `using` 直接报错，提示改用 `import`；实现层 `Decl::Using` 变体、语义/运行时 `apply_usings` 已删除）。同包跨命名空间改用 `import`：限定访问 `Math.square(5)` 或符号选择 `import Math.{square};` 后平铺调用 `square(5)`。
-_Avoid_: 通配符式隐式引入一切
-
 ### 导入 (import)
 
-文件级导入语句（2026-08-17 定案，ADR-0010——取代 using，推翻「无文件级 import」）：
+文件级导入语句（2026-08-17 定案，ADR-0010）：
 - `import pkg.mod.{sym as 别名}` — 符号选择 + `as` 重名重命名
 - `import pkg.mod;` — 整模块导入
 - `import pkg.mod as m;` — 整模块 + 别名
+
+同包跨命名空间：限定访问 `Math.square(5)` 或符号选择 `import Math.{square};` 后平铺调用 `square(5)`。
 
 `H.std` = 内置标准库根路径，用户库经 build.zon 声明后按依赖名引用。**依赖解析顺序**：(1) 系统 SDK 目录（`$H_HOME/sdk/<name>/`，未设置则回退 `~/.hc/sdk/<name>/`），(2) 当前项目目录。**重名冲突规则**：同名导入符号冲突 → 编译错误，用户必须用 `as` 显式消歧。**库符号访问规则**：库函数可直接调用；库类型需创建（`alloc.init(T)` 堆上 / 值字面量栈上）。
 _Avoid_: 多套导入机制并存

@@ -15,7 +15,7 @@
 | 声明 | `var` `const` `fn` `global` |
 | 控制流 | `if` `else` `while` `for` `break` `continue` `return` `switch` `defer` `errdefer` |
 | 类型构造 | `class` `enum` `tree` `interface` `where`（`struct` 已并入 `class`） |
-| 模块 | `namespace` `using`（已由 `import` 取代，ADR-0010）`pub` |
+| 模块 | `namespace` `import` `pub` |
 | 内存/所有权 | `o` `move` |
 | 操作 | `and` `or` `try` `catch` `orelse` |
 | 元编程 | `script` `comptime` `anytype` `type` |
@@ -116,7 +116,7 @@ tree Node { ... }                            // 递归/层级
 
 ```hc
 namespace io { ... }
-import pkg.{sym};        // 选择导入（取代 using，ADR-0010）
+import pkg.{sym};        // 选择导入
 pub fn f() ...            // pub = 包边界可见性
 ```
 

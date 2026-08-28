@@ -86,7 +86,7 @@ hc --help
 | 里程碑 | 内容 |
 |---|---|
 | M0 地基 | cargo 三 crate 工作区（零外部依赖） |
-| M1 前端 | 关键字/运算符/字符串/数字全集；Parser + AST；多错误诊断；跨文件模块（namespace / using / 兄弟文件符号登记、目录 = 包） |
+| M1 前端 | 关键字/运算符/字符串/数字全集；Parser + AST；多错误诊断；跨文件模块（namespace / import / 兄弟文件符号登记、目录 = 包） |
 | M2 语义 | 名称解析（重载池）；完整类型检查（表达式级 + 期望类型传播 + 字段/索引校验）；推断（泛型 T / 指针形态 / 多路径返回 / 重载歧义）；所有权（分配来源 + move 合法性 + 引用逃逸）；错误集（显式 / `!T` 推断收集 / anyerror + 错误码表）；函数（重载 / 可选参数 / 闭包 move 捕获） |
 | M3 双后端 | 共享 IR（`ir.rs`，唯一语义源）；字节码 VM（HBC2）；LLVM 原生后端（`llvm.rs`，emit-.ll + zig cc）；双模式一致性套件（CI 硬门槛） |
 | M4 内建 | 内存运行时（作用域 LIFO 销毁 + Arena）；错误/终止（错误码 + `@panic` + `ExitType`）；`@` 内建基础集（sizeOf/alignOf/offsetOf/typeOf/intCast/ptrCast/compileError/addWithOverflow 等）；序列化内建（to_bytes/from_bytes/to_json/from_json/box）；标量接口族（ICompare/INumber/IInt/IUint/IFloat + 运算符绑定）；迭代内建（IIterable 三态 + iter()）；Debug 悬垂标记 |
