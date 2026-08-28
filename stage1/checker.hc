@@ -2401,6 +2401,8 @@ class Checker {
     funcs: Map<&[u8], FnSig>,
     // 当前函数是否声明了错误联合返回类型
     current_fn_ret_is_error_union: bool,
+    // 当前正在检查的类名（空串 = 不在类内；用于 self 注册与 Self 解析）
+    mut current_class: &[u8],
 
     // 初始化：从源码构建行号表
     fn init(self: *mut Self, src: Vec<u8>) void {
@@ -2797,12 +2799,28 @@ class Checker {
     fn check_decl(self: *mut Self, decl: AstNode) void {
         var k = decl.kind;
         if (k == "Fn") { self.check_fn(decl); }
+        else if (k == "Class") { self.check_class(decl); }
         else if (k == "Namespace") {
             var mut i: usize = 0;
             while (i < decl.children.len) {
                 self.check_decl(decl.children[i]);
                 i += 1;
             }
+        }
+    }
+
+    // 检查类声明：逐个检查方法体（self 由 current_class 在 check_fn 内注册）
+    fn check_class(self: *mut Self, decl: AstNode) void {
+        var cname = get_prop(decl.props, "name");
+        if (cname) |c| {
+            self.current_class = c;
+            var mut i: usize = 0;
+            while (i < decl.children.len) {
+                var child = decl.children[i];
+                if (child.kind == "Fn") { self.check_fn(child); }
+                i += 1;
+            }
+            self.current_class = "";
         }
     }
 
@@ -2813,6 +2831,15 @@ class Checker {
         var ru = get_prop(decl.props, "ret_union");
         if (ru) |_| { self.current_fn_ret_is_error_union = true; }
         else { self.current_fn_ret_is_error_union = false; }
+        // 方法体：注册 self（显式 self 参数会在下方参数循环中覆盖）
+        if (self.current_class.len > 0) {
+            var self_info = VarInfo{
+                ty = make_ty(self.current_class),
+                source = AllocSource.Unknown,
+                mut_ = true,
+            };
+            self.register("self", self_info);
+        }
         var mut i: usize = 0;
         while (i < decl.children.len) {
             var child = decl.children[i];
@@ -3383,6 +3410,7 @@ fn main(args: Vec<String>) !void {
         types = Map<&[u8], SType>.init(alloc),
         funcs = Map<&[u8], FnSig>.init(alloc),
         current_fn_ret_is_error_union = false,
+        current_class = "",
     });
     checker.init(src);
     checker.check_program(ast);
