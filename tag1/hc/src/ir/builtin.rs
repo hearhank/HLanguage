@@ -1316,6 +1316,504 @@ pub(crate) fn call_intrlist_ns_method_ir(
 }
 
 /// IntrList 实例方法：push_front/pop_front/push_back/pop_back/remove/len/is_empty/clear。
+fn intrlist_get_field(ctx: &Ctx, class_cell: usize, name: &str) -> Option<usize> {
+    match &ctx.cells[class_cell] {
+        Cell::Class { fields, .. } => fields.get(name).copied(),
+        _ => None,
+    }
+}
+
+fn intrlist_get_int(ctx: &Ctx, class_cell: usize, name: &str) -> Option<i128> {
+    let cell = intrlist_get_field(ctx, class_cell, name)?;
+    match &ctx.cells[cell] {
+        Cell::Value(IrValue::Int(n)) => Some(*n),
+        _ => None,
+    }
+}
+
+fn intrlist_set_int(ctx: &mut Ctx, class_cell: usize, name: &str, val: i128) {
+    if let Some(cell) = intrlist_get_field(ctx, class_cell, name) {
+        ctx.cells[cell] = Cell::Value(IrValue::Int(val));
+    }
+}
+
+/// IntrList.push_front(val)——头插，复用 free 槽位
+fn intrlist_push_front(ctx: &mut Ctx, class_cell: usize, args: &[IrValue]) -> R<Option<IrValue>> {
+    let val = args
+        .get(0)
+        .ok_or_else(|| IrError::msg("ArityMismatch", "push_front"))?;
+    // 分配节点索引
+    let idx = if let Some(free_cell) = intrlist_get_field(ctx, class_cell, "free") {
+        let elems = match &ctx.cells[free_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        if let Some(last) = elems.last() {
+            let val = match &ctx.cells[*last] {
+                Cell::Value(v) => v.clone(),
+                _ => IrValue::Int(0),
+            };
+            let mut new_elems = elems;
+            new_elems.pop();
+            ctx.cells[free_cell] = Cell::Elems(new_elems);
+            match val {
+                IrValue::Int(n) => Some(n as usize),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let idx = idx.unwrap_or_else(|| {
+        if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+            match &ctx.cells[prev_cell] {
+                Cell::Elems(e) => e.len(),
+                _ => 0,
+            }
+        } else {
+            0
+        }
+    });
+    let head = intrlist_get_int(ctx, class_cell, "head").unwrap_or(-1) as isize;
+
+    // 设置 prev[idx] = -1
+    if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+        let elems = match &ctx.cells[prev_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(-1)));
+        let mut new_elems = elems;
+        if idx < new_elems.len() {
+            new_elems[idx] = new_elem;
+        } else {
+            new_elems.push(new_elem);
+        }
+        ctx.cells[prev_cell] = Cell::Elems(new_elems);
+    }
+    // 设置 next[idx] = old_head
+    if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+        let elems = match &ctx.cells[next_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(head as i128)));
+        let mut new_elems = elems;
+        if idx < new_elems.len() {
+            new_elems[idx] = new_elem;
+        } else {
+            new_elems.push(new_elem);
+        }
+        ctx.cells[next_cell] = Cell::Elems(new_elems);
+    }
+    // 设置 vals[idx] = val
+    if let Some(vals_cell) = intrlist_get_field(ctx, class_cell, "vals") {
+        let elems = match &ctx.cells[vals_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(val.clone()));
+        let mut new_elems = elems;
+        if idx < new_elems.len() {
+            new_elems[idx] = new_elem;
+        } else {
+            new_elems.push(new_elem);
+        }
+        ctx.cells[vals_cell] = Cell::Elems(new_elems);
+    }
+    // 如果 old_head 存在，设置 prev[old_head] = idx
+    if head >= 0 {
+        if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+            let elems = match &ctx.cells[prev_cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            if let Some(&elem_cell) = elems.get(head as usize) {
+                ctx.cells[elem_cell] = Cell::Value(IrValue::Int(idx as i128));
+            }
+        }
+    } else {
+        intrlist_set_int(ctx, class_cell, "tail", idx as i128);
+    }
+    intrlist_set_int(ctx, class_cell, "head", idx as i128);
+    let cur_len = intrlist_get_int(ctx, class_cell, "len").unwrap_or(0);
+    intrlist_set_int(ctx, class_cell, "len", cur_len + 1);
+    Ok(Some(IrValue::Int(idx as i128)))
+}
+
+/// IntrList.pop_front()——头删，回收索引进 free
+fn intrlist_pop_front(ctx: &mut Ctx, class_cell: usize) -> R<Option<IrValue>> {
+    let head = intrlist_get_int(ctx, class_cell, "head").unwrap_or(-1);
+    if head < 0 {
+        return Ok(Some(IrValue::Opt(None)));
+    }
+    let head = head as usize;
+    // 读取值
+    let val = if let Some(vals_cell) = intrlist_get_field(ctx, class_cell, "vals") {
+        match &ctx.cells[vals_cell] {
+            Cell::Elems(elems) => {
+                if head < elems.len() {
+                    match &ctx.cells[elems[head]] {
+                        Cell::Value(v) => v.clone(),
+                        _ => IrValue::Void,
+                    }
+                } else {
+                    IrValue::Void
+                }
+            }
+            _ => IrValue::Void,
+        }
+    } else {
+        IrValue::Void
+    };
+    // 获取 next 索引
+    let next_idx = if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+        match &ctx.cells[next_cell] {
+            Cell::Elems(elems) => {
+                if head < elems.len() {
+                    match &ctx.cells[elems[head]] {
+                        Cell::Value(IrValue::Int(v)) => *v,
+                        _ => -1,
+                    }
+                } else {
+                    -1
+                }
+            }
+            _ => -1,
+        }
+    } else {
+        -1
+    };
+    // 释放 head 索引
+    if let Some(free_cell) = intrlist_get_field(ctx, class_cell, "free") {
+        let elems = match &ctx.cells[free_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(head as i128)));
+        let mut new_elems = elems;
+        new_elems.push(new_elem);
+        ctx.cells[free_cell] = Cell::Elems(new_elems);
+    }
+    // 更新 head
+    if next_idx >= 0 {
+        if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+            let elems = match &ctx.cells[prev_cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            if let Some(&elem_cell) = elems.get(next_idx as usize) {
+                ctx.cells[elem_cell] = Cell::Value(IrValue::Int(-1));
+            }
+        }
+        intrlist_set_int(ctx, class_cell, "head", next_idx);
+    } else {
+        intrlist_set_int(ctx, class_cell, "head", -1);
+        intrlist_set_int(ctx, class_cell, "tail", -1);
+    }
+    let cur_len = intrlist_get_int(ctx, class_cell, "len").unwrap_or(0);
+    intrlist_set_int(ctx, class_cell, "len", cur_len - 1);
+    Ok(Some(val))
+}
+
+/// IntrList.push_back(val)——尾插，复用 free 槽位
+fn intrlist_push_back(ctx: &mut Ctx, class_cell: usize, args: &[IrValue]) -> R<Option<IrValue>> {
+    let val = args
+        .get(0)
+        .ok_or_else(|| IrError::msg("ArityMismatch", "push_back"))?;
+    // 分配节点索引
+    let idx = if let Some(free_cell) = intrlist_get_field(ctx, class_cell, "free") {
+        let elems = match &ctx.cells[free_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        if let Some(last) = elems.last() {
+            let val = match &ctx.cells[*last] {
+                Cell::Value(v) => v.clone(),
+                _ => IrValue::Int(0),
+            };
+            let mut new_elems = elems;
+            new_elems.pop();
+            ctx.cells[free_cell] = Cell::Elems(new_elems);
+            match val {
+                IrValue::Int(n) => Some(n as usize),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let idx = idx.unwrap_or_else(|| {
+        if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+            match &ctx.cells[prev_cell] {
+                Cell::Elems(e) => e.len(),
+                _ => 0,
+            }
+        } else {
+            0
+        }
+    });
+    let tail = intrlist_get_int(ctx, class_cell, "tail").unwrap_or(-1) as isize;
+
+    // 设置 prev[idx] = old_tail
+    if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+        let elems = match &ctx.cells[prev_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(tail as i128)));
+        let mut new_elems = elems;
+        if idx < new_elems.len() {
+            new_elems[idx] = new_elem;
+        } else {
+            new_elems.push(new_elem);
+        }
+        ctx.cells[prev_cell] = Cell::Elems(new_elems);
+    }
+    // 设置 next[idx] = -1
+    if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+        let elems = match &ctx.cells[next_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(-1)));
+        let mut new_elems = elems;
+        if idx < new_elems.len() {
+            new_elems[idx] = new_elem;
+        } else {
+            new_elems.push(new_elem);
+        }
+        ctx.cells[next_cell] = Cell::Elems(new_elems);
+    }
+    // 设置 vals[idx] = val
+    if let Some(vals_cell) = intrlist_get_field(ctx, class_cell, "vals") {
+        let elems = match &ctx.cells[vals_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(val.clone()));
+        let mut new_elems = elems;
+        if idx < new_elems.len() {
+            new_elems[idx] = new_elem;
+        } else {
+            new_elems.push(new_elem);
+        }
+        ctx.cells[vals_cell] = Cell::Elems(new_elems);
+    }
+    // 如果 old_tail 存在，设置 next[old_tail] = idx
+    if tail >= 0 {
+        if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+            let elems = match &ctx.cells[next_cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            if let Some(&elem_cell) = elems.get(tail as usize) {
+                ctx.cells[elem_cell] = Cell::Value(IrValue::Int(idx as i128));
+            }
+        }
+    } else {
+        intrlist_set_int(ctx, class_cell, "head", idx as i128);
+    }
+    intrlist_set_int(ctx, class_cell, "tail", idx as i128);
+    let cur_len = intrlist_get_int(ctx, class_cell, "len").unwrap_or(0);
+    intrlist_set_int(ctx, class_cell, "len", cur_len + 1);
+    Ok(Some(IrValue::Int(idx as i128)))
+}
+
+/// IntrList.pop_back()——尾删，回收索引进 free
+fn intrlist_pop_back(ctx: &mut Ctx, class_cell: usize) -> R<Option<IrValue>> {
+    let tail = intrlist_get_int(ctx, class_cell, "tail").unwrap_or(-1);
+    if tail < 0 {
+        return Ok(Some(IrValue::Opt(None)));
+    }
+    let tail = tail as usize;
+    // 读取值
+    let val = if let Some(vals_cell) = intrlist_get_field(ctx, class_cell, "vals") {
+        match &ctx.cells[vals_cell] {
+            Cell::Elems(elems) => {
+                if tail < elems.len() {
+                    match &ctx.cells[elems[tail]] {
+                        Cell::Value(v) => v.clone(),
+                        _ => IrValue::Void,
+                    }
+                } else {
+                    IrValue::Void
+                }
+            }
+            _ => IrValue::Void,
+        }
+    } else {
+        IrValue::Void
+    };
+    // 获取 prev 索引
+    let prev_idx = if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+        match &ctx.cells[prev_cell] {
+            Cell::Elems(elems) => {
+                if tail < elems.len() {
+                    match &ctx.cells[elems[tail]] {
+                        Cell::Value(IrValue::Int(v)) => *v,
+                        _ => -1,
+                    }
+                } else {
+                    -1
+                }
+            }
+            _ => -1,
+        }
+    } else {
+        -1
+    };
+    // 释放 tail 索引
+    if let Some(free_cell) = intrlist_get_field(ctx, class_cell, "free") {
+        let elems = match &ctx.cells[free_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(tail as i128)));
+        let mut new_elems = elems;
+        new_elems.push(new_elem);
+        ctx.cells[free_cell] = Cell::Elems(new_elems);
+    }
+    // 更新 tail
+    if prev_idx >= 0 {
+        if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+            let elems = match &ctx.cells[next_cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            if let Some(&elem_cell) = elems.get(prev_idx as usize) {
+                ctx.cells[elem_cell] = Cell::Value(IrValue::Int(-1));
+            }
+        }
+        intrlist_set_int(ctx, class_cell, "tail", prev_idx);
+    } else {
+        intrlist_set_int(ctx, class_cell, "head", -1);
+        intrlist_set_int(ctx, class_cell, "tail", -1);
+    }
+    let cur_len = intrlist_get_int(ctx, class_cell, "len").unwrap_or(0);
+    intrlist_set_int(ctx, class_cell, "len", cur_len - 1);
+    Ok(Some(val))
+}
+
+/// IntrList.remove(idx)——按索引摘除节点并接前后驱
+fn intrlist_remove(ctx: &mut Ctx, class_cell: usize, args: &[IrValue]) -> R<Option<IrValue>> {
+    let idx = int_arg_ir(ctx, args, 0)?;
+    if idx < 0 {
+        return Ok(Some(IrValue::Opt(None)));
+    }
+    let idx = idx as usize;
+    // 检查节点是否存在
+    let node_exists = if let Some(vals_cell) = intrlist_get_field(ctx, class_cell, "vals") {
+        match &ctx.cells[vals_cell] {
+            Cell::Elems(elems) => idx < elems.len(),
+            _ => false,
+        }
+    } else {
+        false
+    };
+    if !node_exists {
+        return Ok(Some(IrValue::Opt(None)));
+    }
+    // 读取 prev 和 next
+    let prev_idx = if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+        match &ctx.cells[prev_cell] {
+            Cell::Elems(elems) => {
+                if idx < elems.len() {
+                    match &ctx.cells[elems[idx]] {
+                        Cell::Value(IrValue::Int(v)) => *v,
+                        _ => -1,
+                    }
+                } else {
+                    -1
+                }
+            }
+            _ => -1,
+        }
+    } else {
+        -1
+    };
+    let next_idx = if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+        match &ctx.cells[next_cell] {
+            Cell::Elems(elems) => {
+                if idx < elems.len() {
+                    match &ctx.cells[elems[idx]] {
+                        Cell::Value(IrValue::Int(v)) => *v,
+                        _ => -1,
+                    }
+                } else {
+                    -1
+                }
+            }
+            _ => -1,
+        }
+    } else {
+        -1
+    };
+    // 读取值
+    let val = if let Some(vals_cell) = intrlist_get_field(ctx, class_cell, "vals") {
+        match &ctx.cells[vals_cell] {
+            Cell::Elems(elems) => {
+                if idx < elems.len() {
+                    match &ctx.cells[elems[idx]] {
+                        Cell::Value(v) => v.clone(),
+                        _ => IrValue::Void,
+                    }
+                } else {
+                    IrValue::Void
+                }
+            }
+            _ => IrValue::Void,
+        }
+    } else {
+        IrValue::Void
+    };
+    // 更新前后节点的链接
+    if prev_idx >= 0 {
+        if let Some(next_cell) = intrlist_get_field(ctx, class_cell, "next") {
+            let elems = match &ctx.cells[next_cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            if let Some(&elem_cell) = elems.get(prev_idx as usize) {
+                ctx.cells[elem_cell] = Cell::Value(IrValue::Int(next_idx));
+            }
+        }
+    } else {
+        intrlist_set_int(ctx, class_cell, "head", next_idx);
+    }
+    if next_idx >= 0 {
+        if let Some(prev_cell) = intrlist_get_field(ctx, class_cell, "prev") {
+            let elems = match &ctx.cells[prev_cell] {
+                Cell::Elems(e) => e.clone(),
+                _ => Vec::new(),
+            };
+            if let Some(&elem_cell) = elems.get(next_idx as usize) {
+                ctx.cells[elem_cell] = Cell::Value(IrValue::Int(prev_idx));
+            }
+        }
+    } else {
+        intrlist_set_int(ctx, class_cell, "tail", prev_idx);
+    }
+    // 释放索引
+    if let Some(free_cell) = intrlist_get_field(ctx, class_cell, "free") {
+        let elems = match &ctx.cells[free_cell] {
+            Cell::Elems(e) => e.clone(),
+            _ => Vec::new(),
+        };
+        let new_elem = ctx.alloc(Cell::Value(IrValue::Int(idx as i128)));
+        let mut new_elems = elems;
+        new_elems.push(new_elem);
+        ctx.cells[free_cell] = Cell::Elems(new_elems);
+    }
+    let cur_len = intrlist_get_int(ctx, class_cell, "len").unwrap_or(0);
+    intrlist_set_int(ctx, class_cell, "len", cur_len - 1);
+    Ok(Some(val))
+}
+
 pub(crate) fn call_intrlist_method_ir(
     ctx: &mut Ctx,
     module: &IrModule,
@@ -1347,473 +1845,11 @@ pub(crate) fn call_intrlist_method_ir(
     };
 
     match method {
-        "push_front" => {
-            let val = args
-                .get(0)
-                .ok_or_else(|| IrError::msg("ArityMismatch", "push_front"))?;
-            // 分配节点索引
-            let idx = if let Some(free_cell) = get_field(ctx, "free") {
-                let elems = match &ctx.cells[free_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                if let Some(last) = elems.last() {
-                    let val = match &ctx.cells[*last] {
-                        Cell::Value(v) => v.clone(),
-                        _ => IrValue::Int(0),
-                    };
-                    let mut new_elems = elems;
-                    new_elems.pop();
-                    ctx.cells[free_cell] = Cell::Elems(new_elems);
-                    match val {
-                        IrValue::Int(n) => Some(n as usize),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let idx = idx.unwrap_or_else(|| {
-                if let Some(prev_cell) = get_field(ctx, "prev") {
-                    match &ctx.cells[prev_cell] {
-                        Cell::Elems(e) => e.len(),
-                        _ => 0,
-                    }
-                } else {
-                    0
-                }
-            });
-            let head = get_int(ctx, "head").unwrap_or(-1) as isize;
-
-            // 设置 prev[idx] = -1
-            if let Some(prev_cell) = get_field(ctx, "prev") {
-                let elems = match &ctx.cells[prev_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(-1)));
-                let mut new_elems = elems;
-                if idx < new_elems.len() {
-                    new_elems[idx] = new_elem;
-                } else {
-                    new_elems.push(new_elem);
-                }
-                ctx.cells[prev_cell] = Cell::Elems(new_elems);
-            }
-            // 设置 next[idx] = old_head
-            if let Some(next_cell) = get_field(ctx, "next") {
-                let elems = match &ctx.cells[next_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(head as i128)));
-                let mut new_elems = elems;
-                if idx < new_elems.len() {
-                    new_elems[idx] = new_elem;
-                } else {
-                    new_elems.push(new_elem);
-                }
-                ctx.cells[next_cell] = Cell::Elems(new_elems);
-            }
-            // 设置 vals[idx] = val
-            if let Some(vals_cell) = get_field(ctx, "vals") {
-                let elems = match &ctx.cells[vals_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(val.clone()));
-                let mut new_elems = elems;
-                if idx < new_elems.len() {
-                    new_elems[idx] = new_elem;
-                } else {
-                    new_elems.push(new_elem);
-                }
-                ctx.cells[vals_cell] = Cell::Elems(new_elems);
-            }
-            // 如果 old_head 存在，设置 prev[old_head] = idx
-            if head >= 0 {
-                if let Some(prev_cell) = get_field(ctx, "prev") {
-                    let elems = match &ctx.cells[prev_cell] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => Vec::new(),
-                    };
-                    if let Some(&elem_cell) = elems.get(head as usize) {
-                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(idx as i128));
-                    }
-                }
-            } else {
-                set_int(ctx, "tail", idx as i128);
-            }
-            set_int(ctx, "head", idx as i128);
-            let cur_len = get_int(ctx, "len").unwrap_or(0);
-            set_int(ctx, "len", cur_len + 1);
-            Ok(Some(IrValue::Int(idx as i128)))
-        }
-        "pop_front" => {
-            let head = get_int(ctx, "head").unwrap_or(-1);
-            if head < 0 {
-                return Ok(Some(IrValue::Opt(None)));
-            }
-            let head = head as usize;
-            // 读取值
-            let val = if let Some(vals_cell) = get_field(ctx, "vals") {
-                match &ctx.cells[vals_cell] {
-                    Cell::Elems(elems) => {
-                        if head < elems.len() {
-                            match &ctx.cells[elems[head]] {
-                                Cell::Value(v) => v.clone(),
-                                _ => IrValue::Void,
-                            }
-                        } else {
-                            IrValue::Void
-                        }
-                    }
-                    _ => IrValue::Void,
-                }
-            } else {
-                IrValue::Void
-            };
-            // 获取 next 索引
-            let next_idx = if let Some(next_cell) = get_field(ctx, "next") {
-                match &ctx.cells[next_cell] {
-                    Cell::Elems(elems) => {
-                        if head < elems.len() {
-                            match &ctx.cells[elems[head]] {
-                                Cell::Value(IrValue::Int(v)) => *v,
-                                _ => -1,
-                            }
-                        } else {
-                            -1
-                        }
-                    }
-                    _ => -1,
-                }
-            } else {
-                -1
-            };
-            // 释放 head 索引
-            if let Some(free_cell) = get_field(ctx, "free") {
-                let elems = match &ctx.cells[free_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(head as i128)));
-                let mut new_elems = elems;
-                new_elems.push(new_elem);
-                ctx.cells[free_cell] = Cell::Elems(new_elems);
-            }
-            // 更新 head
-            if next_idx >= 0 {
-                if let Some(prev_cell) = get_field(ctx, "prev") {
-                    let elems = match &ctx.cells[prev_cell] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => Vec::new(),
-                    };
-                    if let Some(&elem_cell) = elems.get(next_idx as usize) {
-                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(-1));
-                    }
-                }
-                set_int(ctx, "head", next_idx);
-            } else {
-                set_int(ctx, "head", -1);
-                set_int(ctx, "tail", -1);
-            }
-            let cur_len = get_int(ctx, "len").unwrap_or(0);
-            set_int(ctx, "len", cur_len - 1);
-            Ok(Some(val))
-        }
-        "push_back" => {
-            let val = args
-                .get(0)
-                .ok_or_else(|| IrError::msg("ArityMismatch", "push_back"))?;
-            // 分配节点索引
-            let idx = if let Some(free_cell) = get_field(ctx, "free") {
-                let elems = match &ctx.cells[free_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                if let Some(last) = elems.last() {
-                    let val = match &ctx.cells[*last] {
-                        Cell::Value(v) => v.clone(),
-                        _ => IrValue::Int(0),
-                    };
-                    let mut new_elems = elems;
-                    new_elems.pop();
-                    ctx.cells[free_cell] = Cell::Elems(new_elems);
-                    match val {
-                        IrValue::Int(n) => Some(n as usize),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let idx = idx.unwrap_or_else(|| {
-                if let Some(prev_cell) = get_field(ctx, "prev") {
-                    match &ctx.cells[prev_cell] {
-                        Cell::Elems(e) => e.len(),
-                        _ => 0,
-                    }
-                } else {
-                    0
-                }
-            });
-            let tail = get_int(ctx, "tail").unwrap_or(-1) as isize;
-
-            // 设置 prev[idx] = old_tail
-            if let Some(prev_cell) = get_field(ctx, "prev") {
-                let elems = match &ctx.cells[prev_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(tail as i128)));
-                let mut new_elems = elems;
-                if idx < new_elems.len() {
-                    new_elems[idx] = new_elem;
-                } else {
-                    new_elems.push(new_elem);
-                }
-                ctx.cells[prev_cell] = Cell::Elems(new_elems);
-            }
-            // 设置 next[idx] = -1
-            if let Some(next_cell) = get_field(ctx, "next") {
-                let elems = match &ctx.cells[next_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(-1)));
-                let mut new_elems = elems;
-                if idx < new_elems.len() {
-                    new_elems[idx] = new_elem;
-                } else {
-                    new_elems.push(new_elem);
-                }
-                ctx.cells[next_cell] = Cell::Elems(new_elems);
-            }
-            // 设置 vals[idx] = val
-            if let Some(vals_cell) = get_field(ctx, "vals") {
-                let elems = match &ctx.cells[vals_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(val.clone()));
-                let mut new_elems = elems;
-                if idx < new_elems.len() {
-                    new_elems[idx] = new_elem;
-                } else {
-                    new_elems.push(new_elem);
-                }
-                ctx.cells[vals_cell] = Cell::Elems(new_elems);
-            }
-            // 如果 old_tail 存在，设置 next[old_tail] = idx
-            if tail >= 0 {
-                if let Some(next_cell) = get_field(ctx, "next") {
-                    let elems = match &ctx.cells[next_cell] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => Vec::new(),
-                    };
-                    if let Some(&elem_cell) = elems.get(tail as usize) {
-                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(idx as i128));
-                    }
-                }
-            } else {
-                set_int(ctx, "head", idx as i128);
-            }
-            set_int(ctx, "tail", idx as i128);
-            let cur_len = get_int(ctx, "len").unwrap_or(0);
-            set_int(ctx, "len", cur_len + 1);
-            Ok(Some(IrValue::Int(idx as i128)))
-        }
-        "pop_back" => {
-            let tail = get_int(ctx, "tail").unwrap_or(-1);
-            if tail < 0 {
-                return Ok(Some(IrValue::Opt(None)));
-            }
-            let tail = tail as usize;
-            // 读取值
-            let val = if let Some(vals_cell) = get_field(ctx, "vals") {
-                match &ctx.cells[vals_cell] {
-                    Cell::Elems(elems) => {
-                        if tail < elems.len() {
-                            match &ctx.cells[elems[tail]] {
-                                Cell::Value(v) => v.clone(),
-                                _ => IrValue::Void,
-                            }
-                        } else {
-                            IrValue::Void
-                        }
-                    }
-                    _ => IrValue::Void,
-                }
-            } else {
-                IrValue::Void
-            };
-            // 获取 prev 索引
-            let prev_idx = if let Some(prev_cell) = get_field(ctx, "prev") {
-                match &ctx.cells[prev_cell] {
-                    Cell::Elems(elems) => {
-                        if tail < elems.len() {
-                            match &ctx.cells[elems[tail]] {
-                                Cell::Value(IrValue::Int(v)) => *v,
-                                _ => -1,
-                            }
-                        } else {
-                            -1
-                        }
-                    }
-                    _ => -1,
-                }
-            } else {
-                -1
-            };
-            // 释放 tail 索引
-            if let Some(free_cell) = get_field(ctx, "free") {
-                let elems = match &ctx.cells[free_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(tail as i128)));
-                let mut new_elems = elems;
-                new_elems.push(new_elem);
-                ctx.cells[free_cell] = Cell::Elems(new_elems);
-            }
-            // 更新 tail
-            if prev_idx >= 0 {
-                if let Some(next_cell) = get_field(ctx, "next") {
-                    let elems = match &ctx.cells[next_cell] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => Vec::new(),
-                    };
-                    if let Some(&elem_cell) = elems.get(prev_idx as usize) {
-                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(-1));
-                    }
-                }
-                set_int(ctx, "tail", prev_idx);
-            } else {
-                set_int(ctx, "head", -1);
-                set_int(ctx, "tail", -1);
-            }
-            let cur_len = get_int(ctx, "len").unwrap_or(0);
-            set_int(ctx, "len", cur_len - 1);
-            Ok(Some(val))
-        }
-        "remove" => {
-            let idx = int_arg_ir(ctx, args, 0)?;
-            if idx < 0 {
-                return Ok(Some(IrValue::Opt(None)));
-            }
-            let idx = idx as usize;
-            // 检查节点是否存在
-            let node_exists = if let Some(vals_cell) = get_field(ctx, "vals") {
-                match &ctx.cells[vals_cell] {
-                    Cell::Elems(elems) => idx < elems.len(),
-                    _ => false,
-                }
-            } else {
-                false
-            };
-            if !node_exists {
-                return Ok(Some(IrValue::Opt(None)));
-            }
-            // 读取 prev 和 next
-            let prev_idx = if let Some(prev_cell) = get_field(ctx, "prev") {
-                match &ctx.cells[prev_cell] {
-                    Cell::Elems(elems) => {
-                        if idx < elems.len() {
-                            match &ctx.cells[elems[idx]] {
-                                Cell::Value(IrValue::Int(v)) => *v,
-                                _ => -1,
-                            }
-                        } else {
-                            -1
-                        }
-                    }
-                    _ => -1,
-                }
-            } else {
-                -1
-            };
-            let next_idx = if let Some(next_cell) = get_field(ctx, "next") {
-                match &ctx.cells[next_cell] {
-                    Cell::Elems(elems) => {
-                        if idx < elems.len() {
-                            match &ctx.cells[elems[idx]] {
-                                Cell::Value(IrValue::Int(v)) => *v,
-                                _ => -1,
-                            }
-                        } else {
-                            -1
-                        }
-                    }
-                    _ => -1,
-                }
-            } else {
-                -1
-            };
-            // 读取值
-            let val = if let Some(vals_cell) = get_field(ctx, "vals") {
-                match &ctx.cells[vals_cell] {
-                    Cell::Elems(elems) => {
-                        if idx < elems.len() {
-                            match &ctx.cells[elems[idx]] {
-                                Cell::Value(v) => v.clone(),
-                                _ => IrValue::Void,
-                            }
-                        } else {
-                            IrValue::Void
-                        }
-                    }
-                    _ => IrValue::Void,
-                }
-            } else {
-                IrValue::Void
-            };
-            // 更新前后节点的链接
-            if prev_idx >= 0 {
-                if let Some(next_cell) = get_field(ctx, "next") {
-                    let elems = match &ctx.cells[next_cell] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => Vec::new(),
-                    };
-                    if let Some(&elem_cell) = elems.get(prev_idx as usize) {
-                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(next_idx));
-                    }
-                }
-            } else {
-                set_int(ctx, "head", next_idx);
-            }
-            if next_idx >= 0 {
-                if let Some(prev_cell) = get_field(ctx, "prev") {
-                    let elems = match &ctx.cells[prev_cell] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => Vec::new(),
-                    };
-                    if let Some(&elem_cell) = elems.get(next_idx as usize) {
-                        ctx.cells[elem_cell] = Cell::Value(IrValue::Int(prev_idx));
-                    }
-                }
-            } else {
-                set_int(ctx, "tail", prev_idx);
-            }
-            // 释放索引
-            if let Some(free_cell) = get_field(ctx, "free") {
-                let elems = match &ctx.cells[free_cell] {
-                    Cell::Elems(e) => e.clone(),
-                    _ => Vec::new(),
-                };
-                let new_elem = ctx.alloc(Cell::Value(IrValue::Int(idx as i128)));
-                let mut new_elems = elems;
-                new_elems.push(new_elem);
-                ctx.cells[free_cell] = Cell::Elems(new_elems);
-            }
-            let cur_len = get_int(ctx, "len").unwrap_or(0);
-            set_int(ctx, "len", cur_len - 1);
-            Ok(Some(val))
-        }
+        "push_front" => intrlist_push_front(ctx, class_cell, args),
+        "pop_front" => intrlist_pop_front(ctx, class_cell),
+        "push_back" => intrlist_push_back(ctx, class_cell, args),
+        "pop_back" => intrlist_pop_back(ctx, class_cell),
+        "remove" => intrlist_remove(ctx, class_cell, args),
         "len" => Ok(Some(IrValue::Int(get_int(ctx, "len").unwrap_or(0)))),
         "is_empty" => {
             let cur_len = get_int(ctx, "len").unwrap_or(0);
