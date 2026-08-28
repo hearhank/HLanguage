@@ -9,7 +9,7 @@
 ### 1.1 词法分析（Lexer）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using（已废弃）/ import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
+| 关键字全集 | `fn / var / const / global / if / else / while / for / break / continue / return / switch / defer / errdefer / class / enum / union / tree / interface / where / namespace / using（已移除，报错提示改用 import）/ import / pub / export / owned / o / move / mut / and / or / try / catch / orelse / script / comptime / anytype / type / async / await / spawn / extern / void / null / true / false` | ✅ |
 | 字面量 | 整数（进制前缀+后缀）、浮点、字符串（含转义）、原生字符串 `"""..."""`、字符 | ✅ |
 | 运算符/标点 | 完整运算符集（算术/比较/逻辑/位/赋值/范围/`||` 错误集联合） | ✅ |
 | 注释 | 行注释 `//` + 块注释 `/* */` | ✅ |
@@ -19,7 +19,7 @@
 ### 1.2 语法分析（Parser + AST）
 | 功能 | 描述 | 状态 |
 |------|------|------|
-| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using（已废弃）/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
+| 声明解析 | 函数/变量/常量/全局/class/enum/union/interface/namespace/using（已移除，报错提示改用 import）/import/comptime（`script` 已移除，见 12-script-redesign.md） | ✅ |
 | 语句解析 | 表达式/变量声明/if/while/for/switch（含守卫）/return/break/continue/defer/errdefer/块 | ✅ |
 | 表达式解析 | 完整优先级：字面量/标识符/一元/二元/调用/索引/字段/取址/解引用/if/switch/闭包/构造 | ✅ |
 | 类型解析 | 命名类型/指针/切片/可选/错误联合/元组/数组/推断类型 | ✅ |
@@ -476,7 +476,7 @@
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | `namespace` | 命名空间声明 | ✅ |
-| `using` | 命名空间引入（已废弃，解析到直接报错） | 🟡 废弃 |
+| `using` | 命名空间引入（已移除，2026-08-28：解析到 `using` 直接报错提示改用 `import`） | ✅ 已移除 |
 | `import` | 包导入（含 `H.std.{...}` 限定选择） | ✅ |
 | `pub` | 可见性控制 | ✅ |
 | `export` | 导出标记 | ✅ |

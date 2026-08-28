@@ -3,10 +3,10 @@ import H.std.{io};
 // 44-multi-file-main.hc — 多文件项目入口
 //
 //   - build.zon 声明包内文件（Q26）
-//   - using 引入命名空间；限定访问 Orders.Line
+//   - import 引入命名空间；限定访问 Orders.Line
 
-using Orders;
-using Pricing;
+import Orders;
+import Pricing;
 
 fn main() !void {
     var lines = Vec<Orders.Line>.init(alloc);

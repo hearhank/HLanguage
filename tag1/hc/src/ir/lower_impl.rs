@@ -11,7 +11,7 @@ pub fn lower(program: &Program) -> Result<IrModule, IrError> {
 }
 
 /// 使用外部提供的类型表降级程序（用于多文件合并时共享类型定义）。
-/// 类型表应包含所有文件的类型定义，使跨文件类型引用（如 `using` 导入的命名空间类）
+/// 类型表应包含所有文件的类型定义，使跨文件类型引用（如 `import` 导入的命名空间类）
 /// 在降级时能够解析。
 pub fn lower_with_types(program: &Program, types: TypeTable) -> Result<IrModule, IrError> {
     let errors = crate::runtime::errorcodes::collect(program, 0);
@@ -462,7 +462,7 @@ pub(crate) fn lower_decl(
             for (flat, qn, func) in inner {
                 let idx = module.funcs.len();
                 module.funcs.push(func);
-                // 扁平名（using 导入后直接调用）：先到先得
+                // 扁平名（import 导入后直接调用）：先到先得
                 module.func_index.entry(flat).or_default().push(idx);
                 // 限定名（Math.square / io.net.connect）
                 module.func_index.entry(qn).or_default().push(idx);
@@ -471,7 +471,7 @@ pub(crate) fn lower_decl(
         // 全局/常量声明：由合成 `@__init__` 函数处理（Phase 5）——此处跳过，
         // 启动初始化语义在 IrRuntime::init 中落地
         Decl::Global { .. } | Decl::Const { .. } => {}
-        // 类型级声明（class/enum/interface/using/script）：无顶层运行时代码；
+        // 类型级声明（class/enum/interface/import/script）：无顶层运行时代码；
         // class 方法登记为 `{Type}.{method}`（对齐 oracle interp.rs:522-535）——IIterable
         // 用户类型的 `next()` 经此查找。方法体降级失败 → 跳过登记（调用点 NoFunction
         // 硬错误，不使整个程序降级失败——方法与调用分属 Phase 3/4 边界）。
@@ -503,7 +503,6 @@ pub(crate) fn lower_decl(
         | Decl::Struct { .. }
         | Decl::Union { .. }
         | Decl::Interface { .. }
-        | Decl::Using { .. }
         | Decl::Import { .. }
         | Decl::Comptime { .. }
         | Decl::Include { .. } => {}

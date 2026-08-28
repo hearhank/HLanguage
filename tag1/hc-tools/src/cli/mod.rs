@@ -591,13 +591,6 @@ fn dump_decl(decl: &hc::ast::Decl, depth: usize) {
                 dump_decl(d, depth + 1);
             }
         }
-        hc::ast::Decl::Using { path, alias, .. } => {
-            print!("{indent}Using|path={:?}", path);
-            if let Some(a) = alias {
-                print!("|alias={a}");
-            }
-            println!();
-        }
         hc::ast::Decl::Import {
             path,
             alias,

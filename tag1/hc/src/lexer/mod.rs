@@ -144,7 +144,6 @@ impl<'a> Lexer<'a> {
             "interface" => TokenKind::KwInterface,
             "where" => TokenKind::KwWhere,
             "namespace" => TokenKind::KwNamespace,
-            "using" => TokenKind::KwUsing,
             "import" => TokenKind::KwImport,
             "pub" => TokenKind::KwPub,
             "export" => TokenKind::KwExport,

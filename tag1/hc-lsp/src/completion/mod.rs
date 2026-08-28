@@ -56,7 +56,6 @@ pub const KEYWORDS: &[&str] = &[
     "type",
     "anytype",
     "pub",
-    "using",
     "script",
     "comptime",
     "test",

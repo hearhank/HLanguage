@@ -221,7 +221,7 @@ pub fn check(program: &Program) -> Vec<Diagnostic> {
 }
 
 /// M1.4：跨文件语义检查——外部（兄弟文件）符号并入登记，
-/// 使限定名（`Orders.Line`）与 using 导入（`square(5)`）可被准确检查
+/// 使限定名（`Orders.Line`）与 import 导入（`square(5)`）可被准确检查
 pub fn check_with_extern(program: &Program, externs: &[&Program]) -> Vec<Diagnostic> {
     check_with_extern_deps(program, externs, &[])
 }
@@ -261,7 +261,6 @@ pub fn check_with_extern_deps(
         checker.collect_dep(dep, name);
     }
     checker.collect(program);
-    checker.apply_usings(program);
     checker.apply_imports(program);
     checker.validate_continuous();
     checker.validate_interface_impls(program);

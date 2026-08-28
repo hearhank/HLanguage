@@ -5,7 +5,7 @@ import H.std.{io};
 // 命名空间 = 逻辑分组（C# 式）：
 //   - namespace 块可跨文件；一个文件可有多个命名空间
 //   - pub 仅控制包边界（跨包可见需 pub + build.zon 依赖声明）
-//   - 同包跨命名空间：using 引入即可
+//   - 同包跨命名空间：import 引入即可
 
 namespace Math {
     pub fn square(x: i32) i32 {

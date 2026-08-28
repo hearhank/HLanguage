@@ -191,28 +191,6 @@ impl Parser {
                     span: start.merge(&end),
                 })
             }
-            TokenKind::KwUsing => {
-                if is_export {
-                    return Err(
-                        self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
-                    );
-                }
-                self.advance();
-                let path = self.parse_path()?;
-                let alias = if self.is_ident("as") {
-                    self.advance();
-                    Some(self.expect_ident()?)
-                } else {
-                    None
-                };
-                self.expect(&TokenKind::Semi, "`;` after using")?;
-                let end = self.span();
-                Ok(Decl::Using {
-                    path,
-                    alias,
-                    span: start.merge(&end),
-                })
-            }
             TokenKind::KwImport => {
                 if is_export {
                     return Err(

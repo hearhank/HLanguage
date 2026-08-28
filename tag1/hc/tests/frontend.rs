@@ -673,7 +673,7 @@ fn m14_extern_symbols_enable_crossfile_check() {
         parse_source("namespace Orders {\n    pub class Line { item: String, price: f64 }\n}\n")
             .expect("parse ext");
     let main = parse_source(
-        "using Orders;\n[test] fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
+        "[test] fn t() !void {\n    var l = Orders.Line{ item = String.from(\"a\", alloc), price = 3.0 };\n    var x = l.itemm;\n}\n",
     )
     .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
@@ -687,34 +687,34 @@ fn m14_extern_symbols_enable_crossfile_check() {
 }
 
 #[test]
-fn m14_using_imports_type() {
-    // using 导入类型：`Line` 不限定直接引用（扁平名）
+fn m14_import_selects_type() {
+    // ADR-0010：import 符号选择导入类型——`Line` 不限定直接引用
     let ext =
         parse_source("namespace Orders { pub class Line { item: String } }").expect("parse ext");
     let main = parse_source(
-        "using Orders;\n[test] fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
+        "import Orders.{Line};\n[test] fn t() !void {\n    var l = Line{ item = String.from(\"a\", alloc) };\n}\n",
     )
     .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
     assert!(
         !diags.iter().any(|d| d.is_error()),
-        "using 导入后扁平类型可用: {:?}",
+        "import 符号选择导入后扁平类型可用: {:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn m14_using_alias_qualified_call() {
-    // using NS as M：M.member 限定调用（语义可解析）
+fn m14_import_whole_module_alias_qualified_call() {
+    // ADR-0010：import 整模块 + 别名——M.member 限定调用（语义可解析）
     let ext = parse_source("namespace Math { pub fn square(x: i32) i32 { return x * x; } }\n")
         .expect("parse ext");
     let main =
-        parse_source("using Math as M;\n[test] fn t() !void {\n    var r = M.square(5);\n}\n")
+        parse_source("import Math as M;\n[test] fn t() !void {\n    var r = M.square(5);\n}\n")
             .expect("parse main");
     let diags = hc::check_semantics_extern(&main, &[&ext]);
     assert!(
         !diags.iter().any(|d| d.is_error()),
-        "using as 别名限定调用合法: {:?}",
+        "import as 别名限定调用合法: {:?}",
         diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
 }

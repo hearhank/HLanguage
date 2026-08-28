@@ -103,12 +103,7 @@ pub enum Decl {
         is_module: bool,
         span: Span,
     },
-    Using {
-        path: Vec<String>,
-        alias: Option<String>,
-        span: Span,
-    },
-    /// `import` 语句（ADR-0010：取代 `using`；导入对象 = 模块 `[module]` 标注的命名空间/包）
+    /// `import` 语句；导入对象 = 模块 `[module]` 标注的命名空间/包）
     ///
     /// 三种形态：
     /// ```hc
@@ -140,7 +135,7 @@ pub enum Decl {
 }
 
 impl Decl {
-    /// 跨包导出标志（`using`/`script` 无包边界概念，恒 false）
+    /// 跨包导出标志（`script` 无包边界概念，恒 false）
     pub fn is_pub(&self) -> bool {
         match self {
             Decl::Global { pub_, .. }
@@ -152,10 +147,7 @@ impl Decl {
             | Decl::Union { pub_, .. }
             | Decl::Interface { pub_, .. }
             | Decl::Namespace { pub_, .. } => *pub_,
-            Decl::Using { .. }
-            | Decl::Import { .. }
-            | Decl::Comptime { .. }
-            | Decl::Include { .. } => false,
+            Decl::Import { .. } | Decl::Comptime { .. } | Decl::Include { .. } => false,
         }
     }
 }

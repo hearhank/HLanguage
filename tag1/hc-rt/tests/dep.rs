@@ -7,7 +7,7 @@ fn parse(s: &str) -> hc::Program {
 }
 
 #[test]
-fn dep_pub_fn_accessible_via_qualified_and_using() {
+fn dep_pub_fn_accessible_via_qualified_and_import() {
     let dep = parse(
         r#"
 pub fn double(x: i32) i32 { return x * 2; }
@@ -16,8 +16,8 @@ fn hidden(x: i32) i32 { return x + 100; }
     );
     let main = parse(
         r#"
-using jsonlib;
-[test] fn dep_pub_fn_accessible_via_qualified_and_using() !void {
+import jsonlib.{double};
+[test] fn dep_pub_fn_accessible_via_qualified_and_import() !void {
     var a = jsonlib.double(21);
     try expect_eq(a, 42);
     var b = double(10);
@@ -47,7 +47,6 @@ fn hidden(x: i32) i32 { return x + 100; }
     );
     let main = parse(
         r#"
-using jsonlib;
 [test] fn dep_non_pub_fn_not_visible() !void {
     var x = jsonlib.hidden(1);
     try expect_eq(x, 101);

@@ -313,7 +313,6 @@ impl<'a> Fmt<'a> {
             | TokenKind::KwDefer
             | TokenKind::KwErrdefer
             | TokenKind::KwWhere
-            | TokenKind::KwUsing
             | TokenKind::KwPub
             | TokenKind::KwExport
             | TokenKind::KwOwned

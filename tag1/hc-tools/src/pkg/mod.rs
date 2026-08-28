@@ -323,8 +323,8 @@ pub(crate) fn check_and_merge_deps(
     if errs.iter().any(|d| d.is_error()) {
         return Err(diag::render(&errs, entry_source));
     }
-    // 构建合并类型表：先收集所有程序（入口 + 兄弟）的类型定义，使跨文件 using 导入
-    // 的类型在降级时可解析（如 44-multi-file-main.hc 的 using Orders → Orders.Line）。
+    // 构建合并类型表：先收集所有程序（入口 + 兄弟）的类型定义，使跨文件 import 导入
+    // 的类型在降级时可解析（如 44-multi-file-main.hc 的 import Orders → Orders.Line）。
     let mut combined_types = hc::ir::build_type_table(entry);
     for s in siblings {
         let st = hc::ir::build_type_table(s);

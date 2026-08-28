@@ -183,8 +183,6 @@ impl Interp {
         for d in &program.decls {
             self.exec_decl_top(d)?;
         }
-        // 第四遍：`using NS;` 别名解析（M1.4/Q21）——限定名 → 扁平名导入
-        self.apply_usings(program);
         // ADR-0010：`import` 语句运行时绑定（A2a——镜像语义层 apply_imports）
         self.apply_imports(program);
         // D1-4：保存程序快照，供线程模式测试 fork 新 Interp
@@ -192,17 +190,9 @@ impl Interp {
         Ok(())
     }
 
-    /// M1.4：`using NS;` 导入命名空间函数为扁平名（文件自身定义优先；
-    /// 同包跨命名空间 using 即达；`using NS as M` 等价重命名前缀）
-    pub(crate) fn apply_usings(&mut self, program: &Program) {
-        for d in &program.decls {
-            self.collect_using(d);
-        }
-    }
-
-    pub(crate) fn collect_using(&mut self, d: &Decl) {
+    pub(crate) fn collect_import(&mut self, d: &Decl) {
         match d {
-            Decl::Using { path, alias, .. } => {
+            Decl::Import { path, alias, .. } => {
                 let prefix = path.join(".");
                 let qp = format!("{prefix}.");
                 let flat_of = |member: &str| match alias {
@@ -227,7 +217,7 @@ impl Interp {
                         }
                     }
                 }
-                // 类型导入（using NS 后 `Line` 可直接引用）
+                // 类型导入（import NS 后 `Line` 可直接引用）
                 let tkeys: Vec<String> = self
                     .types
                     .keys()
@@ -265,7 +255,7 @@ impl Interp {
             }
             Decl::Namespace { decls, .. } => {
                 for inner in decls {
-                    self.collect_using(inner);
+                    self.collect_import(inner);
                 }
             }
             _ => {}
@@ -461,7 +451,7 @@ impl Interp {
     }
 
     /// M7.2：加载依赖包声明——包名前缀登记，仅 `pub` 项可见（跨包边界），
-    /// 不登记扁平名（不污染主包命名空间）、不注入 ExitType、不展开依赖自身 using、
+    /// 不登记扁平名（不污染主包命名空间）、不注入 ExitType、不展开依赖自身 import、
     /// 不并入错误集（错误码按包隔离，tag1 单包 ID 0）。
     pub fn load_dep(&mut self, name: &str, programs: &[&Program]) -> Result<()> {
         for p in programs {
@@ -671,7 +661,7 @@ impl Interp {
     }
 
     /// 函数注册（Q21 命名空间）：扁平名 + 限定名双注册。
-    /// 扁平名（`square`）供 `using Math;` 后直接调用；限定名（`Math.square`）
+    /// 扁平名（`square`）供 `import Math;` 后直接调用；限定名（`Math.square`）
     /// 供 `Math.square(5)` 静态调用（eval_call Dot 分支经 funcs 命中）。
     pub(crate) fn register_fn_decl_prefixed(&mut self, d: &Decl, prefix: &str) -> Result<()> {
         self.register_fn_decl_prefixed_filter(d, prefix, false, false, false)
@@ -709,7 +699,7 @@ impl Interp {
                 }
                 // 兄弟文件（skip_entry）：顶层函数不注册（文件私有，避免跨文件污染
                 // 同名重载池，如 64/74 各自 describe）；命名空间函数只注册限定名
-                // （扁平名由目标文件 `using NS;` 导入）。自身文件：扁平 + 限定双注册。
+                // （扁平名由目标文件 `import NS;` 导入）。自身文件：扁平 + 限定双注册。
                 if skip_entry && prefix.is_empty() {
                     return Ok(());
                 }
@@ -791,10 +781,6 @@ impl Interp {
                 for inner in decls {
                     self.exec_decl_top(inner)?;
                 }
-            }
-            Decl::Using { path, .. } => {
-                // tag1：using 无操作（模块扁平化；跨包解析归 M1.4/M7.2）
-                let _ = path;
             }
             Decl::Include { .. } => {
                 // B6-2：.hs 脚本文件引用；loader 内不执行，由 run_file_hs 解析

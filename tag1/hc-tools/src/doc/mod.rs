@@ -202,7 +202,6 @@ fn decl_span(d: &Decl) -> &Span {
         | Decl::Union { span, .. }
         | Decl::Interface { span, .. }
         | Decl::Namespace { span, .. }
-        | Decl::Using { span, .. }
         | Decl::Import { span, .. }
         | Decl::Struct { span, .. }
         | Decl::Comptime { span, .. }
@@ -245,9 +244,7 @@ fn decl_anchor(d: &Decl) -> String {
         Decl::Const { name, .. } => format!("const {name}"),
         Decl::Global { name, .. } => format!("global {name}"),
         Decl::Struct { name, .. } => format!("struct {name}"),
-        Decl::Import { .. } | Decl::Using { .. } | Decl::Comptime { .. } | Decl::Include { .. } => {
-            String::new()
-        }
+        Decl::Import { .. } | Decl::Comptime { .. } | Decl::Include { .. } => String::new(),
     }
 }
 
@@ -289,8 +286,8 @@ fn render_decl(d: &Decl, src: &str, runs: &mut Vec<DocRun>, out: &mut String, le
     let h = "#".repeat(3 + level);
     let doc = doc_before(src, runs, decl_span(d).start);
     match d {
-        Decl::Import { .. } | Decl::Using { .. } => return, // 导入集中列出，不在此渲染
-        Decl::Include { .. } => return,                     // 文件引用不在此渲染
+        Decl::Import { .. } => return,  // 导入集中列出，不在此渲染
+        Decl::Include { .. } => return, // 文件引用不在此渲染
         Decl::Comptime { .. } => {
             if let Some(doc) = doc {
                 out.push_str(&format!("{h} `comptime`\n\n{doc}\n\n"));
@@ -576,10 +573,10 @@ pub fn render_file_page(rel_path: &str, src: &str) -> Result<String, String> {
     let mut out = String::new();
     out.push_str(&format!("# `{stem}`\n\n"));
 
-    // 文件级文档：首个文档块在首条 import/using 之前（直接贴在声明上的 doc 归属该声明）
+    // 文件级文档：首个文档块在首条 import 之前（直接贴在声明上的 doc 归属该声明）
     if let Some(first) = program.decls.first() {
         let first_start = decl_span(first).start;
-        let first_is_import = matches!(first, Decl::Import { .. } | Decl::Using { .. });
+        let first_is_import = matches!(first, Decl::Import { .. });
         if first_is_import
             && !runs.is_empty()
             && runs[0].end <= first_start
@@ -608,7 +605,7 @@ pub fn render_file_page(rel_path: &str, src: &str) -> Result<String, String> {
     out.push_str("## 声明\n\n");
     let mut any = false;
     for d in &program.decls {
-        if matches!(d, Decl::Import { .. } | Decl::Using { .. }) {
+        if matches!(d, Decl::Import { .. }) {
             continue;
         }
         render_decl(d, src, &mut runs, &mut out, 0);

@@ -2,7 +2,7 @@ import H.std.{io};
 
 // 02-packages/jsonlib/json.hc — 依赖包：pub 边界演示
 //
-//   - pub fn parse：跨包可见（app 经 `using jsonlib;` / `jsonlib.parse(...)` 访问）
+//   - pub fn parse：跨包可见（app 经 `import jsonlib;` / `jsonlib.parse(...)` 访问）
 //   - fn secret：包内私有（无 pub，跨包不可见）
 
 pub fn parse(json: String) i32 {

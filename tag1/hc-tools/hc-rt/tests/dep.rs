@@ -1,7 +1,7 @@
-//! M7.2 跨包依赖：`Interp::load_dep` + `using pkg.xxx` / `pkg.xxx` + pub 边界
+//! M7.2 跨包依赖：`Interp::load_dep` + `import pkg.xxx` / `pkg.xxx` + pub 边界
 //!
 //! 依赖包符号以包名前缀登记（`jsonlib.foo`）、仅 `pub` 项可见；
-//! `using jsonlib;` 再按需平铺。非 pub 依赖符号不可见（运行期失败）。
+//! `import jsonlib;` 再按需平铺。非 pub 依赖符号不可见（运行期失败）。
 
 use hc_rt::Interp;
 
@@ -10,7 +10,7 @@ fn parse(s: &str) -> hc::Program {
 }
 
 #[test]
-fn dep_pub_fn_accessible_via_qualified_and_using() {
+fn dep_pub_fn_accessible_via_qualified_and_import() {
     let dep = parse(
         r#"
 pub fn double(x: i32) i32 { return x * 2; }
@@ -19,8 +19,8 @@ fn hidden(x: i32) i32 { return x + 100; }
     );
     let main = parse(
         r#"
-using jsonlib;
-[test] fn dep_pub_fn_accessible_via_qualified_and_using() !void {
+import jsonlib;
+[test] fn dep_pub_fn_accessible_via_qualified_and_import() !void {
     var a = jsonlib.double(21);
     try expect_eq(a, 42);
     var b = double(10);
@@ -50,7 +50,7 @@ fn hidden(x: i32) i32 { return x + 100; }
     );
     let main = parse(
         r#"
-using jsonlib;
+import jsonlib;
 [test] fn dep_non_pub_fn_not_visible() !void {
     var x = jsonlib.hidden(1);
     try expect_eq(x, 101);

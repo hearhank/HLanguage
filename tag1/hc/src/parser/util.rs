@@ -80,7 +80,6 @@ impl Parser {
                     | TokenKind::KwUnion
                     | TokenKind::KwInterface
                     | TokenKind::KwNamespace
-                    | TokenKind::KwUsing
                     | TokenKind::KwImport
                     | TokenKind::KwGlobal
             ) {

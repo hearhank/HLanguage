@@ -249,7 +249,7 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
                     continue;
                 }
             }
-            // M7.2：build.zon 本地依赖（using pkg.xxx 跨包访问）
+            // M7.2：build.zon 本地依赖（import pkg.xxx 跨包访问）
             if load_manifest_deps_into(&mut interp, f).is_err() {
                 total_f += 1;
                 all_ok = false;

@@ -133,7 +133,7 @@ fn build_rev_kw_map() Map<&[u8], &[u8]> {
     m.put("KwTry", "try");
     m.put("KwType", "type");
     m.put("KwUnion", "union");
-    m.put("KwUsing", "using");
+    m.put("KwImport", "import");
     m.put("KwVar", "var");
     m.put("KwVoid", "void");
     m.put("KwWhere", "where");
@@ -200,7 +200,7 @@ class Lexer {
                 if (slice_eq(name, "class")) return "KwClass";
                 if (slice_eq(name, "union")) return "KwUnion";
                 if (slice_eq(name, "where")) return "KwWhere";
-                if (slice_eq(name, "using")) return "KwUsing";
+                if (slice_eq(name, "import")) return "KwImport";
                 if (slice_eq(name, "owned")) return "KwOwned";
                 if (slice_eq(name, "catch")) return "KwCatch";
                 if (slice_eq(name, "async")) return "KwAsync";
@@ -921,7 +921,7 @@ class Parser {
             self.expect("RBrace");
             return ns;
         }
-        if (k == "KwUsing") {
+        if (k == "KwImport") {
             self.advance();
             var path = self.parse_path();
             var mut alias: ?&[u8] = null;
@@ -930,7 +930,7 @@ class Parser {
                 alias = self.expect_ident();
             }
             self.expect("Semi");
-            var u = make_node("Using");
+            var u = make_node("Import");
             node_add_prop(&u, "path", path);
             if (alias) |a| { node_add_prop(&u, "alias", a); }
             return u;

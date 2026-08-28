@@ -108,7 +108,7 @@ fn build_kw_map() Map<&[u8], &[u8]> {
     m.put("try", "KwTry");
     m.put("type", "KwType");
     m.put("union", "KwUnion");
-    m.put("using", "KwUsing");
+    m.put("import", "KwImport");
     m.put("var", "KwVar");
     m.put("void", "KwVoid");
     m.put("where", "KwWhere");
@@ -159,7 +159,7 @@ fn build_rev_kw_map() Map<&[u8], &[u8]> {
     m.put("KwTry", "try");
     m.put("KwType", "type");
     m.put("KwUnion", "union");
-    m.put("KwUsing", "using");
+    m.put("KwImport", "import");
     m.put("KwVar", "var");
     m.put("KwVoid", "void");
     m.put("KwWhere", "where");
@@ -870,7 +870,7 @@ class Parser {
             self.expect("RBrace");
             return ns;
         }
-        if (k == "KwUsing") {
+        if (k == "KwImport") {
             self.advance();
             var path = self.parse_path();
             var mut alias: ?&[u8] = null;
@@ -879,7 +879,7 @@ class Parser {
                 alias = self.expect_ident();
             }
             self.expect("Semi");
-            var u = make_node("Using");
+            var u = make_node("Import");
             node_add_prop(&u, "path", path);
             if (alias) |a| { node_add_prop(&u, "alias", a); }
             return u;

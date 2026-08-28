@@ -100,7 +100,7 @@ fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "interface") return "KwInterface";
     if (name == "where") return "KwWhere";
     if (name == "namespace") return "KwNamespace";
-    if (name == "using") return "KwUsing";
+    if (name == "import") return "KwImport";
     if (name == "import") return "KwImport";
     if (name == "pub") return "KwPub";
     if (name == "export") return "KwExport";

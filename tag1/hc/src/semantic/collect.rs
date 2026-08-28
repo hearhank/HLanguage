@@ -15,7 +15,7 @@ impl Checker {
     /// M1.4：兄弟文件声明收集——对齐运行时 `load_siblings` 的文件私有规则：
     /// 类型/全局/错误集扁平+限定双登记（共享）；顶层函数文件私有不登记（避免跨文件
     /// 污染同名重载池，如 25/26 各自 load_config）；命名空间函数只登记限定名（扁平名
-    /// 由目标文件 `using NS;` 导入）。
+    /// 由目标文件 `import NS;` 导入）。
     pub(crate) fn collect_sibling(&mut self, program: &Program) {
         for d in &program.decls {
             self.collect_decl_prefixed_filter(d, "", false, false, true);
@@ -23,7 +23,7 @@ impl Checker {
     }
 
     /// M1.4：声明收集（Q21 命名空间）——扁平名 + 限定名双登记
-    /// （`square` 供包内直接引用 / using 导入；`Math.square` 供限定访问）
+    /// （`square` 供包内直接引用 / import 导入；`Math.square` 供限定访问）
     pub(crate) fn collect_decl_prefixed(&mut self, d: &Decl, prefix: &str) {
         self.collect_decl_prefixed_filter(d, prefix, false, false, false);
     }
@@ -283,7 +283,7 @@ impl Checker {
                 if !is_test {
                     // 兄弟文件（skip_entry）：跳过 main 与顶层函数（文件私有——对齐运行时
                     // register_fn_decl_prefixed_filter 的 skip_entry 规则）；命名空间函数
-                    // 只登记限定名（扁平名由 `using` 导入）。
+                    // 只登记限定名（扁平名由 `import` 导入）。
                     if !(skip_entry && (name == "main" || prefix.is_empty())) {
                         // 模块隔离（A2b）：`[module]` 成员不登记扁平名（仅限定名，供 import 复制）
                         if !skip_entry && !skip_flat {
@@ -374,81 +374,6 @@ impl Checker {
                             inner, &np, skip_flat, pub_only, skip_entry,
                         );
                     }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// M1.4：语义层 `using NS;` 导入——限定名（函数/类型/全局）复制为扁平名
-    /// （与运行时 apply_usings 对齐；文件自身定义优先）
-    pub(crate) fn apply_usings(&mut self, program: &Program) {
-        for d in &program.decls {
-            self.collect_using_decl(d);
-        }
-    }
-
-    pub(crate) fn collect_using_decl(&mut self, d: &Decl) {
-        match d {
-            Decl::Using { path, alias, .. } => {
-                let prefix = format!("{}.{}", path.join("."), "");
-                let flat_of = |member: &str| match alias {
-                    Some(a) => format!("{a}.{member}"),
-                    None => member.to_string(),
-                };
-                // 函数（跳过方法：成员名不含 `.`）
-                let fkeys: Vec<String> = self
-                    .funcs
-                    .keys()
-                    .filter(|k| k.starts_with(&prefix) && !k[prefix.len()..].contains('.'))
-                    .cloned()
-                    .collect();
-                for k in fkeys {
-                    let member = k[prefix.len()..].to_string();
-                    let flat = flat_of(&member);
-                    if !self.funcs.contains_key(&flat) {
-                        let defs = self.funcs.get(&k).cloned().unwrap_or_default();
-                        if !defs.is_empty() {
-                            self.funcs.entry(flat).or_default().extend(defs);
-                        }
-                    }
-                }
-                // 类型
-                let tkeys: Vec<String> = self
-                    .types
-                    .keys()
-                    .filter(|k| k.starts_with(&prefix))
-                    .cloned()
-                    .collect();
-                for k in tkeys {
-                    let member = k[prefix.len()..].to_string();
-                    let flat = flat_of(&member);
-                    if !self.types.contains_key(&flat) {
-                        if let Some(info) = self.types.get(&k) {
-                            self.types.insert(flat, info.clone());
-                        }
-                    }
-                }
-                // 全局
-                let gkeys: Vec<String> = self
-                    .globals
-                    .keys()
-                    .filter(|k| k.starts_with(&prefix))
-                    .cloned()
-                    .collect();
-                for k in gkeys {
-                    let member = k[prefix.len()..].to_string();
-                    let flat = flat_of(&member);
-                    if !self.globals.contains_key(&flat) {
-                        if let Some(t) = self.globals.get(&k) {
-                            self.globals.insert(flat, t.clone());
-                        }
-                    }
-                }
-            }
-            Decl::Namespace { decls, .. } => {
-                for inner in decls {
-                    self.collect_using_decl(inner);
                 }
             }
             _ => {}

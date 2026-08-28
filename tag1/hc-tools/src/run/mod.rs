@@ -55,7 +55,7 @@ pub(crate) fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
     if let Some(root) = project_root.as_ref() {
         crate::pkg::validate_module_contexts(root);
     }
-    // M7.2：build.zon 本地依赖（using pkg.xxx 跨包访问）
+    // M7.2：build.zon 本地依赖（import pkg.xxx 跨包访问）
     if let Err(code) = load_manifest_deps_into(&mut interp, path) {
         return code;
     }
