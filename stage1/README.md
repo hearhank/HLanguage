@@ -9,6 +9,7 @@
 | K1 Lexer | `lexer.hc` | ✅ 已完成（6621 token 零 diff） |
 | K2 Parser | `parser.hc` | ✅ 已完成（性能已优化，解析自身 ~1s） |
 | **K3 语义分析** | **`checker.hc`** | **✅ 已完成（11/11 任务完成，13 项对照测试全部通过）** |
+| K3.5 自检收敛 | — | 🟡 新增：checker 自检 stage1 三源不崩溃 ✅（2026-08-29），误报收敛待做（类/方法/字段建模不全） |
 | K4 后端 | — | 🔴 待实现 |
 | K5 自举闭环 | — | 🔴 待实现 |
 | K6 可复现构建 | — | 🔴 待实现 |
@@ -69,3 +70,14 @@ hc run stage1/checker.hc <file.hc>
 ### 语料文件
 
 `stage1/corpus/` 目录包含 19 个测试语料文件（01–20），覆盖词法、语法、语义各阶段。
+
+### 自检回归（2026-08-29）
+
+**修复 `error.NoField at 0:0` 自检崩溃**：checker.hc 检查 lexer.hc / parser.hc / 自身时，解释器在 `type_of_expr` Call 分支响亮中止。根因（吃狗粮暴露）：
+
+1. **漏解包可选值**（3 处）：`ty_of`（`self.types.get(name)`）、`type_of_expr` Ident 分支、Call 分支（`sig.ret_type`）把 `Map.get` 返回的 `?SType`/`?FnSig` 直接当非可选取字段。规范要求 `?T` 使用前显式解包（`06-02-types.md`）——补 `if (t) \|tt\| { return tt; }` 解包。解释器 NoField 属正确行为；Rust 语义检查器未在编译期抓住此错（`.field` 作用于 `?T` 不报错），登记为语义检查缺口。
+2. **解析器丢弃 `\|payload\|` 绑定名**：`parse_if_stmt`/`parse_while_stmt` 解析载荷后仅存局部变量（lint 曾报「未使用变量 cap」）。现经 `node_add_prop` 存入 `payload`/`payload_err` 属性，`check_if`/`check_while` 在作用域内注册载荷变量。
+
+**回归测试**：`tag1/hc-tools/tests/k3_checker.rs` `self_check_completes_on_stage1_sources`（13→14 项）——checker 对 stage1 三源完整跑完（exit 0、无解释器级 `error.*` 中止）。
+
+**已知余量（K3.5，误报非崩溃）**：checker 的类/方法/字段建模不全（`parse_method`/`parse_field` 丢弃节点、`check_decl` 无 Class 分支、字段名被当标识符检查、`Self`/字段解析缺失），自检 lexer/parser/自身分别产生 690/1616/2387 行误报。收敛任务归入 K4 计划前置任务（见 `docs/SPEC/phase4/05-k4-execution-plan.md`）。

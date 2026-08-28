@@ -34,15 +34,17 @@
 - ✅ **A6 标准库数据结构**：bitmap / ringbuf / pagemem / intrlist / treemap
 - ✅ **A7 惰性迭代器**：`iter()` 返回 LazyIter，`filter`/`map` 链式延迟
 
-### 自举进度
+### 自举进度（2026-08-29 更新）
 - **K1 H 版 lexer** ✅：`stage1/lexer.hc`，6621 token 零 diff
-- **K2 H 版 parser** 🔴：`stage1/parser.hc` 部分实现，测试超时
-- **K3–K6** 🔴：未动工
+- **K2 H 版 parser** ✅：性能已优化（解析自身 ~1s，较原 60s+ 提升 ~60x，8 项语料对照通过）
+- **K3 H 版语义** ✅：`stage1/checker.hc`（11/11 任务，13 项对照测试全部通过）；自检 stage1 三源不崩溃 ✅（2026-08-29 修复 NoField 崩溃，详见 `04-execution-status.md`）
+- **K3.5 误报收敛** 🟡：checker 类/方法/字段建模不全导致的自检误报待收敛（见 `05-k4-execution-plan.md`）
+- **K4–K6** 🔴：待实现（K4 详细任务分解见 `05-k4-execution-plan.md`）
 
 ### 1.x 延迟项（剩余）
 - ⏳ 包注册中心正式版
 - ⏳ 真 OS 进程/共享内存（跨进程）
 - ⏳ 数据库连接抽象
 - ⏳ 绑定级只读（C4）
-- ⏳ LLVM 原生内建子集扩展（C8）
-- ⏳ 自举（K2–K6）
+- ⏳ LLVM 原生内建子集扩展（C8，剩余 14 mismatch 收束待授权）
+- ⏳ 自举（K4–K6）

@@ -1603,11 +1603,13 @@ class Parser {
         if (self.at("Pipe")) {
             self.advance();
             var cap = self.expect_ident();
+            node_add_prop(&ifn, "payload", cap);
             self.expect("Pipe");
         }
         if (self.at("Pipe")) {
             self.advance();
             var err = self.expect_ident();
+            node_add_prop(&ifn, "payload_err", err);
             self.expect("Pipe");
         }
         self.expect("RParen");
@@ -1635,6 +1637,7 @@ class Parser {
         if (self.at("Pipe")) {
             self.advance();
             var cap = self.expect_ident();
+            node_add_prop(&wn, "payload", cap);
             self.expect("Pipe");
         }
         self.expect("RParen");
@@ -2437,7 +2440,8 @@ class Checker {
         if (name == "Future") return make_ty(name);
         // 在类型注册表中查找
         if (self.types.contains(name)) {
-            return self.types.get(name);
+            var t = self.types.get(name);
+            if (t) |tt| { return tt; }
         }
         // 大写开头 → 泛型参数
         if (name.len > 0 and name[0] >= 'A' and name[0] <= 'Z') {
@@ -2538,7 +2542,10 @@ class Checker {
                 var found = self.lookup(n);
                 if (found) |info| { return info.ty; }
                 // 在类型注册表中查找
-                if (self.types.contains(n)) { return self.types.get(n); }
+                if (self.types.contains(n)) {
+                    var t = self.types.get(n);
+                    if (t) |tt| { return tt; }
+                }
                 // 函数名 → 函数类型
                 if (self.funcs.contains(n)) { return make_ty("fn"); }
                 // 内建名称
@@ -2588,7 +2595,7 @@ class Checker {
                         // 在函数注册表中查找
                         if (self.funcs.contains(n)) {
                             var sig = self.funcs.get(n);
-                            return sig.ret_type;
+                            if (sig) |s| { return s.ret_type; }
                         }
                         // 内建函数
                         if (n == "expect" or n == "expect_eq") return make_ty("void");
@@ -2927,7 +2934,20 @@ class Checker {
         if (stmt.children.len > 1) {
             var then_block = stmt.children[1];
             if (then_block.kind == "Block") {
-                self.check_block(then_block);
+                var p = get_prop(stmt.props, "payload");
+                if (p) |pn| {
+                    self.push_scope();
+                    var info = VarInfo{
+                        ty = make_ty("unknown"),
+                        source = AllocSource.Unknown,
+                        mut_ = false,
+                    };
+                    self.register(pn, info);
+                    self.check_block(then_block);
+                    self.pop_scope();
+                } else {
+                    self.check_block(then_block);
+                }
             }
         }
         if (stmt.children.len > 2) {
@@ -2949,7 +2969,20 @@ class Checker {
         if (stmt.children.len > 1) {
             var body = stmt.children[1];
             if (body.kind == "Block") {
-                self.check_block(body);
+                var p = get_prop(stmt.props, "payload");
+                if (p) |pn| {
+                    self.push_scope();
+                    var info = VarInfo{
+                        ty = make_ty("unknown"),
+                        source = AllocSource.Unknown,
+                        mut_ = false,
+                    };
+                    self.register(pn, info);
+                    self.check_block(body);
+                    self.pop_scope();
+                } else {
+                    self.check_block(body);
+                }
             }
         }
     }
