@@ -26,7 +26,11 @@
 - checker.hc 的 `parse_method`/`parse_field` **建 AST 后全部丢弃**（代码实证）；`check_decl` 无 Class 分支。
 - 探针（`/tmp/probe`）：类含方法 + main 使用该类 → `undefined name '字段'` 误报（pa2 有方法报错、pa3 无方法同 main 不报错、pa5 有方法但 main 不用不报错）；`+=` 非触发因素（pa4 排除）。
 - checker.hc 自检 lexer.hc/parser.hc/自身分别 690/1616/2387 行误报（top：`self`×430、方法参数、`Self` 类型、部分顶层函数 `hexval`/`utf8_width` 被报未定义而 `is_digit` 等正常 —— 注册异常需 AST dump 定位）。
-- **机制疑点未决**：parse_method 声称丢弃但方法体内容仍被检查（`self`×430）—— 需要 AST dump 工具定位真实解析路径（A0）。
+- **机制疑点已决（A0 dump 实证，2026-08-29）**：
+  1. **类体失步**：`parse_class` 丢弃字段/方法后 token 流未正确收束 —— lexer.hc 的 4 个 class 全变成空 `UnknownDecl`；最坏情况（pc.hc：仅字段无方法）连后续 `fn main` 都被吞掉；其余情况泄漏 token 被后续顶层 fn 解析重收，方法体嵌进其他函数的 if 分支（lexer.hc：run() 体挂进 `is_ident_cont`，AST 深度 366，内含 469 个 `self` Ident → 自检 `self`×430 误报的直接来源）。
+  2. **ClassLit 未实现**：`L{pos=0}` / `Counter{n=1}` 的 `{...}` 被当块语句解析，字段名泄漏成外层作用域的 `ExprStmt(Ident pos)` → `undefined name 'pos'/'n'` 误报的直接来源（pa2/cls 探针）。
+  3. else-if 链本身健康（无类探针 5 分支正常嵌套）；失控嵌套是类体失步的次生灾害。
+  4. **A4 范围修正**：ClassLit 需在表达式位置新增解析（`Type{field=val,...}`），而非仅修检查逻辑。
 
 ## 任务分解
 
@@ -75,11 +79,11 @@
 
 | 任务 | 状态 | 提交 | 备注 |
 |---|---|---|---|
-| A0 | 🔴 | — | |
+| A0 | ✅ | 本提交 | dump 工具落地；失步机制实证（见前置事实） |
 | A1 | 🔴 | — | |
 | A2 | 🔴 | — | |
 | A3 | 🔴 | — | |
-| A4 | 🔴 | — | |
+| A4 | 🔴 | — | 含 ClassLit 表达式解析（A0 发现 #2/#4） |
 | A5 | 🔴 | — | |
 | A6 | 🔴 | — | |
 | B1 | 🔴 | — | |

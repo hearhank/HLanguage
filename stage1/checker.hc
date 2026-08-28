@@ -3239,7 +3239,46 @@ class Checker {
 // 入口
 // ============================================================
 
+// ============================================================
+// AST dump 调试工具（--dump-ast）
+// ============================================================
+
+fn dump_indent(depth: usize) void {
+    var mut i: usize = 0;
+    while (i < depth) { io.print("  "); i += 1; }
+}
+
+fn dump_ast_rec(n: AstNode, depth: usize) void {
+    dump_indent(depth);
+    io.print("{} props[{}]{}\n", n.kind, n.props.len, n.props.as_slice());
+    var mut i: usize = 0;
+    while (i < n.children.len) {
+        dump_ast_rec(n.children[i], depth + 1);
+        i += 1;
+    }
+}
+
 fn main(args: Vec<String>) !void {
+    // --dump-ast 调试模式：args[1] 为模式开关（args[0] 是程序自身路径）
+    if (args.len >= 3 and args[1].as_slice() == "--dump-ast") {
+        var mut dsrc = try io.fs.read_file(args[2], alloc);
+        var dkw = build_rev_kw_map();
+        var dlx: Lexer = alloc.init(Lexer{
+            src = dsrc, n = dsrc.len,
+            pos = 0, line = 1, col = 1,
+            tokens = Vec<Token>.init(alloc),
+        });
+        dlx.run();
+        var dparser: Parser = alloc.init(Parser{
+            tokens = dlx.tokens, pos = 0,
+            n = dlx.tokens.len,
+            rev_kw_map = dkw,
+        });
+        var dast = dparser.parse_program();
+        dump_ast_rec(dast, 0);
+        return;
+    }
+
     var mut path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var mut src = try io.fs.read_file(path, alloc);
