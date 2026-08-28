@@ -412,6 +412,719 @@ pub(crate) fn call_closure_ir(
 }
 
 /// 执行函数/闭包体（共享循环；当前函数体在 `func`，模块其余函数在 `module.funcs`）
+/// 数据通路指令（Const/Load/Store/Bin/Un）：常量装载、槽读写与二元/一元运算。
+/// 类型错误（binop/一元负号/按位取反）经 `?` 上抛，语义与拆分前一致。
+fn exec_data(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
+    match inst {
+        IrInst::Const { temp, val } => {
+            ctx.set(
+                &frame,
+                *temp,
+                match val {
+                    IrConst::Int(i) => IrValue::Int(*i),
+                    IrConst::Float(f) => IrValue::Float(*f),
+                    IrConst::Bool(b) => IrValue::Bool(*b),
+                    IrConst::Str(s) => IrValue::String(StringDataIr::from_slice(s.as_bytes())),
+                    IrConst::Void => IrValue::Void,
+                    IrConst::Null => IrValue::Opt(None),
+                    IrConst::Err { name, code } => IrValue::Err {
+                        name: name.clone(),
+                        code: *code,
+                    },
+                    IrConst::End => IrValue::End,
+                },
+            );
+        }
+        IrInst::Load { temp, slot } => {
+            let v = ctx.get(&frame, *slot).clone();
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::Store { slot, temp } => {
+            // M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包写捕获参数槽 → 错误
+            if frame.readonly.contains(slot) {
+                return Err(IrError::msg(
+                    "ReadonlyCapture",
+                    "cannot assign to captured variable in non-mut closure \
+                     (declare the closure `mut` to capture mutably)",
+                ));
+            }
+            let v = ctx.get(&frame, *temp).clone();
+            ctx.set(&frame, *slot, v);
+        }
+        IrInst::Bin { op, temp, a, b } => {
+            let (av, bv) = (ctx.get(&frame, *a).clone(), ctx.get(&frame, *b).clone());
+            let v = binop(*op, ctx, &av, &bv)?;
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::Un { op, temp, a } => {
+            let av = ctx.get(&frame, *a).clone();
+            ctx.set(
+                &frame,
+                *temp,
+                match op {
+                    IrUnOp::Neg => match av {
+                        IrValue::Int(i) => IrValue::Int(-i),
+                        IrValue::Float(f) => IrValue::Float(-f),
+                        _ => return Err(IrError::msg("TypeError", "unary -")),
+                    },
+                    IrUnOp::Not => IrValue::Bool(!av.as_bool()),
+                    IrUnOp::BitNot => match av {
+                        IrValue::Int(i) => IrValue::Int(!i),
+                        _ => return Err(IrError::msg("TypeError", "~")),
+                    },
+                },
+            );
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 控制流指令（Jump 系 + defer 登记/反注册）：条件满足时返回跳转目标 pc（
+/// 主循环置 pc 并跳过底部自增）；返回 `None` 表示不跳转、落入下一条指令。
+/// Push/PopDefer 仅维护帧的 defer 栈；跳转目标查找失败经 `?` 上抛，语义与拆分前一致。
+fn exec_jumps(ctx: &mut Ctx, func: &IrFunc, frame: &mut Frame, inst: &IrInst) -> R<Option<usize>> {
+    match inst {
+        IrInst::Jump { label } => {
+            return Ok(Some(find_label(func, *label)?));
+        }
+        IrInst::JumpIf { temp, label } => {
+            if ctx.get(&frame, *temp).as_bool() {
+                return Ok(Some(find_label(func, *label)?));
+            }
+        }
+        IrInst::JumpIfNot { temp, label } => {
+            if !ctx.get(&frame, *temp).as_bool() {
+                return Ok(Some(find_label(func, *label)?));
+            }
+        }
+        IrInst::JumpIfErr { temp, label } => {
+            if ctx.get(&frame, *temp).is_err() {
+                return Ok(Some(find_label(func, *label)?));
+            }
+        }
+        IrInst::JumpIfNull { temp, label } => {
+            if matches!(ctx.get(&frame, *temp), IrValue::Opt(None)) {
+                return Ok(Some(find_label(func, *label)?));
+            }
+        }
+        // ---- Phase 6：defer / errdefer ----
+        IrInst::PushDefer { id } => frame.defers.push(*id),
+        IrInst::JumpIfNotDefer { id, label } => {
+            if !frame.defers.contains(id) {
+                return Ok(Some(find_label(func, *label)?));
+            }
+        }
+        IrInst::PopDefer { id } => {
+            // 移除最近一次登记（rposition）；未登记（分支未达）→ 无操作
+            if let Some(pos) = frame.defers.iter().rposition(|d| d == id) {
+                frame.defers.remove(pos);
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(None)
+}
+
+/// 函数调用指令（Call/CallBuiltin）：用户函数重载分派/隐式环境限定名路由与
+/// 内建调用；`box` 返回值登记进帧的 Boxed 集以便离开作用域释放；`fail`
+/// 断言失败缓冲由内建写入。隐式限定名命中后提前返回（原 `pc += 1; continue;`
+/// 由主循环底部 `pc += 1` 补齐，语义一致）。
+fn exec_call(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    frame: &mut Frame,
+    fail: &mut Option<String>,
+    depth: usize,
+    inst: &IrInst,
+) -> R<()> {
+    match inst {
+        IrInst::Call { name, args, temp } => {
+            let arg_vals: Vec<IrValue> = args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
+            // Phase 7：隐式环境限定名（io.print / io.fs.open / alloc.init…）与
+            // 虚拟根（json.parse / csv.parse / String.from）——未登记为用户函数时按
+            // 「根值 → 字段 → 方法」路由（对齐 oracle eval_call 隐式环境 + 方法分派）；
+            // 登记了同名用户函数则优先用户函数。
+            if !module.func_index.contains_key(name) {
+                let root = name.split('.').next().unwrap_or("");
+                if is_dotted_implicit_root(root) && name.contains('.') {
+                    let v = call_dotted_implicit(ctx, module, name, &arg_vals)?;
+                    ctx.set(&frame, *temp, v);
+                    // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
+                    return Ok(());
+                }
+            }
+            let callee_idx = pick_func(ctx, module, name, &arg_vals)
+                .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
+            let v = exec_func(ctx, module, callee_idx, &arg_vals, depth + 1)?;
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::CallBuiltin { name, args, temp } => {
+            let arg_vals: Vec<IrValue> = args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
+            let v = call_builtin(ctx, module, name, &arg_vals, fail)?;
+            // Q14：跟踪 Boxed 值，离开作用域时自动释放
+            if name == "box" {
+                if let IrValue::Boxed(cell) = &v {
+                    frame.boxed.insert(*cell);
+                }
+            }
+            ctx.set(&frame, *temp, v);
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 返回指令（Return/ReturnVoid）：断言失败缓冲优先报错；返回值若为 Boxed
+/// 则所有权转移至调用方（移出帧集），其余 Boxed 值在退出前释放，语义与拆分前一致。
+fn exec_return(
+    ctx: &mut Ctx,
+    frame: &mut Frame,
+    fail: &Option<String>,
+    inst: &IrInst,
+) -> R<IrValue> {
+    match inst {
+        IrInst::Return { temp } => {
+            let v = ctx.get(&frame, *temp).clone();
+            if let Some(f) = fail {
+                return Err(IrError::msg("AssertFailed", f));
+            }
+            // Q14：返回值若为 Boxed，所有权转移至调用方（不移除释放）
+            if let IrValue::Boxed(cell) = &v {
+                frame.boxed.remove(cell);
+            }
+            // 释放当前作用域内其余 Boxed 值
+            let data_cells: Vec<usize> = frame
+                .boxed
+                .iter()
+                .filter_map(|cell| {
+                    if let Cell::Boxed { data, .. } = &ctx.cells[*cell] {
+                        Some(*data)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for d in data_cells {
+                ctx.cells[d] = Cell::Value(IrValue::Void);
+            }
+            return Ok(v);
+        }
+        IrInst::ReturnVoid => {
+            if let Some(f) = fail {
+                return Err(IrError::msg("AssertFailed", f));
+            }
+            // Q14：释放当前作用域内所有 Boxed 值
+            let data_cells: Vec<usize> = frame
+                .boxed
+                .iter()
+                .filter_map(|cell| {
+                    if let Cell::Boxed { data, .. } = &ctx.cells[*cell] {
+                        Some(*data)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for d in data_cells {
+                ctx.cells[d] = Cell::Value(IrValue::Void);
+            }
+            return Ok(IrValue::Void);
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// 指针指令（AddrSlot/AddrValue/Deref/StorePtr）：槽/值取址、解引用与写穿赋值；
+/// 写非指针目标报 BadAssign，经 `?` 上抛，语义与拆分前一致。
+fn exec_ptr(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
+    match inst {
+        IrInst::AddrSlot { temp, slot } => {
+            let cell = frame.cells[*slot];
+            ctx.set(&frame, *temp, IrValue::Ptr(cell));
+        }
+        IrInst::AddrValue { temp, value } => {
+            // 非 lvalue 取址快照：求值结果复制进新 cell（对齐 tree-walking `&expr` 兜底）
+            let v = ctx.get(&frame, *value).clone();
+            let cell = ctx.alloc(Cell::Value(v));
+            ctx.set(&frame, *temp, IrValue::Ptr(cell));
+        }
+        IrInst::Deref { temp, a } => {
+            // 解引用：Ptr/Boxed → pointee；非 Ptr → 恒等（对齐 tree-walking `deref_value`）
+            let v = match ctx.get(&frame, *a) {
+                IrValue::Ptr(cell) => ctx.cell_value(*cell).clone(),
+                IrValue::Boxed(cell) => match &ctx.cells[*cell] {
+                    Cell::Boxed { data, .. } => ctx.cell_value(*data).clone(),
+                    _ => IrValue::Void,
+                },
+                other => other.clone(),
+            };
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::StorePtr { target, value } => {
+            let t = ctx.get(&frame, *target).clone();
+            let v = ctx.get(&frame, *value).clone();
+            match t {
+                IrValue::Ptr(cell) => ctx.set_cell(cell, v),
+                // 装箱胖指针：写穿 data cell
+                IrValue::Boxed(cell) => {
+                    let data = match &ctx.cells[cell] {
+                        Cell::Boxed { data, .. } => Some(*data),
+                        _ => None,
+                    };
+                    match data {
+                        Some(d) => ctx.set_cell(d, v),
+                        None => return Err(IrError::msg("BadAssign", "store to non-pointer")),
+                    }
+                }
+                _ => return Err(IrError::msg("BadAssign", "store to non-pointer")),
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 聚合类型指令（Field/StoreField/UnionSync/Index/StoreIndex/SliceOf/StoreSlice）：
+/// 字段/下标读写、切片构造与写、union 字段写后字节重解释同步；越界/类型错误
+/// 经 `?` 上抛，语义与拆分前一致。
+fn exec_aggregate(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst) -> R<()> {
+    match inst {
+        IrInst::Field { temp, base, field } => {
+            let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+            let v = field_value(ctx, &bv, field)?;
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::StoreField { base, field, value } => {
+            let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+            let v = ctx.get(&frame, *value).clone();
+            store_field(ctx, &bv, field, v)?;
+            // K1 union 写路径：字段写后字节重解释同步其余字段（对齐 interp assign_class_field）
+            if let IrValue::Class(c) = bv {
+                if let Cell::Class { fields, .. } = &ctx.cells[c] {
+                    if fields.contains_key("@union") {
+                        union_sync_ir(ctx, module, c, field)?;
+                    }
+                }
+            }
+        }
+        IrInst::UnionSync { class, written } => {
+            let c = match ctx.get(&frame, *class) {
+                IrValue::Class(c) => *c,
+                _ => return Err(IrError::msg("TypeError", "union sync on non-class")),
+            };
+            union_sync_ir(ctx, module, c, written)?;
+        }
+        IrInst::Index { temp, base, index } => {
+            let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+            let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
+            let i = as_index(ctx, &iv)?;
+            let v = index_value(ctx, &bv, i)?;
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::StoreIndex { base, index, value } => {
+            let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+            let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
+            let i = as_index(ctx, &iv)?;
+            let v = ctx.get(&frame, *value).clone();
+            store_index(ctx, &bv, i, v)?;
+        }
+        IrInst::SliceOf { temp, base, lo, hi } => {
+            let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+            let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
+            let lo_i = as_index(ctx, &lo_v)?;
+            let hi_v = ctx.get(&frame, *hi).clone();
+            let (hi_i, open) = match hi_v {
+                IrValue::End => (0, true),
+                other => {
+                    let d = deref_value(ctx, &other).clone();
+                    (as_index(ctx, &d)?, false)
+                }
+            };
+            let v = slice_of(ctx, &bv, lo_i, hi_i, open)?;
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::StoreSlice {
+            base,
+            lo,
+            hi,
+            value,
+        } => {
+            let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
+            let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
+            let lo_i = as_index(ctx, &lo_v)?;
+            let hi_v = ctx.get(&frame, *hi).clone();
+            // 开区间 `arr[a..] = v`：对齐 oracle（eval(hi=`__end__`) 报错）→ BadIndex
+            if matches!(hi_v, IrValue::End) {
+                return Err(IrError::msg("BadIndex", "open-end store slice"));
+            }
+            let hi_d = deref_value(ctx, &hi_v).clone();
+            let hi_i = as_index(ctx, &hi_d)?;
+            let v = ctx.get(&frame, *value).clone();
+            store_slice(ctx, &bv, lo_i, hi_i, &v)?;
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 构造指令（MakeArr/MakeClass/MakeEnum/Destructure/Move/DeepCopy/Unwrap）：
+/// 数组/类/枚举值构造、元组解构（TupleArity 校验）、连续类深拷贝门控与
+/// Optional 解包（NullUnwrap），语义与拆分前一致。
+fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst) -> R<()> {
+    match inst {
+        IrInst::MakeArr { temp, items } => {
+            let mut cells = Vec::with_capacity(items.len());
+            for it in items {
+                let v = ctx.get(&frame, *it).clone();
+                cells.push(ctx.alloc(Cell::Value(v)));
+            }
+            let c = ctx.alloc(Cell::Elems(cells));
+            ctx.set(&frame, *temp, IrValue::Arr(c));
+        }
+        IrInst::MakeClass { temp, ty, fields } => {
+            let mut fs = HashMap::new();
+            for (k, vt) in fields {
+                let v = ctx.get(&frame, *vt).clone();
+                fs.insert(k.clone(), ctx.alloc(Cell::Value(v)));
+            }
+            let c = ctx.alloc(Cell::Class {
+                name: ty.clone(),
+                fields: fs,
+            });
+            ctx.set(&frame, *temp, IrValue::Class(c));
+        }
+        IrInst::MakeEnum {
+            temp,
+            name,
+            variant,
+            payload,
+        } => {
+            let p = match payload {
+                Some(pt) => Some(Box::new(ctx.get(&frame, *pt).clone())),
+                None => None,
+            };
+            ctx.set(
+                &frame,
+                *temp,
+                IrValue::Enum {
+                    name: name.clone(),
+                    variant: variant.clone(),
+                    payload: p,
+                },
+            );
+        }
+        IrInst::Destructure { value, slots } => {
+            let v = deref_value(ctx, ctx.get(&frame, *value)).clone();
+            let elems = match v {
+                IrValue::Arr(c) => match &ctx.cells[c] {
+                    Cell::Elems(e) => e.clone(),
+                    _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
+                },
+                _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
+            };
+            if elems.len() != slots.len() {
+                return Err(IrError::msg("TupleArity", "destructure arity mismatch"));
+            }
+            for (slot, elem) in slots.iter().zip(elems.iter()) {
+                if let Some(s) = slot {
+                    let v = ctx.cell_value(*elem).clone();
+                    ctx.set(&frame, *s, v);
+                }
+            }
+        }
+        IrInst::Move { temp, a } => {
+            let v = ctx.get(&frame, *a).clone();
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::DeepCopy { temp, a } => {
+            let v = ctx.get(&frame, *a).clone();
+            // 运行时门：仅连续类深拷贝（标量/数组/非连续类恒等 = 引用别名）
+            let v = if is_continuous_class(ctx, module, &v) {
+                deep_copy(ctx, v)
+            } else {
+                v
+            };
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::Unwrap { temp, a } => {
+            let v = deref_value(ctx, ctx.get(&frame, *a)).clone();
+            let r = match v {
+                IrValue::Opt(Some(inner)) => *inner,
+                IrValue::Opt(None) => {
+                    return Err(IrError::msg("NullUnwrap", "unwrap of null"));
+                }
+                other => other,
+            };
+            ctx.set(&frame, *temp, r);
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 模式匹配/迭代指令（MatchTest/MakeRange/EnumPayload/IterMake/IterNext）：
+/// switch 模式测试、区间构造、枚举载荷提取与迭代器创建/推进；迭代槽
+/// Read 捕获绑定值副本、Mut/Move 捕获绑定共享源 cell，语义与拆分前一致。
+fn exec_pattern_iter(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    frame: &mut Frame,
+    depth: usize,
+    inst: &IrInst,
+) -> R<()> {
+    match inst {
+        IrInst::MatchTest {
+            temp,
+            subject,
+            pattern,
+        } => {
+            let sv = deref_value(ctx, ctx.get(&frame, *subject)).clone();
+            ctx.set(&frame, *temp, IrValue::Bool(match_pattern(&sv, pattern)));
+        }
+        IrInst::MakeRange { temp, lo, hi } => {
+            let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
+            let hi_v = deref_value(ctx, ctx.get(&frame, *hi)).clone();
+            let (lo_i, hi_i) = match (lo_v, hi_v) {
+                (IrValue::Int(a), IrValue::Int(b)) => (a, b),
+                _ => return Err(IrError::msg("TypeError", "range bounds must be integers")),
+            };
+            let mut cells = Vec::new();
+            let mut i = lo_i;
+            while i < hi_i {
+                cells.push(ctx.alloc(Cell::Value(IrValue::Int(i))));
+                i += 1;
+            }
+            let c = ctx.alloc(Cell::Elems(cells));
+            ctx.set(&frame, *temp, IrValue::Arr(c));
+        }
+        IrInst::EnumPayload { temp, a } => {
+            let av = ctx.get(&frame, *a).clone();
+            let v = enum_payload(ctx, &av)?;
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::IterMake { temp, base } => {
+            let bv = ctx.get(&frame, *base).clone();
+            let items = make_iter(ctx, module, &bv, depth)?;
+            let c = ctx.alloc(Cell::Iter { items, next: 0 });
+            ctx.set(&frame, *temp, IrValue::Iter(c));
+        }
+        IrInst::IterNext {
+            has,
+            iter,
+            slot,
+            read_only,
+        } => {
+            let iter_c = match ctx.get(&frame, *iter) {
+                IrValue::Iter(c) => *c,
+                _ => return Err(IrError::msg("NotIterable", "expected iterator")),
+            };
+            let item = {
+                let c = &mut ctx.cells[iter_c];
+                match c {
+                    Cell::Iter { items, next } => {
+                        if *next < items.len() {
+                            let it = items[*next].clone();
+                            *next += 1;
+                            Some(it)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => return Err(IrError::msg("NotIterable", "corrupt iterator cell")),
+                }
+            };
+            match item {
+                Some(it) => {
+                    if *read_only {
+                        // Read 捕获：槽 cell 置为该项值副本（与容器无别名；
+                        // 非 Value cell——如 Map 的 KV Class 条目——用 read_cell 还原句柄）
+                        let v = ctx.read_cell(it.cell);
+                        ctx.set_cell(frame.cells[*slot], v);
+                    } else {
+                        // Mut/Move 捕获：槽 cell 绑定共享源 cell（写穿）；
+                        // [IrInst::IterWriteBack] 在 run_ir 为无操作（槽 cell 即源 cell）。
+                        frame.cells[*slot] = it.cell;
+                    }
+                    ctx.set(&frame, *has, IrValue::Bool(true));
+                }
+                None => {
+                    ctx.set(&frame, *has, IrValue::Bool(false));
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 闭包指令（MakeClosure/FnRef）：闭包构造——move 捕获深拷贝到新 cell（脱离
+/// 原作用域生命周期），读/mut 捕获共享源 cell（写穿）；函数引用打包为 `IrValue::Fn`。
+fn exec_closure(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
+    match inst {
+        IrInst::MakeClosure {
+            temp,
+            func,
+            captures,
+            is_move,
+            is_mut,
+        } => {
+            let mut cap_cells = Vec::with_capacity(captures.len());
+            for (_, slot) in captures {
+                let cell = frame.cells[*slot];
+                if *is_move {
+                    // move 捕获：深拷贝到新 cell（闭包脱离原作用域生命周期）
+                    let v = ctx.cell_value(cell).clone();
+                    let dv = deep_copy(ctx, v);
+                    let ncell = ctx.alloc(Cell::Value(dv));
+                    cap_cells.push(ncell);
+                } else {
+                    // 读/mut 捕获：共享源 cell（写穿）
+                    cap_cells.push(cell);
+                }
+            }
+            ctx.set(
+                &frame,
+                *temp,
+                IrValue::Closure {
+                    func: *func,
+                    captures: cap_cells,
+                    is_mut: *is_mut,
+                },
+            );
+        }
+        IrInst::FnRef { temp, name } => {
+            ctx.set(&frame, *temp, IrValue::Fn(name.clone()));
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 全局指令（LoadGlobal/StoreGlobal/GlobalAddr）：全局读写与 `&global` 预分配
+/// cell 的 Ptr 别名（写穿共享 cell）；未定义全局报 NoGlobal；`alloc` 在线程
+/// 子任务期间解析到每线程 arena（Q8），语义与拆分前一致。
+fn exec_global(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
+    match inst {
+        IrInst::LoadGlobal { temp, name } => {
+            let v = if name == "alloc" && ctx.current_alloc.is_some() {
+                // Q8：线程子任务期间 `alloc` 解析到每线程 arena（对齐 oracle `lookup`）
+                ctx.current_alloc.clone().unwrap()
+            } else {
+                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
+                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                })?;
+                ctx.cell_value(cell).clone()
+            };
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::StoreGlobal { name, value } => {
+            let cell =
+                ctx.globals.get(name).copied().ok_or_else(|| {
+                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                })?;
+            let v = ctx.get(&frame, *value).clone();
+            ctx.set_cell(cell, v);
+        }
+        // `&global`：预分配 cell 的 Ptr 别名（与局部 `AddrSlot` 同构，写穿共享 cell）
+        IrInst::GlobalAddr { temp, name } => {
+            let cell =
+                ctx.globals.get(name).copied().ok_or_else(|| {
+                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
+                })?;
+            ctx.set(&frame, *temp, IrValue::Ptr(cell));
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// 动态调用指令（CallIndirect/CallMethod）：函数引用/闭包的间接调用与方法
+/// 分派；装箱/集合 `.alloc()` 快速路径返回携带的分配器引用后提前返回
+/// （原 `pc += 1; continue;` 由主循环底部 `pc += 1` 补齐，语义一致）；
+/// 不可调用值报 NotCallable，经 `?` 上抛。
+fn exec_call_dynamic(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    frame: &mut Frame,
+    depth: usize,
+    inst: &IrInst,
+) -> R<()> {
+    match inst {
+        IrInst::CallIndirect { temp, callee, args } => {
+            let callee_v = ctx.get(&frame, *callee).clone();
+            let arg_vals: Vec<IrValue> = args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
+            let v = match callee_v {
+                IrValue::Fn(fname) => {
+                    let idx = pick_func(ctx, module, &fname, &arg_vals).ok_or_else(|| {
+                        IrError::msg("NoFunction", format!("no function `{fname}`"))
+                    })?;
+                    exec_func(ctx, module, idx, &arg_vals, depth + 1)?
+                }
+                IrValue::Closure {
+                    func,
+                    captures,
+                    is_mut,
+                    ..
+                } => call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, depth + 1)?,
+                other => {
+                    return Err(IrError::msg(
+                        "NotCallable",
+                        format!("`{}` is not callable", type_descr(&other)),
+                    ))
+                }
+            };
+            ctx.set(&frame, *temp, v);
+        }
+        IrInst::CallMethod {
+            temp,
+            base,
+            method,
+            args,
+        } => {
+            let raw = ctx.get(&frame, *base).clone();
+            // G3：装箱胖指针 .alloc() → 携带的分配器引用（三字宽胖指针的 alloc 字）
+            if let IrValue::Boxed(bc) = &raw {
+                if method == "alloc" {
+                    if let Cell::Boxed { alloc, .. } = &ctx.cells[*bc] {
+                        ctx.set(&frame, *temp, alloc.clone());
+                        // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
+                        return Ok(());
+                    }
+                }
+            }
+            // G4：集合 .alloc() → 构造 `init(alloc)` 时携带的分配器引用
+            if let IrValue::Vec(vc) = &raw {
+                if method == "alloc" {
+                    if let Cell::Vec { alloc, .. } = &ctx.cells[*vc] {
+                        ctx.set(&frame, *temp, alloc.clone());
+                        // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
+                        return Ok(());
+                    }
+                }
+            }
+            if let IrValue::Map(mc) = &raw {
+                if method == "alloc" {
+                    if let Cell::Map { alloc, .. } = &ctx.cells[*mc] {
+                        ctx.set(&frame, *temp, alloc.clone());
+                        // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
+                        return Ok(());
+                    }
+                }
+            }
+            let self_v = deref_value(ctx, &raw).clone();
+            let mut arg_vals = vec![self_v.clone()];
+            for a in args {
+                arg_vals.push(ctx.get(&frame, *a).clone());
+            }
+            let v = call_method_ir(ctx, module, &self_v, method, &arg_vals)?;
+            ctx.set(&frame, *temp, v);
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
 pub(crate) fn exec_body(
     ctx: &mut Ctx,
     module: &IrModule,
@@ -431,605 +1144,78 @@ pub(crate) fn exec_body(
             ));
         }
         match &func.body[pc] {
-            IrInst::Const { temp, val } => {
-                ctx.set(
-                    &frame,
-                    *temp,
-                    match val {
-                        IrConst::Int(i) => IrValue::Int(*i),
-                        IrConst::Float(f) => IrValue::Float(*f),
-                        IrConst::Bool(b) => IrValue::Bool(*b),
-                        IrConst::Str(s) => IrValue::String(StringDataIr::from_slice(s.as_bytes())),
-                        IrConst::Void => IrValue::Void,
-                        IrConst::Null => IrValue::Opt(None),
-                        IrConst::Err { name, code } => IrValue::Err {
-                            name: name.clone(),
-                            code: *code,
-                        },
-                        IrConst::End => IrValue::End,
-                    },
-                );
+            IrInst::Const { .. }
+            | IrInst::Load { .. }
+            | IrInst::Store { .. }
+            | IrInst::Bin { .. }
+            | IrInst::Un { .. } => {
+                exec_data(ctx, &mut frame, &func.body[pc])?;
             }
-            IrInst::Load { temp, slot } => {
-                let v = ctx.get(&frame, *slot).clone();
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::Store { slot, temp } => {
-                // M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包写捕获参数槽 → 错误
-                if frame.readonly.contains(slot) {
-                    return Err(IrError::msg(
-                        "ReadonlyCapture",
-                        "cannot assign to captured variable in non-mut closure \
-                         (declare the closure `mut` to capture mutably)",
-                    ));
-                }
-                let v = ctx.get(&frame, *temp).clone();
-                ctx.set(&frame, *slot, v);
-            }
-            IrInst::Bin { op, temp, a, b } => {
-                let (av, bv) = (ctx.get(&frame, *a).clone(), ctx.get(&frame, *b).clone());
-                let v = binop(*op, ctx, &av, &bv)?;
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::Un { op, temp, a } => {
-                let av = ctx.get(&frame, *a).clone();
-                ctx.set(
-                    &frame,
-                    *temp,
-                    match op {
-                        IrUnOp::Neg => match av {
-                            IrValue::Int(i) => IrValue::Int(-i),
-                            IrValue::Float(f) => IrValue::Float(-f),
-                            _ => return Err(IrError::msg("TypeError", "unary -")),
-                        },
-                        IrUnOp::Not => IrValue::Bool(!av.as_bool()),
-                        IrUnOp::BitNot => match av {
-                            IrValue::Int(i) => IrValue::Int(!i),
-                            _ => return Err(IrError::msg("TypeError", "~")),
-                        },
-                    },
-                );
-            }
-            IrInst::Jump { label } => {
-                pc = find_label(func, *label)?;
-                continue;
-            }
-            IrInst::JumpIf { temp, label } => {
-                if ctx.get(&frame, *temp).as_bool() {
-                    pc = find_label(func, *label)?;
-                    continue;
-                }
-            }
-            IrInst::JumpIfNot { temp, label } => {
-                if !ctx.get(&frame, *temp).as_bool() {
-                    pc = find_label(func, *label)?;
-                    continue;
-                }
-            }
-            IrInst::JumpIfErr { temp, label } => {
-                if ctx.get(&frame, *temp).is_err() {
-                    pc = find_label(func, *label)?;
-                    continue;
-                }
-            }
-            IrInst::JumpIfNull { temp, label } => {
-                if matches!(ctx.get(&frame, *temp), IrValue::Opt(None)) {
-                    pc = find_label(func, *label)?;
+            IrInst::Jump { .. }
+            | IrInst::JumpIf { .. }
+            | IrInst::JumpIfNot { .. }
+            | IrInst::JumpIfErr { .. }
+            | IrInst::JumpIfNull { .. }
+            | IrInst::PushDefer { .. }
+            | IrInst::JumpIfNotDefer { .. }
+            | IrInst::PopDefer { .. } => {
+                if let Some(next) = exec_jumps(ctx, func, &mut frame, &func.body[pc])? {
+                    pc = next;
                     continue;
                 }
             }
             IrInst::Label { .. } => {}
-            // ---- Phase 6：defer / errdefer ----
-            IrInst::PushDefer { id } => frame.defers.push(*id),
-            IrInst::JumpIfNotDefer { id, label } => {
-                if !frame.defers.contains(id) {
-                    pc = find_label(func, *label)?;
-                    continue;
-                }
+            IrInst::Call { .. } | IrInst::CallBuiltin { .. } => {
+                exec_call(ctx, module, &mut frame, &mut fail, depth, &func.body[pc])?;
             }
-            IrInst::PopDefer { id } => {
-                // 移除最近一次登记（rposition）；未登记（分支未达）→ 无操作
-                if let Some(pos) = frame.defers.iter().rposition(|d| d == id) {
-                    frame.defers.remove(pos);
-                }
-            }
-            IrInst::Call { name, args, temp } => {
-                let arg_vals: Vec<IrValue> =
-                    args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
-                // Phase 7：隐式环境限定名（io.print / io.fs.open / alloc.init…）与
-                // 虚拟根（json.parse / csv.parse / String.from）——未登记为用户函数时按
-                // 「根值 → 字段 → 方法」路由（对齐 oracle eval_call 隐式环境 + 方法分派）；
-                // 登记了同名用户函数则优先用户函数。
-                if !module.func_index.contains_key(name) {
-                    let root = name.split('.').next().unwrap_or("");
-                    if is_dotted_implicit_root(root) && name.contains('.') {
-                        let v = call_dotted_implicit(ctx, module, name, &arg_vals)?;
-                        ctx.set(&frame, *temp, v);
-                        pc += 1;
-                        continue;
-                    }
-                }
-                let callee_idx = pick_func(ctx, module, name, &arg_vals)
-                    .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
-                let v = exec_func(ctx, module, callee_idx, &arg_vals, depth + 1)?;
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::CallBuiltin { name, args, temp } => {
-                let arg_vals: Vec<IrValue> =
-                    args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
-                let v = call_builtin(ctx, module, name, &arg_vals, &mut fail)?;
-                // Q14：跟踪 Boxed 值，离开作用域时自动释放
-                if name == "box" {
-                    if let IrValue::Boxed(cell) = &v {
-                        frame.boxed.insert(*cell);
-                    }
-                }
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::Return { temp } => {
-                let v = ctx.get(&frame, *temp).clone();
-                if let Some(f) = fail {
-                    return Err(IrError::msg("AssertFailed", f));
-                }
-                // Q14：返回值若为 Boxed，所有权转移至调用方（不移除释放）
-                if let IrValue::Boxed(cell) = &v {
-                    frame.boxed.remove(cell);
-                }
-                // 释放当前作用域内其余 Boxed 值
-                let data_cells: Vec<usize> = frame
-                    .boxed
-                    .iter()
-                    .filter_map(|cell| {
-                        if let Cell::Boxed { data, .. } = &ctx.cells[*cell] {
-                            Some(*data)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                for d in data_cells {
-                    ctx.cells[d] = Cell::Value(IrValue::Void);
-                }
-                return Ok(v);
-            }
-            IrInst::ReturnVoid => {
-                if let Some(f) = fail {
-                    return Err(IrError::msg("AssertFailed", f));
-                }
-                // Q14：释放当前作用域内所有 Boxed 值
-                let data_cells: Vec<usize> = frame
-                    .boxed
-                    .iter()
-                    .filter_map(|cell| {
-                        if let Cell::Boxed { data, .. } = &ctx.cells[*cell] {
-                            Some(*data)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                for d in data_cells {
-                    ctx.cells[d] = Cell::Value(IrValue::Void);
-                }
-                return Ok(IrValue::Void);
+            IrInst::Return { .. } | IrInst::ReturnVoid => {
+                return exec_return(ctx, &mut frame, &fail, &func.body[pc]);
             }
             // ---- Phase 1 指针 ----
-            IrInst::AddrSlot { temp, slot } => {
-                let cell = frame.cells[*slot];
-                ctx.set(&frame, *temp, IrValue::Ptr(cell));
-            }
-            IrInst::AddrValue { temp, value } => {
-                // 非 lvalue 取址快照：求值结果复制进新 cell（对齐 tree-walking `&expr` 兜底）
-                let v = ctx.get(&frame, *value).clone();
-                let cell = ctx.alloc(Cell::Value(v));
-                ctx.set(&frame, *temp, IrValue::Ptr(cell));
-            }
-            IrInst::Deref { temp, a } => {
-                // 解引用：Ptr/Boxed → pointee；非 Ptr → 恒等（对齐 tree-walking `deref_value`）
-                let v = match ctx.get(&frame, *a) {
-                    IrValue::Ptr(cell) => ctx.cell_value(*cell).clone(),
-                    IrValue::Boxed(cell) => match &ctx.cells[*cell] {
-                        Cell::Boxed { data, .. } => ctx.cell_value(*data).clone(),
-                        _ => IrValue::Void,
-                    },
-                    other => other.clone(),
-                };
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::StorePtr { target, value } => {
-                let t = ctx.get(&frame, *target).clone();
-                let v = ctx.get(&frame, *value).clone();
-                match t {
-                    IrValue::Ptr(cell) => ctx.set_cell(cell, v),
-                    // 装箱胖指针：写穿 data cell
-                    IrValue::Boxed(cell) => {
-                        let data = match &ctx.cells[cell] {
-                            Cell::Boxed { data, .. } => Some(*data),
-                            _ => None,
-                        };
-                        match data {
-                            Some(d) => ctx.set_cell(d, v),
-                            None => return Err(IrError::msg("BadAssign", "store to non-pointer")),
-                        }
-                    }
-                    _ => return Err(IrError::msg("BadAssign", "store to non-pointer")),
-                }
+            IrInst::AddrSlot { .. }
+            | IrInst::AddrValue { .. }
+            | IrInst::Deref { .. }
+            | IrInst::StorePtr { .. } => {
+                exec_ptr(ctx, &mut frame, &func.body[pc])?;
             }
             // ---- Phase 2 聚合 ----
-            IrInst::Field { temp, base, field } => {
-                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
-                let v = field_value(ctx, &bv, field)?;
-                ctx.set(&frame, *temp, v);
+            IrInst::Field { .. }
+            | IrInst::StoreField { .. }
+            | IrInst::UnionSync { .. }
+            | IrInst::Index { .. }
+            | IrInst::StoreIndex { .. }
+            | IrInst::SliceOf { .. }
+            | IrInst::StoreSlice { .. } => {
+                exec_aggregate(ctx, module, &mut frame, &func.body[pc])?;
             }
-            IrInst::StoreField { base, field, value } => {
-                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
-                let v = ctx.get(&frame, *value).clone();
-                store_field(ctx, &bv, field, v)?;
-                // K1 union 写路径：字段写后字节重解释同步其余字段（对齐 interp assign_class_field）
-                if let IrValue::Class(c) = bv {
-                    if let Cell::Class { fields, .. } = &ctx.cells[c] {
-                        if fields.contains_key("@union") {
-                            union_sync_ir(ctx, module, c, field)?;
-                        }
-                    }
-                }
-            }
-            IrInst::UnionSync { class, written } => {
-                let c = match ctx.get(&frame, *class) {
-                    IrValue::Class(c) => *c,
-                    _ => return Err(IrError::msg("TypeError", "union sync on non-class")),
-                };
-                union_sync_ir(ctx, module, c, written)?;
-            }
-            IrInst::Index { temp, base, index } => {
-                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
-                let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
-                let i = as_index(ctx, &iv)?;
-                let v = index_value(ctx, &bv, i)?;
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::StoreIndex { base, index, value } => {
-                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
-                let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
-                let i = as_index(ctx, &iv)?;
-                let v = ctx.get(&frame, *value).clone();
-                store_index(ctx, &bv, i, v)?;
-            }
-            IrInst::SliceOf { temp, base, lo, hi } => {
-                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
-                let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
-                let lo_i = as_index(ctx, &lo_v)?;
-                let hi_v = ctx.get(&frame, *hi).clone();
-                let (hi_i, open) = match hi_v {
-                    IrValue::End => (0, true),
-                    other => {
-                        let d = deref_value(ctx, &other).clone();
-                        (as_index(ctx, &d)?, false)
-                    }
-                };
-                let v = slice_of(ctx, &bv, lo_i, hi_i, open)?;
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::StoreSlice {
-                base,
-                lo,
-                hi,
-                value,
-            } => {
-                let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
-                let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
-                let lo_i = as_index(ctx, &lo_v)?;
-                let hi_v = ctx.get(&frame, *hi).clone();
-                // 开区间 `arr[a..] = v`：对齐 oracle（eval(hi=`__end__`) 报错）→ BadIndex
-                if matches!(hi_v, IrValue::End) {
-                    return Err(IrError::msg("BadIndex", "open-end store slice"));
-                }
-                let hi_d = deref_value(ctx, &hi_v).clone();
-                let hi_i = as_index(ctx, &hi_d)?;
-                let v = ctx.get(&frame, *value).clone();
-                store_slice(ctx, &bv, lo_i, hi_i, &v)?;
-            }
-            IrInst::MakeArr { temp, items } => {
-                let mut cells = Vec::with_capacity(items.len());
-                for it in items {
-                    let v = ctx.get(&frame, *it).clone();
-                    cells.push(ctx.alloc(Cell::Value(v)));
-                }
-                let c = ctx.alloc(Cell::Elems(cells));
-                ctx.set(&frame, *temp, IrValue::Arr(c));
-            }
-            IrInst::MakeClass { temp, ty, fields } => {
-                let mut fs = HashMap::new();
-                for (k, vt) in fields {
-                    let v = ctx.get(&frame, *vt).clone();
-                    fs.insert(k.clone(), ctx.alloc(Cell::Value(v)));
-                }
-                let c = ctx.alloc(Cell::Class {
-                    name: ty.clone(),
-                    fields: fs,
-                });
-                ctx.set(&frame, *temp, IrValue::Class(c));
-            }
-            IrInst::MakeEnum {
-                temp,
-                name,
-                variant,
-                payload,
-            } => {
-                let p = match payload {
-                    Some(pt) => Some(Box::new(ctx.get(&frame, *pt).clone())),
-                    None => None,
-                };
-                ctx.set(
-                    &frame,
-                    *temp,
-                    IrValue::Enum {
-                        name: name.clone(),
-                        variant: variant.clone(),
-                        payload: p,
-                    },
-                );
-            }
-            IrInst::Destructure { value, slots } => {
-                let v = deref_value(ctx, ctx.get(&frame, *value)).clone();
-                let elems = match v {
-                    IrValue::Arr(c) => match &ctx.cells[c] {
-                        Cell::Elems(e) => e.clone(),
-                        _ => {
-                            return Err(IrError::msg("TupleArity", "expected tuple in destructure"))
-                        }
-                    },
-                    _ => return Err(IrError::msg("TupleArity", "expected tuple in destructure")),
-                };
-                if elems.len() != slots.len() {
-                    return Err(IrError::msg("TupleArity", "destructure arity mismatch"));
-                }
-                for (slot, elem) in slots.iter().zip(elems.iter()) {
-                    if let Some(s) = slot {
-                        let v = ctx.cell_value(*elem).clone();
-                        ctx.set(&frame, *s, v);
-                    }
-                }
-            }
-            IrInst::Move { temp, a } => {
-                let v = ctx.get(&frame, *a).clone();
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::DeepCopy { temp, a } => {
-                let v = ctx.get(&frame, *a).clone();
-                // 运行时门：仅连续类深拷贝（标量/数组/非连续类恒等 = 引用别名）
-                let v = if is_continuous_class(ctx, module, &v) {
-                    deep_copy(ctx, v)
-                } else {
-                    v
-                };
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::Unwrap { temp, a } => {
-                let v = deref_value(ctx, ctx.get(&frame, *a)).clone();
-                let r = match v {
-                    IrValue::Opt(Some(inner)) => *inner,
-                    IrValue::Opt(None) => {
-                        return Err(IrError::msg("NullUnwrap", "unwrap of null"));
-                    }
-                    other => other,
-                };
-                ctx.set(&frame, *temp, r);
+            IrInst::MakeArr { .. }
+            | IrInst::MakeClass { .. }
+            | IrInst::MakeEnum { .. }
+            | IrInst::Destructure { .. }
+            | IrInst::Move { .. }
+            | IrInst::DeepCopy { .. }
+            | IrInst::Unwrap { .. } => {
+                exec_make(ctx, module, &mut frame, &func.body[pc])?;
             }
             // ---- Phase 3 switch / 区间 / for ----
-            IrInst::MatchTest {
-                temp,
-                subject,
-                pattern,
-            } => {
-                let sv = deref_value(ctx, ctx.get(&frame, *subject)).clone();
-                ctx.set(&frame, *temp, IrValue::Bool(match_pattern(&sv, pattern)));
-            }
-            IrInst::MakeRange { temp, lo, hi } => {
-                let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
-                let hi_v = deref_value(ctx, ctx.get(&frame, *hi)).clone();
-                let (lo_i, hi_i) = match (lo_v, hi_v) {
-                    (IrValue::Int(a), IrValue::Int(b)) => (a, b),
-                    _ => return Err(IrError::msg("TypeError", "range bounds must be integers")),
-                };
-                let mut cells = Vec::new();
-                let mut i = lo_i;
-                while i < hi_i {
-                    cells.push(ctx.alloc(Cell::Value(IrValue::Int(i))));
-                    i += 1;
-                }
-                let c = ctx.alloc(Cell::Elems(cells));
-                ctx.set(&frame, *temp, IrValue::Arr(c));
-            }
-            IrInst::EnumPayload { temp, a } => {
-                let av = ctx.get(&frame, *a).clone();
-                let v = enum_payload(ctx, &av)?;
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::IterMake { temp, base } => {
-                let bv = ctx.get(&frame, *base).clone();
-                let items = make_iter(ctx, module, &bv, depth)?;
-                let c = ctx.alloc(Cell::Iter { items, next: 0 });
-                ctx.set(&frame, *temp, IrValue::Iter(c));
-            }
-            IrInst::IterNext {
-                has,
-                iter,
-                slot,
-                read_only,
-            } => {
-                let iter_c = match ctx.get(&frame, *iter) {
-                    IrValue::Iter(c) => *c,
-                    _ => return Err(IrError::msg("NotIterable", "expected iterator")),
-                };
-                let item = {
-                    let c = &mut ctx.cells[iter_c];
-                    match c {
-                        Cell::Iter { items, next } => {
-                            if *next < items.len() {
-                                let it = items[*next].clone();
-                                *next += 1;
-                                Some(it)
-                            } else {
-                                None
-                            }
-                        }
-                        _ => return Err(IrError::msg("NotIterable", "corrupt iterator cell")),
-                    }
-                };
-                match item {
-                    Some(it) => {
-                        if *read_only {
-                            // Read 捕获：槽 cell 置为该项值副本（与容器无别名；
-                            // 非 Value cell——如 Map 的 KV Class 条目——用 read_cell 还原句柄）
-                            let v = ctx.read_cell(it.cell);
-                            ctx.set_cell(frame.cells[*slot], v);
-                        } else {
-                            // Mut/Move 捕获：槽 cell 绑定共享源 cell（写穿）；
-                            // [IrInst::IterWriteBack] 在 run_ir 为无操作（槽 cell 即源 cell）。
-                            frame.cells[*slot] = it.cell;
-                        }
-                        ctx.set(&frame, *has, IrValue::Bool(true));
-                    }
-                    None => {
-                        ctx.set(&frame, *has, IrValue::Bool(false));
-                    }
-                }
+            IrInst::MatchTest { .. }
+            | IrInst::MakeRange { .. }
+            | IrInst::EnumPayload { .. }
+            | IrInst::IterMake { .. }
+            | IrInst::IterNext { .. } => {
+                exec_pattern_iter(ctx, module, &mut frame, depth, &func.body[pc])?;
             }
             IrInst::IterWriteBack { .. } => {}
             // ---- Phase 4 闭包 / 函数引用 / 方法 / 动态调用 ----
-            IrInst::MakeClosure {
-                temp,
-                func,
-                captures,
-                is_move,
-                is_mut,
-            } => {
-                let mut cap_cells = Vec::with_capacity(captures.len());
-                for (_, slot) in captures {
-                    let cell = frame.cells[*slot];
-                    if *is_move {
-                        // move 捕获：深拷贝到新 cell（闭包脱离原作用域生命周期）
-                        let v = ctx.cell_value(cell).clone();
-                        let dv = deep_copy(ctx, v);
-                        let ncell = ctx.alloc(Cell::Value(dv));
-                        cap_cells.push(ncell);
-                    } else {
-                        // 读/mut 捕获：共享源 cell（写穿）
-                        cap_cells.push(cell);
-                    }
-                }
-                ctx.set(
-                    &frame,
-                    *temp,
-                    IrValue::Closure {
-                        func: *func,
-                        captures: cap_cells,
-                        is_mut: *is_mut,
-                    },
-                );
-            }
-            IrInst::FnRef { temp, name } => {
-                ctx.set(&frame, *temp, IrValue::Fn(name.clone()));
+            IrInst::MakeClosure { .. } | IrInst::FnRef { .. } => {
+                exec_closure(ctx, &mut frame, &func.body[pc])?;
             }
             // ---- Phase 5：global / const ----
-            IrInst::LoadGlobal { temp, name } => {
-                let v = if name == "alloc" && ctx.current_alloc.is_some() {
-                    // Q8：线程子任务期间 `alloc` 解析到每线程 arena（对齐 oracle `lookup`）
-                    ctx.current_alloc.clone().unwrap()
-                } else {
-                    let cell = ctx.globals.get(name).copied().ok_or_else(|| {
-                        IrError::msg("NoGlobal", format!("undefined global `{name}`"))
-                    })?;
-                    ctx.cell_value(cell).clone()
-                };
-                ctx.set(&frame, *temp, v);
+            IrInst::LoadGlobal { .. } | IrInst::StoreGlobal { .. } | IrInst::GlobalAddr { .. } => {
+                exec_global(ctx, &mut frame, &func.body[pc])?;
             }
-            IrInst::StoreGlobal { name, value } => {
-                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
-                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
-                })?;
-                let v = ctx.get(&frame, *value).clone();
-                ctx.set_cell(cell, v);
-            }
-            // `&global`：预分配 cell 的 Ptr 别名（与局部 `AddrSlot` 同构，写穿共享 cell）
-            IrInst::GlobalAddr { temp, name } => {
-                let cell = ctx.globals.get(name).copied().ok_or_else(|| {
-                    IrError::msg("NoGlobal", format!("undefined global `{name}`"))
-                })?;
-                ctx.set(&frame, *temp, IrValue::Ptr(cell));
-            }
-            IrInst::CallIndirect { temp, callee, args } => {
-                let callee_v = ctx.get(&frame, *callee).clone();
-                let arg_vals: Vec<IrValue> =
-                    args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
-                let v = match callee_v {
-                    IrValue::Fn(fname) => {
-                        let idx = pick_func(ctx, module, &fname, &arg_vals).ok_or_else(|| {
-                            IrError::msg("NoFunction", format!("no function `{fname}`"))
-                        })?;
-                        exec_func(ctx, module, idx, &arg_vals, depth + 1)?
-                    }
-                    IrValue::Closure {
-                        func,
-                        captures,
-                        is_mut,
-                        ..
-                    } => {
-                        call_closure_ir(ctx, module, func, &captures, &arg_vals, is_mut, depth + 1)?
-                    }
-                    other => {
-                        return Err(IrError::msg(
-                            "NotCallable",
-                            format!("`{}` is not callable", type_descr(&other)),
-                        ))
-                    }
-                };
-                ctx.set(&frame, *temp, v);
-            }
-            IrInst::CallMethod {
-                temp,
-                base,
-                method,
-                args,
-            } => {
-                let raw = ctx.get(&frame, *base).clone();
-                // G3：装箱胖指针 .alloc() → 携带的分配器引用（三字宽胖指针的 alloc 字）
-                if let IrValue::Boxed(bc) = &raw {
-                    if method == "alloc" {
-                        if let Cell::Boxed { alloc, .. } = &ctx.cells[*bc] {
-                            ctx.set(&frame, *temp, alloc.clone());
-                            pc += 1;
-                            continue;
-                        }
-                    }
-                }
-                // G4：集合 .alloc() → 构造 `init(alloc)` 时携带的分配器引用
-                if let IrValue::Vec(vc) = &raw {
-                    if method == "alloc" {
-                        if let Cell::Vec { alloc, .. } = &ctx.cells[*vc] {
-                            ctx.set(&frame, *temp, alloc.clone());
-                            pc += 1;
-                            continue;
-                        }
-                    }
-                }
-                if let IrValue::Map(mc) = &raw {
-                    if method == "alloc" {
-                        if let Cell::Map { alloc, .. } = &ctx.cells[*mc] {
-                            ctx.set(&frame, *temp, alloc.clone());
-                            pc += 1;
-                            continue;
-                        }
-                    }
-                }
-                let self_v = deref_value(ctx, &raw).clone();
-                let mut arg_vals = vec![self_v.clone()];
-                for a in args {
-                    arg_vals.push(ctx.get(&frame, *a).clone());
-                }
-                let v = call_method_ir(ctx, module, &self_v, method, &arg_vals)?;
-                ctx.set(&frame, *temp, v);
+            IrInst::CallIndirect { .. } | IrInst::CallMethod { .. } => {
+                exec_call_dynamic(ctx, module, &mut frame, depth, &func.body[pc])?;
             }
         }
         pc += 1;
