@@ -1,0 +1,67 @@
+//! IR 数据模型（ADR-0028）：类型定义按「一个类型一个文件」组织于本目录，
+//! 文件名 = 类型名的 snake_case；ir/mod.rs 经 `pub use models::*` 重导出保持原路径。
+
+use super::*;
+
+mod arena_alloc_err_ir;
+mod arena_state_ir;
+mod cell;
+mod chan_inner_ir;
+mod chan_state_ir;
+mod channel_state_ir;
+mod class_info;
+mod ctx;
+mod enum_info;
+mod frame;
+mod g_id_ir;
+mod g_result_ir;
+mod g_state_ir;
+mod goroutine_ir;
+mod goroutine_scheduler_ir;
+mod ir_bin_op;
+mod ir_const;
+mod ir_error;
+mod ir_func;
+mod ir_inst;
+mod ir_module;
+mod ir_pattern;
+mod ir_runtime;
+mod ir_un_op;
+mod ir_value;
+mod iter_item;
+mod pipe_ir;
+mod r;
+mod scheduler_inner_ir;
+mod thread_result_ir;
+mod thread_state_ir;
+mod type_table;
+mod union_info;
+
+pub(in crate::ir) use arena_alloc_err_ir::*;
+pub use arena_state_ir::*;
+pub use cell::*;
+pub use chan_inner_ir::*;
+pub use chan_state_ir::*;
+pub(in crate::ir) use channel_state_ir::*;
+pub use class_info::*;
+pub use ctx::*;
+pub use enum_info::*;
+pub use frame::*;
+pub(in crate::ir) use goroutine_scheduler_ir::*;
+pub use ir_bin_op::*;
+pub use ir_const::*;
+pub use ir_error::*;
+pub use ir_func::*;
+pub use ir_inst::*;
+pub use ir_module::*;
+pub use ir_pattern::*;
+pub use ir_runtime::*;
+pub use ir_un_op::*;
+pub use ir_value::*;
+pub use iter_item::*;
+pub use pipe_ir::*;
+pub(crate) use r::*;
+pub(in crate::ir) use thread_result_ir::*;
+pub(in crate::ir) use thread_state_ir::*;
+pub use type_table::*;
+pub use union_info::*;
