@@ -4,16 +4,50 @@
   "meta": {
     "title": "H Language Compiler Architecture",
     "output": "docs/architecture/h-language-architecture.html",
-    "quality_profile": "standard",
+    "quality_profile": "showcase",
     "views": [
-      { "id": "pipeline", "label": "Compiler pipeline", "focus": ["lexer", "parser", "semantic", "ir", "bytecode", "llvm"], "note": "Follow source code through the full compilation pipeline." },
-      { "id": "execution", "label": "Execution modes", "focus": ["hc-cli", "bytecode", "llvm", "runtime"], "note": "Bytecode VM for development, LLVM native for production." },
-      { "id": "bootstrap", "label": "Self-hosting bootstrap", "focus": ["stage1-lexer", "stage1-parser"], "note": "Stage1 H-written parser/lexer — the bootstrap milestone." }
+      {
+        "id": "pipeline",
+        "label": "Compiler pipeline",
+        "focus": [
+          "lexer",
+          "parser",
+          "semantic",
+          "ir",
+          "bytecode",
+          "llvm"
+        ],
+        "note": "Follow source code through the full compilation pipeline."
+      },
+      {
+        "id": "execution",
+        "label": "Execution modes",
+        "focus": [
+          "hc-cli",
+          "bytecode",
+          "llvm",
+          "runtime"
+        ],
+        "note": "Tree-walking interpreter for development, LLVM native for production."
+      },
+      {
+        "id": "bootstrap",
+        "label": "Self-hosting bootstrap",
+        "focus": [
+          "stage1-lexer",
+          "stage1-parser",
+          "stage1-semantic"
+        ],
+        "note": "Stage1 H-written lexer/parser/checker — the bootstrap milestone."
+      }
     ]
   },
   "layout": {
     "mode": "grid",
-    "origin": [40, 50],
+    "origin": [
+      40,
+      50
+    ],
     "cols": 6,
     "gapX": 30,
     "gapY": 40,
@@ -21,60 +55,305 @@
     "cellH": 60
   },
   "components": [
-    { "id": "hc-cli", "type": "backend", "label": "hc CLI", "sublabel": "hc-tools", "row": 0, "col": 0, "size": [150, 60], "tag": "entry point" },
-    { "id": "hc-lsp", "type": "backend", "label": "hc-lsp", "sublabel": "LSP server", "row": 0, "col": 4, "size": [150, 60], "tag": "IDE support" },
-    { "id": "lexer", "type": "backend", "label": "Lexer", "sublabel": "token stream", "row": 1, "col": 0, "size": [150, 60] },
-    { "id": "parser", "type": "backend", "label": "Parser", "sublabel": "AST construction", "row": 1, "col": 1, "size": [150, 60] },
-    { "id": "semantic", "type": "backend", "label": "Semantic", "sublabel": "type checking", "row": 1, "col": 2, "size": [150, 60] },
-    { "id": "ir", "type": "backend", "label": "IR", "sublabel": "intermediate repr", "row": 1, "col": 3, "size": [150, 60] },
-    { "id": "bytecode", "type": "backend", "label": "Bytecode", "sublabel": "HBC2 VM", "row": 1, "col": 4, "size": [150, 60], "tag": "dev mode" },
-    { "id": "llvm", "type": "backend", "label": "LLVM", "sublabel": "native compile", "row": 1, "col": 5, "size": [150, 60], "tag": "production" },
-    { "id": "runtime", "type": "backend", "label": "Runtime", "sublabel": "hc-rt interpreter", "row": 2, "col": 0, "size": [330, 60] },
-    { "id": "stage1-lexer", "type": "external", "label": "Stage1 Lexer", "sublabel": "H-written", "row": 2, "col": 4, "size": [150, 60], "tag": "bootstrap" },
-    { "id": "stage1-parser", "type": "external", "label": "Stage1 Parser", "sublabel": "H-written", "row": 2, "col": 5, "size": [150, 60], "tag": "self-host" }
+    {
+      "id": "hc-cli",
+      "type": "backend",
+      "label": "hc CLI",
+      "sublabel": "hc-tools",
+      "row": 0,
+      "col": 0,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "entry point"
+    },
+    {
+      "id": "hc-lsp",
+      "type": "backend",
+      "label": "hc-lsp",
+      "sublabel": "LSP server",
+      "row": 0,
+      "col": 5,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "IDE support"
+    },
+    {
+      "id": "lexer",
+      "type": "backend",
+      "label": "Lexer",
+      "sublabel": "token stream",
+      "row": 1,
+      "col": 0,
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "parser",
+      "type": "backend",
+      "label": "Parser",
+      "sublabel": "AST construction",
+      "row": 1,
+      "col": 1,
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "semantic",
+      "type": "backend",
+      "label": "Semantic",
+      "sublabel": "type checking",
+      "row": 1,
+      "col": 2,
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "ir",
+      "type": "backend",
+      "label": "IR",
+      "sublabel": "intermediate repr",
+      "row": 1,
+      "col": 3,
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "bytecode",
+      "type": "backend",
+      "label": "Bytecode",
+      "sublabel": "HBC2 VM",
+      "row": 1,
+      "col": 4,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "dev mode"
+    },
+    {
+      "id": "llvm",
+      "type": "backend",
+      "label": "LLVM",
+      "sublabel": "native compile",
+      "row": 1,
+      "col": 5,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "production"
+    },
+    {
+      "id": "stage1-lexer",
+      "type": "external",
+      "label": "Stage1 Lexer",
+      "sublabel": "H-written",
+      "row": 2,
+      "col": 0,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "K1 done"
+    },
+    {
+      "id": "stage1-parser",
+      "type": "external",
+      "label": "Stage1 Parser",
+      "sublabel": "H-written",
+      "row": 2,
+      "col": 1,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "K2 done"
+    },
+    {
+      "id": "stage1-semantic",
+      "type": "external",
+      "label": "Stage1 Semantic",
+      "sublabel": "H-written checker",
+      "row": 2,
+      "col": 2,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "K3 done"
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "Runtime",
+      "sublabel": "hc-rt interpreter",
+      "row": 2,
+      "col": 4,
+      "size": [
+        150,
+        60
+      ]
+    }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Compiler Core", "wraps": ["lexer", "parser", "semantic", "ir", "bytecode", "llvm"], "pad": 16 },
-    { "kind": "region", "label": "Bootstrap Stage 1", "wraps": ["stage1-lexer", "stage1-parser"], "pad": 12 }
+    {
+      "kind": "region",
+      "label": "Compiler Core",
+      "wraps": [
+        "lexer",
+        "parser",
+        "semantic",
+        "ir",
+        "bytecode",
+        "llvm"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "Bootstrap Stage 1",
+      "wraps": [
+        "stage1-lexer",
+        "stage1-parser",
+        "stage1-semantic"
+      ],
+      "pad": 12
+    }
   ],
   "connections": [
-    { "from": "hc-cli", "to": "parser" },
-    { "from": "hc-cli", "to": "bytecode", "variant": "emphasis" },
-    { "from": "hc-lsp", "to": "parser", "variant": "dashed" },
-    { "from": "lexer", "to": "parser", "label": "tokens", "labelAt": [205, 224] },
-    { "from": "parser", "to": "semantic", "label": "AST" },
-    { "from": "semantic", "to": "ir", "label": "typed AST", "labelAt": [565, 224] },
-    { "from": "ir", "to": "bytecode", "label": "lower", "labelAt": [754, 224] },
-    { "from": "bytecode", "to": "runtime", "label": "execute", "variant": "emphasis" },
-    { "from": "stage1-lexer", "to": "stage1-parser", "label": "tokens", "labelAt": [925, 324] }
+    {
+      "from": "hc-cli",
+      "to": "lexer"
+    },
+    {
+      "from": "hc-lsp",
+      "to": "parser",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "lexer",
+      "to": "parser",
+      "label": "tokens",
+      "labelAt": [
+        205,
+        224
+      ]
+    },
+    {
+      "from": "parser",
+      "to": "semantic",
+      "label": "AST",
+      "labelAt": [
+        385,
+        224
+      ]
+    },
+    {
+      "from": "semantic",
+      "to": "ir",
+      "label": "typed AST",
+      "labelAt": [
+        565,
+        224
+      ]
+    },
+    {
+      "from": "ir",
+      "to": "bytecode",
+      "label": "lower",
+      "labelAt": [
+        745,
+        224
+      ]
+    },
+    {
+      "from": "bytecode",
+      "to": "runtime",
+      "label": "execute",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        835,
+        224
+      ]
+    },
+    {
+      "from": "stage1-lexer",
+      "to": "stage1-parser",
+      "label": "tokens",
+      "labelAt": [
+        205,
+        324
+      ]
+    },
+    {
+      "from": "stage1-parser",
+      "to": "stage1-semantic",
+      "label": "AST",
+      "labelAt": [
+        385,
+        324
+      ]
+    }
   ],
   "cards": [
-    { "dot": "cyan", "title": "Compiler Pipeline", "items": [
-      "Source code enters through the lexer as a token stream",
-      "Parser builds an AST (abstract syntax tree)",
-      "Semantic analysis performs type checking and inference",
-      "IR lowers the typed AST to an intermediate representation",
-      "Bytecode codegen compiles IR to HBC2 bytecode for the VM",
-      "LLVM codegen compiles IR to native code via zig cc"
-    ]},
-    { "dot": "emerald", "title": "Execution Modes", "items": [
-      "hc run — bytecode VM (fast development, full language support)",
-      "hc run --ir — IR reference interpreter (debug, 100% coverage)",
-      "hc build — LLVM native compilation (production, ~75x faster)",
-      "hc check — parse + semantic only, no codegen"
-    ]},
-    { "dot": "violet", "title": "Self-Hosting Bootstrap", "items": [
-      "Stage1 lexer and parser are written in H, not Rust",
-      "stage1/parser.hc parses itself — the bootstrap milestone",
-      "hc run stage1/parser.hc <file> uses the H parser",
-      "hc build stage1/parser.hc produces a native exe (0.32s self-parse)",
-      "Rust reference parser preserved as fallback (dual implementation)"
-    ]},
-    { "dot": "rose", "title": "Tooling", "items": [
-      "hc fmt — token-level formatting with AST fidelity",
-      "hc lint — 6 rules (L001–L006): naming, unused vars, simplification",
-      "hc doc — generates Markdown API docs from /// comments",
-      "hc-lsp — LSP server for IDE integration (Zed, VS Code)"
-    ]}
+    {
+      "dot": "cyan",
+      "title": "Compiler Pipeline",
+      "items": [
+        "Source → lexer → token stream",
+        "Parser builds an AST",
+        "Semantic: type checking, ownership, error-set inference",
+        "IR lowers typed AST (single semantic source)",
+        "Bytecode codegen → HBC2 VM",
+        "LLVM codegen → native via zig cc"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Execution Modes",
+      "items": [
+        "hc run — tree-walking interpreter (default, full language)",
+        "hc run --ir — IR reference interpreter",
+        "hc run <file.hbc> — bytecode VM (reuses run_ir)",
+        "hc build — LLVM native (builtin subset)"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Self-Hosting Bootstrap",
+      "items": [
+        "K1 lexer.hc done — 6621 tokens, zero diff",
+        "K2 parser.hc done — self-parse ~1s",
+        "K3 checker.hc done — 11/11 tasks, 13 tests green",
+        "K4–K6 (backend / bootstrap / reproducible) pending",
+        "Rust reference kept as fallback"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Tooling",
+      "items": [
+        "hc fmt — token-level formatting",
+        "hc lint — 9 rules",
+        "hc doc — Markdown API docs from /// comments",
+        "hc-lsp — diagnostics, completion, go-to-def, hover"
+      ]
+    }
   ]
 }
