@@ -3447,6 +3447,272 @@ pub(crate) fn find_label(func: &IrFunc, id: usize) -> R<usize> {
 /// 全量内建（对齐 oracle `call_builtin` interp.rs:2911-3404 全面：box/copy/@ 内建/
 /// sqrt/min/max/read_u64_le/sort/binary_search/解析器/parse_int/parse_float/断言五件套）。
 /// 断言失败经 `fail` 通道延迟到 `Return`（对齐 IR `AssertFailed` 通道）。
+/// `box(v[, alloc])`——装箱：分配 cell 持有值 + 类型标签（G3 分配器显式/回退全局）
+fn call_box_builtin(ctx: &mut Ctx, args: &[IrValue]) -> R<IrValue> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(IrError::msg("ArityMismatch", "box expects 1-2 args"));
+    }
+    // G3：分配器引用——显式传入或回退全局 alloc（`box(v)` 单参形态）
+    let alloc_v = if args.len() > 1 {
+        args[1].clone()
+    } else {
+        implicit_env_value(ctx, "alloc")
+    };
+    let data = ctx.alloc(Cell::Value(args[0].clone()));
+    let vtbl = ir_type_name(ctx, &args[0]);
+    Ok(IrValue::Boxed(ctx.alloc(Cell::Boxed {
+        data,
+        vtbl,
+        alloc: alloc_v,
+    })))
+}
+
+/// `unbox(v)`——从 Boxed 胖指针取回值，消费 Box（所有权转移）
+fn call_unbox_builtin(ctx: &mut Ctx, args: &[IrValue]) -> R<IrValue> {
+    if args.len() != 1 {
+        return Err(IrError::msg("ArityMismatch", "unbox expects 1 arg"));
+    }
+    // 从 Boxed 胖指针中取出值，消费 Box（所有权转移）。
+    // 注意：不用 deref_value 因为后者会解引用 Boxed 到内部值。
+    let v = &args[0];
+    // 可能是 Ptr(Boxed) 或直接 Boxed
+    let boxed_cell = match v {
+        IrValue::Boxed(cell) => Some(*cell),
+        IrValue::Ptr(cell) => match &ctx.cells[*cell] {
+            Cell::Value(IrValue::Boxed(bc)) => Some(*bc),
+            _ => None,
+        },
+        _ => None,
+    };
+    match boxed_cell {
+        Some(cell) => {
+            let data = match &ctx.cells[cell] {
+                Cell::Boxed { data, .. } => *data,
+                _ => return Err(IrError::msg("TypeError", "unbox: corrupted boxed value")),
+            };
+            let inner = ctx.cell_value(data).clone();
+            // 清空 data cell 防止双重释放
+            ctx.cells[data] = Cell::Value(IrValue::Void);
+            Ok(inner)
+        }
+        None => {
+            let desc = type_descr(v);
+            Err(IrError::msg(
+                "TypeError",
+                format!("unbox expects a boxed value, got {desc}"),
+            ))
+        }
+    }
+}
+
+/// `copy(&x[, .shallow])`——浅复制（L1 CopyMode 内建枚举）或深复制
+fn call_copy_builtin(ctx: &mut Ctx, args: &[IrValue]) -> R<IrValue> {
+    if args.is_empty() {
+        return Err(IrError::msg("ArityMismatch", "copy"));
+    }
+    // copy(&x, .shallow)（L1：CopyMode 内建枚举，.shallow 推断）
+    let shallow = if args.len() > 1 {
+        matches!(
+            deref_value(ctx, &args[1]),
+            IrValue::Enum { variant, .. } if variant == "shallow"
+        )
+    } else {
+        false
+    };
+    let v = args[0].clone();
+    Ok(if shallow { v } else { deep_copy(ctx, v) })
+}
+
+/// `spawn(f, args...)`——立即启动 OS 线程执行 f(args...)，返回 Thread 句柄（组 G E4）
+fn call_spawn_builtin(ctx: &mut Ctx, module: &IrModule, args: &[IrValue]) -> R<IrValue> {
+    if args.is_empty() {
+        return Err(IrError::msg(
+            "ArityMismatch",
+            "spawn expects at least callee",
+        ));
+    }
+    let callee = deref_value(ctx, &args[0]).clone();
+    match &callee {
+        IrValue::Fn(_) => {}
+        IrValue::Closure { .. } => {
+            return Err(IrError::msg(
+                "NotSupported",
+                "spawn with closure not yet supported in IR backend",
+            ));
+        }
+        _ => return Err(IrError::msg("NotCallable", "spawn callee is not callable")),
+    }
+    let mut arg_vals = Vec::new();
+    for a in &args[1..] {
+        arg_vals.push(deref_value(ctx, a).clone());
+    }
+    // Q8：每线程独立 Arena 实例（在线程内创建，避免跨 Ctx 传递 cell 索引）
+
+    // E4：创建 OS 线程共享状态
+    let result = Arc::new(Mutex::new(None::<ThreadResultIr>));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+
+    let tid = ctx.next_tid;
+    ctx.next_tid += 1;
+
+    let module = ctx
+        .module
+        .clone()
+        .unwrap_or_else(|| Arc::new(IrModule::default()));
+
+    let result_tx = result.clone();
+    let cancel_tx = cancel.clone();
+    let done_tx = done.clone();
+
+    let callee_clone = callee.clone();
+    let arg_vals_clone = arg_vals.clone();
+
+    // 确保调度器已启动
+    ctx.scheduler.start();
+
+    // 创建协程任务闭包
+    let task: Box<dyn FnOnce() + Send> = Box::new(move || {
+        // 检查取消标志
+        if cancel_tx.load(Ordering::SeqCst) {
+            let err_v = err_val(&*module, "Cancelled");
+            let mut r = result_tx.lock().unwrap();
+            *r = Some(ThreadResultIr::Ok(err_v));
+            done_tx.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        let mut rt = IrRuntime::new();
+        let init_r = rt.init(&*module);
+        let r = match init_r {
+            Ok(()) => {
+                // 绑定每线程 alloc（在线程的 Ctx 内创建 Arena，避免 cell 索引跨 Ctx 传递）
+                let alloc_v = IrValue::Arena(rt.ctx.alloc(Cell::Arena(ArenaStateIr::new())));
+                rt.ctx.current_alloc = Some(alloc_v);
+                match callee_clone {
+                    IrValue::Fn(ref fname) => {
+                        match pick_func(&rt.ctx, &*module, fname, &arg_vals_clone) {
+                            Some(idx) => exec_func(&mut rt.ctx, &*module, idx, &arg_vals_clone, 0),
+                            None => {
+                                Err(IrError::msg("NoFunction", format!("no function `{fname}`")))
+                            }
+                        }
+                    }
+                    _ => Err(IrError::msg("NotCallable", "spawn callee is not callable")),
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        let mut rv = result_tx.lock().unwrap();
+        *rv = Some(match r {
+            Ok(v) => ThreadResultIr::Ok(v),
+            Err(e) => ThreadResultIr::Err(e),
+        });
+        done_tx.store(true, Ordering::SeqCst);
+    });
+
+    // 提交协程到调度器
+    let _gid = ctx.scheduler.submit("spawn".to_string(), task);
+
+    ctx.thread_handles.insert(
+        tid,
+        ThreadStateIr {
+            join_handle: None,
+            result,
+            cancel,
+            done,
+        },
+    );
+
+    // 返回 Thread 类值，包含 _tid 和用户可读字段
+    let mut fields = HashMap::new();
+    fields.insert(
+        "_tid".to_string(),
+        ctx.alloc(Cell::Value(IrValue::Int(tid as i128))),
+    );
+    fields.insert(
+        "done".to_string(),
+        ctx.alloc(Cell::Value(IrValue::Bool(false))),
+    );
+    fields.insert(
+        "cancel".to_string(),
+        ctx.alloc(Cell::Value(IrValue::Bool(false))),
+    );
+    fields.insert(
+        "detached".to_string(),
+        ctx.alloc(Cell::Value(IrValue::Bool(false))),
+    );
+    Ok(IrValue::Class(ctx.alloc(Cell::Class {
+        name: "Thread".into(),
+        fields,
+    })))
+}
+
+/// `Pipe<T>`/`Tee`/`Funnel`/`Hub` 类型实例化（组 F 四模式容器标记；.init 在 call_method_ir 构造）
+fn call_channel_ctor_builtin(ctx: &mut Ctx, name: &str) -> R<IrValue> {
+    if name == "Pipe" {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cid = ctx.next_channel_id;
+        ctx.next_channel_id += 1;
+        ctx.channels.insert(
+            cid,
+            ChannelStateIr::Pipe {
+                sender: tx,
+                receiver: rx,
+            },
+        );
+        let mut fields = HashMap::new();
+        fields.insert(
+            "_chan_id".to_string(),
+            ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
+        );
+        fields.insert(
+            "closed".to_string(),
+            ctx.alloc(Cell::Value(IrValue::Bool(false))),
+        );
+        Ok(IrValue::Class(ctx.alloc(Cell::Class {
+            name: name.into(),
+            fields,
+        })))
+    } else {
+        // E4：Tee/Funnel/Hub 使用 Mutex+Condvar 队列
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let condvar = Arc::new(Condvar::new());
+        let cid = ctx.next_channel_id;
+        ctx.next_channel_id += 1;
+        let state = match name {
+            "Tee" => ChannelStateIr::Tee {
+                queue: queue.clone(),
+                condvar: condvar.clone(),
+            },
+            "Funnel" => ChannelStateIr::Funnel {
+                queue: queue.clone(),
+                condvar: condvar.clone(),
+            },
+            "Hub" => ChannelStateIr::Hub {
+                queue: queue.clone(),
+                condvar: condvar.clone(),
+            },
+            _ => unreachable!(),
+        };
+        ctx.channels.insert(cid, state);
+        let mut fields = HashMap::new();
+        fields.insert(
+            "_chan_id".to_string(),
+            ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
+        );
+        fields.insert(
+            "closed".to_string(),
+            ctx.alloc(Cell::Value(IrValue::Bool(false))),
+        );
+        Ok(IrValue::Class(ctx.alloc(Cell::Class {
+            name: name.into(),
+            fields,
+        })))
+    }
+}
+
 pub(crate) fn call_builtin(
     ctx: &mut Ctx,
     module: &IrModule,
@@ -3455,272 +3721,17 @@ pub(crate) fn call_builtin(
     fail: &mut Option<String>,
 ) -> R<IrValue> {
     match name {
-        "box" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(IrError::msg("ArityMismatch", "box expects 1-2 args"));
-            }
-            // G3：分配器引用——显式传入或回退全局 alloc（`box(v)` 单参形态）
-            let alloc_v = if args.len() > 1 {
-                args[1].clone()
-            } else {
-                implicit_env_value(ctx, "alloc")
-            };
-            let data = ctx.alloc(Cell::Value(args[0].clone()));
-            let vtbl = ir_type_name(ctx, &args[0]);
-            Ok(IrValue::Boxed(ctx.alloc(Cell::Boxed {
-                data,
-                vtbl,
-                alloc: alloc_v,
-            })))
-        }
-        "unbox" => {
-            if args.len() != 1 {
-                return Err(IrError::msg("ArityMismatch", "unbox expects 1 arg"));
-            }
-            // 从 Boxed 胖指针中取出值，消费 Box（所有权转移）。
-            // 注意：不用 deref_value 因为后者会解引用 Boxed 到内部值。
-            let v = &args[0];
-            // 可能是 Ptr(Boxed) 或直接 Boxed
-            let boxed_cell = match v {
-                IrValue::Boxed(cell) => Some(*cell),
-                IrValue::Ptr(cell) => match &ctx.cells[*cell] {
-                    Cell::Value(IrValue::Boxed(bc)) => Some(*bc),
-                    _ => None,
-                },
-                _ => None,
-            };
-            match boxed_cell {
-                Some(cell) => {
-                    let data = match &ctx.cells[cell] {
-                        Cell::Boxed { data, .. } => *data,
-                        _ => return Err(IrError::msg("TypeError", "unbox: corrupted boxed value")),
-                    };
-                    let inner = ctx.cell_value(data).clone();
-                    // 清空 data cell 防止双重释放
-                    ctx.cells[data] = Cell::Value(IrValue::Void);
-                    Ok(inner)
-                }
-                None => {
-                    let desc = type_descr(v);
-                    Err(IrError::msg(
-                        "TypeError",
-                        format!("unbox expects a boxed value, got {desc}"),
-                    ))
-                }
-            }
-        }
-        "copy" => {
-            if args.is_empty() {
-                return Err(IrError::msg("ArityMismatch", "copy"));
-            }
-            // copy(&x, .shallow)（L1：CopyMode 内建枚举，.shallow 推断）
-            let shallow = if args.len() > 1 {
-                matches!(
-                    deref_value(ctx, &args[1]),
-                    IrValue::Enum { variant, .. } if variant == "shallow"
-                )
-            } else {
-                false
-            };
-            let v = args[0].clone();
-            Ok(if shallow { v } else { deep_copy(ctx, v) })
-        }
+        "box" => call_box_builtin(ctx, args),
+        "unbox" => call_unbox_builtin(ctx, args),
+        "copy" => call_copy_builtin(ctx, args),
         // ---------- 组 G 线程（E4：真 OS 并行） ----------
         // spawn(f, args...) owned Thread(T)：立即使用 std::thread::spawn 启动 OS 线程
         // 执行 f(args...)，返回 Thread 句柄。join 等待线程结束返回结果。
-        "spawn" => {
-            if args.is_empty() {
-                return Err(IrError::msg(
-                    "ArityMismatch",
-                    "spawn expects at least callee",
-                ));
-            }
-            let callee = deref_value(ctx, &args[0]).clone();
-            match &callee {
-                IrValue::Fn(_) => {}
-                IrValue::Closure { .. } => {
-                    return Err(IrError::msg(
-                        "NotSupported",
-                        "spawn with closure not yet supported in IR backend",
-                    ));
-                }
-                _ => return Err(IrError::msg("NotCallable", "spawn callee is not callable")),
-            }
-            let mut arg_vals = Vec::new();
-            for a in &args[1..] {
-                arg_vals.push(deref_value(ctx, a).clone());
-            }
-            // Q8：每线程独立 Arena 实例（在线程内创建，避免跨 Ctx 传递 cell 索引）
-
-            // E4：创建 OS 线程共享状态
-            let result = Arc::new(Mutex::new(None::<ThreadResultIr>));
-            let cancel = Arc::new(AtomicBool::new(false));
-            let done = Arc::new(AtomicBool::new(false));
-
-            let tid = ctx.next_tid;
-            ctx.next_tid += 1;
-
-            let module = ctx
-                .module
-                .clone()
-                .unwrap_or_else(|| Arc::new(IrModule::default()));
-
-            let result_tx = result.clone();
-            let cancel_tx = cancel.clone();
-            let done_tx = done.clone();
-
-            let callee_clone = callee.clone();
-            let arg_vals_clone = arg_vals.clone();
-
-            // 确保调度器已启动
-            ctx.scheduler.start();
-
-            // 创建协程任务闭包
-            let task: Box<dyn FnOnce() + Send> = Box::new(move || {
-                // 检查取消标志
-                if cancel_tx.load(Ordering::SeqCst) {
-                    let err_v = err_val(&*module, "Cancelled");
-                    let mut r = result_tx.lock().unwrap();
-                    *r = Some(ThreadResultIr::Ok(err_v));
-                    done_tx.store(true, Ordering::SeqCst);
-                    return;
-                }
-
-                let mut rt = IrRuntime::new();
-                let init_r = rt.init(&*module);
-                let r = match init_r {
-                    Ok(()) => {
-                        // 绑定每线程 alloc（在线程的 Ctx 内创建 Arena，避免 cell 索引跨 Ctx 传递）
-                        let alloc_v =
-                            IrValue::Arena(rt.ctx.alloc(Cell::Arena(ArenaStateIr::new())));
-                        rt.ctx.current_alloc = Some(alloc_v);
-                        match callee_clone {
-                            IrValue::Fn(ref fname) => {
-                                match pick_func(&rt.ctx, &*module, fname, &arg_vals_clone) {
-                                    Some(idx) => {
-                                        exec_func(&mut rt.ctx, &*module, idx, &arg_vals_clone, 0)
-                                    }
-                                    None => Err(IrError::msg(
-                                        "NoFunction",
-                                        format!("no function `{fname}`"),
-                                    )),
-                                }
-                            }
-                            _ => Err(IrError::msg("NotCallable", "spawn callee is not callable")),
-                        }
-                    }
-                    Err(e) => Err(e),
-                };
-
-                let mut rv = result_tx.lock().unwrap();
-                *rv = Some(match r {
-                    Ok(v) => ThreadResultIr::Ok(v),
-                    Err(e) => ThreadResultIr::Err(e),
-                });
-                done_tx.store(true, Ordering::SeqCst);
-            });
-
-            // 提交协程到调度器
-            let _gid = ctx.scheduler.submit("spawn".to_string(), task);
-
-            ctx.thread_handles.insert(
-                tid,
-                ThreadStateIr {
-                    join_handle: None,
-                    result,
-                    cancel,
-                    done,
-                },
-            );
-
-            // 返回 Thread 类值，包含 _tid 和用户可读字段
-            let mut fields = HashMap::new();
-            fields.insert(
-                "_tid".to_string(),
-                ctx.alloc(Cell::Value(IrValue::Int(tid as i128))),
-            );
-            fields.insert(
-                "done".to_string(),
-                ctx.alloc(Cell::Value(IrValue::Bool(false))),
-            );
-            fields.insert(
-                "cancel".to_string(),
-                ctx.alloc(Cell::Value(IrValue::Bool(false))),
-            );
-            fields.insert(
-                "detached".to_string(),
-                ctx.alloc(Cell::Value(IrValue::Bool(false))),
-            );
-            Ok(IrValue::Class(ctx.alloc(Cell::Class {
-                name: "Thread".into(),
-                fields,
-            })))
-        }
+        "spawn" => call_spawn_builtin(ctx, module, args),
         // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
         // ---------- 组 F：四模式类型实例化（Pipe<i32> → 空容器标记） ----------
         // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
-        "Pipe" | "Tee" | "Funnel" | "Hub" => {
-            if name == "Pipe" {
-                let (tx, rx) = std::sync::mpsc::channel();
-                let cid = ctx.next_channel_id;
-                ctx.next_channel_id += 1;
-                ctx.channels.insert(
-                    cid,
-                    ChannelStateIr::Pipe {
-                        sender: tx,
-                        receiver: rx,
-                    },
-                );
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "_chan_id".to_string(),
-                    ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
-                );
-                fields.insert(
-                    "closed".to_string(),
-                    ctx.alloc(Cell::Value(IrValue::Bool(false))),
-                );
-                Ok(IrValue::Class(ctx.alloc(Cell::Class {
-                    name: name.into(),
-                    fields,
-                })))
-            } else {
-                // E4：Tee/Funnel/Hub 使用 Mutex+Condvar 队列
-                let queue = Arc::new(Mutex::new(VecDeque::new()));
-                let condvar = Arc::new(Condvar::new());
-                let cid = ctx.next_channel_id;
-                ctx.next_channel_id += 1;
-                let state = match name {
-                    "Tee" => ChannelStateIr::Tee {
-                        queue: queue.clone(),
-                        condvar: condvar.clone(),
-                    },
-                    "Funnel" => ChannelStateIr::Funnel {
-                        queue: queue.clone(),
-                        condvar: condvar.clone(),
-                    },
-                    "Hub" => ChannelStateIr::Hub {
-                        queue: queue.clone(),
-                        condvar: condvar.clone(),
-                    },
-                    _ => unreachable!(),
-                };
-                ctx.channels.insert(cid, state);
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "_chan_id".to_string(),
-                    ctx.alloc(Cell::Value(IrValue::Int(cid as i128))),
-                );
-                fields.insert(
-                    "closed".to_string(),
-                    ctx.alloc(Cell::Value(IrValue::Bool(false))),
-                );
-                Ok(IrValue::Class(ctx.alloc(Cell::Class {
-                    name: name.into(),
-                    fields,
-                })))
-            }
-        }
+        "Pipe" | "Tee" | "Funnel" | "Hub" => call_channel_ctor_builtin(ctx, name),
         // ---------- @ 内建 ----------
         "@intFromEnum" => {
             let v = deref_value(ctx, &args[0]);
