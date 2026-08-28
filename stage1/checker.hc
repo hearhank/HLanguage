@@ -1226,20 +1226,57 @@ class Parser {
             if (self.peek() == "LBracket" or self.peek() == "KwPub" or self.peek() == "KwFn") {
                 self.parse_method(cls);
             } else {
-                self.parse_field(cls);
+                var f = self.parse_field();
+                node_add_child(&cls, f);
             }
         }
         self.expect("RBrace");
         return cls;
     }
 
-    fn parse_field(self: *mut Self, cls: AstNode) void {
+    fn parse_field(self: *mut Self) AstNode {
         var mut is_fpub = false;
         if (self.at("KwPub")) { is_fpub = true; self.advance(); }
+        var mut is_mut = false;
+        if (self.at("KwMut")) { is_mut = true; self.advance(); }
         var name = self.expect_ident();
+        var f = make_node("FieldDecl");
+        node_add_prop(&f, "name", name);
+        if (is_mut) { node_add_prop(&f, "mut", "true"); }
+        if (is_fpub) { node_add_prop(&f, "pub", "true"); }
         self.expect("Colon");
-        self.parse_type();
-        self.expect("Semi");
+        // 简单 Ident 类型存 ty prop（对齐 Param 模式）；其余类型仅消费 token
+        if (self.at("Ident")) {
+            var ty = self.peek_text();
+            self.advance();
+            if (ty.len > 0) {
+                quoted_add_prop(&f, "ty", ty);
+            }
+            // 泛型实参仅消费：Type(T1,T2) / Type<T1,T2>
+            if (self.at("LParen")) {
+                self.advance();
+                while (!self.at("RParen") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RParen");
+            }
+            if (self.at("Lt")) {
+                self.advance();
+                while (!self.at("Gt") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("Gt");
+            }
+        } else {
+            self.parse_type();
+        }
+        // 分隔容错：逗号/分号均可
+        if (self.at("Comma") or self.at("Semi")) { self.advance(); }
+        return f;
     }
 
     fn parse_method(self: *mut Self, cls: AstNode) void {
