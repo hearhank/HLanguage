@@ -3713,26 +3713,14 @@ fn call_channel_ctor_builtin(ctx: &mut Ctx, name: &str) -> R<IrValue> {
     }
 }
 
-pub(crate) fn call_builtin(
+/// @ 内省内建：@intFromEnum/@enumFromInt/@sizeOf/@alignOf/@offsetOf/@typeOf
+fn call_introspection_builtin(
     ctx: &mut Ctx,
     module: &IrModule,
     name: &str,
     args: &[IrValue],
-    fail: &mut Option<String>,
 ) -> R<IrValue> {
     match name {
-        "box" => call_box_builtin(ctx, args),
-        "unbox" => call_unbox_builtin(ctx, args),
-        "copy" => call_copy_builtin(ctx, args),
-        // ---------- 组 G 线程（E4：真 OS 并行） ----------
-        // spawn(f, args...) owned Thread(T)：立即使用 std::thread::spawn 启动 OS 线程
-        // 执行 f(args...)，返回 Thread 句柄。join 等待线程结束返回结果。
-        "spawn" => call_spawn_builtin(ctx, module, args),
-        // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
-        // ---------- 组 F：四模式类型实例化（Pipe<i32> → 空容器标记） ----------
-        // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
-        "Pipe" | "Tee" | "Funnel" | "Hub" => call_channel_ctor_builtin(ctx, name),
-        // ---------- @ 内建 ----------
         "@intFromEnum" => {
             let v = deref_value(ctx, &args[0]);
             match v {
@@ -3784,15 +3772,6 @@ pub(crate) fn call_builtin(
                 )),
             }
         }
-        "@panic" => {
-            // Q-S2：@panic("消息", 位置) abort
-            let msg = if args.is_empty() {
-                "panic".to_string()
-            } else {
-                deref_value(ctx, &args[0]).display(ctx)
-            };
-            Err(IrError::msg("Panic", msg))
-        }
         "@sizeOf" => {
             let ty = match deref_value(ctx, &args[0]) {
                 IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
@@ -3828,6 +3807,40 @@ pub(crate) fn call_builtin(
             let v = deref_value(ctx, &args[0]);
             Ok(str_val(&ir_type_name(ctx, v)))
         }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// @ 诊断内建：@panic（abort）/ @compileError（编译期错误）
+fn call_diag_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
+        "@panic" => {
+            // Q-S2：@panic("消息", 位置) abort
+            let msg = if args.is_empty() {
+                "panic".to_string()
+            } else {
+                deref_value(ctx, &args[0]).display(ctx)
+            };
+            Err(IrError::msg("Panic", msg))
+        }
+        "@compileError" => {
+            let msg = if args.is_empty() {
+                "compileError".to_string()
+            } else {
+                deref_value(ctx, &args[0]).display(ctx)
+            };
+            Err(IrError::msg(
+                "CompileError",
+                format!("@compileError: {msg}"),
+            ))
+        }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// @ 指针/整数转换内建：@intCast/@ptrCast/@alignCast/@ptrFromInt/@intFromPtr
+fn call_cast_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
         "@intCast" => {
             let ty = match deref_value(ctx, &args[0]) {
                 IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
@@ -3853,39 +3866,6 @@ pub(crate) fn call_builtin(
                 .last()
                 .ok_or_else(|| IrError::msg("ArityMismatch", name))?;
             Ok(deref_value(ctx, v).clone())
-        }
-        "@volatileLoad" => {
-            // K2：@volatileLoad(ptr)——读穿指针。IR 参考解释器无优化器，volatile
-            // 透明 = deref_value（对齐 interp deref_checked）；原生 LLVM volatile 指令层体现。
-            if args.len() != 1 {
-                return Err(IrError::msg("ArityMismatch", "@volatileLoad"));
-            }
-            Ok(deref_value(ctx, &args[0]).clone())
-        }
-        "@volatileStore" => {
-            // K2：@volatileStore(ptr, v)——写穿指针（对齐 StorePtr 写穿语义）
-            if args.len() != 2 {
-                return Err(IrError::msg("ArityMismatch", "@volatileStore"));
-            }
-            let t = args[0].clone();
-            let v = args[1].clone();
-            match t {
-                IrValue::Ptr(cell) => ctx.set_cell(cell, v),
-                IrValue::Boxed(cell) => {
-                    let data = match &ctx.cells[cell] {
-                        Cell::Boxed { data, .. } => Some(*data),
-                        _ => None,
-                    };
-                    match data {
-                        Some(d) => ctx.set_cell(d, v),
-                        None => {
-                            return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer"))
-                        }
-                    }
-                }
-                _ => return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer")),
-            }
-            Ok(IrValue::Void)
         }
         "@ptrFromInt" => {
             // K4：@ptrFromInt(addr)——整数地址 → 虚拟指针。登记过（@intFromPtr）→ 重建
@@ -3921,6 +3901,53 @@ pub(crate) fn call_builtin(
                 _ => Err(IrError::msg("TypeError", "@intFromPtr expects a pointer")),
             }
         }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// @ volatile 内存访问内建：@volatileLoad/@volatileStore（K2）
+fn call_volatile_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
+        "@volatileLoad" => {
+            // K2：@volatileLoad(ptr)——读穿指针。IR 参考解释器无优化器，volatile
+            // 透明 = deref_value（对齐 interp deref_checked）；原生 LLVM volatile 指令层体现。
+            if args.len() != 1 {
+                return Err(IrError::msg("ArityMismatch", "@volatileLoad"));
+            }
+            Ok(deref_value(ctx, &args[0]).clone())
+        }
+        "@volatileStore" => {
+            // K2：@volatileStore(ptr, v)——写穿指针（对齐 StorePtr 写穿语义）
+            if args.len() != 2 {
+                return Err(IrError::msg("ArityMismatch", "@volatileStore"));
+            }
+            let t = args[0].clone();
+            let v = args[1].clone();
+            match t {
+                IrValue::Ptr(cell) => ctx.set_cell(cell, v),
+                IrValue::Boxed(cell) => {
+                    let data = match &ctx.cells[cell] {
+                        Cell::Boxed { data, .. } => Some(*data),
+                        _ => None,
+                    };
+                    match data {
+                        Some(d) => ctx.set_cell(d, v),
+                        None => {
+                            return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer"))
+                        }
+                    }
+                }
+                _ => return Err(IrError::msg("BadAssign", "@volatileStore to non-pointer")),
+            }
+            Ok(IrValue::Void)
+        }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// @ 原子内存访问内建：@atomicLoad/@atomicStore/@atomicRmw（Q-S3）
+fn call_atomic_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
         "@atomicLoad" => {
             // Q-S3：@atomicLoad(T, p, order)——原子读。协作式单线程无并发竞争，atomic
             // 透明 = deref_value（对齐 @volatileLoad）；类型名/内存序参数已求值、忽略。
@@ -3989,17 +4016,13 @@ pub(crate) fn call_builtin(
                 _ => Err(IrError::msg("BadAssign", "@atomicRmw expects pointer")),
             }
         }
-        "@compileError" => {
-            let msg = if args.is_empty() {
-                "compileError".to_string()
-            } else {
-                deref_value(ctx, &args[0]).display(ctx)
-            };
-            Err(IrError::msg(
-                "CompileError",
-                format!("@compileError: {msg}"),
-            ))
-        }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// 数值内建：@add/sub/mulWithOverflow、sqrt、min/max
+fn call_math_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
         "@addWithOverflow" | "@subWithOverflow" | "@mulWithOverflow" => {
             // 返回 (T, bool) 元组；tag1 Int = i128 无溢出（标志恒 false）
             let a = match deref_value(ctx, &args[0]) {
@@ -4017,7 +4040,6 @@ pub(crate) fn call_builtin(
             };
             Ok(make_arr(ctx, vec![IrValue::Int(r), IrValue::Bool(false)]))
         }
-        // ---------- 数值工具 ----------
         "sqrt" => {
             let v = deref_value(ctx, &args[0]);
             match v {
@@ -4065,7 +4087,13 @@ pub(crate) fn call_builtin(
             };
             Ok(if take_a { a } else { b })
         }
-        // ---------- 格式辅助（M5.3 serialize）：fmt_int/fmt_float → String ----------
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// 序列化辅助（M5.3）：fmt_int/fmt_float/read_u64_le
+fn call_fmt_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
         "fmt_int" => {
             let v = deref_value(ctx, &args[0]);
             match v {
@@ -4081,7 +4109,6 @@ pub(crate) fn call_builtin(
                 _ => Err(IrError::msg("TypeError", "fmt_float expects float")),
             }
         }
-        // ---------- 字节/算法 ----------
         "read_u64_le" => {
             let v = deref_value(ctx, &args[0]);
             let b = value_bytes_ir(ctx, v)
@@ -4092,6 +4119,13 @@ pub(crate) fn call_builtin(
             let n = u64::from_le_bytes(b[0..8].try_into().unwrap());
             Ok(IrValue::Int(n as i128))
         }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// 数组算法内建：sort（可选比较器闭包）/binary_search
+fn call_sort_builtin(ctx: &mut Ctx, module: &IrModule, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
         "sort" => {
             let v = deref_value(ctx, &args[0]).clone();
             // 对齐 oracle interp.rs:3195-3205：第二参若提供必须是比较器闭包，
@@ -4150,48 +4184,51 @@ pub(crate) fn call_builtin(
                 _ => Err(IrError::msg("TypeError", "sort expects array")),
             }
         }
-        "binary_search" => {
-            let v = deref_value(ctx, &args[0]).clone();
-            let target = deref_value(ctx, &args[1]).clone();
-            let items: Vec<IrValue> = match &v {
-                IrValue::Arr(c) => match &ctx.cells[*c] {
-                    Cell::Elems(e) => e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect(),
-                    _ => return Err(IrError::msg("TypeError", "binary_search expects array")),
-                },
-                IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
-                    Cell::Elems(e) => e[*start..*start + *len]
-                        .iter()
-                        .map(|ec| ctx.cell_value(*ec).clone())
-                        .collect(),
-                    _ => return Err(IrError::msg("TypeError", "binary_search expects slice")),
-                },
-                _ => {
-                    return Err(IrError::msg(
-                        "TypeError",
-                        "binary_search expects array or slice",
-                    ))
-                }
-            };
-            let mut lo = 0usize;
-            let mut hi = items.len();
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if value_lt(&items[mid], &target) {
-                    lo = mid + 1;
-                } else if items[mid].value_eq(ctx, &target) {
-                    return Ok(IrValue::Opt(Some(Box::new(IrValue::Int(mid as i128)))));
-                } else {
-                    hi = mid;
-                }
-            }
-            Ok(IrValue::Opt(None))
+        "binary_search" => call_binary_search_builtin(ctx, args),
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// binary_search(arr_or_slice, target) → Opt(usize)
+fn call_binary_search_builtin(ctx: &mut Ctx, args: &[IrValue]) -> R<IrValue> {
+    let target = deref_value(ctx, &args[1]).clone();
+    let items: Vec<IrValue> = match deref_value(ctx, &args[0]) {
+        IrValue::Arr(c) => match &ctx.cells[*c] {
+            Cell::Elems(e) => e.iter().map(|ec| ctx.cell_value(*ec).clone()).collect(),
+            _ => return Err(IrError::msg("TypeError", "binary_search expects array")),
+        },
+        IrValue::Slice { data, start, len } => match &ctx.cells[*data] {
+            Cell::Elems(e) => e[*start..*start + *len]
+                .iter()
+                .map(|ec| ctx.cell_value(*ec).clone())
+                .collect(),
+            _ => return Err(IrError::msg("TypeError", "binary_search expects slice")),
+        },
+        _ => {
+            return Err(IrError::msg(
+                "TypeError",
+                "binary_search expects array or slice",
+            ))
         }
-        // ---------- 解析器辅助（71-recursive-parser；操作 &[u8] 与 *usize）----------
-        "skip_space" | "peek" | "advance" | "is_digit" | "parse_number" => {
-            let r = call_parser_builtin_ir(ctx, module, name, args)?
-                .ok_or_else(|| IrError::msg("NoMethod", name))?;
-            Ok(r)
+    };
+    let mut lo = 0usize;
+    let mut hi = items.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if value_lt(&items[mid], &target) {
+            lo = mid + 1;
+        } else if items[mid].value_eq(ctx, &target) {
+            return Ok(IrValue::Opt(Some(Box::new(IrValue::Int(mid as i128)))));
+        } else {
+            hi = mid;
         }
+    }
+    Ok(IrValue::Opt(None))
+}
+
+/// 字符串解析内建：parse_int/parse_float → Opt(Int/Float)
+fn call_parse_builtin(ctx: &mut Ctx, name: &str, args: &[IrValue]) -> R<IrValue> {
+    match name {
         "parse_int" => {
             let s = str_arg_ir(ctx, args, 0)?;
             let text = String::from_utf8_lossy(&s).trim().to_string();
@@ -4218,7 +4255,20 @@ pub(crate) fn call_builtin(
                 None => IrValue::Opt(None),
             })
         }
-        // ---------- 断言五件套（Q-T1）：测试函数内隐式可用；3 参 expect = 解析器 ----------
+        _ => Ok(IrValue::Void),
+    }
+}
+
+/// 断言五件套（Q-T1）：expect/expect_eq/expect_neq/expect_error/expect_eq_slices。
+/// 失败不抛错，写入 fail（测试函数内隐式可用）；3 参 expect = 解析器。
+fn call_expect_builtin(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    name: &str,
+    args: &[IrValue],
+    fail: &mut Option<String>,
+) -> R<IrValue> {
+    match name {
         "expect" => {
             if args.len() == 3 {
                 let r = call_parser_builtin_ir(ctx, module, "expect", args)?
@@ -4293,6 +4343,56 @@ pub(crate) fn call_builtin(
                 ));
                 Ok(IrValue::Void)
             }
+        }
+        _ => Ok(IrValue::Void),
+    }
+}
+
+pub(crate) fn call_builtin(
+    ctx: &mut Ctx,
+    module: &IrModule,
+    name: &str,
+    args: &[IrValue],
+    fail: &mut Option<String>,
+) -> R<IrValue> {
+    match name {
+        "box" => call_box_builtin(ctx, args),
+        "unbox" => call_unbox_builtin(ctx, args),
+        "copy" => call_copy_builtin(ctx, args),
+        // ---------- 组 G 线程（E4：真 OS 并行） ----------
+        // spawn(f, args...) owned Thread(T)：立即使用 std::thread::spawn 启动 OS 线程
+        // 执行 f(args...)，返回 Thread 句柄。join 等待线程结束返回结果。
+        "spawn" => call_spawn_builtin(ctx, module, args),
+        // Phase 3 移除：with_arena 已弃用，使用 Arena.init(alloc) 替代
+        // ---------- 组 F：四模式类型实例化（Pipe<i32> → 空容器标记） ----------
+        // 类型参数（TypeExpr）已降级为 Const 值、忽略；.init 在 call_method_ir 构造真实容器。
+        "Pipe" | "Tee" | "Funnel" | "Hub" => call_channel_ctor_builtin(ctx, name),
+        // ---------- @ 内建：内省与诊断 ----------
+        "@intFromEnum" | "@enumFromInt" | "@sizeOf" | "@alignOf" | "@offsetOf" | "@typeOf" => {
+            call_introspection_builtin(ctx, module, name, args)
+        }
+        "@panic" | "@compileError" => call_diag_builtin(ctx, name, args),
+        "@intCast" | "@ptrCast" | "@alignCast" | "@ptrFromInt" | "@intFromPtr" => {
+            call_cast_builtin(ctx, name, args)
+        }
+        "@volatileLoad" | "@volatileStore" => call_volatile_builtin(ctx, name, args),
+        "@atomicLoad" | "@atomicStore" | "@atomicRmw" => call_atomic_builtin(ctx, name, args),
+        // ---------- 数值/格式/算法工具 ----------
+        "@addWithOverflow" | "@subWithOverflow" | "@mulWithOverflow" | "sqrt" | "min" | "max" => {
+            call_math_builtin(ctx, name, args)
+        }
+        "fmt_int" | "fmt_float" | "read_u64_le" => call_fmt_builtin(ctx, name, args),
+        "sort" | "binary_search" => call_sort_builtin(ctx, module, name, args),
+        // ---------- 解析器辅助（71-recursive-parser；操作 &[u8] 与 *usize）----------
+        "skip_space" | "peek" | "advance" | "is_digit" | "parse_number" => {
+            let r = call_parser_builtin_ir(ctx, module, name, args)?
+                .ok_or_else(|| IrError::msg("NoMethod", name))?;
+            Ok(r)
+        }
+        "parse_int" | "parse_float" => call_parse_builtin(ctx, name, args),
+        // ---------- 断言五件套（Q-T1）：测试函数内隐式可用；3 参 expect = 解析器 ----------
+        "expect" | "expect_eq" | "expect_neq" | "expect_error" | "expect_eq_slices" => {
+            call_expect_builtin(ctx, module, name, args, fail)
         }
         _ => Ok(IrValue::Void),
     }
