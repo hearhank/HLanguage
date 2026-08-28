@@ -3,6 +3,7 @@
 > 来源：`01-bootstrap-plan.md` K4 任务细化（2026-08-29）。
 > 执行规则：**每个任务 ≤1h**；完成即测试验证 → 更新本文档进度 → 提交 → `node .gitnexus/run.cjs analyze --index-only` 索引 → 下一任务。
 > 前置状态：K1 ✅ K2 ✅ K3 ✅；P1.5 自检崩溃已修复（`04-execution-status.md`，提交 `060aad2`）。
+> **目录约定（用户裁定）**：K4 相关代码与 `.hc` 测试/探针/语料文件一律写 `stage1/` 下（探针 `stage1/probes/`、执行语料 `stage1/exec-corpus/`、对照语料 `stage1/corpus/`）；Rust 测试 harness（`k4_interp.rs`）仍在 `tag1/hc-tools/tests/`。
 
 ## 目标与验收
 
@@ -81,10 +82,10 @@
 |---|---|---|---|
 | A0 | ✅ | 本提交 | dump 工具落地；失步机制实证（见前置事实） |
 | A1 | ✅ | 下一提交 | FieldDecl 节点落地（ty 存 props 对齐 Param 模式，非 children）；显式消费 KwMut（expect_ident 无条件推进是失步引擎）；逗号/分号容错；parser.hc 与 checker.hc 内嵌副本同步修改；K3 14 项+示例门 161 全绿 |
-| A2 | 🔴 | — | |
+| A2 | ✅ | 下一提交 | 方法节点经 finish_fn_decl 入树（prop method=类名）；验证中发现并同步修复整链解析缺陷：① parse_block 缺 `{` 时不再吞语句到任意 `}`（失控根因）；② 新增 parse_block_or_stmt 支持无括号 if/while/for 体；③ 载荷捕获 `) \|v\|` 移到右括号后（45 处用法，原先从未生效）；④ 参数/返回类型的泛型实参消费 + var mut 前缀；⑤ 合并重复 import 分支（`.{io}` 选择集）。自检误报 lexer 690→**4**、parser 1616→**13**、checker 2387→**40**；剩余几乎全为 ClassLit 字段名泄漏（→A4） |
 | A3 | 🔴 | — | |
 | A4 | 🔴 | — | 含 ClassLit 表达式解析（A0 发现 #2/#4） |
-| A5 | 🔴 | — | |
+| A5 | 🔴 | — | 原目标（顶层函数误报）已被 A2 修复消解（hexval/utf8_width 不再误报）；剩余验证并入 A6 |
 | A6 | 🔴 | — | |
 | B1 | 🔴 | — | |
 | B2 | 🔴 | — | |

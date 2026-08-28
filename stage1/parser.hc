@@ -873,6 +873,20 @@ class Parser {
         if (k == "KwImport") {
             self.advance();
             var path = self.parse_path();
+            // 选择集：import H.std.{io}（parse_path 已消费 `{` 前的点）
+            if (self.at("LBrace")) {
+                self.advance();
+                while (!self.at("RBrace") and !self.at("Eof")) {
+                    var _ = self.expect_name_or_keyword();
+                    if (self.at("Ident") and self.peek_text() == "as") {
+                        self.advance();
+                        var _a = self.expect_ident();
+                    }
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RBrace");
+            }
             var mut alias: ?&[u8] = null;
             if (self.at("Ident") and self.peek_text() == "as") {
                 self.advance();
@@ -883,42 +897,6 @@ class Parser {
             node_add_prop(&u, "path", path);
             if (alias) |a| { node_add_prop(&u, "alias", a); }
             return u;
-        }
-        if (k == "KwImport") {
-            self.advance();
-            var path = self.parse_import_path();
-            var mut select: ?Vec<AstNode> = null;
-            if (self.at("Dot") and self.peek_n(1) == "LBrace") {
-                self.advance(); // .
-                self.advance(); // {
-                var syms = Vec<AstNode>.init(alloc);
-                while (true) {
-                    var name = self.expect_ident();
-                    var mut alias: ?&[u8] = null;
-                    if (self.at("Ident") and self.peek_text() == "as") {
-                        self.advance();
-                        alias = self.expect_ident();
-                    }
-                    var s = make_node("ImportSelect");
-                    node_add_prop(&s, "name", name);
-                    if (alias) |a| { node_add_prop(&s, "alias", a); }
-                    syms.append(s);
-                    if (self.at("Comma")) { self.advance(); }
-                    else { break; }
-                }
-                self.expect("RBrace");
-                select = syms;
-            }
-            var mut alias: ?&[u8] = null;
-            if (select == null and self.at("Ident") and self.peek_text() == "as") {
-                self.advance();
-                alias = self.expect_ident();
-            }
-            self.expect("Semi");
-            var imp = make_node("Import");
-            node_add_prop(&imp, "path", path);
-            if (alias) |a| { node_add_prop(&imp, "alias", a); }
-            return imp;
         }
         if (k == "KwScript") {
             self.advance();
@@ -1045,6 +1023,7 @@ class Parser {
             if (self.at("Ident") or self.at("KwVoid")) {
                 var mut ret_ty = self.peek_text();
                 self.advance();
+                self.consume_type_args();
                 var r = make_node("ret:");
                 var mut k: usize = 0;
                 while (k < ret_ty.len) {
@@ -1062,6 +1041,7 @@ class Parser {
                 if (self.at("KwVoid")) { ret_ty = "void"; }
             }
             self.advance();
+            self.consume_type_args();
             var r = make_node("ret:");
             var mut k: usize = 0;
             while (k < ret_ty.len) {
@@ -1069,6 +1049,9 @@ class Parser {
                 k += 1;
             }
             node_add_child(&f, r);
+        } else if (!self.at("LBrace") and !self.at("Semi") and !self.at("Eof")) {
+            // 复杂类型（如 ?&[u8]、*[4]u8 等）：仅消费 token
+            self.parse_type();
         }
         // where 子句
         if (self.at("KwWhere")) {
@@ -1138,10 +1121,15 @@ class Parser {
     }
 
     fn parse_param(self: *mut Self) AstNode {
+        // var/mut 前缀（如 var mut out: Vec<u8>）
+        var mut is_mut = false;
+        if (self.at("KwVar")) { self.advance(); is_mut = true; }
+        if (self.at("KwMut")) { self.advance(); is_mut = true; }
         var name = self.expect_ident();
         self.expect("Colon");
         var p = make_node("Param");
         node_add_prop(&p, "name", name);
+        if (is_mut) { node_add_prop(&p, "mut", "true"); }
         if (self.at("Ident") or self.at("KwVoid")) {
             var ty = self.peek_text();
             self.advance();
@@ -1149,6 +1137,25 @@ class Parser {
                 quoted_add_prop(&p, "ty", ty);
             } else {
                 quoted_add_prop(&p, "ty", "void");
+            }
+            // 泛型实参仅消费：Type(T1,T2) / Type<T1,T2>
+            if (self.at("LParen")) {
+                self.advance();
+                while (!self.at("RParen") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("RParen");
+            }
+            if (self.at("Lt")) {
+                self.advance();
+                while (!self.at("Gt") and !self.at("Eof")) {
+                    self.parse_type();
+                    if (self.at("Comma")) { self.advance(); }
+                    else { break; }
+                }
+                self.expect("Gt");
             }
         } else {
             self.parse_type();
@@ -1183,9 +1190,10 @@ class Parser {
         self.expect("LBrace");
         // 字段和方法
         while (!self.at("RBrace") and !self.at("Eof")) {
-            if (self.peek() == "LBracket" or self.peek() == "KwPub" or self.peek() == "KwFn") {
+            if (self.at("KwFn") or self.at("LBracket") or (self.at("KwPub") and self.peek_n(1) == "KwFn")) {
                 // 方法
-                self.parse_method(cls);
+                var m = self.parse_method(name);
+                node_add_child(&cls, m);
             } else {
                 // 字段
                 var f = self.parse_field();
@@ -1241,38 +1249,19 @@ class Parser {
         return f;
     }
 
-    fn parse_method(self: *mut Self, cls: AstNode) void {
+    fn parse_method(self: *mut Self, cls_name: &[u8]) AstNode {
         // traits
-        while (self.at("LBracket")) { self.parse_trait(); }
+        var mut traits = Vec<&[u8]>.init(alloc);
+        while (self.at("LBracket")) {
+            var t = self.parse_trait();
+            if (t) |tn| { traits.append(tn); }
+        }
         var mut is_pub = false;
         if (self.at("KwPub")) { is_pub = true; self.advance(); }
         self.expect("KwFn");
-        var name = self.expect_ident();
-        // 泛型 <T>
-        if (self.at("Lt")) {
-            self.advance();
-            while (!self.at("Gt") and !self.at("Eof")) {
-                self.expect_ident();
-                if (self.at("Comma")) { self.advance(); }
-            }
-            self.expect("Gt");
-        }
-        self.expect("LParen");
-        if (!self.at("RParen")) {
-            while (true) {
-                var _ = self.parse_param();
-                if (self.at("Comma")) { self.advance(); }
-                else { break; }
-            }
-        }
-        self.expect("RParen");
-        if (self.at("Bang")) {
-            self.advance();
-            self.parse_type();
-        } else if (self.at("KwVoid") or self.at("Ident")) {
-            self.advance();
-        }
-        var body = self.parse_block();
+        var f = self.finish_fn_decl(traits, is_pub, false, false);
+        node_add_prop(&f, "method", cls_name);
+        return f;
     }
 
     fn parse_enum(self: *mut Self, is_pub: bool) AstNode {
@@ -1485,13 +1474,46 @@ class Parser {
 
     fn parse_block(self: *mut Self) AstNode {
         var b = make_node("Block");
-        self.expect("LBrace");
+        // `{` 缺失时返回空块且不消费（防失控吞并；无括号体由 parse_block_or_stmt 包装）
+        if (!self.at("LBrace")) { return b; }
+        self.advance();
         while (!self.at("RBrace") and !self.at("Eof")) {
             var stmt = self.parse_stmt();
             node_add_child(&b, stmt);
         }
         self.expect("RBrace");
         return b;
+    }
+
+    // 块或单语句体：`if (c) stmt;` 无括号形式包装成 Block
+    fn parse_block_or_stmt(self: *mut Self) AstNode {
+        if (self.at("LBrace")) { return self.parse_block(); }
+        var b = make_node("Block");
+        var stmt = self.parse_stmt();
+        node_add_child(&b, stmt);
+        return b;
+    }
+
+    // 泛型实参仅消费：Type(T1,T2) / Type<T1,T2>
+    fn consume_type_args(self: *mut Self) void {
+        if (self.at("LParen")) {
+            self.advance();
+            while (!self.at("RParen") and !self.at("Eof")) {
+                self.parse_type();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+            self.expect("RParen");
+        }
+        if (self.at("Lt")) {
+            self.advance();
+            while (!self.at("Gt") and !self.at("Eof")) {
+                self.parse_type();
+                if (self.at("Comma")) { self.advance(); }
+                else { break; }
+            }
+            self.expect("Gt");
+        }
     }
 
     fn parse_stmt(self: *mut Self) AstNode {
@@ -1615,20 +1637,21 @@ class Parser {
         self.expect("LParen");
         var cond = self.parse_expr();
         node_add_child(&ifn, cond);
-        // 捕获 |v|
+        self.expect("RParen");
+        // 载荷捕获（后置）：if (opt) |v| / if (x) |v| |e|
         if (self.at("Pipe")) {
             self.advance();
             var cap = self.expect_ident();
+            node_add_prop(&ifn, "payload", cap);
             self.expect("Pipe");
         }
-        // 错误捕获 |err|
         if (self.at("Pipe")) {
             self.advance();
             var err = self.expect_ident();
+            node_add_prop(&ifn, "payload_err", err);
             self.expect("Pipe");
         }
-        self.expect("RParen");
-        var then_b = self.parse_block();
+        var then_b = self.parse_block_or_stmt();
         node_add_child(&ifn, then_b);
         if (self.at("KwElse")) {
             self.advance();
@@ -1636,7 +1659,7 @@ class Parser {
                 var else_if = self.parse_if_stmt();
                 node_add_child(&ifn, else_if);
             } else {
-                var else_b = self.parse_block();
+                var else_b = self.parse_block_or_stmt();
                 node_add_child(&ifn, else_b);
             }
         }
@@ -1649,12 +1672,14 @@ class Parser {
         self.expect("LParen");
         var cond = self.parse_expr();
         node_add_child(&wn, cond);
+        self.expect("RParen");
+        // 载荷捕获（后置）：while (it.next()) |x|
         if (self.at("Pipe")) {
             self.advance();
             var cap = self.expect_ident();
+            node_add_prop(&wn, "payload", cap);
             self.expect("Pipe");
         }
-        self.expect("RParen");
         // step 子句
         if (self.at("Colon") and self.peek_n(1) == "LParen") {
             self.advance();
@@ -1662,7 +1687,7 @@ class Parser {
             self.parse_expr();
             self.expect("RParen");
         }
-        var body = self.parse_block();
+        var body = self.parse_block_or_stmt();
         node_add_child(&wn, body);
         return wn;
     }
@@ -1672,12 +1697,17 @@ class Parser {
         var for_node = make_node("For");
         self.expect("LParen");
         if (self.at("KwMut")) { self.advance(); }
-        var cap = self.expect_ident();
-        self.expect("Pipe");
         var iter = self.parse_expr();
         node_add_child(&for_node, iter);
         self.expect("RParen");
-        var body = self.parse_block();
+        // 载荷捕获（后置）：for (iter) |item|
+        if (self.at("Pipe")) {
+            self.advance();
+            var cap = self.expect_ident();
+            node_add_prop(&for_node, "payload", cap);
+            self.expect("Pipe");
+        }
+        var body = self.parse_block_or_stmt();
         node_add_child(&for_node, body);
         return for_node;
     }
