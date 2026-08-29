@@ -2649,6 +2649,13 @@ fn mk_opt_none() Value {
         obj = null, name = "",
     };
 }
+fn mk_obj(inst: ObjInst) Value {
+    return Value{
+        kind = "obj", i = 0, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = inst, name = "",
+    };
+}
 
 // 环境条目
 class EnvEntry {
@@ -2892,13 +2899,17 @@ class Interp {
     mut flow: &[u8],   // "" 正常 | "break" | "continue"（循环消费）| "return"（函数边界消费）
     mut retv: Value,   // return 载荷
     fns: Map<&[u8], usize>,   // 顶层 fn 注册表（存 prog.children 索引；Map 存类实例跨 put 会被重定位损坏，标量安全）
+    classes: Map<&[u8], usize>,   // 类注册表（类名 → prog.children 索引）
 
     // 找 main 并执行其体（先收集顶层 fn 注册表）
     fn run_main(self: *mut Self) void {
         var mut i: usize = 0;
         while (i < self.prog.children.len) {
             var decl = self.prog.children[i];
-            if (decl.kind == "Fn") {
+            if (decl.kind == "Class") {
+                var cn = get_prop(decl.props, "name");
+                if (cn) |c| { self.classes.put(c, i); }
+            } else if (decl.kind == "Fn") {
                 var name = get_prop(decl.props, "name");
                 if (name) |nm| {
                     self.fns.put(nm, i);
@@ -3077,6 +3088,29 @@ class Interp {
         if (k == "Index") {
             return self.eval_index(e);
         }
+        if (k == "ClassLit") {
+            // 类字面量 → 对象（字段平行数组）
+            var cname = get_prop(e.props, "name");
+            var mut inst = ObjInst{
+                cls = "",
+                field_names = Vec<&[u8]>.init(alloc),
+                field_vals = Vec<Value>.init(alloc),
+            };
+            if (cname) |cn| { inst.cls = cn; }
+            var mut ci2: usize = 0;
+            while (ci2 < e.children.len) {
+                var fin = e.children[ci2];
+                var fn2 = get_prop(fin.props, "name");
+                var mut fv = mk_void();
+                if (fin.children.len > 0) { fv = self.eval_expr(fin.children[0]); }
+                if (fn2) |f| {
+                    inst.field_names.append(f);
+                    inst.field_vals.append(fv);
+                }
+                ci2 += 1;
+            }
+            return mk_obj(inst);
+        }
         if (k == "Unwrap") {
             // .? 解包：some → 内值；none → 原样上浮（语料不对 none 取 .?）
             if (e.children.len > 0) {
@@ -3103,16 +3137,27 @@ class Interp {
         return mk_void();
     }
 
-    // 属性读：容器 .len（str .len 亦在此，C7 复用）
+    // 属性读：容器 .len / obj 字段读
     fn eval_field(self: *mut Self, e: AstNode) Value {
         if (e.children.len == 0) { return mk_void(); }
         var fname = get_prop(e.props, "field");
         if (fname) |f| {
+            var bv = self.eval_expr(e.children[0]);
             if (slice_eq(f, "len")) {
-                var bv = self.eval_expr(e.children[0]);
                 if (bv.kind == "vec") { return mk_int(@intCast(i64, bv.vec.len)); }
                 if (bv.kind == "map") { return mk_int(@intCast(i64, bv.map.len)); }
                 if (bv.kind == "str") { return mk_int(@intCast(i64, bv.s.len)); }
+            }
+            if (bv.kind == "obj") {
+                if (bv.obj) |inst| {
+                    var mut fi2: usize = 0;
+                    while (fi2 < inst.field_names.len) {
+                        if (slice_eq(inst.field_names[fi2], f)) {
+                            return inst.field_vals[fi2];
+                        }
+                        fi2 += 1;
+                    }
+                }
             }
         }
         return mk_void();
@@ -3217,6 +3262,58 @@ class Interp {
         var op = get_prop(e.props, "op");
         if (op) |o| {
             var target = e.children[0];
+            if (target.kind == "Field") {
+                // obj 字段写（Eq / 复合赋值）：重建 ObjInst 并变量写回
+                var fname = get_prop(target.props, "field");
+                if (fname) |f| {
+                    var bnode = target.children[0];
+                    var mut basev = self.eval_expr(bnode);
+                    if (basev.kind == "obj") {
+                        var mut val: Value = mk_void();
+                        if (slice_eq(o, "Eq")) {
+                            val = self.eval_expr(e.children[1]);
+                        } else {
+                            var cur = self.eval_field(target);
+                            var rv = self.eval_expr(e.children[1]);
+                            var mut op2: &[u8] = "Add";
+                            if (slice_eq(o, "MinusEq")) { op2 = "Sub"; }
+                            else if (slice_eq(o, "StarEq")) { op2 = "Mul"; }
+                            else if (slice_eq(o, "SlashEq")) { op2 = "Div"; }
+                            val = self.binop(op2, cur, rv);
+                        }
+                        if (basev.obj) |inst| {
+                            var names2 = Vec<&[u8]>.init(alloc);
+                            var vals2 = Vec<Value>.init(alloc);
+                            var mut i2: usize = 0;
+                            var mut hit = false;
+                            while (i2 < inst.field_names.len) {
+                                names2.append(inst.field_names[i2]);
+                                if (slice_eq(inst.field_names[i2], f)) {
+                                    vals2.append(val);
+                                    hit = true;
+                                } else {
+                                    vals2.append(inst.field_vals[i2]);
+                                }
+                                i2 += 1;
+                            }
+                            if (hit and bnode.kind == "Ident") {
+                                var ni = ObjInst{
+                                    cls = inst.cls,
+                                    field_names = names2,
+                                    field_vals = vals2,
+                                };
+                                basev.obj = ni;
+                                var bn2 = get_prop(bnode.props, "name");
+                                if (bn2) |bn3| {
+                                    self.env.assign(bn3, basev);
+                                    return val;
+                                }
+                            }
+                        }
+                    }
+                }
+                return mk_void();
+            }
             var name = get_prop(target.props, "name");
             if (name) |nm| {
                 if (slice_eq(o, "Eq")) {
@@ -3295,6 +3392,9 @@ class Interp {
                         if (tn) |t| {
                             if (slice_eq(t, "Vec")) { return mk_vec(Vec<Value>.init(alloc)); }
                             if (slice_eq(t, "Map")) { return mk_map(); }
+                            if (slice_eq(t, "alloc") and e.children.len > 1 and e.children[1].kind == "ClassLit") {
+                                return self.eval_expr(e.children[1]);
+                            }
                         }
                     }
                     // 实例方法：求值 base，按值类型分发；容器变更写回变量
@@ -3360,6 +3460,28 @@ class Interp {
                             return mk_bool(false);
                         }
                     }
+                    if (basev.kind == "obj") {
+                        // 方法分发：obj.cls → 类注册表 → 类体 Fn（name==m）
+                        if (basev.obj) |inst| {
+                            var cip = self.classes.get(inst.cls);
+                            if (cip) |ci| {
+                                var cnode = self.prog.children[ci];
+                                var mut mi: usize = 0;
+                                while (mi < cnode.children.len) {
+                                    var mnode = cnode.children[mi];
+                                    if (mnode.kind == "Fn") {
+                                        var mn = get_prop(mnode.props, "name");
+                                        if (mn) |mn2| {
+                                            if (slice_eq(mn2, m)) {
+                                                return self.call_method(mnode, basev, e);
+                                            }
+                                        }
+                                    }
+                                    mi += 1;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else if (head.kind == "Ident") {
@@ -3403,6 +3525,39 @@ class Interp {
             }
         }
         return mk_void();
+    }
+
+    // 方法调用：绑定 self（不占实参位）+ 其余参数，执行方法体
+    fn call_method(self: *mut Self, mnode: AstNode, recv: Value, e: AstNode) Value {
+        var flen = mnode.children.len;
+        self.env.push_scope();
+        self.env.declare("self", recv);
+        var mut pidx: usize = 0;
+        var mut ai: usize = 1;
+        while (pidx < flen) {
+            var ch = mnode.children[pidx];
+            if (ch.kind != "Param") { break; }
+            var pname = get_prop(ch.props, "name");
+            if (pname) |pn| {
+                if (!slice_eq(pn, "self")) {
+                    if (ai >= e.children.len) { break; }
+                    var pv = self.eval_expr(e.children[ai]);
+                    self.env.declare(pn, pv);
+                    ai += 1;
+                }
+            }
+            pidx += 1;
+        }
+        var body = mnode.children[flen - 1];
+        self.flow = "";
+        self.retv = mk_void();
+        if (body.kind == "Block") {
+            self.exec_block(body);
+        }
+        var out = self.retv;
+        self.flow = "";
+        self.env.pop_scope();
+        return out;
     }
 
     // "{}" 占位符格式化输出（与 Rust 参考 stdout 对齐）
@@ -3553,6 +3708,7 @@ fn main(args: Vec<String>) !void {
         flow = "",
         retv = mk_void(),
         fns = Map<&[u8], usize>.init(alloc),
+        classes = Map<&[u8], usize>.init(alloc),
     });
     it.run_main();
 }

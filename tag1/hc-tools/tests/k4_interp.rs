@@ -120,7 +120,6 @@ fn c06_string_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c07_class_matches_rust_reference() {
     assert_corpus_pair("07-class.hc");
 }

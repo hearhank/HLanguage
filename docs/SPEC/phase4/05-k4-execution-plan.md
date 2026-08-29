@@ -97,7 +97,7 @@
 | C5 | ✅ | 本次提交 | 根因 = `pi` 内置常量遮蔽（π），改名 pidx 修复；c04 已摘 ignore（4 passed/6 ignored）；01–04 对照全绿。细化见下节 |
 | C6 | ✅ | 本次提交 | Vec/Map/可选值全绿（opt 盒模型）；05/08 对照 MATCH；c05/c08 摘 ignore（6 passed/4 ignored）。细化见下节 |
 | C7 | ✅ | 本次提交 | str 切片/concat/compare/fromInt 全绿；06 对照 MATCH；c06 摘 ignore（7 passed/3 ignored）。细化见下节 |
-| C8 | 🔴 | — | 细化拆分见下节 |
+| C8 | ✅ | 本次提交 | 对象模型/方法分发/self 读写全绿；07 对照 MATCH（连 10 综合亦提前变绿）；c07 摘 ignore（8 passed/2 ignored）。细化见下节 |
 | C9 | 🔴 | — | 细化拆分见下节 |
 | C10 | 🔴 | — | 细化拆分见下节 |
 | D1 | 🔴 | — | |
@@ -142,9 +142,9 @@
 
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
-| C8.1 | 对象模型：`ClassLit` 求值（FieldInit 子节点求值 → 字段平行数组 obj 值，沿 C2 模式避 Value↔Env 环）+ `alloc.init(...)` 调用绑定 | 探针建对象并读字段 | ≤1h |
-| C8.2 | 方法分发 + self：run_main 扫 Class 声明建 类→方法注册表（存 prog.children 索引，标量安全）；Call head=Field(base=obj 值) 分发；方法体注册 `self` + `self.x` 读 | 探针 inc/get 生效 | ≤1h |
-| C8.3 | self 字段写：Assign/复合赋值 target=Field（`self.n += self.step`，就地写回 obj 平行数组）；07 摘 ignore + 回归 + 提交 | cargo k4 8 passed/2 ignored | ≤1h |
+| C8.1 ✅ | ClassLit 求值（FieldInit → ObjInst 字段平行数组）+ alloc.init(ClassLit) 绑定 + classes 注册表（run_main 扫 Class 声明） | 07 对照 MATCH | ≤1h |
+| C8.2 ✅ | 方法分发（obj.cls → 类注册表 → 类体 Fn）+ self 绑定（call_method：self 不占实参位）+ self.x 读（eval_field obj 分支） | 07 inc/get 生效 | ≤1h |
+| C8.3 ✅ | self 字段写：eval_assign Field 目标（Eq/复合赋值 → binop → 重建 ObjInst + env 写回，值语义保险）；07 摘 ignore + 回归全绿 | cargo k4 8 passed/2 ignored | ≤1h |
 
 ### C9 错误路径（09）
 

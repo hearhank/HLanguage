@@ -4,8 +4,8 @@
 [MATCH] 04-fn-rec
 [MATCH] 05-vec
 [MATCH] 06-string
-[DIFF] 07-class
+[MATCH] 07-class
 [MATCH] 08-map
 [DIFF] 09-errors
-[DIFF] 10-comprehensive
-=== Summary: 7 MATCH / 3 DIFF ===
+[MATCH] 10-comprehensive
+=== Summary: 9 MATCH / 1 DIFF ===
