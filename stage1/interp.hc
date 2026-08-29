@@ -3075,6 +3075,7 @@ class Interp {
                         return mk_int(-v.i);
                     }
                     if (slice_eq(o, "Not")) { return mk_bool(!self.truthy(v)); }
+                    if (slice_eq(o, "BitNot")) { return mk_int(~v.i); }
                 }
                 return v;
             }
@@ -3300,6 +3301,12 @@ class Interp {
         if (slice_eq(o, "Mul")) { return mk_int(l.i * r.i); }
         if (slice_eq(o, "Div")) { return mk_int(l.i / r.i); }
         if (slice_eq(o, "Mod")) { return mk_int(l.i % r.i); }
+        // P2：位运算（int 族；对齐 Rust 参考——i64 >> 为算术右移）
+        if (slice_eq(o, "BitAnd")) { return mk_int(l.i & r.i); }
+        if (slice_eq(o, "BitOr")) { return mk_int(l.i | r.i); }
+        if (slice_eq(o, "BitXor")) { return mk_int(l.i ^ r.i); }
+        if (slice_eq(o, "Shl")) { return mk_int(l.i << r.i); }
+        if (slice_eq(o, "Shr")) { return mk_int(l.i >> r.i); }
         return mk_void();
     }
 
@@ -3532,6 +3539,12 @@ class Interp {
         } else if (head.kind == "Ident") {
             var hname = get_prop(head.props, "name");
             if (hname) |hn| {
+                // P1：@内建求值——原来只查用户 fn 表，@intCast 等静默返回 void。
+                // 语义对齐 hc-rt call_builtin：@intCast(T, x) = 范围检查 + 透传
+                //（Rust 越界抛 IntCastOverflow，stage1 静默 void——语料规避越界用例）。
+                if (slice_eq(hn, "intCast") or slice_eq(hn, "floatCast")) {
+                    return self.builtin_cast(hn, e);
+                }
                 if (self.fns.contains(hn)) {
                     var fip = self.fns.get(hn);
                     if (fip) |fi| {
@@ -3603,6 +3616,40 @@ class Interp {
         self.flow = "";
         self.env.pop_scope();
         return out;
+    }
+
+    // P1：@intCast / @floatCast 求值（K5-pre）
+    // 形态：@intCast(T, x) → Call(Ident("intCast"), [Ident(T), x])（AtBuiltin 折叠）
+    fn builtin_cast(self: *mut Self, name: &[u8], e: AstNode) Value {
+        if (e.children.len < 3) { return mk_void(); }
+        var tnode = e.children[1];
+        if (tnode.kind != "Ident") { return mk_void(); }
+        var tnp = get_prop(tnode.props, "name");
+        if (tnp) |t| {
+            var v = self.eval_expr(e.children[2]);
+            if (slice_eq(name, "intCast")) {
+                if (v.kind != "int") { return mk_void(); }
+                // 目标宽度范围（对齐 hc-rt int_width_bounds；i64/isize/i128 全值域免查，
+                // u64/u128/usize 上限截到 i64 可表示域）
+                var mut bad = false;
+                if (slice_eq(t, "i8")) { bad = v.i < -128 or v.i > 127; }
+                else if (slice_eq(t, "i16")) { bad = v.i < -32768 or v.i > 32767; }
+                else if (slice_eq(t, "i32")) { bad = v.i < -2147483648 or v.i > 2147483647; }
+                else if (slice_eq(t, "u8")) { bad = v.i < 0 or v.i > 255; }
+                else if (slice_eq(t, "u16")) { bad = v.i < 0 or v.i > 65535; }
+                else if (slice_eq(t, "u32")) { bad = v.i < 0 or v.i > 4294967295; }
+                else if (slice_eq(t, "u64") or slice_eq(t, "u128") or slice_eq(t, "usize")) { bad = v.i < 0; }
+                if (bad) { return mk_void(); }
+                return mk_int(v.i);
+            }
+            // @floatCast：int→float 提升 / float 透传（float→int 截断语料规避，暂缺）
+            if (slice_eq(name, "floatCast")) {
+                if (v.kind == "int") { return mk_float(as_f(v)); }
+                if (v.kind == "float") { return v; }
+                return mk_void();
+            }
+        }
+        return mk_void();
     }
 
     // "{}" 占位符格式化输出（与 Rust 参考 stdout 对齐）

@@ -77,7 +77,13 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 
 | 任务 | 状态 | 提交 | 备注 |
 |---|---|---|---|
-| P1–P7 | 🔴 | — | |
+| P1 @intCast/@floatCast 求值 | ✅ | 见 P1/P2 提交 | 范围检查+透传（对齐 hc-rt int_width_bounds）；越界 stage1 静默 void（Rust 抛 IntCastOverflow），语料规避；@floatCast Rust interp 本无，stage1 做 int→float/透传最小实现 |
+| P2 位运算 binop | ✅ | 见 P1/P2 提交 | BitAnd/BitOr/BitXor/Shl/Shr + Unary BitNot；探针含 UTF-8 掩码组合与 usize 移位，双向一致 |
+| P3 | 🔴 | — | |
+| P4 | 🔴 | — | |
+| P5 | 🔴 | — | |
+| P6 | 🔴 | — | |
+| P7 | 🔴 | — | |
 | S1–S9 | 🔴 | — | |
 | V1–V2 | 🔴 | — | |
 
