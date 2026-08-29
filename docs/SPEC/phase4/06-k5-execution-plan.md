@@ -1,6 +1,7 @@
 # K5 执行计划：自举闭环 stage2（最小自展 + 全 H 链）
 
 > 来源：2026-08-29 grilling 会话定案（Hank 全部确认），决策记录见 `docs/adr/0029-k5-minimal-bootstrap.md`。
+> **交接快照：P 组（P1–P7）已完成，S 组待启动——实施细节/陷阱/限制见 `07-k5-handoff.md`。**
 > 执行规则：沿用 K4 惯例——完成即测试验证 → 更新本文档进度 → 提交 → `node .gitnexus/run.cjs analyze --index-only`；单任务预估超 1h 即执行时细拆。
 > 目录约定：stage2 源码写 `stage2/`（多文件，`import .{sym}` 同目录互导）；测试/对照脚本/探针写 `stage2/test/`；K5-pre 求值面修复改 `stage1/interp.hc`。
 
