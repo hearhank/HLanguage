@@ -110,7 +110,6 @@ fn c04_fn_rec_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c05_vec_matches_rust_reference() {
     assert_corpus_pair("05-vec.hc");
 }
@@ -128,7 +127,6 @@ fn c07_class_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c08_map_matches_rust_reference() {
     assert_corpus_pair("08-map.hc");
 }

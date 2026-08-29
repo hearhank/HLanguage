@@ -2625,6 +2625,30 @@ fn mk_vec(items: Vec<Value>) Value {
         obj = null, name = "",
     };
 }
+fn mk_map() Value {
+    return Value{
+        kind = "map", i = 0, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+// 可选值（?T）：i 作 some/none 标志，vec 作 0/1 元素盒（避免 Value 自嵌套类型）
+fn mk_opt_some(v: Value) Value {
+    var bx = Vec<Value>.init(alloc);
+    bx.append(v);
+    return Value{
+        kind = "opt", i = 1, f = 0.0, s = "",
+        vec = bx, map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
+fn mk_opt_none() Value {
+    return Value{
+        kind = "opt", i = 0, f = 0.0, s = "",
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
 
 // 环境条目
 class EnvEntry {
@@ -3030,6 +3054,68 @@ class Interp {
         if (k == "Call") {
             return self.eval_call(e);
         }
+        if (k == "Field") {
+            return self.eval_field(e);
+        }
+        if (k == "Index") {
+            return self.eval_index(e);
+        }
+        if (k == "Unwrap") {
+            // .? 解包：some → 内值；none → 原样上浮（语料不对 none 取 .?）
+            if (e.children.len > 0) {
+                var uv = self.eval_expr(e.children[0]);
+                if (uv.kind == "opt") {
+                    if (uv.i == 1 and uv.vec.len > 0) { return uv.vec[0]; }
+                }
+                return uv;
+            }
+            return mk_void();
+        }
+        if (k == "Orelse") {
+            // orelse 兜底：some → 内值；none/缺失 → 兔底表达式
+            if (e.children.len >= 2) {
+                var lv = self.eval_expr(e.children[0]);
+                if (lv.kind == "opt") {
+                    if (lv.i == 1 and lv.vec.len > 0) { return lv.vec[0]; }
+                    return self.eval_expr(e.children[1]);
+                }
+                return lv;
+            }
+            return mk_void();
+        }
+        return mk_void();
+    }
+
+    // 属性读：容器 .len（str .len 亦在此，C7 复用）
+    fn eval_field(self: *mut Self, e: AstNode) Value {
+        if (e.children.len == 0) { return mk_void(); }
+        var fname = get_prop(e.props, "field");
+        if (fname) |f| {
+            if (slice_eq(f, "len")) {
+                var bv = self.eval_expr(e.children[0]);
+                if (bv.kind == "vec") { return mk_int(@intCast(i64, bv.vec.len)); }
+                if (bv.kind == "map") { return mk_int(@intCast(i64, bv.map.len)); }
+                if (bv.kind == "str") { return mk_int(@intCast(i64, bv.s.len)); }
+            }
+        }
+        return mk_void();
+    }
+
+    // 索引读：vec[i] / str[i]（str[a..b] 切片属 C7）
+    fn eval_index(self: *mut Self, e: AstNode) Value {
+        if (e.children.len < 2) { return mk_void(); }
+        var bv = self.eval_expr(e.children[0]);
+        var iv = self.eval_expr(e.children[1]);
+        if (bv.kind == "vec") {
+            var n: i64 = @intCast(i64, bv.vec.len);
+            if (iv.i >= 0 and iv.i < n) { return bv.vec[@intCast(usize, iv.i)]; }
+            return mk_void();
+        }
+        if (bv.kind == "str") {
+            var n: i64 = @intCast(i64, bv.s.len);
+            if (iv.i >= 0 and iv.i < n) { return mk_int(bv.s[@intCast(usize, iv.i)]); }
+            return mk_void();
+        }
         return mk_void();
     }
 
@@ -3139,16 +3225,76 @@ class Interp {
         var head = e.children[0];
         if (head.kind == "Field") {
             var method = get_prop(head.props, "field");
-            var mut base_name: &[u8] = "";
-            if (head.children.len > 0 and head.children[0].kind == "Ident") {
-                var bn = get_prop(head.children[0].props, "name");
-                if (bn) |bnm| { base_name = bnm; }
-            }
-            if (slice_eq(base_name, "io")) {
-                if (method) |m| {
-                    if (slice_eq(m, "print") or slice_eq(m, "println")) {
-                        self.builtin_print(e, slice_eq(m, "println"));
-                        return mk_void();
+            if (method) |m| {
+                // io.print/println 内建
+                if (head.children.len > 0 and head.children[0].kind == "Ident") {
+                    var bn = get_prop(head.children[0].props, "name");
+                    if (bn) |bnm| {
+                        if (slice_eq(bnm, "io") and (slice_eq(m, "print") or slice_eq(m, "println"))) {
+                            self.builtin_print(e, slice_eq(m, "println"));
+                            return mk_void();
+                        }
+                    }
+                }
+                if (head.children.len > 0) {
+                    // 类型构造：Vec<T>.init / Map<K,V>.init（泛型实参已被解析器消费）
+                    if (slice_eq(m, "init") and head.children[0].kind == "Ident") {
+                        var tn = get_prop(head.children[0].props, "name");
+                        if (tn) |t| {
+                            if (slice_eq(t, "Vec")) { return mk_vec(Vec<Value>.init(alloc)); }
+                            if (slice_eq(t, "Map")) { return mk_map(); }
+                        }
+                    }
+                    // 实例方法：求值 base，按值类型分发；容器变更写回变量
+                    //（Vec/Map 结构体按值拷贝，不写回则 len/内容对后续语句不可见）
+                    var basev = self.eval_expr(head.children[0]);
+                    var is_var = head.children[0].kind == "Ident";
+                    var mut bname: ?&[u8] = null;
+                    if (is_var) { bname = get_prop(head.children[0].props, "name"); }
+                    if (basev.kind == "vec") {
+                        if (slice_eq(m, "append")) {
+                            if (e.children.len > 1) {
+                                basev.vec.append(self.eval_expr(e.children[1]));
+                                if (bname) |bn| { self.env.assign(bn, basev); }
+                            }
+                            return mk_void();
+                        }
+                        if (slice_eq(m, "get")) {
+                            if (e.children.len > 1) {
+                                var iv = self.eval_expr(e.children[1]);
+                                var n: i64 = @intCast(i64, basev.vec.len);
+                                if (iv.i >= 0 and iv.i < n) {
+                                    return mk_opt_some(basev.vec[@intCast(usize, iv.i)]);
+                                }
+                            }
+                            return mk_opt_none();
+                        }
+                    }
+                    if (basev.kind == "map") {
+                        if (slice_eq(m, "put")) {
+                            if (e.children.len > 2) {
+                                var kv = self.eval_expr(e.children[1]);
+                                var vv = self.eval_expr(e.children[2]);
+                                basev.map.put(kv.s, vv);
+                                if (bname) |bn| { self.env.assign(bn, basev); }
+                            }
+                            return mk_void();
+                        }
+                        if (slice_eq(m, "get")) {
+                            if (e.children.len > 1) {
+                                var kv = self.eval_expr(e.children[1]);
+                                var hit = basev.map.get(kv.s);
+                                if (hit) |val| { return mk_opt_some(val); }
+                            }
+                            return mk_opt_none();
+                        }
+                        if (slice_eq(m, "contains")) {
+                            if (e.children.len > 1) {
+                                var kv = self.eval_expr(e.children[1]);
+                                return mk_bool(basev.map.contains(kv.s));
+                            }
+                            return mk_bool(false);
+                        }
                     }
                 }
             }

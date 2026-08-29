@@ -95,7 +95,7 @@
 | C3 | ✅ | 下一提交 | 表达式求值落地：字面量/Ident/Unary/ Binary（短路）/赋值（`Eq`/`PlusEq`/`MinusEq`/`StarEq`/`SlashEq`，解糖 binop）+ `io.print/println`（`{}` 占位符）；`append_bytes` 补入（非内置，checker.hc 同款）；**修正 parser 副本两处求值面缺陷**：① Call 头是 `Field|field=`（非 DotCall/method）、StrLit/BoolLit prop 名为 `value`；② parse_var_decl 把 init 表达式 `parse_expr()` 丢弃未入树（已修：init 作末子节点）；**锁定两条 H 语义**（后续任务必须遵守）：切片 `==` 不可用于运行时堆子切片（props 派生值），必须逐字节 `slice_eq`（checker.hc 同款）；`@intCast` 仅收 Int（float→int 无内建），append_float 重写为无 cast 算法（10 的幂标定+逐位减法+digit_ch 比较链）；10/10 语料与真实 hc 实测基线存 k4test/；01/02 摘除 ignore（k4 2 passed/8 ignored）；回归全绿：自检 7/7、checker 查 interp OK、k3 15 项、示例门 161/0/1 |
 | C4 | ✅ | 下一提交 | 控制流落地：If/else（parse_block_or_stmt 两形态体）、While、For（vec 迭代 + payload 载荷声明）、Break/Continue（Interp.flow 信号字段传播，循环消费；块循环遇 flow 早退）；ArrayLit 求值（mk_vec）；03 摘除 ignore（k4 3 passed/7 ignored）；回归全绿：01/02 对照、checker 查 interp OK、自检 7/7 |
 | C5 | ✅ | 本次提交 | 根因 = `pi` 内置常量遮蔽（π），改名 pidx 修复；c04 已摘 ignore（4 passed/6 ignored）；01–04 对照全绿。细化见下节 |
-| C6 | 🔴 | — | 细化拆分见下节 |
+| C6 | ✅ | 本次提交 | Vec/Map/可选值全绿（opt 盒模型）；05/08 对照 MATCH；c05/c08 摘 ignore（6 passed/4 ignored）。细化见下节 |
 | C7 | 🔴 | — | 细化拆分见下节 |
 | C8 | 🔴 | — | 细化拆分见下节 |
 | C9 | 🔴 | — | 细化拆分见下节 |
@@ -126,10 +126,10 @@
 
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
-| C6.1 | Vec 值面：Field 属性读 `.len`、方法 `.init/.append/.get`、`Index` 元素读 `v[i]` | 探针打印 3/20/30 | ≤1h |
-| C6.2 | Map 值面：`.init/.put`（同 key 覆盖）/`.get/.contains/.len` | 08 前四行输出正确 | ≤1h |
-| C6.3 | 可选值后缀：`Unwrap`（`.?`）解包 + `Orelse` 兜底（?T 值建模，Map.get/Vec.get 返回 opt） | 05/08 对照 MATCH | ≤1h |
-| C6.4 | 05/08 摘 ignore + 回归（01–04 不漂移）+ 提交 | cargo k4 6 passed/4 ignored | ≤1h |
+| C6.1 ✅ | Field 属性读 `.len`（eval_field）+ Index 求值（eval_index，含 vec/str 单字节）+ Vec 方法 init/append/get；容器变更写回变量（Vec/Map 结构体按值拷贝，不写回 len/内容不可见） | probe-vec：3/20/60 | ≤1h |
+| C6.2 ✅ | Map 方法 init/put（同 key 覆盖）/get/contains；值限定标量/字符串（Map 存实例跨 put 重定位风险，语料内安全） | probe-map：2/true/false/2 | ≤1h |
+| C6.3 ✅ | 可选值建模：kind="opt"，i 作 some/none 标志、vec 作 0/1 元素盒（避 Value 自嵌套）；Unwrap(.?) 解包 + Orelse 兔底 | probe-opt：7/5/42/-1；05/08 对照 MATCH | ≤1h |
+| C6.4 ✅ | c05/c08 摘 ignore；回归全绿（自检、checker 查 interp、01–04 不漂移） | cargo k4 6 passed/4 ignored | ≤1h |
 
 ### C7 String（06）
 

@@ -2,10 +2,10 @@
 [MATCH] 02-vars
 [MATCH] 03-control
 [MATCH] 04-fn-rec
-[DIFF] 05-vec
+[MATCH] 05-vec
 [DIFF] 06-string
 [DIFF] 07-class
-[DIFF] 08-map
+[MATCH] 08-map
 [DIFF] 09-errors
 [DIFF] 10-comprehensive
-=== Summary: 4 MATCH / 6 DIFF ===
+=== Summary: 6 MATCH / 4 DIFF ===
