@@ -2663,6 +2663,14 @@ fn mk_err(ename: &[u8]) Value {
         obj = null, name = "",
     };
 }
+// P4：纯枚举值（name=枚举名，s=变体名，i=序数）
+fn mk_enum(ename: &[u8], vname: &[u8], ord: i64) Value {
+    return Value{
+        kind = "enum", i = ord, f = 0.0, s = vname,
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = ename,
+    };
+}
 
 // 环境条目
 class EnvEntry {
@@ -2907,6 +2915,7 @@ class Interp {
     mut retv: Value,   // return 载荷
     fns: Map<&[u8], usize>,   // 顶层 fn 注册表（存 prog.children 索引；Map 存类实例跨 put 会被重定位损坏，标量安全）
     classes: Map<&[u8], usize>,   // 类注册表（类名 → prog.children 索引）
+    enums: Map<&[u8], usize>,   // P4：枚举注册表（枚举名 → prog.children 索引）
 
     // 找 main 并执行其体（先收集顶层 fn 注册表）
     fn run_main(self: *mut Self) void {
@@ -2916,6 +2925,10 @@ class Interp {
             if (decl.kind == "Class") {
                 var cn = get_prop(decl.props, "name");
                 if (cn) |c| { self.classes.put(c, i); }
+            } else if (decl.kind == "Enum") {
+                // P4：枚举登记（变体→序数由 children 顺序决定）
+                var en = get_prop(decl.props, "name");
+                if (en) |en2| { self.enums.put(en2, i); }
             } else if (decl.kind == "Fn") {
                 var name = get_prop(decl.props, "name");
                 if (name) |nm| {
@@ -3242,6 +3255,30 @@ class Interp {
         if (e.children.len == 0) { return mk_void(); }
         var fname = get_prop(e.props, "field");
         if (fname) |f| {
+            // P4：纯枚举变体访问 Enum.Variant → 枚举值（base 为 Ident 且命中枚举注册表）
+            if (e.children[0].kind == "Ident") {
+                var ebp = get_prop(e.children[0].props, "name");
+                if (ebp) |ebn| {
+                    var eip = self.enums.get(ebn);
+                    if (eip) |ei| {
+                        var enode = self.prog.children[ei];
+                        var mut vi: usize = 0;
+                        while (vi < enode.children.len) {
+                            var vnode = enode.children[vi];
+                            if (vnode.kind == "Variant") {
+                                var vnp = get_prop(vnode.props, "name");
+                                if (vnp) |vnm| {
+                                    if (slice_eq(vnm, f)) {
+                                        return mk_enum(ebn, vnm, @intCast(i64, vi));
+                                    }
+                                }
+                            }
+                            vi += 1;
+                        }
+                        return mk_void();
+                    }
+                }
+            }
             var bv = self.eval_expr(e.children[0]);
             if (slice_eq(f, "len")) {
                 if (bv.kind == "vec") { return mk_int(@intCast(i64, bv.vec.len)); }
@@ -3324,11 +3361,18 @@ class Interp {
         var lfl = l.kind == "float";
         var rfl = r.kind == "float";
         if (slice_eq(o, "Eq")) {
+            // P4：纯枚举 == 按序数（同类型且同序数；对齐 Rust 参考 discriminant 比较）
+            if (l.kind == "enum" and r.kind == "enum") {
+                return mk_bool(slice_eq(l.name, r.name) and l.i == r.i);
+            }
             if (l.kind == "str" and r.kind == "str") { return mk_bool(slice_eq(l.s, r.s)); }
             if (lfl or rfl) { return mk_bool(as_f(l) == as_f(r)); }
             return mk_bool(l.i == r.i);
         }
         if (slice_eq(o, "Ne")) {
+            if (l.kind == "enum" and r.kind == "enum") {
+                return mk_bool(!(slice_eq(l.name, r.name) and l.i == r.i));
+            }
             if (l.kind == "str" and r.kind == "str") { return mk_bool(!slice_eq(l.s, r.s)); }
             if (lfl or rfl) { return mk_bool(!(as_f(l) == as_f(r))); }
             return mk_bool(!(l.i == r.i));
@@ -3855,6 +3899,7 @@ fn main(args: Vec<String>) !void {
         retv = mk_void(),
         fns = Map<&[u8], usize>.init(alloc),
         classes = Map<&[u8], usize>.init(alloc),
+        enums = Map<&[u8], usize>.init(alloc),
     });
     it.run_main();
 }
