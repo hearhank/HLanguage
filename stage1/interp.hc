@@ -2768,6 +2768,23 @@ fn append_bytes(out: *mut Vec<u8>, s: &[u8]) void {
     }
 }
 
+// 字节串字典序比较（String.compare；-1/0/1）
+fn str_compare(a: &[u8], b: &[u8]) i64 {
+    var mut n: usize = a.len;
+    if (b.len < n) { n = b.len; }
+    var mut i: usize = 0;
+    while (i < n) {
+        if (a[i] != b[i]) {
+            if (a[i] < b[i]) { return -1; }
+            return 1;
+        }
+        i += 1;
+    }
+    if (a.len < b.len) { return -1; }
+    if (a.len > b.len) { return 1; }
+    return 0;
+}
+
 // i64 追加为十进制字节
 fn append_int(v: i64, out: *mut Vec<u8>) void {
     var mut u = v;
@@ -3112,6 +3129,22 @@ class Interp {
             return mk_void();
         }
         if (bv.kind == "str") {
+            // 切片 s[a..b]（Range 二元节点）→ 子串
+            var rn = e.children[1];
+            if (rn.kind == "Binary") {
+                var rop = get_prop(rn.props, "op");
+                if (rop) |ro| {
+                    if (slice_eq(ro, "Range")) {
+                        var a2 = self.eval_expr(rn.children[0]);
+                        var b2 = self.eval_expr(rn.children[1]);
+                        var sn: i64 = @intCast(i64, bv.s.len);
+                        if (a2.i >= 0 and b2.i <= sn and a2.i <= b2.i) {
+                            return mk_str(bv.s[@intCast(usize, a2.i)..@intCast(usize, b2.i)]);
+                        }
+                        return mk_str("");
+                    }
+                }
+            }
             var n: i64 = @intCast(i64, bv.s.len);
             if (iv.i >= 0 and iv.i < n) { return mk_int(bv.s[@intCast(usize, iv.i)]); }
             return mk_void();
@@ -3236,6 +3269,25 @@ class Interp {
                         }
                     }
                 }
+                // 静态方法：String.compare / String.fromInt（base 为类型名）
+                if (head.children[0].kind == "Ident") {
+                    var st = get_prop(head.children[0].props, "name");
+                    if (st) |t| {
+                        if (slice_eq(t, "String")) {
+                            if (slice_eq(m, "compare") and e.children.len > 2) {
+                                var av = self.eval_expr(e.children[1]);
+                                var bv = self.eval_expr(e.children[2]);
+                                return mk_int(str_compare(av.s, bv.s));
+                            }
+                            if (slice_eq(m, "fromInt") and e.children.len > 1) {
+                                var iv = self.eval_expr(e.children[1]);
+                                var buf = Vec<u8>.init(alloc);
+                                append_int(iv.i, &mut buf);
+                                return mk_str(buf.as_slice());
+                            }
+                        }
+                    }
+                }
                 if (head.children.len > 0) {
                     // 类型构造：Vec<T>.init / Map<K,V>.init（泛型实参已被解析器消费）
                     if (slice_eq(m, "init") and head.children[0].kind == "Ident") {
@@ -3268,6 +3320,18 @@ class Interp {
                                 }
                             }
                             return mk_opt_none();
+                        }
+                    }
+                    if (basev.kind == "str") {
+                        if (slice_eq(m, "concat")) {
+                            if (e.children.len > 1) {
+                                var ov = self.eval_expr(e.children[1]);
+                                var buf = Vec<u8>.init(alloc);
+                                append_bytes(&mut buf, basev.s);
+                                append_bytes(&mut buf, ov.s);
+                                return mk_str(buf.as_slice());
+                            }
+                            return basev;
                         }
                     }
                     if (basev.kind == "map") {

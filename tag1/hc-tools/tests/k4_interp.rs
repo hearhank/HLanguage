@@ -115,7 +115,6 @@ fn c05_vec_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c06_string_matches_rust_reference() {
     assert_corpus_pair("06-string.hc");
 }

@@ -96,7 +96,7 @@
 | C4 | ✅ | 下一提交 | 控制流落地：If/else（parse_block_or_stmt 两形态体）、While、For（vec 迭代 + payload 载荷声明）、Break/Continue（Interp.flow 信号字段传播，循环消费；块循环遇 flow 早退）；ArrayLit 求值（mk_vec）；03 摘除 ignore（k4 3 passed/7 ignored）；回归全绿：01/02 对照、checker 查 interp OK、自检 7/7 |
 | C5 | ✅ | 本次提交 | 根因 = `pi` 内置常量遮蔽（π），改名 pidx 修复；c04 已摘 ignore（4 passed/6 ignored）；01–04 对照全绿。细化见下节 |
 | C6 | ✅ | 本次提交 | Vec/Map/可选值全绿（opt 盒模型）；05/08 对照 MATCH；c05/c08 摘 ignore（6 passed/4 ignored）。细化见下节 |
-| C7 | 🔴 | — | 细化拆分见下节 |
+| C7 | ✅ | 本次提交 | str 切片/concat/compare/fromInt 全绿；06 对照 MATCH；c06 摘 ignore（7 passed/3 ignored）。细化见下节 |
 | C8 | 🔴 | — | 细化拆分见下节 |
 | C9 | 🔴 | — | 细化拆分见下节 |
 | C10 | 🔴 | — | 细化拆分见下节 |
@@ -135,8 +135,8 @@
 
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
-| C7.1 | 字符串值面：`.len` 属性、`Index` 单字节 `s[i]`（返回字节码）、`Index`+`Range` 切片 `s[a..b]`（生成新 str 值） | 06 前三行对照一致 | ≤1h |
-| C7.2 | String 内建：`concat`、`String.compare`、`String.fromInt`；str==str 核对；06 摘 ignore + 回归 + 提交 | cargo k4 7 passed/3 ignored | ≤1h |
+| C7.1 ✅ | str .len 复用 eval_field；Index 单字节已在 C6.1；新增 s[a..b] 切片（Range 二元节点 → 子串；运行时堆子切片仅限打印，不参与 ==，对齐 C3 锁定约束） | 06 前三行对照一致 | ≤1h |
+| C7.2 ✅ | String 静态方法（compare→str_compare 字典序 -1/0/1、fromInt→append_int 缓冲）+ 实例 concat（append_bytes 双段）；06 摘 ignore + 回归全绿 | cargo k4 7 passed/3 ignored | ≤1h |
 
 ### C8 class（07）
 

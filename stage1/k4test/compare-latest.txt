@@ -3,9 +3,9 @@
 [MATCH] 03-control
 [MATCH] 04-fn-rec
 [MATCH] 05-vec
-[DIFF] 06-string
+[MATCH] 06-string
 [DIFF] 07-class
 [MATCH] 08-map
 [DIFF] 09-errors
 [DIFF] 10-comprehensive
-=== Summary: 6 MATCH / 4 DIFF ===
+=== Summary: 7 MATCH / 3 DIFF ===
