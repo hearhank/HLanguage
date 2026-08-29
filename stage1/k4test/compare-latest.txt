@@ -8,4 +8,7 @@
 [MATCH] 08-map
 [MATCH] 09-errors
 [MATCH] 10-comprehensive
-=== Summary: 10 MATCH / 0 DIFF ===
+[MATCH] 11-switch-enum
+[MATCH] 12-cast-bits
+[MATCH] 13-opt-capture
+=== Summary: 13 MATCH / 0 DIFF ===
