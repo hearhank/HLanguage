@@ -2971,20 +2971,74 @@ class Interp {
             }
         } else if (k == "If") {
             var cv = self.eval_expr(stmt.children[0]);
-            if (self.truthy(cv)) {
-                self.exec_sub(stmt.children[1]);
-            } else if (stmt.children.len >= 3) {
-                self.exec_sub(stmt.children[2]);
+            var pl = get_prop(stmt.props, "payload");
+            if (pl) |p| {
+                // P3：if (opt) |v| —— some 走 then 并绑定载荷；none/err 走 else
+                //（payload_err 有则绑定原值）。非 opt/err 值按 truthy 处理，载荷=条件值。
+                var mut ok = true;
+                if (cv.kind == "opt") {
+                    ok = cv.i == 1 and cv.vec.len > 0;
+                } else if (cv.kind == "err") {
+                    ok = false;
+                }
+                if (ok) {
+                    self.env.push_scope();
+                    if (cv.kind == "opt") {
+                        self.env.declare(p, cv.vec[0]);
+                    } else {
+                        self.env.declare(p, cv);
+                    }
+                    self.exec_sub(stmt.children[1]);
+                    self.env.pop_scope();
+                } else if (stmt.children.len >= 3) {
+                    var pel = get_prop(stmt.props, "payload_err");
+                    self.env.push_scope();
+                    if (pel) |pe| { self.env.declare(pe, cv); }
+                    self.exec_sub(stmt.children[2]);
+                    self.env.pop_scope();
+                }
+            } else {
+                if (self.truthy(cv)) {
+                    self.exec_sub(stmt.children[1]);
+                } else if (stmt.children.len >= 3) {
+                    self.exec_sub(stmt.children[2]);
+                }
             }
         } else if (k == "While") {
-            while (true) {
-                var cv = self.eval_expr(stmt.children[0]);
-                if (!self.truthy(cv)) { break; }
-                self.exec_sub(stmt.children[1]);
-                if (self.flow.len > 0) {
-                    if (slice_eq(self.flow, "break")) { self.flow = ""; break; }
-                    if (slice_eq(self.flow, "continue")) { self.flow = ""; continue; }
-                    break;
+            var plw = get_prop(stmt.props, "payload");
+            if (plw) |p| {
+                // P3：while (opt) |v| —— some 迭代绑定载荷，none/err 终止
+                while (true) {
+                    var cv2 = self.eval_expr(stmt.children[0]);
+                    var mut ok2 = true;
+                    if (cv2.kind == "opt") {
+                        ok2 = cv2.i == 1 and cv2.vec.len > 0;
+                    } else if (cv2.kind == "err") { ok2 = false; }
+                    if (!ok2) { break; }
+                    self.env.push_scope();
+                    if (cv2.kind == "opt") {
+                        self.env.declare(p, cv2.vec[0]);
+                    } else {
+                        self.env.declare(p, cv2);
+                    }
+                    self.exec_sub(stmt.children[1]);
+                    self.env.pop_scope();
+                    if (self.flow.len > 0) {
+                        if (slice_eq(self.flow, "break")) { self.flow = ""; break; }
+                        if (slice_eq(self.flow, "continue")) { self.flow = ""; continue; }
+                        break;
+                    }
+                }
+            } else {
+                while (true) {
+                    var cv = self.eval_expr(stmt.children[0]);
+                    if (!self.truthy(cv)) { break; }
+                    self.exec_sub(stmt.children[1]);
+                    if (self.flow.len > 0) {
+                        if (slice_eq(self.flow, "break")) { self.flow = ""; break; }
+                        if (slice_eq(self.flow, "continue")) { self.flow = ""; continue; }
+                        break;
+                    }
                 }
             }
         } else if (k == "For") {
