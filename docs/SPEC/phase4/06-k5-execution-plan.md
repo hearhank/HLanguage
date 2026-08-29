@@ -81,7 +81,7 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | P2 位运算 binop | ✅ | 见 P1/P2 提交 | BitAnd/BitOr/BitXor/Shl/Shr + Unary BitNot；探针含 UTF-8 掩码组合与 usize 移位，双向一致 |
 | P3 if/while 可选捕获 | ✅ | 见 P3 提交 | some→then 绑定载荷、none/err→else（payload_err 有则绑定）；非 opt/err 按 truthy；while 同步支持；守卫型 if 不在 stage1 求值面 |
 | P4 纯枚举求值 | ✅ | 见 P4 提交 | Enum 登记（变体→序数）、Enum.Variant Field 访问、==/!= 同类型比序数；带负载变体不在 stage1 求值面 |
-| P5 | 🔴 | — | |
+| P5 switch 语句求值 | ✅ | 见 P5 提交 | 字面量/枚举/else 分支 + 多模式臂（修内嵌 parser 逗号 break bug，对齐 Rust）；守卫 parser 已丢弃不支持；枚举模式用 Enum.Variant 全限定形（Rust parser 不接受 .Variant） |
 | P6 | 🔴 | — | |
 | P7 | 🔴 | — | |
 | S1–S9 | 🔴 | — | |

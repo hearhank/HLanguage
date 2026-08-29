@@ -1816,11 +1816,12 @@ class Parser {
 
     fn parse_switch_arm(self: *mut Self) AstNode {
         var arm = make_node("SwitchArm");
-        // 模式列表
+        // 模式列表（逗号分隔多个模式，直到 =>；对齐 Rust parser 多模式支持）
         while (!self.at("FatArrow") and !self.at("RBrace") and !self.at("Eof")) {
             var pat = self.parse_switch_pattern();
             node_add_child(&arm, pat);
-            if (self.at("Comma")) { self.advance(); break; }
+            if (self.at("Comma")) { self.advance(); continue; }
+            break;
         }
         self.expect("FatArrow");
         // 守卫
@@ -3072,6 +3073,28 @@ class Interp {
                     n += 1;
                 }
             }
+        } else if (k == "Switch") {
+            // P5：switch 语句求值——字面量/枚举分支 + else 默认。守卫已被 parser 丢弃
+            //（parse_switch_arm 不存储），运行时不支持；穷举检查属 checker 侧。
+            var sv = self.eval_expr(stmt.children[0]);
+            var mut ai: usize = 1;
+            while (ai < stmt.children.len) {
+                var arm = stmt.children[ai];
+                // 注意：循环变量不得命名 pi（H 内置常量 π，同名声明会被遮蔽——C5.1 根因）
+                var mut pati: usize = 0;
+                var mut matched = false;
+                while (pati < arm.children.len) {
+                    var pat = arm.children[pati];
+                    if (pat.kind != "Pattern") { break; }
+                    if (self.pattern_match(pat, sv)) { matched = true; break; }
+                    pati += 1;
+                }
+                if (matched) {
+                    self.exec_sub(arm.children[arm.children.len - 1]);
+                    break;
+                }
+                ai += 1;
+            }
         } else if (k == "Break") {
             self.flow = "break";
         } else if (k == "Continue") {
@@ -3089,6 +3112,37 @@ class Interp {
     fn truthy(self: *mut Self, v: Value) bool {
         if (v.kind == "bool") { return v.i == 1; }
         if (v.kind == "int") { return v.i != 0; }
+        return false;
+    }
+
+    // P5：switch 模式匹配（int / str / 枚举变体 / else）。
+    // parser 将 `.Variant` 与 `Enum.Variant` 都存 error prop——按变体名匹配枚举值（s）。
+    // str 模式：剥离首尾引号逐字节比较（无转义处理，语料规避）。
+    fn pattern_match(self: *mut Self, pat: AstNode, sv: Value) bool {
+        if (has_prop(pat.props, "else")) { return true; }
+        var ip = get_prop(pat.props, "int");
+        if (ip) |itxt| {
+            if (sv.kind == "int") { return sv.i == parse_int_text(itxt); }
+            return false;
+        }
+        var sp = get_prop(pat.props, "str");
+        if (sp) |stxt| {
+            if (sv.kind == "str" and stxt.len >= 2) {
+                return slice_eq(stxt[1..stxt.len - 1], sv.s);
+            }
+            return false;
+        }
+        var ep = get_prop(pat.props, "error");
+        if (ep) |en| {
+            if (sv.kind == "enum") { return slice_eq(en, sv.s); }
+            if (sv.kind == "err") { return slice_eq(en, sv.s); }
+            return false;
+        }
+        var np = get_prop(pat.props, "ident");
+        if (np) |nn| {
+            if (sv.kind == "enum") { return slice_eq(nn, sv.s); }
+            return false;
+        }
         return false;
     }
 
