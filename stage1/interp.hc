@@ -2732,8 +2732,15 @@ class Env {
         var mut i: i64 = @intCast(i64, self.entries.len) - 1;
         while (i >= 0) {
             var entry = self.entries[@intCast(usize, i)];
-            if (slice_eq(entry.name, name)) {
-                return entry.val;
+            // 长度预检 + 内联字节比较（消除每条目一次 slice_eq 函数调用的逐字节循环开销）
+            if (entry.name.len == name.len) {
+                var mut j: usize = 0;
+                var mut ok = true;
+                while (j < name.len) {
+                    if (entry.name[j] != name[j]) { ok = false; break; }
+                    j += 1;
+                }
+                if (ok) { return entry.val; }
             }
             i -= 1;
         }
@@ -2744,9 +2751,18 @@ class Env {
     fn assign(self: *mut Self, name: &[u8], val: Value) bool {
         var mut i: i64 = @intCast(i64, self.entries.len) - 1;
         while (i >= 0) {
-            if (slice_eq(self.entries[@intCast(usize, i)].name, name)) {
-                self.entries[@intCast(usize, i)] = EnvEntry{name = name, val = val};
-                return true;
+            var en = self.entries[@intCast(usize, i)];
+            if (en.name.len == name.len) {
+                var mut j: usize = 0;
+                var mut ok = true;
+                while (j < name.len) {
+                    if (en.name[j] != name[j]) { ok = false; break; }
+                    j += 1;
+                }
+                if (ok) {
+                    self.entries[@intCast(usize, i)] = EnvEntry{name = name, val = val};
+                    return true;
+                }
             }
             i -= 1;
         }

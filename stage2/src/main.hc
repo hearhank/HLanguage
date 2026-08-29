@@ -64,55 +64,93 @@ fn vec_from_slice(s: &[u8]) Vec<u8> {
 }
 
 // ============================================================
-// 关键字判定（if-chain——不用 Map：Map 值在 stage1 interp 下属 R2 重定位风险）
+// 关键字判定（首字母分桶 + 桶内串比较——非关键字平均 ~9 次单字符比较即退出，
+// 原全链 ~45 次串比较是词法热点；不用 Map：Map 值在 stage1 interp 下属 R2 重定位风险）
 // ============================================================
 
 fn kw_of(name: &[u8]) ?&[u8] {
-    if (name == "var") return "KwVar";
-    if (name == "const") return "KwConst";
-    if (name == "fn") return "KwFn";
-    if (name == "global") return "KwGlobal";
-    if (name == "if") return "KwIf";
-    if (name == "else") return "KwElse";
-    if (name == "while") return "KwWhile";
-    if (name == "for") return "KwFor";
-    if (name == "break") return "KwBreak";
-    if (name == "continue") return "KwContinue";
-    if (name == "return") return "KwReturn";
-    if (name == "switch") return "KwSwitch";
-    if (name == "defer") return "KwDefer";
-    if (name == "errdefer") return "KwErrdefer";
-    if (name == "class") return "KwClass";
-    if (name == "struct") return "KwStruct";
-    if (name == "enum") return "KwEnum";
-    if (name == "union") return "KwUnion";
-    if (name == "void") return "KwVoid";
-    if (name == "spawn") return "KwSpawn";
-    if (name == "tree") return "KwTree";
-    if (name == "interface") return "KwInterface";
-    if (name == "where") return "KwWhere";
-    if (name == "namespace") return "KwNamespace";
-    if (name == "import") return "KwImport";
-    if (name == "pub") return "KwPub";
-    if (name == "export") return "KwExport";
-    if (name == "owned") return "KwOwned";
-    if (name == "move") return "KwMove";
-    if (name == "mut") return "KwMut";
-    if (name == "and") return "KwAnd";
-    if (name == "or") return "KwOr";
-    if (name == "try") return "KwTry";
-    if (name == "catch") return "KwCatch";
-    if (name == "orelse") return "KwOrelse";
-    if (name == "script") return "KwScript";
-    if (name == "comptime") return "KwComptime";
-    if (name == "anytype") return "KwAnytype";
-    if (name == "type") return "KwType";
-    if (name == "async") return "KwAsync";
-    if (name == "await") return "KwAwait";
-    if (name == "true") return "KwTrue";
-    if (name == "false") return "KwFalse";
-    if (name == "null") return "KwNull";
-    if (name == "extern") return "KwExtern";
+    var c = name[0];
+    if (c == 'a') {
+        if (name == "and") return "KwAnd";
+        if (name == "anytype") return "KwAnytype";
+        if (name == "async") return "KwAsync";
+        if (name == "await") return "KwAwait";
+        return null;
+    }
+    if (c == 'b') { if (name == "break") return "KwBreak"; return null; }
+    if (c == 'c') {
+        if (name == "catch") return "KwCatch";
+        if (name == "class") return "KwClass";
+        if (name == "comptime") return "KwComptime";
+        if (name == "const") return "KwConst";
+        if (name == "continue") return "KwContinue";
+        return null;
+    }
+    if (c == 'd') { if (name == "defer") return "KwDefer"; return null; }
+    if (c == 'e') {
+        if (name == "else") return "KwElse";
+        if (name == "enum") return "KwEnum";
+        if (name == "errdefer") return "KwErrdefer";
+        if (name == "export") return "KwExport";
+        if (name == "extern") return "KwExtern";
+        return null;
+    }
+    if (c == 'f') {
+        if (name == "false") return "KwFalse";
+        if (name == "fn") return "KwFn";
+        if (name == "for") return "KwFor";
+        return null;
+    }
+    if (c == 'g') { if (name == "global") return "KwGlobal"; return null; }
+    if (c == 'i') {
+        if (name == "if") return "KwIf";
+        if (name == "import") return "KwImport";
+        if (name == "interface") return "KwInterface";
+        return null;
+    }
+    if (c == 'm') {
+        if (name == "move") return "KwMove";
+        if (name == "mut") return "KwMut";
+        return null;
+    }
+    if (c == 'n') {
+        if (name == "namespace") return "KwNamespace";
+        if (name == "null") return "KwNull";
+        return null;
+    }
+    if (c == 'o') {
+        if (name == "or") return "KwOr";
+        if (name == "orelse") return "KwOrelse";
+        if (name == "owned") return "KwOwned";
+        return null;
+    }
+    if (c == 'p') { if (name == "pub") return "KwPub"; return null; }
+    if (c == 'r') { if (name == "return") return "KwReturn"; return null; }
+    if (c == 's') {
+        if (name == "script") return "KwScript";
+        if (name == "spawn") return "KwSpawn";
+        if (name == "struct") return "KwStruct";
+        if (name == "switch") return "KwSwitch";
+        return null;
+    }
+    if (c == 't') {
+        if (name == "tree") return "KwTree";
+        if (name == "true") return "KwTrue";
+        if (name == "try") return "KwTry";
+        if (name == "type") return "KwType";
+        return null;
+    }
+    if (c == 'u') { if (name == "union") return "KwUnion"; return null; }
+    if (c == 'v') {
+        if (name == "var") return "KwVar";
+        if (name == "void") return "KwVoid";
+        return null;
+    }
+    if (c == 'w') {
+        if (name == "where") return "KwWhere";
+        if (name == "while") return "KwWhile";
+        return null;
+    }
     return null;
 }
 
@@ -307,7 +345,16 @@ class Lexer {
 
     fn lex_ident(self: *mut Self, start: usize) void {
         var s2 = self.pos;
-        while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+        // 热循环：字符分类与推进内联（消除每字符 is_ident_cont/bump 两层函数调用）
+        while (self.pos < self.n) {
+            var b = self.src[self.pos];
+            if (!((b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_' or (b >= 0xE4 and b <= 0xE9))) { break; }
+            if (b == '\n') { self.line += 1; self.col = 1; } else { self.col += 1; }
+            if (b < 0x80) { self.pos += 1; }
+            else if (b < 0xE0) { self.pos += 2; }
+            else if (b < 0xF0) { self.pos += 3; }
+            else { self.pos += 4; }
+        }
         var name = self.src[s2..self.pos];
         var kw = kw_of(name);
         if (kw) |k| {
