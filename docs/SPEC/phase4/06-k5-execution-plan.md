@@ -83,6 +83,8 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 
 ## 风险登记
 
+- **所有权规则已定案（ADR-0030，2026-08-29）**：转移改为指针形态（`owned *T`/`move &t`），move 后原变量冻结；对 K5 无阻塞——stage2 编码纪律本就规避所有权构造；Rust semantic 同步在 K6 前完成，checker.hc 同步在 K6。
+
 - **checker.hc 裁剪回归**：S4 动 checker 副本时不得破坏 K3 对照门禁（15 项）——裁剪在 stage2/ 副本上进行，stage1/checker.hc 冻结。
 - **HBC2 编码器正确性**：decode 丢 `ret_ty`/`type_implements`（decode.rs:94,136）对 execute_ir 无碍（只要求 func_index 含 main），但 encoder 需避免依赖被丢字段。
 - **确定性漏洞**：任何 Map 迭代/哈希顺序依赖会破坏 V1 字节等价——纪律 1 执行中用探针盯防。
