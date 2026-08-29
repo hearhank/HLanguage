@@ -356,7 +356,7 @@ impl Interp {
     }
 
     /// M1.4：加载同包兄弟文件声明（符号登记），跳过其 test 与 main（入口/测试归属目标文件）
-    pub fn load_siblings(&mut self, programs: &[&Program]) -> Result<()> {
+    pub fn load_siblings(&mut self, programs: &[&Program], entry_ns: &str) -> Result<()> {
         // M1.4：记录外部符号（跨文件语义检查用）
         for p in programs {
             self.extern_programs.push((*p).clone());
@@ -369,7 +369,7 @@ impl Interp {
         }
         for p in programs {
             for d in &p.decls {
-                self.register_fn_decl_skip_entry(d)?;
+                self.register_fn_decl_skip_entry(d, entry_ns)?;
             }
         }
         for p in programs {
@@ -394,7 +394,7 @@ impl Interp {
         }
         for p in programs {
             for d in &p.decls {
-                self.register_fn_decl_prefixed_filter(d, name, true, true, false)?;
+                self.register_fn_decl_prefixed_filter(d, name, true, true, false, "")?;
             }
         }
         for p in programs {
@@ -586,15 +586,15 @@ impl Interp {
     }
 
     /// 兄弟文件函数注册：跳过 [test] fn 与 main（M1.4 包加载）
-    pub(crate) fn register_fn_decl_skip_entry(&mut self, d: &Decl) -> Result<()> {
-        self.register_fn_decl_prefixed_filter(d, "", true, false, false)
+    pub(crate) fn register_fn_decl_skip_entry(&mut self, d: &Decl, entry_ns: &str) -> Result<()> {
+        self.register_fn_decl_prefixed_filter(d, "", true, false, false, entry_ns)
     }
 
     /// 函数注册（Q21 命名空间）：扁平名 + 限定名双注册。
     /// 扁平名（`square`）供 `import Math;` 后直接调用；限定名（`Math.square`）
     /// 供 `Math.square(5)` 静态调用（eval_call Dot 分支经 funcs 命中）。
     pub(crate) fn register_fn_decl_prefixed(&mut self, d: &Decl, prefix: &str) -> Result<()> {
-        self.register_fn_decl_prefixed_filter(d, prefix, false, false, false)
+        self.register_fn_decl_prefixed_filter(d, prefix, false, false, false, "")
     }
 
     pub(crate) fn register_fn_decl_prefixed_filter(
@@ -604,10 +604,13 @@ impl Interp {
         skip_entry: bool,
         pub_only: bool,
         skip_flat: bool,
+        entry_ns: &str,
     ) -> Result<()> {
         if pub_only && !d.is_pub() {
             return Ok(());
         }
+        // ADR-0031：同命名空间（目录 = 包，src/ 透明）兄弟文件的顶层 fn 按自有文件登记
+        let same_ns = !entry_ns.is_empty() && prefix == entry_ns;
         match d {
             Decl::Fn {
                 name,
@@ -649,7 +652,9 @@ impl Interp {
                     span: span.clone(),
                 };
                 // 模块隔离（A2b）：`[module]` 成员不登记扁平名（仅限定名，供 import 复制）
-                if !skip_entry && !skip_flat {
+                // ADR-0031：同命名空间兄弟文件的顶层 fn 按自有文件登记扁平名
+                //（目录 = 包，src/*.hc 同命名空间扁平互见；跨命名空间仍走限定/import）
+                if (!skip_entry || same_ns) && !skip_flat {
                     self.funcs
                         .entry(name.clone())
                         .or_default()
@@ -683,6 +688,7 @@ impl Interp {
                         skip_entry,
                         pub_only,
                         inner_flat,
+                        entry_ns,
                     )?;
                 }
             }

@@ -26,8 +26,8 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 | 阶段 | 文件 | 状态 | 说明 |
 |---|---|---|---|
 | 入口/调度 | src/main.hc | ✅ S1 | 读目标参数 + 阶段调度；`io.fs.read_file` 宿主透传（S1 补入 stage1 interp） |
-| 词法 | src/main.hc 词法节 | ✅ S2 | 提取完成；K1 对照 8/8 文件 MATCH（含 30KB 自身源码 6885 token，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率） |
-| 语法 | src/main.hc 语法节（S3） | 🔴 S3 | 从 stage1/interp.hc 内嵌 Parser 提取（含 switch 多模式臂、CharLit 十进制 prop 修复；rev_kw_map 改 if-chain——同 R2 规避） |
+| 词法 | src/lexer.hc | ✅ S2 | 提取完成；K1 对照 8/8 文件 MATCH（含 30KB 自身源码 6885 token，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；同命名空间扁平共享已落地（ADR-0031 loader 修复） |
+| 语法 | src/parser.hc（S3 建） | 🔴 S3 | 从 stage1/interp.hc 内嵌 Parser 提取（含 switch 多模式臂、CharLit 十进制 prop 修复；rev_kw_map 改 if-chain——同 R2 规避） |
 | 语义 | （S4 建） | 🔴 S4 | 从 checker.hc **stage2 副本**裁剪（stage1/checker.hc 冻结，K3 门禁 15 项不可破） |
 | IR 模型 | （S5 建） | 🔴 S5 | IrModule/IrFunc/IrInst + kind 分发；对照 ir_inst.rs 49 变体圈定 ≤20 |
 | lower | （S6 建） | 🔴 S6 | AST → IrInst |
@@ -44,7 +44,9 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 3. **CharLit props 编码缺陷**（真根因）：`get_prop` 的引号剥离启发式把 `"` 值字节当作引号剥掉、`|` 值被分隔符截断——`'"'`/`'|'` 字面量求值为 0，字符串/位或分派失效。**修复 = CharLit 值改存十进制文本**（`append_int`），绕开 `|key=value` 编码的特殊字节问题
 4. 诊断教训：① `{}` 打印切片值需经 `Vec.as_slice()`（str 语义），直接打切片值会走数组格式化；② 循环变量勿用 `pi`（π 内置常量，同名声明被静默遮蔽——本次再犯）；③ stdout 重定向到文件为块缓冲，timeout 杀进程丢缓冲 → 「零输出」假象
 
-**性能特征**：stage1 链路（嵌套解释）≈ 12 tok/s（30KB/6885 token = 464s）——非缺陷，为嵌套解释固有成本；自举链（S8）与 A.hbc 产物不受影响（编译产物原生执行）。
+**性能特征**：stage1 链路（嵌套解释）≈ 12 tok/s（30KB/6885 token = 464s）——非缺陷，为嵌套解释固有成本；自举链（S8）与 A.hbc 产物不受影响（编译产物原生执行）。微优化已落地（kw_of 首字母分桶 + lex_ident 内联 + env 长度预检）：同输入 76→66s（~13%）。字节码/原生执行路线因 IR/LLVM 对重类实例模式保真缺口暂不可用（详见 ADR-0031 后续）。
+
+**多文件拆分已回归（ADR-0031 落地）**：src/ 同目录文件扁平互见（Rust loader 同命名空间扁平登记已修 + stage1 interp 包模式）；拆分实测：Rust 包模式 / stage1 链路 / checker 三链路全部贯通。
 
 ## 编码纪律（违反即自举等价破坏或静默损坏）
 

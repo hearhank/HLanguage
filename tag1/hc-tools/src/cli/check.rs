@@ -60,7 +60,7 @@ pub(crate) fn check_file(path: &Path) -> Result<(), ExitCode> {
             script::infer_namespace(&mut program, &ns_name, Some(path));
             let mut interp = Interp::new(&source);
             // M1.4：同包兄弟文件先登记符号（解析失败仅告警）
-            if let Err(code) = load_siblings_into(&mut interp, path) {
+            if let Err(code) = load_siblings_into(&mut interp, path, &ns_name) {
                 return Err(code);
             }
             // M7.2：build.zon 本地依赖

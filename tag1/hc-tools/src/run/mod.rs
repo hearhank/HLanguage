@@ -48,7 +48,7 @@ pub(crate) fn run_file(path: &Path, prog_args: &[String]) -> ExitCode {
     // A3：程序 args（[程序名] + 文件后参数）；io.args() 已取消
     interp.args = prog_args.to_vec();
     // M1.4：同包兄弟文件（同目录 .hc）先登记符号
-    if let Err(code) = load_siblings_into(&mut interp, path) {
+    if let Err(code) = load_siblings_into(&mut interp, path, &ns_name) {
         return code;
     }
     // ADR-0026：检查 src/Modules/ 下各模块是否有 context.hc
@@ -210,7 +210,11 @@ pub(crate) fn run_file_bytecode(path: &Path, prog_args: &[String]) -> ExitCode {
 }
 
 /// 登记目标文件的同包兄弟声明（跳过其 test/main；解析失败的兄弟仅告警不阻断）
-pub(crate) fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(), ExitCode> {
+pub(crate) fn load_siblings_into(
+    interp: &mut Interp,
+    path: &Path,
+    entry_ns: &str,
+) -> Result<(), ExitCode> {
     // 仅在项目上下文（存在 build.zon）时加载兄弟文件；单文件脚本不加载，
     // 避免同名类型冲突（如 stage1/parser.hc 与 stage1/lexer.hc 都定义 Lexer 类）
     if script::find_project_root(path).is_none() {
@@ -242,7 +246,7 @@ pub(crate) fn load_siblings_into(interp: &mut Interp, path: &Path) -> Result<(),
         return Ok(());
     }
     let refs: Vec<&hc::Program> = programs.iter().collect();
-    interp.load_siblings(&refs).map_err(|e| {
+    interp.load_siblings(&refs, entry_ns).map_err(|e| {
         eprintln!(
             "{} 兄弟文件装载: {} {}",
             paint(err_color(), "31", "[FAIL]"),
@@ -600,7 +604,7 @@ pub(crate) fn run_file_dangle_bench(
     let mut interp = Interp::new(&source);
     interp.set_debug_dangling(dangle.is_on());
     interp.args = prog_args.to_vec();
-    if let Err(code) = load_siblings_into(&mut interp, path) {
+    if let Err(code) = load_siblings_into(&mut interp, path, &ns_name) {
         return code;
     }
     if let Err(code) = load_manifest_deps_into(&mut interp, path) {

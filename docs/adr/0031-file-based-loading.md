@@ -24,3 +24,11 @@ stage2 多文件化暴露了三方矛盾：Q21「包内共享命名空间」（0
 - stage1 interp 的 P7 `import .{sym}` 保留为工具链扩展（单文件链路显式加载），不参与规范。
 - 同命名空间同名声明 → 编译错误（此前被 loader 静默跳过，现为响亮诊断）。
 - 前置阻塞：stage1 interp 类实例缺陷（probe-tok6：类实例经函数返回 + Vec 存储后引用型字段丢失）——不修则 stage1 链路无法端到端验证多文件。
+
+## 实施状态（2026-08-29 当日落地）
+
+- ✅ Rust loader（hc-rt）：`load_siblings`/`register_fn_decl_skip_entry`/`register_fn_decl_prefixed_filter` 线程化 `entry_ns`；同命名空间兄弟顶层 fn 按自有文件登记扁平名（`same_ns`）；loose 单文件模式（无 build.zon）行为不变（兄弟各归各自文件命名空间，文件私有保持）；vendored 副本已同步。
+- ✅ stage1 interp 包模式（load_siblings 字典序合并）+ checker 镜像——早于本 ADR 落地，语义与之一致。
+- ✅ stage2 拆分回归：src/{main,lexer}.hc 扁平互见，三链路（Rust 包模式/stage1 interp/checker）全部贯通，K1 对照 MATCH。
+- ⏸ 同名冲突的**编译期**诊断（D9）：v1 由 pick_fn 调用期歧义响亮报错替代；编译期跨文件同名检测列为 K6 细化项。
+- ℹ️ 「类实例缺陷」已证伪（打印/编码缺口，见 stage2/README 复盘）；嵌套解释 ≈ 12 tok/s 为固有成本；字节码/原生执行路线的 IR/LLVM 保真缺口独立立项。

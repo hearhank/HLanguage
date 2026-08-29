@@ -237,7 +237,7 @@ pub(crate) fn test_dir_dangle(target: &Path, mode: TestMode, dangle: DangleMode)
                 all_siblings.push(p);
             }
             if !all_siblings.is_empty() {
-                if let Err(e) = interp.load_siblings(&all_siblings) {
+                if let Err(e) = interp.load_siblings(&all_siblings, "") {
                     eprintln!(
                         "{} {name} (sibling load: {} {})",
                         paint(err_color(), "31", "[FAIL]"),
