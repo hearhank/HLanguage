@@ -31,11 +31,11 @@ tree Node {
 fn main() !void {
     io.print("fib(10) = {}\n", fib(10));
 
-    // tree 构建：Node.new 构造样板 + move 进 Vec（Q23 调用点显式 move）
+    // tree 构建：Node.new 构造样板（ADR-0030：append 直接收值，无需 move）
     var root: Node = Node.new(1, alloc);
     var child: Node = Node.new(2, alloc);
     child.children.append(Node.new(3, alloc));
-    root.children.append(move child);
+    root.children.append(child);
     io.print("depth = {}\n", root.depth());
 }
 
@@ -47,6 +47,6 @@ fn main() !void {
     var root: Node = Node.new(1, alloc);
     var child: Node = Node.new(2, alloc);
     child.children.append(Node.new(3, alloc));
-    root.children.append(move child);
+    root.children.append(child);
     try expect_eq(root.depth(), 3);
 }

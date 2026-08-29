@@ -498,9 +498,9 @@ fn m24_move_value_type_rejected() {
 
 #[test]
 fn m24_move_owned_ok() {
-    // move 有所有权对象（非 Arena 分配）→ 合法
+    // ADR-0030：move 有所有权变量（owned 标注 + mut，非 Arena 分配）→ 合法
     check_clean(
-        "fn make() owned String {\n    var s = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
+        "fn make() owned String {\n    var mut s: owned String = String.from(\"made\", alloc);\n    return move s;\n}\n[test] fn t() !void {}\n",
     );
 }
 
@@ -520,9 +520,11 @@ fn m24_return_owned_param_must_move() {
         "fn f(y: owned String) *String {\n    return &y;\n}\n",
         "escapes function scope",
     );
-    // move 返回所有权 → 合法
+    // 裸 return 值转出 → 合法（ADR-0030：返回路径无 move）
+    check_clean("fn f(y: owned String) owned String {\n    return y;\n}\n[test] fn t() !void {}\n");
+    // 指针形态转出：owned *mut String 返回 → 合法
     check_clean(
-        "fn f(y: owned String) owned String {\n    return move y;\n}\n[test] fn t() !void {}\n",
+        "fn f(y: owned *mut String) owned *mut String {\n    return y;\n}\n[test] fn t() !void {}\n",
     );
 }
 

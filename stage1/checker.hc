@@ -2458,6 +2458,9 @@ class Checker {
     current_fn_ret_is_error_union: bool,
     // 当前正在检查的类名（空串 = 不在类内；用于 self 注册与 Self 解析）
     mut current_class: &[u8],
+    // ADR-0030（2026-08-29）：已 move 的变量名（use-after-move 冻结）——
+    // 存标量 bool（R2：Map 只存标量避免重定位损坏）；pop_scope 时按绑定名注销
+    moved: Map<&[u8], bool>,
 
     // 初始化：从源码构建行号表
     fn init(self: *mut Self, src: Vec<u8>) void {
@@ -2489,6 +2492,9 @@ class Checker {
             var mut target = self.scope_sizes[self.scope_sizes.len - 1];
             self.scope_sizes.remove(self.scope_sizes.len - 1);
             while (self.scopes.len > target) {
+                var entry = self.scopes[self.scopes.len - 1];
+                // ADR-0030：变量死亡 → 注销冻结标记（本作用域声明的绑定）
+                self.moved.remove(entry.name);
                 self.scopes.remove(self.scopes.len - 1);
             }
         }
@@ -3013,6 +3019,8 @@ class Checker {
                 mut_ = is_mut,
             };
             self.register(n, info);
+            // ADR-0030：重新赋值/新声明 → 复活已 move 的同名变量
+            self.moved.remove(n);
         }
         // 检查初始值表达式类型（初始值是最后一个子节点）
         if (has_init and stmt.children.len > 0) {
@@ -3276,32 +3284,58 @@ class Checker {
             if (expr.children.len > 0) {
                 var inner = expr.children[0];
                 self.check_expr(inner);
-                // 检查 move 目标是否有所有权
-                if (inner.kind == "Ident") {
-                    var name = get_prop(inner.props, "name");
-                    if (name) |n| {
-                        var found = self.lookup(n);
-                        if (found) |info| {
-                            if (info.source == AllocSource.None) {
-                                var msg = Vec<u8>.init(alloc);
-                                msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
-                                msg.append(':'); msg.append(' ');
-                                msg.append('c'); msg.append('a'); msg.append('n'); msg.append('n'); msg.append('o'); msg.append('t');
-                                msg.append(' '); msg.append('m'); msg.append('o'); msg.append('v'); msg.append('e');
-                                msg.append(' '); msg.append('`');
-                                var mut j: usize = 0;
-                                while (j < n.len) { msg.append(n[j]); j += 1; }
-                                msg.append('`'); msg.append(':'); msg.append(' ');
-                                msg.append('v'); msg.append('a'); msg.append('l'); msg.append('u'); msg.append('e');
-                                msg.append(' '); msg.append('t'); msg.append('y'); msg.append('p'); msg.append('e');
-                                msg.append(' '); msg.append('h'); msg.append('a'); msg.append('s');
-                                msg.append(' '); msg.append('n'); msg.append('o'); msg.append(' ');
-                                msg.append('o'); msg.append('w'); msg.append('n'); msg.append('e'); msg.append('r'); msg.append('s'); msg.append('h'); msg.append('i'); msg.append('p');
-                                self.error(msg);
+                // ADR-0030：目标解包 —— Move[AddrOf[Ident]]（move &t / move &mut t）
+                // 与 Move[Ident]（裸别名 ≡ move &mut t）
+                var mut tgt: ?AstNode = null;
+                var mut move_mut = false;
+                if (inner.kind == "AddrOf") {
+                    if (inner.children.len > 0) { tgt = inner.children[0]; }
+                    if (has_prop(inner.props, "mut")) { move_mut = true; }
+                } else if (inner.kind == "Ident") {
+                    tgt = inner;
+                    move_mut = true;
+                }
+                if (tgt) |tn| {
+                    if (tn.kind == "Ident") {
+                        var name = get_prop(tn.props, "name");
+                        if (name) |n| {
+                            var found = self.lookup(n);
+                            if (found) |info| {
+                                // 可写形态（&mut / 裸别名）要求 `mut`
+                                if (move_mut and !info.mut_) {
+                                    var msg = Vec<u8>.init(alloc);
+                                    append_bytes(&msg, "error: cannot move `");
+                                    append_bytes(&msg, n);
+                                    append_bytes(&msg, "` because it is not declared `mut`; use `move &");
+                                    append_bytes(&msg, n);
+                                    append_bytes(&msg, "` for read-only ownership transfer");
+                                    self.error(msg);
+                                }
+                                // 分配来源检查（None = 无所有权；Arena/global 判定 K6 同步）
+                                if (info.source == AllocSource.None) {
+                                    var msg = Vec<u8>.init(alloc);
+                                    append_bytes(&msg, "error: cannot move `");
+                                    append_bytes(&msg, n);
+                                    append_bytes(&msg, "`: value type has no ownership (move transfers destroy responsibility)");
+                                    self.error(msg);
+                                }
+                                // 冻结登记：move 后原变量禁止使用（重新赋值复活）
+                                self.moved.put(n, true);
                             }
                         }
                     }
                 }
+            }
+        } else if (k == "Assign") {
+            // ADR-0030：赋值复活 + 目标/值递归检查
+            if (expr.children.len >= 2) {
+                var tgt = expr.children[0];
+                if (tgt.kind == "Ident") {
+                    var name = get_prop(tgt.props, "name");
+                    if (name) |n| { self.moved.remove(n); }
+                }
+                self.check_expr(tgt);
+                self.check_expr(expr.children[1]);
             }
         } else if (k == "AddrOf" or k == "Try" or k == "Await") {
             if (expr.children.len > 0) {
@@ -3360,7 +3394,17 @@ class Checker {
             if (self.types.contains(n)) { return; }
             if (self.funcs.contains(n)) { return; }
             var found = self.lookup(n);
-            if (found) |_| { return; }
+            if (found) |_| {
+                // ADR-0030：use-after-move 冻结——move 后使用原变量编译错误
+                if (self.moved.contains(n)) {
+                    var msg = Vec<u8>.init(alloc);
+                    append_bytes(&msg, "error: use of moved variable `");
+                    append_bytes(&msg, n);
+                    append_bytes(&msg, "`; assign to it again to revive");
+                    self.error(msg);
+                }
+                return;
+            }
             var msg = Vec<u8>.init(alloc);
             msg.append('e'); msg.append('r'); msg.append('r'); msg.append('o'); msg.append('r');
             msg.append(':'); msg.append(' ');
@@ -3492,6 +3536,7 @@ fn main(args: Vec<String>) !void {
         funcs = Map<&[u8], FnSig>.init(alloc),
         current_fn_ret_is_error_union = false,
         current_class = "",
+        moved = Map<&[u8], bool>.init(alloc),
     });
     checker.init(src);
     checker.check_program(ast);

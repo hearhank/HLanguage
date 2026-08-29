@@ -23,7 +23,7 @@
 
 ## Consequences
 
-- **实现面**：Rust semantic（owned 检查改写 + use-after-move + 分配来源判定 + 返回推断；hc-tools owned_check 4 测试改写）——作为 parity oracle 在 K6 前完成（K5 期间择机）；stage1 checker.hc 同步**推迟到 K6**（stage2 编码纪律规避所有权构造，不阻塞 K5）。
+- **实现面**：Rust semantic **已落地**（2026-08-29：owned 检查改写 + use-after-move 冻结 + `move t`≡`move &mut t` 字面别名 + None-source + `move &t` 形态接入；返回推断本轮只做检查面，自动推断推迟；hc-tools owned_check 13 测试全过）——作为 parity oracle；stage1 checker.hc 已接入冻结/别名/三形态 Move（语料 21 重写），**AllocSource 判定与 owned 标注判定推迟到 K6**（stage2 编码纪律规避所有权构造，不阻塞 K5）。
 - **狗粮零破坏**：stage1 四件套对 move/owned 零使用（仅关键字表），语料 01–10 不受影响；K3 语料 21-ownership.hc（`var y = move x` 值语义）需按新规则重写。
 - **对 K5**：无阻塞；`06-k5-execution-plan.md` 风险登记已更新。K6 一致性以本 ADR 为基准。
 - spec 同步：`CONTEXT.md` §5 与 `06-06-ownership.md` 已按本 ADR 修订。

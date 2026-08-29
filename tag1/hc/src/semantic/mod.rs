@@ -250,6 +250,8 @@ pub fn check_with_extern_deps(
         extension_of: None,
         type_implements: HashMap::new(),
         owned_stack: Vec::new(),
+        moved: HashSet::new(),
+        owned_ever: HashSet::new(),
         diags: Vec::new(),
     };
     // 先收集外部符号（只登记不检查——诊断归属主文件）；兄弟文件按文件私有规则收集
@@ -320,6 +322,12 @@ struct Checker {
     /// 2026-08-25：当前作用域中 `owned` 变量名列表（平行于 scopes）
     /// 进入作用域 push，退出时检查未匹配的 owned 变量 → warining
     owned_stack: Vec<Vec<String>>,
+    /// ADR-0030（2026-08-29）：已 move 的变量名（use-after-move 冻结）——
+    /// 重新赋值复活；块退出时注销本块声明变量的标记（变量死亡冻结无意义）
+    moved: HashSet<String>,
+    /// ADR-0030：历史登记过 `owned` 标注的变量名（move 判定第二源——
+    /// mark_moved 会把名字从 owned_stack 移除，复活后再次 move 仍需通过 owned 判定）
+    owned_ever: HashSet<String>,
     diags: Vec<Diagnostic>,
 }
 

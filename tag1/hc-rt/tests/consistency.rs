@@ -809,15 +809,17 @@ fn divmod(a: i32, b: i32) (i32, i32) {
 
 #[test]
 fn agg_move_expr() {
-    // Move：所有权转移标记（tag1 值语义——`move x` ≡ 值拷贝，原绑定仍可访问）
+    // ADR-0030：move 转移所有权（owned 标注 + mut 变量裸别名），move 后原变量冻结
     assert_all_pass(
         r#"
-[test] fn move_is_value_copy() void {
-    var a = [1, 2, 3];
+[test] fn move_transfers_ownership() void {
+    var mut a: owned Vec<i32> = Vec<i32>.init(alloc);
+    a.append(1);
+    a.append(2);
+    a.append(3);
     var b = move a;
     expect_eq(b.len, 3);
     expect_eq(b[1], 2);
-    expect_eq(a.len, 3);
 }
 "#,
     );

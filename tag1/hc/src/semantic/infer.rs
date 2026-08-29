@@ -35,10 +35,22 @@ impl Checker {
             Expr::BoolLit(..) => SType::Bool,
             Expr::NullLit(..) => SType::Optional(Box::new(SType::Unknown)),
             Expr::VoidLit(..) => SType::Void,
-            Expr::Ident(name, _) => match self.lookup_var_ty(name, scopes) {
-                Some(t) => t,
-                None => SType::Unknown,
-            },
+            Expr::Ident(name, span) => {
+                // ADR-0030：use-after-move 冻结——move 后使用原变量编译错误
+                if self.moved.contains(name) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "use of moved variable `{name}`; \
+                             assign to it again to revive"
+                        ),
+                    ));
+                }
+                match self.lookup_var_ty(name, scopes) {
+                    Some(t) => t,
+                    None => SType::Unknown,
+                }
+            }
             Expr::ArrayLit(items, _) => {
                 // 期望为切片/数组/集合时元素期望传播；无期望 → 定长数组 [N]T
                 let elem_exp = match expected {
@@ -557,10 +569,25 @@ impl Checker {
                 vt.unwrap_or(SType::Unknown)
             }
             Expr::Move(inner, span) => {
-                // M2.4：move 唯一约束 = 拥有所有权（非 Arena/global/值类型）
-                if let Expr::Ident(name, _) = inner.as_ref() {
-                    if let Some(src) = self.lookup_var_source(name, scopes) {
-                        match src {
+                // ADR-0030（2026-08-29）：move 三形态 —— move &t（只读拥有）/ move &mut t
+                // （可写拥有）/ move t（≡ move &mut t 的字面别名）。规则：目标标注 `owned`；
+                // 分配来源为全局分配器（Arena/global 禁止）；可写形态要求 `mut`；
+                // move 后原变量冻结（use-after-move → 编译错误，重新赋值复活）。
+                let (target, move_mut): (Option<&Expr>, bool) = match inner.as_ref() {
+                    Expr::AddrOf(of, is_mut, _) => (Some(of.as_ref()), *is_mut),
+                    Expr::Ident(..) => (Some(inner.as_ref()), true),
+                    _ => (None, false),
+                };
+                // 先求值类型（递归 inner）——冻结登记在递归之后，避免 move 表达式
+                // 自身的目标 Ident 触发 use-after-move
+                let t = self.expr_ty(inner, scopes, expected);
+                if let Some(Expr::Ident(name, _)) = target {
+                    // 双源查找：作用域变量 + global（globals 表只存类型，无 VarInfo）
+                    let scoped = scopes.iter().rev().find_map(|s| s.get(name));
+                    let is_global = scoped.is_none() && self.globals.contains_key(name);
+                    if let Some(info) = scoped {
+                        // 分配来源：Arena / global 禁止 move（内存归 Arena/全局对象管理）
+                        match info.source {
                             AllocSource::Arena => self.diags.push(Diagnostic::error(
                                 span.clone(),
                                 format!(
@@ -584,10 +611,45 @@ impl Checker {
                             )),
                             _ => {}
                         }
+                        // 目标必须标注 `owned`（defer 义务 / 转移资格的锚点）
+                        // （owned 标注双源：owned_stack 现役登记 + owned_ever 历史登记——
+                        //   mark_moved 会移出现役集，复活后再次 move 靠历史集判定）
+                        if !self.owned_stack.iter().any(|s| s.contains(name))
+                            && !self.owned_ever.contains(name)
+                        {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot move `{name}`: variable is not declared `owned` \
+                                     (transfer requires an owned binding)"
+                                ),
+                            ));
+                        }
+                        // 可写形态（显式 &mut / 裸值别名）：要求 `mut`
+                        if move_mut && !info.mut_ {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!(
+                                    "cannot move `{name}` because it is not declared `mut`; \
+                                     use `move &{name}` for read-only ownership transfer"
+                                ),
+                            ));
+                        }
+                        // 冻结登记 + defer 义务解除
+                        self.moved.insert(name.clone());
+                        self.mark_moved(name);
+                    } else if is_global {
+                        // ADR-0030：global 禁止 move（内存由全局对象管理）
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!(
+                                "cannot move global `{name}` (ownership belongs to \
+                                 root scope)"
+                            ),
+                        ));
                     }
                 }
-                self.expr_ty(inner, scopes, expected)
-                    .unwrap_or(SType::Unknown)
+                t.unwrap_or(SType::Unknown)
             }
             Expr::Closure { .. } => SType::Unknown,
         };

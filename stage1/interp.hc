@@ -3146,6 +3146,13 @@ class Interp {
             if (en) |en2| { return mk_err(en2); }
             return mk_err("unknown");
         }
+        if (k == "Move") {
+            // ADR-0030：move 是编译期所有权转移——运行时穿透求值取引用目标
+            if (e.children.len > 0) {
+                return self.eval_expr(e.children[0]);
+            }
+            return mk_void();
+        }
         if (k == "Try") {
             // try 传播：err → flow=return 向函数边界冒泡
             if (e.children.len > 0) {

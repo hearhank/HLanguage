@@ -1,6 +1,7 @@
 //! hc/tests/owned_check.rs
 //!
-//! 语义测试：`owned` 变量必须匹配 `defer` 或 `move`
+//! 语义测试：`owned` 变量必须匹配 `defer` 或 `move`（2026-08-25）；
+//! ADR-0030（2026-08-29）：指针形态转移 + use-after-move 冻结
 
 use hc::check_semantics;
 use hc::parse_source;
@@ -115,5 +116,110 @@ fn owned_var_in_nested_block_uncovered() {
     assert!(
         y_errs && !x_errs,
         "expected error only for 'y' (uncovered in nested block), got: {diags:?}"
+    );
+}
+
+// ---------- ADR-0030（2026-08-29）：指针形态转移 + 冻结 ----------
+
+#[test]
+fn adr30_move_addr_of_owned_ok() {
+    // move &t：只读拥有转移 → 合法
+    let diags = check(
+        "fn take(r: owned *String) void {}
+         fn test() void {
+            var s: owned String = String.from(\"x\", alloc);
+            take(move &s);
+        }",
+    );
+    assert!(!diags.iter().any(|d| d.is_error()), "got: {diags:?}");
+}
+
+#[test]
+fn adr30_move_addr_mut_ok() {
+    // move &mut t：可写拥有转移（t 为 mut）→ 合法
+    let diags = check(
+        "fn take(r: owned *mut String) void {}
+         fn test() void {
+            var mut s: owned String = String.from(\"x\", alloc);
+            take(move &mut s);
+        }",
+    );
+    assert!(!diags.iter().any(|d| d.is_error()), "got: {diags:?}");
+}
+
+#[test]
+fn adr30_move_alias_requires_mut() {
+    // move t 是 move &mut t 的字面别名：非 mut 变量 → 编译错误
+    let diags = check(
+        "fn take(r: owned *mut String) void {}
+         fn test() void {
+            var s: owned String = String.from(\"x\", alloc);
+            take(move s);
+        }",
+    );
+    assert!(
+        has_error_containing(&diags, "not declared `mut`"),
+        "expected mut error on alias move, got: {diags:?}"
+    );
+}
+
+#[test]
+fn adr30_move_non_owned_errors() {
+    // 未标注 owned 的变量不可 move（ADR-0030 裁决 6）
+    let diags = check(
+        "fn take(r: owned *String) void {}
+         fn test() void {
+            var s: String = String.from(\"x\", alloc);
+            take(move &s);
+        }",
+    );
+    assert!(
+        has_error_containing(&diags, "not declared `owned`"),
+        "expected non-owned error, got: {diags:?}"
+    );
+}
+
+#[test]
+fn adr30_use_after_move_errors() {
+    // move 后原变量冻结：使用 → 编译错误
+    let diags = check(
+        "fn take(r: owned *String) void {}
+         fn peek(r: *String) void {}
+         fn test() void {
+            var s: owned String = String.from(\"x\", alloc);
+            take(move &s);
+            peek(&s);
+        }",
+    );
+    assert!(
+        has_error_containing(&diags, "use of moved variable `s`"),
+        "expected use-after-move error, got: {diags:?}"
+    );
+}
+
+#[test]
+fn adr30_assign_revives_moved_var() {
+    // move 后重新赋值 → 复活，可再次转移
+    let diags = check(
+        "fn take(r: owned *mut String) void {}
+         fn test() void {
+            var mut s: owned String = String.from(\"x\", alloc);
+            take(move &mut s);
+            s = String.from(\"y\", alloc);
+            take(move &mut s);
+        }",
+    );
+    assert!(!diags.iter().any(|d| d.is_error()), "got: {diags:?}");
+}
+
+#[test]
+fn adr30_move_global_rejected_alias() {
+    // global 禁止 move（别名形态 move g 同样拒绝）
+    let diags = check(
+        "fn take(y: owned *mut String) void {}\n         global g: String = String.from(\"x\", alloc);\n         [test] fn t() !void {\n            take(move g);\n        }",
+    );
+    assert!(
+        has_error_containing(&diags, "cannot move global"),
+        "expected global move error, got: {diags:?}"
     );
 }

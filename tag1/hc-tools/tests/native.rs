@@ -464,12 +464,15 @@ fn aggregate_move_expr_native() {
         eprintln!("SKIP: zig cc 不可用");
         return;
     }
-    // Move：值语义拷贝（`move x` ≡ 值拷贝，原绑定仍可访问）
+    // ADR-0030：move 转移所有权（owned + mut 变量裸别名），move 后原变量冻结
     let src = r#"
 fn main() i32 {
-    var a = [1, 2, 3];
+    var mut a: owned Vec<i32> = Vec<i32>.init(alloc);
+    a.append(1);
+    a.append(2);
+    a.append(3);
     var b = move a;
-    if (b.len != 3 or b[1] != 2 or a.len != 3) { return 1; }
+    if (b.len != 3 or b[1] != 2) { return 1; }
     return 0;
 }
 "#;

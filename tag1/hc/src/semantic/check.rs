@@ -285,6 +285,13 @@ impl Checker {
             }
         }
         self.owned_stack.pop();
+        // ADR-0030：块退出时注销本块声明变量的冻结标记（变量死亡冻结无意义；
+        // 内层 move 的若为外层变量，标记保留——不在本块声明集内）
+        if let Some(scope) = scopes.last() {
+            for name in scope.keys() {
+                self.moved.remove(name);
+            }
+        }
         scopes.pop();
     }
 
@@ -371,7 +378,11 @@ impl Checker {
                 // 2026-08-25：owned 类型变量登记到 owned_stack
                 if let Some(Type::Owned(_)) = ty {
                     self.owned_stack.last_mut().unwrap().push(name.clone());
+                    // ADR-0030：历史登记（复活后再次 move 的判定源）
+                    self.owned_ever.insert(name.clone());
                 }
+                // ADR-0030：重新赋值复活已 move 的变量
+                self.moved.remove(name);
             }
             Stmt::ConstDecl { name, init, .. } => {
                 let t = self.expr_ty(init, scopes, None);
@@ -393,11 +404,20 @@ impl Checker {
                 span,
                 ..
             }) => {
+                // ADR-0030：对已 move 变量重新赋值 → 复活（先于 target 求值，
+                // 否则 target 的 Ident 求值会误触发 use-after-move）
+                if let Expr::Ident(name, _) = target.as_ref() {
+                    self.moved.remove(name);
+                }
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
                 self.check_assignable(&target_ty, &value_ty, span, "assignment");
                 // 2026-08-25：写只读变量 → 编译错误（须 `mut` 声明）
                 self.check_mut_write(target, scopes, span);
+                // ADR-0030：对已 move 变量重新赋值 → 复活
+                if let Expr::Ident(name, _) = target.as_ref() {
+                    self.moved.remove(name);
+                }
                 // M2.3 指针形态：写只读指针 → 编译错误
                 self.check_ptr_write(target, scopes, span);
                 // G3 Q19：spawn→join 冻结窗口——写入被引用捕获目标 → 编译错误
@@ -902,8 +922,8 @@ impl Checker {
         }
     }
 
-    /// 2026-08-25：标记 owned 变量已被 move 转移
-    fn mark_moved(&mut self, name: &str) {
+    /// 2026-08-25：标记 owned 变量已被 move 转移（ADR-0030：infer.rs 也调用）
+    pub(crate) fn mark_moved(&mut self, name: &str) {
         for scope in self.owned_stack.iter_mut().rev() {
             scope.retain(|v| v != name);
         }
