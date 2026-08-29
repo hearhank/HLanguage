@@ -40,6 +40,24 @@ fn main(args: Vec<String>) !void {
     var toks = lex_source(src);
     // 阶段 2：语法（S3 已落地）
     var ast = parse_tokens(toks);
-    // 阶段 3+：语义检查 / lower / HBC2 编码（S4–S7 填充）
-    io.print("stage2: {} bytes -> {} tokens -> {} decls\n", src.len, toks.len, ast.children.len);
+    // 阶段 3：语义检查（S4：src/checker.hc，同命名空间扁平共享）
+    var checker: Checker = alloc.init(Checker{
+        diags = Vec<Vec<u8>>.init(alloc),
+        src = Vec<u8>.init(alloc),
+        line_starts = Vec<usize>.init(alloc),
+        scopes = Vec<ScopeEntry>.init(alloc),
+        scope_sizes = Vec<usize>.init(alloc),
+        types = Map<&[u8], SType>.init(alloc),
+        funcs = Map<&[u8], FnSig>.init(alloc),
+        current_fn_ret_is_error_union = false,
+        current_class = "",
+    });
+    checker.init(src);
+    checker.check_program(ast);
+    if (checker.diags.len > 0) {
+        checker.report();
+        return error.CheckFailed;
+    }
+    // 阶段 4+：lower / HBC2 编码（S6–S7 填充）
+    io.print("stage2: {} bytes -> {} tokens -> {} decls, check ok\n", src.len, toks.len, ast.children.len);
 }
