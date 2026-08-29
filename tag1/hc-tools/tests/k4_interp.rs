@@ -138,3 +138,20 @@ fn c09_errors_matches_rust_reference() {
 fn c10_comprehensive_matches_rust_reference() {
     assert_corpus_pair("10-comprehensive.hc");
 }
+
+// ---------- K5-pre（P 组）：求值面修复语料 ----------
+
+#[test]
+fn p11_switch_enum_matches_rust_reference() {
+    assert_corpus_pair("11-switch-enum.hc");
+}
+
+#[test]
+fn p12_cast_bits_matches_rust_reference() {
+    assert_corpus_pair("12-cast-bits.hc");
+}
+
+#[test]
+fn p13_opt_capture_matches_rust_reference() {
+    assert_corpus_pair("13-opt-capture.hc");
+}
