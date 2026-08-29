@@ -2386,7 +2386,13 @@ class Parser {
             var txt = self.peek_text();
             self.advance();
             var c = make_node("CharLit");
-            node_add_prop(&c, "value", txt[0..txt.len]);
+            // 值以十进制文本存储——原始字节可能是 " 或 | 等属性分隔符，会破坏 |key=value 编码
+            //（get_prop 的引号剥离/| 截断曾使 '"' 与 '|' 字面量求值为 0，字符串分派失效）
+            if (txt.len > 0) {
+                var dec = Vec<u8>.init(alloc);
+                append_int(@intCast(i64, txt[0]), &mut dec);
+                node_add_prop(&c, "value", dec.as_slice());
+            }
             return c;
         }
         if (k == "KwTrue") {
@@ -2916,6 +2922,17 @@ fn append_value(v: Value, out: *mut Vec<u8>) void {
     else if (v.kind == "str") { append_bytes(out, v.s); }
     else if (v.kind == "null") { append_bytes(out, "null"); }
     else if (v.kind == "void") { }
+    else if (v.kind == "vec") {
+        // S2：对齐 Rust display —— [元素, 元素]（元素递归追加）
+        append_bytes(out, "[");
+        var mut vi: usize = 0;
+        while (vi < v.vec.len) {
+            if (vi > 0) { append_bytes(out, ", "); }
+            append_value(v.vec[vi], out);
+            vi += 1;
+        }
+        append_bytes(out, "]");
+    }
 }
 
 // 取 Value 的 f64 视图（int 提升为 float）——须在 Interp 之前定义（单遍编译）
@@ -3369,11 +3386,10 @@ class Interp {
             return mk_bool(false);
         }
         if (k == "CharLit") {
-            // S2：字符字面量 = 码点整数值（value prop = lex_char 存的单字节；
-            // 多字节字符字面量 lex_char 不产出，无需处理）
+            // S2：字符字面量 = 码点整数值（value prop = 十进制文本，见解析器 Char 分支）
             var t = get_prop(e.props, "value");
             if (t) |txt| {
-                if (txt.len > 0) { return mk_int(@intCast(i64, txt[0])); }
+                if (txt.len > 0) { return mk_int(parse_int_text(txt)); }
             }
             return mk_int(0);
         }
@@ -3838,6 +3854,19 @@ class Interp {
                     var mut bname: ?&[u8] = null;
                     if (is_var) { bname = get_prop(head.children[0].props, "name"); }
                     if (basev.kind == "vec") {
+                        if (slice_eq(m, "as_slice")) {
+                            // S2：对齐 Rust Arr.as_slice —— 收集 Int(0..=255) 元素为字节 → str
+                            var bytes = Vec<u8>.init(alloc);
+                            var mut si3: usize = 0;
+                            while (si3 < basev.vec.len) {
+                                var el = basev.vec[si3];
+                                if (el.kind == "int" and el.i >= 0 and el.i <= 255) {
+                                    bytes.append(@intCast(u8, el.i));
+                                }
+                                si3 += 1;
+                            }
+                            return mk_str(bytes.as_slice());
+                        }
                         if (slice_eq(m, "append")) {
                             if (e.children.len > 1) {
                                 basev.vec.append(self.eval_expr(e.children[1]));
@@ -3858,7 +3887,7 @@ class Interp {
                     }
                     if (basev.kind == "str") {
                         if (slice_eq(m, "as_slice")) {
-                            // S2：str.as_slice() 透传（stage2 源码风格依赖；值即切片）
+                            // str.as_slice 透传（对齐 Rust String.as_slice → String）
                             return basev;
                         }
                         if (slice_eq(m, "concat")) {

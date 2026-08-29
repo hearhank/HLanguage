@@ -55,8 +55,6 @@
 |---|---|---|---|
 | S1 | 源码骨架：`main.hc`（读源文件参数 + 阶段调度）+ `import .{lexer,parser,...}` 结构 + 纪律自查清单入库 | interp 检查通过、空编译跑通（产出空 .hbc 不要求） | ≤1h |
 | S2 | lexer 提取移植：从内嵌副本提取为 `lexer.hc`，适配多文件（去 self-contained 假设） | 对 6621 token 自身源码与 Rust lex 零 diff（复用 K1 对照法） | 1–3h |
-
-> **S2 进展（🟡 未关）**：① `hc new <name>` 命令落地（= hc init，CLI 分派别名）；② stage2 迁移为标准 hc 项目（build.zon + src/main.hc + test/）；③ lexer 完整提取（含 dbg_escape/K1 格式 dump_tokens），**Rust 包模式下与 hc lex 逐字节一致（7/7 文件 MATCH）**；④ 提取过程补三个 stage1 interp 求值面缺口：CharLit 求值、if/while 捕获对 null 条件判 falsy、str.as_slice 透传。**未关项**：stage1 interp 类实例缺陷——类实例经函数返回 + Vec 存储后引用型字段（Vec/str）丢失、标量存活（最小复现 `stage1/k4test/probe-tok6.hc`，Rust 参考正确）——导致 stage1 interp 链路的 dump 载荷为空（`Ident("")`），S2 验收的 stage1 侧对照被阻塞；**该缺陷同时阻塞 S3–S6**（Token/AstNode 模型依赖类实例传递），下一步主攻。另一发现：Rust 包加载 M1.4 兄弟文件顶层 fn 不登记（文件私有设计），跨文件调用需 namespace+import 仪式——stage2 收敛为自包含单文件（对齐 stage1 四件套惯例），拆分待上述两项落地。`import .{sym}` 为 stage1 interp 专有扩展（Rust parser 按规范拒绝），stage2 已改用包模式自动加载。
 | S3 | parser 提取移植：`parser.hc` 多文件化，AST 节点模型对齐 stage2 子集 | 对 stage2 自身源码 parse 成功 + AST dump 对照抽查 | 1–3h |
 | S4 | semantic 裁剪：从 checker.hc 裁剪名称解析 + 签名/调用点类型检查（砍所有权/错误集推断） | 对 stage2 自身源码 0 误报 0 漏报（对照 Rust check） | 1–3h |
 | S5 | IR 模型：`IrModule/IrFunc/IrInst` class + kind 分发（按 stage2 子集圈定指令集，对照 ir_inst.rs 49 变体圈定） | 指令集清单入档（预计 ≤20 变体） | ≤1h |
@@ -88,7 +86,9 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | P6 对照语料 | ✅ | 见 P6 提交 | exec-corpus 11/12/13 + k4_interp.rs 3 测试 = 13 passed；对照脚本 13 MATCH；12 号语料踩纪律 5（utf8_len 须先于 main 定义）已修正 |
 | P7 多文件 import | ✅ | 见 P7 提交 | interp+checker：`import .{sym}` 同目录 sym.hc 加载（递归/环检测/菱形去重），顶层符号平铺合并，run_main 两遍化；模块路径导入（H.std.{io}）不触发文件加载；环/缺文件响亮报错；模块限定访问（a.fn()）不在本轮 |
 | S1 源码骨架 | ✅ | 见 S1 提交 | stage2/{main,lexer,parser}.hc + README 纪律清单 + test/smoke.hc；**含两个 K5-pre 漏项补齐（interp.hc）**：① run_main 绑定 main 形参（bootstrap 链硬前提；args[0]=自身路径+余参透传对齐 Rust hc）；② io.fs.read_file 宿主透传（NotFound/Io→目标 Try/Catch 通道）；③ main 返回 err → stdout 响亮（flow=="return" 且 retv 为 err 才判定——retv 是残留寄存器；err 名经 Vec 拷贝避开 AST 子切片的数组格式化）。验收四连：checker OK / smoke 贯通 / usage+Usage / 缺文件 NotFound |
-| S2–S9 | 🔴 | — | |
+| S1 源码骨架 | ✅ | 见 S1 提交 | stage2/{main,lexer,parser}.hc + README 纪律清单 + test/smoke.hc；**含两个 K5-pre 漏项补齐（interp.hc）**：① run_main 绑定 main 形参（bootstrap 链硬前提；args[0]=自身路径+余参透传对齐 Rust hc）；② io.fs.read_file 宿主透传（NotFound/Io→目标 Try/Catch 通道）；③ main 返回 err → stdout 响亮（flow=="return" 且 retv 为 err 才判定——retv 是残留寄存器；err 名经 Vec 拷贝避开 AST 子切片的数组格式化）。验收四连：checker OK / smoke 贯通 / usage+Usage / 缺文件 NotFound |
+| S2 词法提取 | ✅ | 见 S2 提交 | lexer 完整提取入 stage2/src/main.hc（自包含单文件，ADR-0031）；K1 对照 8/8 MATCH（含 30KB/6885 token 自身源码，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；**「类实例缺陷」证伪**——真根因 = CharLit props 编码（get_prop 引号剥离吃掉 " 值字节、| 截断）+ append_value 无 vec 分支 + Vec.as_slice 缺失，三者均已修；CharLit 值改存十进制文本；`hc new` 命令 + stage2 项目化（build.zon + src/ + test/）同批落地；grilling 会话产出 ADR-0031（同命名空间扁平共享）+ CONTEXT.md 术语；多文件拆分待 Rust loader 同命名空间扁平登记修复后回归 |
+| S3–S9 | 🔴 | — | |
 | V1–V2 | 🔴 | — | |
 
 ## 风险登记

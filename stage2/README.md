@@ -26,8 +26,8 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 | 阶段 | 文件 | 状态 | 说明 |
 |---|---|---|---|
 | 入口/调度 | src/main.hc | ✅ S1 | 读目标参数 + 阶段调度；`io.fs.read_file` 宿主透传（S1 补入 stage1 interp） |
-| 词法 | src/lexer.hc | 🟡 S2 | 已提取 + dump_tokens（K1 格式）；**阻塞：stage1 interp 类实例缺陷**（见下）；Rust 包模式下 lexer 正确 |
-| 语法 | src/parser.hc | 🔴 S3 | 从 stage1/interp.hc 内嵌 Parser 提取（含 switch 多模式臂、import syms prop 修复；rev_kw_map 改 if-chain——同 R2 规避） |
+| 词法 | src/main.hc 词法节 | ✅ S2 | 提取完成；K1 对照 8/8 文件 MATCH（含 30KB 自身源码 6885 token，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率） |
+| 语法 | src/main.hc 语法节（S3） | 🔴 S3 | 从 stage1/interp.hc 内嵌 Parser 提取（含 switch 多模式臂、CharLit 十进制 prop 修复；rev_kw_map 改 if-chain——同 R2 规避） |
 | 语义 | （S4 建） | 🔴 S4 | 从 checker.hc **stage2 副本**裁剪（stage1/checker.hc 冻结，K3 门禁 15 项不可破） |
 | IR 模型 | （S5 建） | 🔴 S5 | IrModule/IrFunc/IrInst + kind 分发；对照 ir_inst.rs 49 变体圈定 ≤20 |
 | lower | （S6 建） | 🔴 S6 | AST → IrInst |
@@ -35,15 +35,16 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 | 闭环脚本 | test/bootstrap.bat | 🔴 S8 | interp 跑 stage2 → A.hbc；hc run A.hbc → B.hbc；fc /b 断言 A==B |
 | 行为验证 | — | 🔴 S9 | A.hbc 执行输出 vs stage2 经 Rust 编译输出 |
 
-## 🔴 S2 阻塞缺陷（stage1 interp，下一步主攻）
+## ✅ S2 缺陷复盘（已解决，2026-08-29）
 
-**类实例经函数返回 + Vec 存储后，引用型字段（Vec/str）丢失，标量字段存活。**
+**原登记的「类实例缺陷」不存在**——数据始终完好，是**打印/编码缺口**的假象：
 
-- 最小复现：`stage1/k4test/probe-tok6.hc`（`mk()` 返回 `T6{kind,text,start}` → append → 读回 text 全空；Rust 参考正确）
-- 症状：`hc run stage1\interp.hc stage2\src\main.hc --dump-tokens ...` 的 Ident/Str/Int 载荷为空（`Ident("")`）；Rust 包模式（`hc run stage2`）下同一 lexer 输出正确
-- 已排除：Map 值（R2，已改 if-chain 规避）、CharLit（已补求值）、Vec 本身（probe2/3 标量+字面量字段存活）
-- 疑点集中：`eval_call` 返回路径的 Value/ObjInst 拷贝（`var out = self.retv`）与 `Vec<Value>` 重分配的交互——类实例的引用型字段在重分配后失效
-- 影响：stage2 编译器的 Token/AstNode 模型依赖类实例传递；**此缺陷不修，S2–S6 无法在 stage1 interp 链路上推进**（Rust 包模式不受影响）
+1. `append_value` 无 vec 分支：`{}` 打印 Vec 值输出为空（Rust 参考 display 为 `[元素, ...]`）——已补
+2. `Vec.as_slice` 未实现：返回 void（Rust 语义 = 收集 Int(0..=255) 元素为字节 → String）——已补
+3. **CharLit props 编码缺陷**（真根因）：`get_prop` 的引号剥离启发式把 `"` 值字节当作引号剥掉、`|` 值被分隔符截断——`'"'`/`'|'` 字面量求值为 0，字符串/位或分派失效。**修复 = CharLit 值改存十进制文本**（`append_int`），绕开 `|key=value` 编码的特殊字节问题
+4. 诊断教训：① `{}` 打印切片值需经 `Vec.as_slice()`（str 语义），直接打切片值会走数组格式化；② 循环变量勿用 `pi`（π 内置常量，同名声明被静默遮蔽——本次再犯）；③ stdout 重定向到文件为块缓冲，timeout 杀进程丢缓冲 → 「零输出」假象
+
+**性能特征**：stage1 链路（嵌套解释）≈ 12 tok/s（30KB/6885 token = 464s）——非缺陷，为嵌套解释固有成本；自举链（S8）与 A.hbc 产物不受影响（编译产物原生执行）。
 
 ## 编码纪律（违反即自举等价破坏或静默损坏）
 
