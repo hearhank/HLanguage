@@ -6,13 +6,13 @@
 //   链路：hc run stage1/interp.hc stage2/src/main.hc <target.hc>
 //   对照：hc run stage1/interp.hc stage2/src/main.hc --dump-tokens <target.hc>（= hc lex 格式）
 // 阶段 2：语法分析（S3 填充真实 Parser；当前为骨架占位）
-
 // ============================================================
-// 阶段 2：语法分析（S3 填充真实 Parser；当前为骨架占位）
+// 阶段 2：语法分析（S3：src/parser.hc）
 // ============================================================
 
-fn parse_tokens(ntoks: usize) usize {
-    return 0;
+fn parse_tokens(toks: Vec<Token>) AstNode {
+    var p: Parser = alloc.init(Parser{ tokens = toks, pos = 0, n = toks.len, rev_kw_map = build_rev_kw_map() });
+    return p.parse_program();
 }
 
 // ============================================================
@@ -20,14 +20,17 @@ fn parse_tokens(ntoks: usize) usize {
 // ============================================================
 
 fn main(args: Vec<String>) !void {
-    // S2：token 流转储（K1 对照模式）
-    if (args.len >= 3 and args[1].as_slice() == "--dump-tokens") {
+    // S3：AST 转储（与 hc run stage1/interp.hc --dump-ast 同格式）
+    if (args.len >= 3 and args[1].as_slice() == "--dump-ast") {
         var dsrc = try io.fs.read_file(args[2], alloc);
-        dump_tokens(lex_source(dsrc));
+        var dast = parse_tokens(lex_source(dsrc));
+        var dumper: AstDumper = alloc.init(AstDumper{ buf = Vec<u8>.init(alloc) });
+        dumper.dump(dast, 0);
+        io.print("{}", dumper.buf.as_slice());
         return;
     }
     if (args.len < 2) {
-        io.print("usage: main [--dump-tokens] <source.hc>\n");
+        io.print("usage: main [--dump-tokens] [--dump-ast] <source.hc>\n");
         return error.Usage;
     }
     var path = args[1];
@@ -35,8 +38,8 @@ fn main(args: Vec<String>) !void {
     var src = try io.fs.read_file(path, alloc);
     // 阶段 1：词法（S2 已落地）
     var toks = lex_source(src);
-    // 阶段 2：语法（S3 填充真实 Parser）
-    var nnodes = parse_tokens(toks.len);
+    // 阶段 2：语法（S3 已落地）
+    var ast = parse_tokens(toks);
     // 阶段 3+：语义检查 / lower / HBC2 编码（S4–S7 填充）
-    io.print("stage2: {} bytes -> {} tokens -> {} nodes\n", src.len, toks.len, nnodes);
+    io.print("stage2: {} bytes -> {} tokens -> {} decls\n", src.len, toks.len, ast.children.len);
 }

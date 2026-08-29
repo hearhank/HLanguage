@@ -27,7 +27,7 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 |---|---|---|---|
 | 入口/调度 | src/main.hc | ✅ S1 | 读目标参数 + 阶段调度；`io.fs.read_file` 宿主透传（S1 补入 stage1 interp） |
 | 词法 | src/lexer.hc | ✅ S2 | 提取完成；K1 对照 8/8 文件 MATCH（含 30KB 自身源码 6885 token，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；同命名空间扁平共享已落地（ADR-0031 loader 修复） |
-| 语法 | src/parser.hc（S3 建） | 🔴 S3 | 从 stage1/interp.hc 内嵌 Parser 提取（含 switch 多模式臂、CharLit 十进制 prop 修复；rev_kw_map 改 if-chain——同 R2 规避） |
+| 语法 | src/parser.hc | ✅ S3 | 提取完成；两级 AST dump 对照 9/9 MATCH（含 stage2 全部自身源码，parser.hc AST 8037 行）；AstDumper 同步提取（--dump-ast 模式） |
 | 语义 | （S4 建） | 🔴 S4 | 从 checker.hc **stage2 副本**裁剪（stage1/checker.hc 冻结，K3 门禁 15 项不可破） |
 | IR 模型 | （S5 建） | 🔴 S5 | IrModule/IrFunc/IrInst + kind 分发；对照 ir_inst.rs 49 变体圈定 ≤20 |
 | lower | （S6 建） | 🔴 S6 | AST → IrInst |

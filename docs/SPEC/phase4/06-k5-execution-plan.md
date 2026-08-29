@@ -88,7 +88,9 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | S1 源码骨架 | ✅ | 见 S1 提交 | stage2/{main,lexer,parser}.hc + README 纪律清单 + test/smoke.hc；**含两个 K5-pre 漏项补齐（interp.hc）**：① run_main 绑定 main 形参（bootstrap 链硬前提；args[0]=自身路径+余参透传对齐 Rust hc）；② io.fs.read_file 宿主透传（NotFound/Io→目标 Try/Catch 通道）；③ main 返回 err → stdout 响亮（flow=="return" 且 retv 为 err 才判定——retv 是残留寄存器；err 名经 Vec 拷贝避开 AST 子切片的数组格式化）。验收四连：checker OK / smoke 贯通 / usage+Usage / 缺文件 NotFound |
 | S1 源码骨架 | ✅ | 见 S1 提交 | stage2/{main,lexer,parser}.hc + README 纪律清单 + test/smoke.hc；**含两个 K5-pre 漏项补齐（interp.hc）**：① run_main 绑定 main 形参（bootstrap 链硬前提；args[0]=自身路径+余参透传对齐 Rust hc）；② io.fs.read_file 宿主透传（NotFound/Io→目标 Try/Catch 通道）；③ main 返回 err → stdout 响亮（flow=="return" 且 retv 为 err 才判定——retv 是残留寄存器；err 名经 Vec 拷贝避开 AST 子切片的数组格式化）。验收四连：checker OK / smoke 贯通 / usage+Usage / 缺文件 NotFound |
 | S2 词法提取 | ✅ | 见 S2 提交 | lexer 完整提取入 stage2/src/main.hc（自包含单文件，ADR-0031）；K1 对照 8/8 MATCH（含 30KB/6885 token 自身源码，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；**「类实例缺陷」证伪**——真根因 = CharLit props 编码（get_prop 引号剥离吃掉 " 值字节、| 截断）+ append_value 无 vec 分支 + Vec.as_slice 缺失，三者均已修；CharLit 值改存十进制文本；`hc new` 命令 + stage2 项目化（build.zon + src/ + test/）同批落地；grilling 会话产出 ADR-0031（同命名空间扁平共享）+ CONTEXT.md 术语；多文件拆分待 Rust loader 同命名空间扁平登记修复后回归 |
-| S3–S9 | 🔴 | — | |
+| S2 词法提取 | ✅ | 见 S2 提交 | lexer 完整提取入 stage2/src/main.hc（自包含单文件，ADR-0031）；K1 对照 8/8 MATCH（含 30KB/6885 token 自身源码，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；**「类实例缺陷」证伪**——真根因 = CharLit props 编码（get_prop 引号剥离吃掉 " 值字节、| 截断）+ append_value 无 vec 分支 + Vec.as_slice 缺失，三者均已修；CharLit 值改存十进制文本；`hc new` 命令 + stage2 项目化（build.zon + src/ + test/）同批落地；grilling 会话产出 ADR-0031（同命名空间扁平共享）+ CONTEXT.md 术语；多文件拆分待 Rust loader 同命名空间扁平登记修复后回归 |
+| S3 parser 提取 | ✅ | 见 S3 提交 | stage2 拆分回归（src/{main,lexer,parser}.hc，无 import 纯扁平共享，D3' loader 修复落地）；两级 AST dump 对照 9/9 MATCH（含 8037 行 parser.hc 自身 AST）；AstDumper 同步提取（--dump-ast 模式）|
+| S4–S9 | 🔴 | — | |
 | V1–V2 | 🔴 | — | |
 
 ## 风险登记
