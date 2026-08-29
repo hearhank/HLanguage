@@ -46,3 +46,7 @@ nul
 /tag1/*.ast
 /tag1/*.py
 /tag1/*.log
+
+# k4test 比对脚本的纯临时产物（用后即删）
+/stage1/k4test/diff-*.txt
+/stage1/k4test/tmp-*.txt

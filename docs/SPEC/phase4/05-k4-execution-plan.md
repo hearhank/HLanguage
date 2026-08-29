@@ -98,10 +98,10 @@
 | C6 | ✅ | 本次提交 | Vec/Map/可选值全绿（opt 盒模型）；05/08 对照 MATCH；c05/c08 摘 ignore（6 passed/4 ignored）。细化见下节 |
 | C7 | ✅ | 本次提交 | str 切片/concat/compare/fromInt 全绿；06 对照 MATCH；c06 摘 ignore（7 passed/3 ignored）。细化见下节 |
 | C8 | ✅ | 本次提交 | 对象模型/方法分发/self 读写全绿；07 对照 MATCH（连 10 综合亦提前变绿）；c07 摘 ignore（8 passed/2 ignored）。细化见下节 |
-| C9 | 🔴 | — | 细化拆分见下节 |
-| C10 | 🔴 | — | 细化拆分见下节 |
-| D1 | 🔴 | — | |
-| D2 | 🔴 | — | |
+| C9 | ✅ | 本次提交 | err 值模型 + try 传播 + catch 兔底；09 对照 MATCH。细化见下节 |
+| C10 | ✅ | 本次提交 | 10/10 对照 MATCH；k4 10 passed/0 ignored；workspace 全绿；checker OK + 自检 7/7。细化见下节 |
+| D1 | ✅ | 本次提交 | 根 README / phase4 README / 01-bootstrap-plan / stage1 README 同步 |
+| D2 | ✅ | 本次提交 | 性能基线入档（10 语料 124–322ms，启动主导） |
 
 ## 剩余任务细化拆分（2026-08-29 实测复核）
 
@@ -150,22 +150,22 @@
 
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
-| C9.1 | 错误值模型：Value 增 err 形态（kind="err" 存错误名）；`ErrorLit` 求值；`return error.X` 产生 err 载荷 | 探针打印错误传播路径 | ≤1h |
-| C9.2 | try 传播 + catch 兜底：`Try` 内 Call 返回 err → flow=return 向上传播（对齐 Zig 语义）；`Catch` 左值 err → 求兜底值；09 摘 ignore + 回归 + 提交 | cargo k4 9 passed/1 ignored | ≤1h |
+| C9.1 ✅ | Value 增 err 形态（mk_err，s 存错误名）；ErrorLit 求值；Return error.X 载荷经 retv/flow 既有机制传递 | 09 前两行：42/0 | ≤1h |
+| C9.2 ✅ | Try 求值（err → retv+flow=return 向函数边界冒泡）；Catch 求值（err → Default 包裹节点求兔底值）；09 摘 ignore + 回归全绿 | cargo k4 9 passed/1 ignored | ≤1h |
 
 ### C10 全量验收（10）
 
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
-| C10.1 | 综合语料：10 对照 MATCH（class+Vec+Map+String+控制流+错误组合）；k4 全部摘 ignore；`cargo test --workspace` 全绿 | 10 passed/0 ignored | ≤1h |
-| C10.2 | 自检：interp.hc 过 checker 检查不崩；误报数登记本文档 | 数字入档 | ≤1h |
+| C10.1 ✅ | 10 综合语料对照 MATCH（在 C8 落地时即提前变绿）；k4 全部摘 ignore（10 passed/0 ignored）；`cargo test --release --workspace` 全绿（k3 15、examples 43、全部套件 0 failed） | 10 passed/0 ignored | ≤1h |
+| C10.2 ✅ | interp.hc 过 checker 检查 OK、--self-test 7/7；登记完成 | checker OK + 自检 7/7 | ≤1h |
 
 ### D 收尾
 
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
-| D1 | 文档同步：README E7 行、`00-feature-inventory.md` §十七、`01-bootstrap-plan.md` 当前状态、stage1/README 进度表 | 文档一致；提交 | ≤1h |
-| D2 | 性能基线：10 综合语料 interp 耗时登记（K5 回归基线） | 数字入档 | ≤1h |
+| D1 ✅ | 文档同步：根 README（状态表 + E7 行）、`00-feature-inventory` 交由 K5 前盘点、`01-bootstrap-plan` Z3 行、phase4/README 自举进度、stage1/README 进度表 | 文档一致 | ≤1h |
+| D2 ✅ | 性能基线（2026-08-29，release hc.exe，含启动开销）：01 135ms / 02 124ms / 03 148ms / 04 322ms（fib 递归）/ 05 133ms / 06 132ms / 07 137ms / 08 131ms / 09 133ms / 10 198ms；启动主导 ~130ms，K5 回归以此为准 | 数字入档 | ≤1h |
 
 ### 依赖顺序
 

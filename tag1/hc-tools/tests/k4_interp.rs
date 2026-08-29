@@ -130,13 +130,11 @@ fn c08_map_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c09_errors_matches_rust_reference() {
     assert_corpus_pair("09-errors.hc");
 }
 
 #[test]
-#[ignore]
 fn c10_comprehensive_matches_rust_reference() {
     assert_corpus_pair("10-comprehensive.hc");
 }

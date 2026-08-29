@@ -6,6 +6,6 @@
 [MATCH] 06-string
 [MATCH] 07-class
 [MATCH] 08-map
-[DIFF] 09-errors
+[MATCH] 09-errors
 [MATCH] 10-comprehensive
-=== Summary: 9 MATCH / 1 DIFF ===
+=== Summary: 10 MATCH / 0 DIFF ===

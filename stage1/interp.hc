@@ -2656,6 +2656,13 @@ fn mk_obj(inst: ObjInst) Value {
         obj = inst, name = "",
     };
 }
+fn mk_err(ename: &[u8]) Value {
+    return Value{
+        kind = "err", i = 0, f = 0.0, s = ename,
+        vec = Vec<Value>.init(alloc), map = Map<&[u8], Value>.init(alloc),
+        obj = null, name = "",
+    };
+}
 
 // 环境条目
 class EnvEntry {
@@ -3123,7 +3130,7 @@ class Interp {
             return mk_void();
         }
         if (k == "Orelse") {
-            // orelse 兜底：some → 内值；none/缺失 → 兔底表达式
+            // orelse 兔底：some → 内值；none/缺失 → 兔底表达式
             if (e.children.len >= 2) {
                 var lv = self.eval_expr(e.children[0]);
                 if (lv.kind == "opt") {
@@ -3131,6 +3138,37 @@ class Interp {
                     return self.eval_expr(e.children[1]);
                 }
                 return lv;
+            }
+            return mk_void();
+        }
+        if (k == "ErrorLit") {
+            var en = get_prop(e.props, "name");
+            if (en) |en2| { return mk_err(en2); }
+            return mk_err("unknown");
+        }
+        if (k == "Try") {
+            // try 传播：err → flow=return 向函数边界冒泡
+            if (e.children.len > 0) {
+                var tv = self.eval_expr(e.children[0]);
+                if (tv.kind == "err") {
+                    self.retv = tv;
+                    self.flow = "return";
+                    return mk_void();
+                }
+                return tv;
+            }
+            return mk_void();
+        }
+        if (k == "Catch") {
+            // catch 兔底：err → 求默认值（Default 包裹节点）；否则原值
+            if (e.children.len >= 2) {
+                var cv = self.eval_expr(e.children[0]);
+                if (cv.kind == "err") {
+                    var dn = e.children[1];
+                    if (dn.children.len > 0) { return self.eval_expr(dn.children[0]); }
+                    return mk_void();
+                }
+                return cv;
             }
             return mk_void();
         }
