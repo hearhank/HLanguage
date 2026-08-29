@@ -83,7 +83,7 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | P4 纯枚举求值 | ✅ | 见 P4 提交 | Enum 登记（变体→序数）、Enum.Variant Field 访问、==/!= 同类型比序数；带负载变体不在 stage1 求值面 |
 | P5 switch 语句求值 | ✅ | 见 P5 提交 | 字面量/枚举/else 分支 + 多模式臂（修内嵌 parser 逗号 break bug，对齐 Rust）；守卫 parser 已丢弃不支持；枚举模式用 Enum.Variant 全限定形（Rust parser 不接受 .Variant） |
 | P6 对照语料 | ✅ | 见 P6 提交 | exec-corpus 11/12/13 + k4_interp.rs 3 测试 = 13 passed；对照脚本 13 MATCH；12 号语料踩纪律 5（utf8_len 须先于 main 定义）已修正 |
-| P7 | 🔴 | — | |
+| P7 多文件 import | ✅ | 见 P7 提交 | interp+checker：`import .{sym}` 同目录 sym.hc 加载（递归/环检测/菱形去重），顶层符号平铺合并，run_main 两遍化；模块路径导入（H.std.{io}）不触发文件加载；环/缺文件响亮报错；模块限定访问（a.fn()）不在本轮 |
 | S1–S9 | 🔴 | — | |
 | V1–V2 | 🔴 | — | |
 

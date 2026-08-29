@@ -942,10 +942,17 @@ class Parser {
             self.advance();
             var path = self.parse_path();
             // 选择集：import H.std.{io}（parse_path 已消费 `{` 前的点）
+            var syms = Vec<u8>.init(alloc);
+            var mut has_syms = false;
             if (self.at("LBrace")) {
                 self.advance();
+                has_syms = true;
                 while (!self.at("RBrace") and !self.at("Eof")) {
-                    var _ = self.expect_name_or_keyword();
+                    var sname = self.expect_name_or_keyword();
+                    // P7：记录选择符号（逗号分隔），供 interp 同目录文件加载
+                    var mut j2: usize = 0;
+                    while (j2 < sname.len) { syms.append(sname[j2]); j2 += 1; }
+                    syms.append(',');
                     if (self.at("Ident") and self.peek_text() == "as") {
                         self.advance();
                         var _a = self.expect_ident();
@@ -963,6 +970,15 @@ class Parser {
             self.expect("Semi");
             var u = make_node("Import");
             node_add_prop(&u, "path", path);
+            if (has_syms) {
+                // 去掉尾逗号后存入 syms prop（空选择集不存）
+                var body2 = syms.as_slice();
+                if (body2.len > 0 and body2[body2.len - 1] == ',') {
+                    node_add_prop(&u, "syms", body2[0..body2.len - 1]);
+                } else if (body2.len > 0) {
+                    node_add_prop(&u, "syms", body2);
+                }
+            }
             if (alias) |a| { node_add_prop(&u, "alias", a); }
             return u;
         }
@@ -2917,8 +2933,79 @@ class Interp {
     fns: Map<&[u8], usize>,   // 顶层 fn 注册表（存 prog.children 索引；Map 存类实例跨 put 会被重定位损坏，标量安全）
     classes: Map<&[u8], usize>,   // 类注册表（类名 → prog.children 索引）
     enums: Map<&[u8], usize>,   // P4：枚举注册表（枚举名 → prog.children 索引）
+    imports: Map<&[u8], i64>,   // P7：import 加载态（sym → 1=加载中 2=完成）
 
-    // 找 main 并执行其体（先收集顶层 fn 注册表）
+    // P7：同目录 import 递归加载 + 顶层符号合并（入口前调用）。
+    // 约定：`import .{sym}` → 同目录 sym.hc；self.imports 态 1=加载中 2=完成；环 → error.ImportCycle。
+    // 合并顺序：被导文件顶层声明追加到主程序声明之后（run_main 两遍注册，与顺序无关）。
+    fn load_imports(self: *mut Self, node: *mut AstNode, dir: &[u8]) !void {
+        // 快照本层 import 的符号（递归加载会 append children，先收集再处理）
+        var syms_list = Vec<&[u8]>.init(alloc);
+        var mut i: usize = 0;
+        while (i < node.children.len) {
+            var imp = node.children[i];
+            if (imp.kind == "Import") {
+                // 仅同目录形态 `import .{sym}` 触发文件加载：parse_path 对前导点返回空 path；
+                // 模块路径导入（如 H.std.{io}）path 非空，不走文件解析
+                var pp = get_prop(imp.props, "path");
+                if (pp) |pv| {
+                    if (pv.len == 0) {
+                        var sp = get_prop(imp.props, "syms");
+                        if (sp) |syms| {
+                            var mut a: usize = 0;
+                            var mut b: usize = 0;
+                            while (b <= syms.len) {
+                                if (b == syms.len or syms[b] == ',') {
+                                    if (b > a) { syms_list.append(syms[a..b]); }
+                                    b += 1;
+                                    a = b;
+                                } else { b += 1; }
+                            }
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        var mut si: usize = 0;
+        while (si < syms_list.len) {
+            var sym = syms_list[si];
+            var stp = self.imports.get(sym);
+            if (stp) |st| {
+                if (st == 1) { return error.ImportCycle; }
+                // st == 2：已加载，菱形依赖去重
+            } else {
+                self.imports.put(sym, 1);
+                var fpath = join_path(dir, sym);
+                var fsrc = try io.fs.read_file(fpath.as_slice(), alloc);
+                var flx: Lexer = alloc.init(Lexer{
+                    src = fsrc, n = fsrc.len,
+                    pos = 0, line = 1, col = 1,
+                    tokens = Vec<Token>.init(alloc),
+                    kw_map = build_kw_map(),
+                });
+                flx.run();
+                var fparser: Parser = alloc.init(Parser{
+                    tokens = flx.tokens, pos = 0,
+                    n = flx.tokens.len,
+                    rev_kw_map = build_rev_kw_map(),
+                });
+                var fast = fparser.parse_program();
+                // 递归处理被导文件自己的 import（同目录）；成功后置完成态再合并
+                try self.load_imports(&fast, dir);
+                self.imports.put(sym, 2);
+                var mut ci: usize = 0;
+                while (ci < fast.children.len) {
+                    self.prog.children.append(fast.children[ci]);
+                    ci += 1;
+                }
+            }
+            si += 1;
+        }
+    }
+
+    // 找 main 并执行其体（P7：两遍——先全量注册 fn/class/enum，再定位 main；
+    // 多文件合并后 main 可能先于被依赖声明出现，单遍扫描会漏注册）
     fn run_main(self: *mut Self) void {
         var mut i: usize = 0;
         while (i < self.prog.children.len) {
@@ -2932,10 +3019,18 @@ class Interp {
                 if (en) |en2| { self.enums.put(en2, i); }
             } else if (decl.kind == "Fn") {
                 var name = get_prop(decl.props, "name");
-                if (name) |nm| {
-                    self.fns.put(nm, i);
-                    if (slice_eq(nm, "main") and decl.children.len > 0) {
-                        var body = decl.children[decl.children.len - 1];
+                if (name) |nm| { self.fns.put(nm, i); }
+            }
+            i += 1;
+        }
+        var mut j: usize = 0;
+        while (j < self.prog.children.len) {
+            var decl2 = self.prog.children[j];
+            if (decl2.kind == "Fn") {
+                var name2 = get_prop(decl2.props, "name");
+                if (name2) |nm2| {
+                    if (slice_eq(nm2, "main") and decl2.children.len > 0) {
+                        var body = decl2.children[decl2.children.len - 1];
                         if (body.kind == "Block") {
                             self.exec_block(body);
                             if (slice_eq(self.flow, "return")) { self.flow = ""; }
@@ -2944,7 +3039,7 @@ class Interp {
                     }
                 }
             }
-            i += 1;
+            j += 1;
         }
     }
 
@@ -3832,6 +3927,53 @@ class Interp {
 }
 
 // ============================================================
+// P7：同目录 import 加载（多文件自举链路）
+// 约定：`import .{sym}` → 同目录 sym.hc；加载态 1=加载中 2=完成；环 → error.ImportCycle。
+// 合并顺序：被导文件顶层声明追加到主程序声明之后（求值器两遍注册，与顺序无关）。
+// ============================================================
+
+fn dir_of(path: &[u8]) &[u8] {
+    var mut last: usize = 0;
+    var mut i: usize = 0;
+    while (i < path.len) {
+        if (path[i] == '/' or path[i] == '\\') { last = i + 1; }
+        i += 1;
+    }
+    return path[0..last];
+}
+
+fn stem_of(path: &[u8]) &[u8] {
+    var mut start: usize = 0;
+    var mut i: usize = 0;
+    var mut end: usize = path.len;
+    while (i < path.len) {
+        if (path[i] == '/' or path[i] == '\\') { start = i + 1; }
+        i += 1;
+    }
+    if (path.len >= 3 and path[path.len - 3] == '.' and path[path.len - 2] == 'h' and path[path.len - 1] == 'c') {
+        end = path.len - 3;
+    }
+    return path[start..end];
+}
+
+fn join_path(dir: &[u8], name: &[u8]) Vec<u8> {
+    var out = Vec<u8>.init(alloc);
+    var mut i: usize = 0;
+    while (i < dir.len) { out.append(dir[i]); i += 1; }
+    if (dir.len > 0 and dir[dir.len - 1] != '/' and dir[dir.len - 1] != '\\') {
+        out.append('/');
+    }
+    i = 0;
+    while (i < name.len) { out.append(name[i]); i += 1; }
+    out.append('.');
+    out.append('h');
+    out.append('c');
+    return out;
+}
+
+// load_imports 为 Interp 方法（Map.put 变异方法要求可变归属，走 self 字段）
+
+// ============================================================
 // 入口
 // ============================================================
 
@@ -3954,6 +4096,11 @@ fn main(args: Vec<String>) !void {
         fns = Map<&[u8], usize>.init(alloc),
         classes = Map<&[u8], usize>.init(alloc),
         enums = Map<&[u8], usize>.init(alloc),
+        imports = Map<&[u8], i64>.init(alloc),
     });
+    // P7：同目录 import 加载（多文件自举链路）；主文件先置加载态供环检测
+    var mdir = dir_of(path.as_slice());
+    it.imports.put(stem_of(path.as_slice()), 1);
+    try it.load_imports(&ast, mdir);
     it.run_main();
 }

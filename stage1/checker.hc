@@ -948,10 +948,17 @@ class Parser {
             self.advance();
             var path = self.parse_path();
             // 选择集：import H.std.{io}（parse_path 已消费 `{` 前的点）
+            var syms = Vec<u8>.init(alloc);
+            var mut has_syms = false;
             if (self.at("LBrace")) {
                 self.advance();
+                has_syms = true;
                 while (!self.at("RBrace") and !self.at("Eof")) {
-                    var _ = self.expect_name_or_keyword();
+                    var sname = self.expect_name_or_keyword();
+                    // P7：记录选择符号（逗号分隔），供同目录文件加载
+                    var mut j2: usize = 0;
+                    while (j2 < sname.len) { syms.append(sname[j2]); j2 += 1; }
+                    syms.append(',');
                     if (self.at("Ident") and self.peek_text() == "as") {
                         self.advance();
                         var _a = self.expect_ident();
@@ -969,6 +976,15 @@ class Parser {
             self.expect("Semi");
             var u = make_node("Import");
             node_add_prop(&u, "path", path);
+            if (has_syms) {
+                // 去掉尾逗号后存入 syms prop（空选择集不存）
+                var body2 = syms.as_slice();
+                if (body2.len > 0 and body2[body2.len - 1] == ',') {
+                    node_add_prop(&u, "syms", body2[0..body2.len - 1]);
+                } else if (body2.len > 0) {
+                    node_add_prop(&u, "syms", body2);
+                }
+            }
             if (alias) |a| { node_add_prop(&u, "alias", a); }
             return u;
         }
@@ -2461,6 +2477,8 @@ class Checker {
     // ADR-0030（2026-08-29）：已 move 的变量名（use-after-move 冻结）——
     // 存标量 bool（R2：Map 只存标量避免重定位损坏）；pop_scope 时按绑定名注销
     moved: Map<&[u8], bool>,
+    // P7：import 加载态（sym → 1=加载中 2=完成）
+    imports: Map<&[u8], i64>,
 
     // 初始化：从源码构建行号表
     fn init(self: *mut Self, src: Vec<u8>) void {
@@ -2764,6 +2782,70 @@ class Checker {
             return make_ty("unknown");
         }
         return make_ty("unknown");
+    }
+
+    // P7：同目录 import 递归加载 + 顶层符号合并（check_program 前调用）。
+    // 约定与 interp.hc 一致：sym → 同目录 sym.hc；态 1=加载中 2=完成；环 → error.ImportCycle。
+    fn load_imports(self: *mut Self, node: *mut AstNode, dir: &[u8]) !void {
+        var syms_list = Vec<&[u8]>.init(alloc);
+        var mut i: usize = 0;
+        while (i < node.children.len) {
+            var imp = node.children[i];
+            if (imp.kind == "Import") {
+                // 仅同目录形态 `import .{sym}` 触发文件加载：parse_path 对前导点返回空 path；
+                // 模块路径导入（如 H.std.{io}）path 非空，不走文件解析
+                var pp = get_prop(imp.props, "path");
+                if (pp) |pv| {
+                    if (pv.len == 0) {
+                        var sp = get_prop(imp.props, "syms");
+                        if (sp) |syms| {
+                            var mut a: usize = 0;
+                            var mut b: usize = 0;
+                            while (b <= syms.len) {
+                                if (b == syms.len or syms[b] == ',') {
+                                    if (b > a) { syms_list.append(syms[a..b]); }
+                                    b += 1;
+                                    a = b;
+                                } else { b += 1; }
+                            }
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        var mut si: usize = 0;
+        while (si < syms_list.len) {
+            var sym = syms_list[si];
+            var stp = self.imports.get(sym);
+            if (stp) |st| {
+                if (st == 1) { return error.ImportCycle; }
+            } else {
+                self.imports.put(sym, 1);
+                var fpath = join_path(dir, sym);
+                var fsrc = try io.fs.read_file(fpath.as_slice(), alloc);
+                var flx: Lexer = alloc.init(Lexer{
+                    src = fsrc, n = fsrc.len,
+                    pos = 0, line = 1, col = 1,
+                    tokens = Vec<Token>.init(alloc),
+                });
+                flx.run();
+                var fparser: Parser = alloc.init(Parser{
+                    tokens = flx.tokens, pos = 0,
+                    n = flx.tokens.len,
+                    rev_kw_map = build_rev_kw_map(),
+                });
+                var fast = fparser.parse_program();
+                try self.load_imports(&fast, dir);
+                self.imports.put(sym, 2);
+                var mut ci: usize = 0;
+                while (ci < fast.children.len) {
+                    node.children.append(fast.children[ci]);
+                    ci += 1;
+                }
+            }
+            si += 1;
+        }
     }
 
     // 检查程序（两遍：收集 + 检查）
@@ -3481,6 +3563,49 @@ fn dump_ast_rec(n: AstNode, depth: usize) void {
     }
 }
 
+// ============================================================
+// P7：同目录 import 路径辅助（与 interp.hc 同实现）
+// ============================================================
+
+fn dir_of(path: &[u8]) &[u8] {
+    var mut last: usize = 0;
+    var mut i: usize = 0;
+    while (i < path.len) {
+        if (path[i] == '/' or path[i] == '\\') { last = i + 1; }
+        i += 1;
+    }
+    return path[0..last];
+}
+
+fn stem_of(path: &[u8]) &[u8] {
+    var mut start: usize = 0;
+    var mut i: usize = 0;
+    var mut end: usize = path.len;
+    while (i < path.len) {
+        if (path[i] == '/' or path[i] == '\\') { start = i + 1; }
+        i += 1;
+    }
+    if (path.len >= 3 and path[path.len - 3] == '.' and path[path.len - 2] == 'h' and path[path.len - 1] == 'c') {
+        end = path.len - 3;
+    }
+    return path[start..end];
+}
+
+fn join_path(dir: &[u8], name: &[u8]) Vec<u8> {
+    var out = Vec<u8>.init(alloc);
+    var mut i: usize = 0;
+    while (i < dir.len) { out.append(dir[i]); i += 1; }
+    if (dir.len > 0 and dir[dir.len - 1] != '/' and dir[dir.len - 1] != '\\') {
+        out.append('/');
+    }
+    i = 0;
+    while (i < name.len) { out.append(name[i]); i += 1; }
+    out.append('.');
+    out.append('h');
+    out.append('c');
+    return out;
+}
+
 fn main(args: Vec<String>) !void {
     // --dump-ast 调试模式：args[1] 为模式开关（args[0] 是程序自身路径）
     if (args.len >= 3 and args[1].as_slice() == "--dump-ast") {
@@ -3537,8 +3662,13 @@ fn main(args: Vec<String>) !void {
         current_fn_ret_is_error_union = false,
         current_class = "",
         moved = Map<&[u8], bool>.init(alloc),
+        imports = Map<&[u8], i64>.init(alloc),
     });
     checker.init(src);
+    // P7：同目录 import 加载（多文件检查）；主文件先置加载态供环检测
+    var mdir = dir_of(path.as_slice());
+    checker.imports.put(stem_of(path.as_slice()), 1);
+    try checker.load_imports(&ast, mdir);
     checker.check_program(ast);
     checker.report();
 }
