@@ -54,6 +54,8 @@
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
 | S1 | 源码骨架：`main.hc`（读源文件参数 + 阶段调度）+ `import .{lexer,parser,...}` 结构 + 纪律自查清单入库 | interp 检查通过、空编译跑通（产出空 .hbc 不要求） | ≤1h |
+
+| S1 | 源码骨架：`main.hc`（读源文件参数 + 阶段调度）+ `import .{lexer,parser,...}` 结构 + 纪律自查清单入库 | interp 检查通过、空编译跑通（产出空 .hbc 不要求） | ≤1h |
 | S2 | lexer 提取移植：从内嵌副本提取为 `lexer.hc`，适配多文件（去 self-contained 假设） | 对 6621 token 自身源码与 Rust lex 零 diff（复用 K1 对照法） | 1–3h |
 | S3 | parser 提取移植：`parser.hc` 多文件化，AST 节点模型对齐 stage2 子集 | 对 stage2 自身源码 parse 成功 + AST dump 对照抽查 | 1–3h |
 | S4 | semantic 裁剪：从 checker.hc 裁剪名称解析 + 签名/调用点类型检查（砍所有权/错误集推断） | 对 stage2 自身源码 0 误报 0 漏报（对照 Rust check） | 1–3h |
@@ -85,7 +87,8 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | P5 switch 语句求值 | ✅ | 见 P5 提交 | 字面量/枚举/else 分支 + 多模式臂（修内嵌 parser 逗号 break bug，对齐 Rust）；守卫 parser 已丢弃不支持；枚举模式用 Enum.Variant 全限定形（Rust parser 不接受 .Variant） |
 | P6 对照语料 | ✅ | 见 P6 提交 | exec-corpus 11/12/13 + k4_interp.rs 3 测试 = 13 passed；对照脚本 13 MATCH；12 号语料踩纪律 5（utf8_len 须先于 main 定义）已修正 |
 | P7 多文件 import | ✅ | 见 P7 提交 | interp+checker：`import .{sym}` 同目录 sym.hc 加载（递归/环检测/菱形去重），顶层符号平铺合并，run_main 两遍化；模块路径导入（H.std.{io}）不触发文件加载；环/缺文件响亮报错；模块限定访问（a.fn()）不在本轮 |
-| S1–S9 | 🔴 | — | |
+| S1 源码骨架 | ✅ | 见 S1 提交 | stage2/{main,lexer,parser}.hc + README 纪律清单 + test/smoke.hc；**含两个 K5-pre 漏项补齐（interp.hc）**：① run_main 绑定 main 形参（bootstrap 链硬前提；args[0]=自身路径+余参透传对齐 Rust hc）；② io.fs.read_file 宿主透传（NotFound/Io→目标 Try/Catch 通道）；③ main 返回 err → stdout 响亮（flow=="return" 且 retv 为 err 才判定——retv 是残留寄存器；err 名经 Vec 拷贝避开 AST 子切片的数组格式化）。验收四连：checker OK / smoke 贯通 / usage+Usage / 缺文件 NotFound |
+| S2–S9 | 🔴 | — | |
 | V1–V2 | 🔴 | — | |
 
 ## 风险登记

@@ -2924,6 +2924,11 @@ fn as_f(v: Value) f64 {
     return @intCast(f64, v.i);
 }
 
+// S1：宿主文件读取透传（错误路径由调用方 catch 映射为目标 err 值）
+fn host_read_file(p: &[u8]) !&[u8] {
+    return try io.fs.read_file(p, alloc);
+}
+
 // 执行器（C3：表达式面；控制流 C4、函数 C5、容器 C6+ 递增）
 class Interp {
     prog: AstNode,
@@ -3005,8 +3010,9 @@ class Interp {
     }
 
     // 找 main 并执行其体（P7：两遍——先全量注册 fn/class/enum，再定位 main；
-    // 多文件合并后 main 可能先于被依赖声明出现，单遍扫描会漏注册）
-    fn run_main(self: *mut Self) void {
+    // 多文件合并后 main 可能先于被依赖声明出现，单遍扫描会漏注册）。
+    // S1：绑定 main 形参（launch[0]=程序自身路径 + 余参透传，对齐 Rust hc 约定）。
+    fn run_main(self: *mut Self, launch: Vec<Value>) void {
         var mut i: usize = 0;
         while (i < self.prog.children.len) {
             var decl = self.prog.children[i];
@@ -3032,8 +3038,34 @@ class Interp {
                     if (slice_eq(nm2, "main") and decl2.children.len > 0) {
                         var body = decl2.children[decl2.children.len - 1];
                         if (body.kind == "Block") {
+                            // 绑定首个形参（main(args)）；参数作用域包裹函数体作用域
+                            self.env.push_scope();
+                            var mut prm: usize = 0;
+                            while (prm < decl2.children.len) {
+                                var pnode = decl2.children[prm];
+                                if (pnode.kind != "Param") { break; }
+                                var pp2 = get_prop(pnode.props, "name");
+                                if (pp2) |pname| { self.env.declare(pname, mk_vec(launch)); }
+                                prm += 1;
+                            }
                             self.exec_block(body);
-                            if (slice_eq(self.flow, "return")) { self.flow = ""; }
+                            self.env.pop_scope();
+                            if (slice_eq(self.flow, "return")) {
+                                self.flow = "";
+                                // S1：main 显式 return err / try 上浮 → stdout 响亮
+                                //（不能单看 retv——它是残留寄存器，被调函数的 err 会滞留）
+                                if (self.retv.kind == "err") {
+                                    // 经 Vec 拷贝再 as_slice（{} 对 AST 子切片按字节数组格式化，
+                                    // 对 Vec.as_slice() 按文本——后者为 builtin_print 先例）
+                                    var ebuf = Vec<u8>.init(alloc);
+                                    var mut ei: usize = 0;
+                                    while (ei < self.retv.s.len) {
+                                        ebuf.append(self.retv.s[ei]);
+                                        ei += 1;
+                                    }
+                                    io.print("error: {}\n", ebuf.as_slice());
+                                }
+                            }
                         }
                         return;
                     }
@@ -3655,6 +3687,27 @@ class Interp {
         if (head.kind == "Field") {
             var method = get_prop(head.props, "field");
             if (method) |m| {
+                // io.fs.* 宿主透传（S1：read_file——stage2 main 读目标源文件）。
+                // 错误映射：NotFound → mk_err（目标侧 Try/Catch 通道可用）；其余归 Io。
+                if (head.children[0].kind == "Field") {
+                    var fsf = get_prop(head.children[0].props, "field");
+                    if (fsf) |f2| {
+                        if (slice_eq(f2, "fs") and head.children[0].children.len > 0
+                            and head.children[0].children[0].kind == "Ident") {
+                            var ion = get_prop(head.children[0].children[0].props, "name");
+                            if (ion) |ion2| {
+                                if (slice_eq(ion2, "io") and slice_eq(m, "read_file") and e.children.len > 2) {
+                                    var pv = self.eval_expr(e.children[1]);
+                                    var data = host_read_file(pv.s) catch |err| {
+                                        if (err == error.NotFound) { return mk_err("NotFound"); }
+                                        return mk_err("Io");
+                                    };
+                                    return mk_str(data);
+                                }
+                            }
+                        }
+                    }
+                }
                 // io.print/println 内建
                 if (head.children.len > 0 and head.children[0].kind == "Ident") {
                     var bn = get_prop(head.children[0].props, "name");
@@ -4102,5 +4155,12 @@ fn main(args: Vec<String>) !void {
     var mdir = dir_of(path.as_slice());
     it.imports.put(stem_of(path.as_slice()), 1);
     try it.load_imports(&ast, mdir);
-    it.run_main();
+    // S1：目标程序 main 参数（launch[0]=目标程序自身路径 + 余参透传，对齐 Rust hc 约定）
+    var launch = Vec<Value>.init(alloc);
+    var mut lidx: usize = 1;
+    while (lidx < args.len) {
+        launch.append(mk_str(args[lidx].as_slice()));
+        lidx += 1;
+    }
+    it.run_main(launch);
 }
