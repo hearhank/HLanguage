@@ -13,12 +13,17 @@ hc run stage2 stage2\test\smoke.hc
 :: 语义检查（stage1 checker 检查 stage2 全部源码）
 hc run stage1\checker.hc stage2\src\main.hc
 
-:: 链路（stage1 interp 执行 stage2 编译器；args[1] = 编译目标）
-hc run stage1\interp.hc stage2\src\main.hc stage2\test\smoke.hc
+:: 编译（S6/S7：多文件合并 lower + HBC2 编码；声明按文件序合并）
+hc run stage2 --emit-hbc out.hbc stage2\src\main.hc stage2\src\ir.hc stage2\src\lower.hc stage2\src\encode.hc stage2\src\lexer.hc stage2\src\parser.hc stage2\src\checker.hc
+
+:: 链路（stage1 interp 执行 stage2 编译器；args[1..] = 编译参数）
+hc run stage1\interp.hc stage2\src\main.hc --emit-hbc out.hbc %SRC%
+
+:: 产物执行（HBC2 VM；编译器自身可再编译任意 .hc）
+hc run out.hbc --dump-ast target.hc
 
 :: token 对照（K1 格式，= hc lex）
 hc lex stage2\test\smoke.hc
-hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 ```
 
 ## 阶段状态
@@ -28,12 +33,12 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 | 入口/调度 | src/main.hc | ✅ S1 | 读目标参数 + 阶段调度；`io.fs.read_file` 宿主透传（S1 补入 stage1 interp） |
 | 词法 | src/lexer.hc | ✅ S2 | 提取完成；K1 对照 8/8 文件 MATCH（含 30KB 自身源码 6885 token，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；同命名空间扁平共享已落地（ADR-0031 loader 修复） |
 | 语法 | src/parser.hc | ✅ S3 | 提取完成；两级 AST dump 对照 9/9 MATCH（含 stage2 全部自身源码，parser.hc AST 8037 行）；AstDumper 同步提取（--dump-ast 模式） |
-| 语义 | （S4 建） | 🔴 S4 | 从 checker.hc **stage2 副本**裁剪（stage1/checker.hc 冻结，K3 门禁 15 项不可破） |
-| IR 模型 | （S5 建） | 🔴 S5 | IrModule/IrFunc/IrInst + kind 分发；对照 ir_inst.rs 49 变体圈定 ≤20 |
-| lower | （S6 建） | 🔴 S6 | AST → IrInst |
-| HBC2 编码 | （S7 建） | 🔴 S7 | 魔数 HBC2/v7；对照 encode.rs 子集；decode 丢 ret_ty/type_implements 无碍 |
-| 闭环脚本 | test/bootstrap.bat | 🔴 S8 | interp 跑 stage2 → A.hbc；hc run A.hbc → B.hbc；fc /b 断言 A==B |
-| 行为验证 | — | 🔴 S9 | A.hbc 执行输出 vs stage2 经 Rust 编译输出 |
+| 语义 | src/checker.hc | ✅ S4 | 从 checker.hc **stage2 副本**裁剪（stage1/checker.hc 冻结，K3 门禁 15 项不可破） |
+| IR 模型 | src/ir.hc | ✅ S5 | IrModule/IrFunc/IrInst/IrConst class + kind 分发；指令集 25 变体（对照 ir_inst.rs 49）；无 Map（平行 Vec + 线性查） |
+| lower | src/lower.hc | ✅ S6 | AST → IrInst；对齐 tag1 lower_impl 子集语义；子集外构造响亮诊断；探针 probe_ir.hc 验证 |
+| HBC2 编码 | src/encode.hc | ✅ S7 | 魔数 HBC2/v7；字段序=decode.rs 读回序；排序确定性；**V1 达成：A.hbc == B.hbc 逐字节（304166B）** |
+| 闭环脚本 | test/bootstrap.bat | 🟡 S8 | 脚本已入库；interp 全链待跑（数小时量级，登记基线后闭环） |
+| 行为验证 | — | 🔴 S9 | 待 S8 后（S9-mini 已过：编译版 --dump-ast vs Rust parse 仅 ret: 渲染差异） |
 
 ## ✅ S2 缺陷复盘（已解决，2026-08-29）
 
@@ -67,10 +72,24 @@ hc run stage1\interp.hc stage2\src\main.hc --dump-tokens stage2\test\smoke.hc
 - **io.fs.read_file**：宿主透传已入 stage1 interp；错误映射 NotFound/Io → 目标 Try/Catch 通道。
 - **main 返回 err**：stage1 interp 会在 stdout 打印 `error: <name>`（Rust 侧为非零退出 + stderr）。
 
-## 一次性自举链（S8 后）
+## lower/encode 新增陷阱（S6/S7 实测，2026-08-30）
+
+- **方法必须在类体内**：`self: *mut Self` 自由函数无 Self 语义（`self.x + 1` 报操作数类型错）。
+- **指针参需显式 `.*`**：`out: *mut Vec<u8>` 上 `out.append` 被拒，须 `out.*.append`（checker.hc append_bytes 同款）；`Vec` 赋值是引用语义（`var v = idxs` 报错），拷贝用 `copy(&idxs)`。
+- **AstNode/Vec 引用类型不可重绑**：`var cur = e; cur = cur.children[0]` 被拒——递归下降替代。
+- **`Vec` 无 `pop`**：回滚用 `remove(len - 1)`（checker.hc 同款）。
+- **循环计数/if-let 缺省赋值一律 `var mut`**（Rust hc 强制）。
+- **AtBuiltin token 文本不含 `@`**：parser 折叠为 `Ident("intCast")`——lower 须还原 `@intCast`（运行时内建名带 @），checker 两个名字都要认。
+- **stage2 parser 类方法 = `Fn` + `method=类名` prop**（非 Rust dump 的 `Method` kind）；类字段 = `FieldDecl`。
+- **若需 `v[i] = x`**：lower 已支持 StoreIndex（第 25 号指令），自举自身代码需要它。
+
+## 一次性自举链（S8）
 
 ```bat
-hc run stage1\interp.hc stage2\main.hc stage2\main.hc   REM → A.hbc
-hc run A.hbc stage2\main.hc                              REM → B.hbc
-fc /b A.hbc B.hbc                                        REM V1：字节级相等
+set SRC=stage2\src\main.hc stage2\src\ir.hc stage2\src\lower.hc stage2\src\encode.hc stage2\src\lexer.hc stage2\src\parser.hc stage2\src\checker.hc
+hc run stage1\interp.hc stage2\src\main.hc --emit-hbc stage2\test\A.hbc %SRC%   REM interp 全链（数小时）
+hc run stage2\test\A.hbc --emit-hbc stage2\test\B.hbc %SRC%                     REM A.hbc 自编译
+fc /b stage2\test\A.hbc stage2\test\B.hbc                                        REM V1：字节级相等
 ```
+
+跨宿主确定性已验证（S7）：宿主编译（tree-walking 执行编译器）产物 == A.hbc 自编译产物，逐字节相等（304166 B，21s）。

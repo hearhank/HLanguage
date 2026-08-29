@@ -664,6 +664,15 @@ impl Interp {
                     Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
                 }
             }
+            // io.fs.write_file(path, data, alloc)：整文件写入（截断；K5 S8：stage2 编码产物落盘）
+            "write_file" => {
+                let path = self.eval_path_arg(args, 0, span)?;
+                let data = self.eval_str_arg(args, 1, span)?;
+                match std::fs::write(&path, &data) {
+                    Ok(()) => Ok(Some(Value::Void)),
+                    Err(e) => Ok(Some(self.err_val(&self.io_error_name(&e)))),
+                }
+            }
             // io.fs.read_all(file, alloc)：从句柄读整个文件（从头）
             "read_all" => {
                 let fd = {

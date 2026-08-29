@@ -79,16 +79,37 @@ impl Ctx {
         self.cells.push(cell);
         self.cells.len() - 1
     }
-    /// 读槽值（槽 → cell → value；槽/元素/字段 cell 恒为 `Cell::Value`——不变量）
-    pub(in crate::ir) fn get(&self, frame: &Frame, slot: usize) -> &IrValue {
-        match &self.cells[frame.cells[slot]] {
-            Cell::Value(v) => v,
-            _ => unreachable!("slot cell is not a value cell"),
+    /// 读槽值（未装箱槽直读内联值；已装箱槽写穿 cell）
+    pub(in crate::ir) fn get<'a>(&'a self, frame: &'a Frame, slot: usize) -> &'a IrValue {
+        let c = frame.cell_of[slot];
+        if c >= 0 {
+            match &self.cells[c as usize] {
+                Cell::Value(v) => v,
+                _ => unreachable!("slot cell is not a value cell"),
+            }
+        } else {
+            &frame.values[slot]
         }
     }
-    /// 写槽值
-    pub(in crate::ir) fn set(&mut self, frame: &Frame, slot: usize, v: IrValue) {
-        self.cells[frame.cells[slot]] = Cell::Value(v);
+    /// 写槽值（未装箱槽直写内联值；已装箱槽写穿 cell）
+    pub(in crate::ir) fn set(&mut self, frame: &mut Frame, slot: usize, v: IrValue) {
+        let c = frame.cell_of[slot];
+        if c >= 0 {
+            self.cells[c as usize] = Cell::Value(v);
+        } else {
+            frame.values[slot] = v;
+        }
+    }
+    /// 槽惰性装箱（K5 S8：`&x`/捕获/迭代重定向时调用；返回承载该槽的 cell）。
+    /// cell 以当前值播种，此后该槽读写一律写穿。
+    pub(in crate::ir) fn box_slot(&mut self, frame: &mut Frame, slot: usize) -> usize {
+        let c = frame.cell_of[slot];
+        if c >= 0 {
+            return c as usize;
+        }
+        let cell = self.alloc(Cell::Value(frame.values[slot].clone()));
+        frame.cell_of[slot] = cell as i64;
+        cell
     }
     /// 读 cell 值（指针目标/数组元素/类字段）
     pub(in crate::ir) fn cell_value(&self, cell: usize) -> &IrValue {

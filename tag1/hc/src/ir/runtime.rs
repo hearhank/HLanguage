@@ -340,22 +340,21 @@ pub(crate) fn exec_func(
         return Err(IrError::msg("StackOverflow", "maximum call depth exceeded"));
     }
     let func = &module.funcs[idx];
+    // 帧槽内联值（K5 S8：每调用零 cell 分配；`&x`/捕获时才惰性装箱）
     let mut frame = Frame {
-        cells: Vec::with_capacity(func.n_slots),
+        values: vec![IrValue::Void; func.n_slots],
+        cell_of: vec![-1; func.n_slots],
         defers: Vec::new(),
         readonly: Vec::new(),
         boxed: HashSet::new(),
     };
-    for _ in 0..func.n_slots {
-        frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
-    }
     // 绑定实参；缺失尾参用编译期常量默认值补齐（ADR-0009 / 对齐 oracle `call_fn`）
     for (i, ps) in func.params.iter().enumerate() {
         if i < args.len() {
-            ctx.set(&frame, *ps, args[i].clone());
+            ctx.set(&mut frame, *ps, args[i].clone());
         } else if i < func.defaults.len() {
             if let Some(d) = &func.defaults[i] {
-                ctx.set(&frame, *ps, const_val(d));
+                ctx.set(&mut frame, *ps, const_val(d));
             }
         }
     }
@@ -387,25 +386,23 @@ pub(crate) fn call_closure_ir(
         func.params.iter().take(n_caps).copied().collect()
     };
     let mut frame = Frame {
-        cells: Vec::with_capacity(func.n_slots),
+        values: vec![IrValue::Void; func.n_slots],
+        cell_of: vec![-1; func.n_slots],
         defers: Vec::new(),
         readonly,
         boxed: HashSet::new(),
     };
-    for _ in 0..func.n_slots {
-        frame.cells.push(ctx.alloc(Cell::Value(IrValue::Void)));
-    }
-    // 捕获参数（前 n_caps 个槽）→ 直接绑定捕获 cell（写穿调用方槽）
+    // 捕获参数（前 n_caps 个槽）→ 绑定捕获 cell（写穿调用方槽）
     for (i, cap_cell) in captures.iter().enumerate() {
         if i < func.params.len() {
-            frame.cells[func.params[i]] = *cap_cell;
+            frame.cell_of[func.params[i]] = *cap_cell as i64;
         }
     }
     // 显式参数（捕获参数之后）
     for (i, ps) in func.params.iter().enumerate().skip(n_caps) {
         let ai = i - n_caps;
         if ai < args.len() {
-            ctx.set(&frame, *ps, args[ai].clone());
+            ctx.set(&mut frame, *ps, args[ai].clone());
         }
     }
     exec_body(ctx, module, func, frame, depth)
@@ -418,7 +415,7 @@ fn exec_data(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
     match inst {
         IrInst::Const { temp, val } => {
             ctx.set(
-                &frame,
+                frame,
                 *temp,
                 match val {
                     IrConst::Int(i) => IrValue::Int(*i),
@@ -437,7 +434,7 @@ fn exec_data(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
         }
         IrInst::Load { temp, slot } => {
             let v = ctx.get(&frame, *slot).clone();
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::Store { slot, temp } => {
             // M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包写捕获参数槽 → 错误
@@ -449,17 +446,17 @@ fn exec_data(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
                 ));
             }
             let v = ctx.get(&frame, *temp).clone();
-            ctx.set(&frame, *slot, v);
+            ctx.set(frame, *slot, v);
         }
         IrInst::Bin { op, temp, a, b } => {
             let (av, bv) = (ctx.get(&frame, *a).clone(), ctx.get(&frame, *b).clone());
             let v = binop(*op, ctx, &av, &bv)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::Un { op, temp, a } => {
             let av = ctx.get(&frame, *a).clone();
             ctx.set(
-                &frame,
+                frame,
                 *temp,
                 match op {
                     IrUnOp::Neg => match av {
@@ -549,7 +546,7 @@ fn exec_call(
                 let root = name.split('.').next().unwrap_or("");
                 if is_dotted_implicit_root(root) && name.contains('.') {
                     let v = call_dotted_implicit(ctx, module, name, &arg_vals)?;
-                    ctx.set(&frame, *temp, v);
+                    ctx.set(frame, *temp, v);
                     // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
                     return Ok(());
                 }
@@ -557,7 +554,7 @@ fn exec_call(
             let callee_idx = pick_func(ctx, module, name, &arg_vals)
                 .ok_or_else(|| IrError::msg("NoFunction", format!("no function `{name}`")))?;
             let v = exec_func(ctx, module, callee_idx, &arg_vals, depth + 1)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::CallBuiltin { name, args, temp } => {
             let arg_vals: Vec<IrValue> = args.iter().map(|a| ctx.get(&frame, *a).clone()).collect();
@@ -568,7 +565,7 @@ fn exec_call(
                     frame.boxed.insert(*cell);
                 }
             }
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         _ => unreachable!(),
     }
@@ -640,14 +637,15 @@ fn exec_return(
 fn exec_ptr(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
     match inst {
         IrInst::AddrSlot { temp, slot } => {
-            let cell = frame.cells[*slot];
-            ctx.set(&frame, *temp, IrValue::Ptr(cell));
+            // `&x`：槽惰性装箱——此后该槽读写写穿 cell（别名语义保持）
+            let cell = ctx.box_slot(frame, *slot);
+            ctx.set(frame, *temp, IrValue::Ptr(cell));
         }
         IrInst::AddrValue { temp, value } => {
             // 非 lvalue 取址快照：求值结果复制进新 cell（对齐 tree-walking `&expr` 兜底）
             let v = ctx.get(&frame, *value).clone();
             let cell = ctx.alloc(Cell::Value(v));
-            ctx.set(&frame, *temp, IrValue::Ptr(cell));
+            ctx.set(frame, *temp, IrValue::Ptr(cell));
         }
         IrInst::Deref { temp, a } => {
             // 解引用：Ptr/Boxed → pointee；非 Ptr → 恒等（对齐 tree-walking `deref_value`）
@@ -659,7 +657,7 @@ fn exec_ptr(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
                 },
                 other => other.clone(),
             };
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::StorePtr { target, value } => {
             let t = ctx.get(&frame, *target).clone();
@@ -693,7 +691,7 @@ fn exec_aggregate(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &Ir
         IrInst::Field { temp, base, field } => {
             let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
             let v = field_value(ctx, &bv, field)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::StoreField { base, field, value } => {
             let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
@@ -720,7 +718,7 @@ fn exec_aggregate(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &Ir
             let iv = deref_value(ctx, ctx.get(&frame, *index)).clone();
             let i = as_index(ctx, &iv)?;
             let v = index_value(ctx, &bv, i)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::StoreIndex { base, index, value } => {
             let bv = deref_value(ctx, ctx.get(&frame, *base)).clone();
@@ -742,7 +740,7 @@ fn exec_aggregate(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &Ir
                 }
             };
             let v = slice_of(ctx, &bv, lo_i, hi_i, open)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::StoreSlice {
             base,
@@ -780,7 +778,7 @@ fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst)
                 cells.push(ctx.alloc(Cell::Value(v)));
             }
             let c = ctx.alloc(Cell::Elems(cells));
-            ctx.set(&frame, *temp, IrValue::Arr(c));
+            ctx.set(frame, *temp, IrValue::Arr(c));
         }
         IrInst::MakeClass { temp, ty, fields } => {
             let mut fs = HashMap::new();
@@ -792,7 +790,7 @@ fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst)
                 name: ty.clone(),
                 fields: fs,
             });
-            ctx.set(&frame, *temp, IrValue::Class(c));
+            ctx.set(frame, *temp, IrValue::Class(c));
         }
         IrInst::MakeEnum {
             temp,
@@ -805,7 +803,7 @@ fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst)
                 None => None,
             };
             ctx.set(
-                &frame,
+                frame,
                 *temp,
                 IrValue::Enum {
                     name: name.clone(),
@@ -829,13 +827,13 @@ fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst)
             for (slot, elem) in slots.iter().zip(elems.iter()) {
                 if let Some(s) = slot {
                     let v = ctx.cell_value(*elem).clone();
-                    ctx.set(&frame, *s, v);
+                    ctx.set(frame, *s, v);
                 }
             }
         }
         IrInst::Move { temp, a } => {
             let v = ctx.get(&frame, *a).clone();
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::DeepCopy { temp, a } => {
             let v = ctx.get(&frame, *a).clone();
@@ -845,7 +843,7 @@ fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst)
             } else {
                 v
             };
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::Unwrap { temp, a } => {
             let v = deref_value(ctx, ctx.get(&frame, *a)).clone();
@@ -856,7 +854,7 @@ fn exec_make(ctx: &mut Ctx, module: &IrModule, frame: &mut Frame, inst: &IrInst)
                 }
                 other => other,
             };
-            ctx.set(&frame, *temp, r);
+            ctx.set(frame, *temp, r);
         }
         _ => unreachable!(),
     }
@@ -880,7 +878,7 @@ fn exec_pattern_iter(
             pattern,
         } => {
             let sv = deref_value(ctx, ctx.get(&frame, *subject)).clone();
-            ctx.set(&frame, *temp, IrValue::Bool(match_pattern(&sv, pattern)));
+            ctx.set(frame, *temp, IrValue::Bool(match_pattern(&sv, pattern)));
         }
         IrInst::MakeRange { temp, lo, hi } => {
             let lo_v = deref_value(ctx, ctx.get(&frame, *lo)).clone();
@@ -896,18 +894,18 @@ fn exec_pattern_iter(
                 i += 1;
             }
             let c = ctx.alloc(Cell::Elems(cells));
-            ctx.set(&frame, *temp, IrValue::Arr(c));
+            ctx.set(frame, *temp, IrValue::Arr(c));
         }
         IrInst::EnumPayload { temp, a } => {
             let av = ctx.get(&frame, *a).clone();
             let v = enum_payload(ctx, &av)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::IterMake { temp, base } => {
             let bv = ctx.get(&frame, *base).clone();
             let items = make_iter(ctx, module, &bv, depth)?;
             let c = ctx.alloc(Cell::Iter { items, next: 0 });
-            ctx.set(&frame, *temp, IrValue::Iter(c));
+            ctx.set(frame, *temp, IrValue::Iter(c));
         }
         IrInst::IterNext {
             has,
@@ -937,19 +935,19 @@ fn exec_pattern_iter(
             match item {
                 Some(it) => {
                     if *read_only {
-                        // Read 捕获：槽 cell 置为该项值副本（与容器无别名；
+                        // Read 捕获：槽置为该项值副本（与容器无别名；
                         // 非 Value cell——如 Map 的 KV Class 条目——用 read_cell 还原句柄）
                         let v = ctx.read_cell(it.cell);
-                        ctx.set_cell(frame.cells[*slot], v);
+                        ctx.set(frame, *slot, v);
                     } else {
-                        // Mut/Move 捕获：槽 cell 绑定共享源 cell（写穿）；
+                        // Mut/Move 捕获：槽装箱绑定共享源 cell（写穿）；
                         // [IrInst::IterWriteBack] 在 run_ir 为无操作（槽 cell 即源 cell）。
-                        frame.cells[*slot] = it.cell;
+                        frame.cell_of[*slot] = it.cell as i64;
                     }
-                    ctx.set(&frame, *has, IrValue::Bool(true));
+                    ctx.set(frame, *has, IrValue::Bool(true));
                 }
                 None => {
-                    ctx.set(&frame, *has, IrValue::Bool(false));
+                    ctx.set(frame, *has, IrValue::Bool(false));
                 }
             }
         }
@@ -971,20 +969,20 @@ fn exec_closure(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
         } => {
             let mut cap_cells = Vec::with_capacity(captures.len());
             for (_, slot) in captures {
-                let cell = frame.cells[*slot];
                 if *is_move {
-                    // move 捕获：深拷贝到新 cell（闭包脱离原作用域生命周期）
-                    let v = ctx.cell_value(cell).clone();
+                    // move 捕获：深拷贝独立 cell（闭包脱离原作用域生命周期）
+                    let v = ctx.get(frame, *slot).clone();
                     let dv = deep_copy(ctx, v);
                     let ncell = ctx.alloc(Cell::Value(dv));
                     cap_cells.push(ncell);
                 } else {
-                    // 读/mut 捕获：共享源 cell（写穿）
+                    // 读/mut 捕获：槽装箱共享源 cell（写穿）
+                    let cell = ctx.box_slot(frame, *slot);
                     cap_cells.push(cell);
                 }
             }
             ctx.set(
-                &frame,
+                frame,
                 *temp,
                 IrValue::Closure {
                     func: *func,
@@ -994,7 +992,7 @@ fn exec_closure(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
             );
         }
         IrInst::FnRef { temp, name } => {
-            ctx.set(&frame, *temp, IrValue::Fn(name.clone()));
+            ctx.set(frame, *temp, IrValue::Fn(name.clone()));
         }
         _ => unreachable!(),
     }
@@ -1016,7 +1014,7 @@ fn exec_global(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
                 })?;
                 ctx.cell_value(cell).clone()
             };
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::StoreGlobal { name, value } => {
             let cell =
@@ -1032,7 +1030,7 @@ fn exec_global(ctx: &mut Ctx, frame: &mut Frame, inst: &IrInst) -> R<()> {
                 ctx.globals.get(name).copied().ok_or_else(|| {
                     IrError::msg("NoGlobal", format!("undefined global `{name}`"))
                 })?;
-            ctx.set(&frame, *temp, IrValue::Ptr(cell));
+            ctx.set(frame, *temp, IrValue::Ptr(cell));
         }
         _ => unreachable!(),
     }
@@ -1074,7 +1072,7 @@ fn exec_call_dynamic(
                     ))
                 }
             };
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         IrInst::CallMethod {
             temp,
@@ -1087,7 +1085,7 @@ fn exec_call_dynamic(
             if let IrValue::Boxed(bc) = &raw {
                 if method == "alloc" {
                     if let Cell::Boxed { alloc, .. } = &ctx.cells[*bc] {
-                        ctx.set(&frame, *temp, alloc.clone());
+                        ctx.set(frame, *temp, alloc.clone());
                         // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
                         return Ok(());
                     }
@@ -1097,7 +1095,7 @@ fn exec_call_dynamic(
             if let IrValue::Vec(vc) = &raw {
                 if method == "alloc" {
                     if let Cell::Vec { alloc, .. } = &ctx.cells[*vc] {
-                        ctx.set(&frame, *temp, alloc.clone());
+                        ctx.set(frame, *temp, alloc.clone());
                         // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
                         return Ok(());
                     }
@@ -1106,7 +1104,7 @@ fn exec_call_dynamic(
             if let IrValue::Map(mc) = &raw {
                 if method == "alloc" {
                     if let Cell::Map { alloc, .. } = &ctx.cells[*mc] {
-                        ctx.set(&frame, *temp, alloc.clone());
+                        ctx.set(frame, *temp, alloc.clone());
                         // 原 `pc += 1; continue;`：提前返回，主循环底部 `pc += 1` 补齐
                         return Ok(());
                     }
@@ -1118,13 +1116,15 @@ fn exec_call_dynamic(
                 arg_vals.push(ctx.get(&frame, *a).clone());
             }
             let v = call_method_ir(ctx, module, &self_v, method, &arg_vals)?;
-            ctx.set(&frame, *temp, v);
+            ctx.set(frame, *temp, v);
         }
         _ => unreachable!(),
     }
     Ok(())
 }
 
+/// K5 S8：帧槽回收（`&x` 未逃逸的帧）。槽 cell 内容覆写为 Void 后整批入池，
+/// 下次 `exec_func` 复用 cell 索引——cell 堆停止随调用次数无界增长。
 pub(crate) fn exec_body(
     ctx: &mut Ctx,
     module: &IrModule,

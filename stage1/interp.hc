@@ -3088,6 +3088,11 @@ fn host_read_file(p: &[u8]) !&[u8] {
     return try io.fs.read_file(p, alloc);
 }
 
+// K5 S8：宿主文件写入透传（stage2 编码产物落盘；截断写）
+fn host_write_file(p: &[u8], data: &[u8]) !void {
+    return try io.fs.write_file(p, data, alloc);
+}
+
 // S2：文件名字典序小于（插入排序用；前缀规则：短者在前）
 fn str_lt(a: &[u8], b: &[u8]) bool {
     var mut i: usize = 0;
@@ -3960,6 +3965,21 @@ class Interp {
                                         return mk_err("Io");
                                     };
                                     return mk_str(data);
+                                }
+                                // K5 S8：io.fs.write_file(path, data, alloc) → void。
+                                // 宿主会重求值实参表达式——须传本地切片值而非 interp 内部字段
+                                if (slice_eq(ion2, "io") and slice_eq(m, "write_file") and e.children.len > 3) {
+                                    var wpath = self.eval_expr(e.children[1]);
+                                    var wdata = self.eval_expr(e.children[2]);
+                                    var wpathb = Vec<u8>.init(alloc);
+                                    append_bytes(&wpathb, wpath.s);
+                                    var wdatab = Vec<u8>.init(alloc);
+                                    append_bytes(&wdatab, wdata.s);
+                                    host_write_file(wpathb.as_slice(), wdatab.as_slice()) catch |err| {
+                                        if (err == error.NotFound) { return mk_err("NotFound"); }
+                                        return mk_err("Io");
+                                    };
+                                    return mk_void();
                                 }
                             }
                         }

@@ -89,7 +89,11 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | S2 词法提取 | ✅ | 见 S2 提交 | lexer 完整提取入 stage2/src/main.hc（自包含单文件，ADR-0031）；K1 对照 8/8 MATCH（含 30KB/6885 token 自身源码，stage1 链路 464s ≈ 12 tok/s 嵌套解释固有速率）；**「类实例缺陷」证伪**——真根因 = CharLit props 编码（get_prop 引号剥离吃掉 " 值字节、| 截断）+ append_value 无 vec 分支 + Vec.as_slice 缺失，三者均已修；CharLit 值改存十进制文本；`hc new` 命令 + stage2 项目化（build.zon + src/ + test/）同批落地；grilling 会话产出 ADR-0031（同命名空间扁平共享）+ CONTEXT.md 术语；多文件拆分待 Rust loader 同命名空间扁平登记修复后回归 |
 | S3 parser 提取 | ✅ | 见 S3 提交 | stage2 拆分回归（src/{main,lexer,parser}.hc，无 import 纯扁平共享，D3' loader 修复落地）；两级 AST dump 对照 9/9 MATCH（含 8037 行 parser.hc 自身 AST）；AstDumper 同步提取（--dump-ast 模式）|
 | S4 semantic 裁剪 | ✅ | 见 S4 提交 | stage2/src/checker.hc 985 行（原 3743）：保留 Checker/类型/签名/调用点检查，切除所有权机制（moved/AllocSource/infer_source/Move 分支）与工具副本（自带 main/Lexer/Parser/helpers）；stage2 main 接线检查阶段（diags>0 → report + CheckFailed）；0 误报（三链路 check ok）+ 0 漏报抽查（undefined_fn 拒绝） |
-| S5–S9 | 🔴 | — | |
+| S5 IR 模型 | ✅ | 见 S5 提交 | stage2/src/ir.hc（IrModule/IrFunc/IrInst/IrConst class + kind 分发）；指令集 25 变体入档（对照 ir_inst.rs 49 变体）；无 Map（平行 Vec + 线性查，R1/R5） |
+| S6 lower | ✅ | 见 S6 提交 | stage2/src/lower.hc（lower_module：定义预收集→函数发射→组装）；语义对齐 tag1 lower_impl 子集（And/Or 短路、try=JumpIfErr+Return、if-capture=JumpIfNull+Unwrap、CallMethod {Type}.{method}、限定调用隐式环境路由、@intCast 类型位 Const Str）；类方法=Fn+method prop（stage2 parser 契约）；子集外构造响亮诊断；探针 probe_ir.hc 全指令面验证 | 
+| S7 HBC2 编码 | ✅ | 见 S7 提交 | stage2/src/encode.hc（魔数 HBC2/v7；字段序=decode.rs 读回序；func_index/错误码/枚举名排序确定性；Int=i128 LE 16 字节符号扩展）；多文件合并编译接线（--emit-hbc out in1.hc in2.hc...，单 Program 声明序合并）；**V1 达成：A.hbc == B.hbc 逐字节**（宿主编译产物 vs A.hbc 自编译产物，304166 字节，21s） |
+| S8 闭环脚本 | 🟡 | — | stage2/test/bootstrap.bat 已入库（A: interp 全链 → B: A.hbc 自编译 → fc /b）；interp 全链待跑（数小时量级，登记基线后即闭环） |
+| S9 行为验证 | 🔴 | — | 待 S8 后（已有 S9-mini：编译版 --dump-ast vs Rust parse 仅 ret: 渲染差异，其余逐行一致） |
 | V1–V2 | 🔴 | — | |
 
 ## 风险登记
@@ -99,4 +103,5 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 - **checker.hc 裁剪回归**：S4 动 checker 副本时不得破坏 K3 对照门禁（15 项）——裁剪在 stage2/ 副本上进行，stage1/checker.hc 冻结。
 - **HBC2 编码器正确性**：decode 丢 `ret_ty`/`type_implements`（decode.rs:94,136）对 execute_ir 无碍（只要求 func_index 含 main），但 encoder 需避免依赖被丢字段。
 - **确定性漏洞**：任何 Map 迭代/哈希顺序依赖会破坏 V1 字节等价——纪律 1 执行中用探针盯防。
+- **IR VM 帧槽模型重构（S7 期间落地，K5-pre 级）**：原模型每调用为每槽分配共享 cell 且永不回收——编译期百万级方法调用把 cell 堆推至 32GB（alloc abort）。重构为帧槽内联值 + 惰性装箱（`&x`/闭包捕获/迭代 Mut 捕获时才建 cell 写穿），每调用零 cell 分配；别名/写穿/Boxed/只读捕获语义不变（hc 108+153 测试全绿）。同批修复：① tree-walking extract_bytes 不认 H4 切片视图（interp 链 read_file/write_file 全挂的存量回归）；② interp write_file 宿主透传；③ IR 内建 write_file；④ stage2 checker @ 内建名识别（intCast 无 @ 形态）
 - **工作量**：S2–S7 标 1–3h，执行时按 K4 惯例细拆为 ≤1h 步骤；stage2 语言子集若失控（贪心支持更多构造）立即回切纪律 1–7。

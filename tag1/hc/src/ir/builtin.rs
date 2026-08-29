@@ -40,6 +40,15 @@ pub(crate) fn call_fs_method_ir(
                 Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
             }
         }
+        "write_file" => {
+            // K5 S8：stage2 编码产物落盘（截断写；与 tree-walking/interp 语义一致）
+            let path = path_arg_ir(ctx, args, 0)?;
+            let data = str_arg_ir(ctx, args, 1)?;
+            match std::fs::write(&path, &data) {
+                Ok(()) => Ok(Some(IrValue::Void)),
+                Err(e) => Ok(Some(err_val(module, &io_error_name_ir(&e)))),
+            }
+        }
         "read_all" => {
             let f = args
                 .get(0)

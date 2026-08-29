@@ -2,12 +2,16 @@
 
 use super::*;
 
-/// 帧：槽 → cell 索引（别名关键装置——`&x` 即 `Ptr(frame.cells[slot_of_x])`）。
+/// 帧：槽内联值 + 惰性装箱（K5 S8——每调用零 cell 分配；`&x`/捕获/迭代重定向
+/// 时才为该槽分配 cell，此后读写写穿 cell）。
 /// `defers`：本调用内待运行 defer 的多重集（PushDefer 增 / PopDefer 减；守卫判成员）。
 /// 运行时 LIFO 顺序由编译期发射顺序保证，故此处仅需「是否待运行」判定，无需栈序。
 #[derive(Debug, Clone)]
 pub struct Frame {
-    pub cells: Vec<usize>,
+    /// 槽内联值（cell_of[slot] < 0 时读写直达此处）
+    pub values: Vec<IrValue>,
+    /// 槽 → cell（-1 = 未装箱；`&x`/闭包捕获/迭代 Mut 捕获时置位——此后读写写穿 cell）
+    pub cell_of: Vec<i64>,
     pub defers: Vec<usize>,
     /// M2.7 只读捕获强制（Phase 8）：非 `mut` 闭包帧中**只读**的捕获参数槽号。
     /// [`IrInst::Store`] 写这些槽 → ReadonlyCapture（对齐 oracle `readonly_caps`）。

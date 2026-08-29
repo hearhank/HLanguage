@@ -357,9 +357,11 @@ class Checker {
                             var sig = self.funcs.get(n);
                             if (sig) |s| { return s.ret_type; }
                         }
-                        // 内建函数
+                        // 内建函数（stage2 lexer：AtBuiltin token 文本不含 @）
                         if (n == "expect" or n == "expect_eq") return make_ty("void");
                         if (n == "@intCast" or n == "@floatCast") return make_ty("unknown");
+                        if (n == "intCast" or n == "floatCast") return make_ty("unknown");
+                        if (n.len > 0 and n[0] == '@') return make_ty("unknown");
                     }
                 }
             }
@@ -944,6 +946,18 @@ class Checker {
     fn is_builtin_name(self: *mut Self, name: &[u8]) bool {
         if (slice_eq(name, "alloc") or slice_eq(name, "page_allocator")) return true;
         if (slice_eq(name, "io") or slice_eq(name, "stdout") or slice_eq(name, "stderr")) return true;
+        // @ 内建（stage2 lexer 的 AtBuiltin token 文本不含 @，如 intCast）
+        if (name.len > 0 and name[0] == '@') return true;
+        if (slice_eq(name, "intCast") or slice_eq(name, "floatCast")) return true;
+        if (slice_eq(name, "sizeOf") or slice_eq(name, "alignOf") or slice_eq(name, "offsetOf")) return true;
+        // 自由内建（对齐 tag1 ops.rs is_free_builtin）
+        if (slice_eq(name, "box") or slice_eq(name, "unbox") or slice_eq(name, "copy")) return true;
+        if (slice_eq(name, "sqrt") or slice_eq(name, "min") or slice_eq(name, "max")) return true;
+        if (slice_eq(name, "fmt_int") or slice_eq(name, "fmt_float") or slice_eq(name, "read_u64_le")) return true;
+        if (slice_eq(name, "sort") or slice_eq(name, "binary_search")) return true;
+        if (slice_eq(name, "skip_space") or slice_eq(name, "peek") or slice_eq(name, "advance")) return true;
+        if (slice_eq(name, "is_digit") or slice_eq(name, "parse_number")) return true;
+        if (slice_eq(name, "parse_int") or slice_eq(name, "parse_float") or slice_eq(name, "spawn")) return true;
         if (slice_eq(name, "true") or slice_eq(name, "false") or slice_eq(name, "null") or slice_eq(name, "void")) return true;
         if (slice_eq(name, "pi")) return true;
         if (slice_eq(name, "Vec") or slice_eq(name, "Deque") or slice_eq(name, "Map") or slice_eq(name, "Table")) return true;

@@ -20,6 +20,63 @@ fn parse_tokens(toks: Vec<Token>) AstNode {
 // ============================================================
 
 fn main(args: Vec<String>) !void {
+    // S6/S7：--emit-hbc <out.hbc> <in.hc> [in2.hc...]——多文件合并编译（单 Program，声明按文件序合并）
+    if (args.len >= 3 and args[1].as_slice() == "--emit-hbc") {
+        if (args.len < 4) {
+            io.print("usage: main --emit-hbc <out.hbc> <in.hc> [more.hc...]\n");
+            return error.Usage;
+        }
+        var out_path = args[2];
+        var prog = make_node("Program");
+        var mut fi: usize = 3;
+        while (fi < args.len) {
+            var fsrc = try io.fs.read_file(args[fi], alloc);
+            var ftoks = lex_source(fsrc);
+            var fast = parse_tokens(ftoks);
+            var mut di: usize = 0;
+            while (di < fast.children.len) {
+                node_add_child(&prog, fast.children[di]);
+                di += 1;
+            }
+            fi += 1;
+        }
+        // 语义检查（合并后单 Program；src 取首文件仅作诊断定位）
+        var src0 = try io.fs.read_file(args[3], alloc);
+        var checker: Checker = alloc.init(Checker{
+            diags = Vec<Vec<u8>>.init(alloc),
+            src = Vec<u8>.init(alloc),
+            line_starts = Vec<usize>.init(alloc),
+            scopes = Vec<ScopeEntry>.init(alloc),
+            scope_sizes = Vec<usize>.init(alloc),
+            types = Map<&[u8], SType>.init(alloc),
+            funcs = Map<&[u8], FnSig>.init(alloc),
+            current_fn_ret_is_error_union = false,
+            current_class = "",
+        });
+        checker.init(src0);
+        checker.check_program(prog);
+        if (checker.diags.len > 0) {
+            checker.report();
+            return error.CheckFailed;
+        }
+        // lower（S6）：子集外构造响亮失败
+        var l = lower_module(prog);
+        if (l.errs.len > 0) {
+            io.print("lower failed: {} diagnostics\n", l.errs.len);
+            var mut ei: usize = 0;
+            while (ei < l.errs.len) {
+                io.print("  - {}\n", l.errs[ei]);
+                ei += 1;
+            }
+            return error.LowerFailed;
+        }
+        // HBC2 编码（S7）落盘
+        var m = lower_finish(&l);
+        var bytes = enc_module(m);
+        try io.fs.write_file(out_path, bytes.as_slice(), alloc);
+        io.print("stage2: {} files -> {} decls -> {} funcs -> {} bytes -> {}\n", args.len - 3, prog.children.len, l.funcs.len, bytes.len, out_path);
+        return;
+    }
     // S3：AST 转储（与 hc run stage1/interp.hc --dump-ast 同格式）
     if (args.len >= 3 and args[1].as_slice() == "--dump-ast") {
         var dsrc = try io.fs.read_file(args[2], alloc);
