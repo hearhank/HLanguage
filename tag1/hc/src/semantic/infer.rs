@@ -892,6 +892,10 @@ impl Checker {
 
     /// 类型是否实现接口（内建实现 / class 冒号标注）
     pub(crate) fn implements(&self, t: &SType, iface: &str) -> bool {
+        // IToString/IHashCode（2026-08-29）：所有类型默认实现（内建接口）
+        if matches!(iface, "IToString" | "IHashCode") {
+            return true;
+        }
         match t {
             SType::Int { width } => match width {
                 IntWidth::I8
@@ -927,6 +931,10 @@ impl Checker {
     /// 字段访问校验（Field / Dot 链）
     pub(crate) fn check_field_access(&mut self, bt: Option<&SType>, field: &str, span: &Span) {
         let bt = bt.map(|t| self.deref_member(t)); // 自动解引用（A3）
+                                                   // IToString/IHashCode：所有类型默认实现——无括号字段访问形态放行
+        if is_universal_method(field) {
+            return;
+        }
         match bt {
             Some(SType::Named(n, _)) if !is_builtin_type(n) => {
                 if let Some(TypeKind::Class { fields, .. }) = self.types.get(n).map(|i| &i.kind) {
@@ -2578,6 +2586,10 @@ impl Checker {
             Type::Named(n, _) => n.clone(),
             _ => return,
         };
+        // IToString/IHashCode（2026-08-29）：所有类型默认实现——约束验证放行
+        if matches!(iface_name.as_str(), "IToString" | "IHashCode") {
+            return;
+        }
         let ok = match concrete {
             SType::Unknown | SType::Infer | SType::Generic(_) => true,
             SType::Int { width } => match width {

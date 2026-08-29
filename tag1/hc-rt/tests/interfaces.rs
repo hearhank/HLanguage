@@ -216,3 +216,60 @@ fn test_attr_no_name_falls_back_to_fn_name() {
     assert!(interp.test_out.iter().any(|l| l.contains("hello")));
     assert!(interp.test_out.iter().any(|l| l.contains("单参名称")));
 }
+
+// ---------- IToString / IHashCode（2026-08-29：所有类型默认实现） ----------
+
+#[test]
+fn iface_itos_string_class_default() {
+    // class 默认 to_string = 类名；get_hashcode = 确定性哈希
+    run_ok(
+        r#"
+class Point {
+    x: i32,
+    y: i32,
+}
+[test] fn to_string_class() void {
+    var p: Point = alloc.init(Point{x = 1, y = 2});
+    var s = p.to_string();
+    expect_eq(s, "Point");
+}
+[test] fn hashcode_deterministic() void {
+    var p1: Point = alloc.init(Point{x = 1, y = 2});
+    var p2: Point = alloc.init(Point{x = 1, y = 2});
+    expect_eq(p1.get_hashcode(), p2.get_hashcode());
+}
+"#,
+    );
+}
+
+#[test]
+fn iface_scalar_to_string() {
+    // 标量/字符串的默认 to_string
+    run_ok(
+        r#"
+[test] fn to_string_scalar() void {
+    var n = 42;
+    expect_eq(n.to_string(), "42");
+    var f = 1.5;
+    expect_eq(f.to_string(), "1.5");
+    var s: ?String = String.from("hi", alloc);
+    expect_eq("hi".to_string(), "hi");
+}
+"#,
+    );
+}
+
+#[test]
+fn where_itos() {
+    run_ok(
+        r#"
+fn describe<T>(x: T) String where T: IToString {
+    return x.to_string();
+}
+[test] fn where_itos() void {
+    var n = 7;
+    expect_eq(describe(n), "7");
+}
+"#,
+    );
+}

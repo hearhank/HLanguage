@@ -61,6 +61,23 @@ interface IFloat: INumber {
 - **接口 = 类型标注**：`*INumber` = 只读引用、`*mut INumber` = 可写引用（标量可 `box` 装箱，Q17 统一机制）
 - `bool`/`char`/`void`/指针不实现（非数字）
 
+## 通用接口（2026-08-29 定案：所有类型默认实现）
+
+```
+interface IToString {
+    fn to_string(self: *Self) String;    // 文本化统一入口（调试/日志/显示）
+}
+
+interface IHashCode {
+    fn get_hashcode(self: *Self) i32;    // 哈希契约（Map 分桶等）
+}
+```
+
+- **默认实现（编译器内建合成）**：所有 struct/class 与内建类型自动实现两接口，无需声明 `: IToString` / `: IHashCode`；`where T: IToString` / `where T: IHashCode` 约束对任意类型成立
+- **默认语义**：`to_string` = 类名（class 实例）/ display 形式（标量/Str/容器）；`get_hashcode` = FNV-1a32(`to_string` 结果)，以 i32 返回
+- 用户类型可自定义同名方法覆盖默认实现（接口签名不变，方法解析优先用户方法）
+- 实现状态：语义放行 + interp / IR 内建 ✅；LLVM 原生后端暂未合成（需新 @hc helper，后续任务）
+
 ## 迭代契约（2026-08-14 定案）
 
 - 接口 **`IIterable`** 按**元素访问形态**三态（泛型实例化语法与 `Vec<i32>` 一致用圆括号）：

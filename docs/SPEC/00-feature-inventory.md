@@ -197,6 +197,14 @@
 | IInt / IUint | 整数接口 | ✅ |
 | IFloat | 浮点接口 | ✅ |
 
+### 4.5.1 通用接口（2026-08-29 定案）
+| 功能 | 描述 | 状态 |
+|------|------|------|
+| IToString | `to_string() String`——所有类型默认实现（class → 类名；标量/Str/容器 → display），用户方法可覆盖 | ✅ |
+| IHashCode | `get_hashcode() i32`——默认实现 FNV-1a32(to_string) | ✅ |
+
+> 注：LLVM 原生后端暂未合成默认实现（需新 @hc helper，后续任务）；详见 `phase1/06-05-interfaces.md` 通用接口节。
+
 ### 4.6 迭代内建
 | 功能 | 描述 | 状态 |
 |------|------|------|

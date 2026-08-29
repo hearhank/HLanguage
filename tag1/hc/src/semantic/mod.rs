@@ -375,6 +375,12 @@ pub(crate) fn is_serialize_builtin(field: &str) -> bool {
     matches!(field, "from_json" | "to_json" | "from_bytes" | "to_bytes")
 }
 
+/// IToString/IHashCode（2026-08-29）：所有类型默认实现的内建接口方法——
+/// 字段访问与方法调用检查放行（无需类声明）
+pub(crate) fn is_universal_method(field: &str) -> bool {
+    matches!(field, "to_string" | "get_hashcode")
+}
+
 /// 内建类型（编译器内建实现；方法放行）
 pub(crate) fn is_builtin_type(name: &str) -> bool {
     matches!(

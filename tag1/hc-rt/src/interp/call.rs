@@ -924,6 +924,23 @@ impl Interp {
                 return Ok(Some(v));
             }
         }
+        // IToString/IHashCode（2026-08-29）：所有类型默认实现（内建接口）——
+        // to_string = 类名（class）/ display（标量/Str/容器）；get_hashcode = FNV-1a(to_string)
+        if field == "to_string" || field == "get_hashcode" {
+            let s = match self_v {
+                Value::Class(c) => c.borrow().name.clone(),
+                other => other.display(),
+            };
+            if field == "to_string" {
+                return Ok(Some(Value::String(StringData::from_slice(s.as_bytes()))));
+            }
+            let mut hash: u32 = 2166136261;
+            for b in s.as_bytes() {
+                hash ^= *b as u32;
+                hash = hash.wrapping_mul(16777619);
+            }
+            return Ok(Some(Value::Int(hash as i32 as i128)));
+        }
         match (self_v, field) {
             (Value::String(s), "concat") => {
                 let other = self.eval(&args[0])?;

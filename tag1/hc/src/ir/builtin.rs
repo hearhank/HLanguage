@@ -3096,6 +3096,29 @@ pub(crate) fn call_builtin_method(
             return Ok(Some(v));
         }
     }
+    // IToString/IHashCode（2026-08-29）：所有类型默认实现（内建接口）——
+    // to_string = 类名（class）/ display（标量/Str）；get_hashcode = FNV-1a(to_string)
+    if method == "to_string" || method == "get_hashcode" {
+        let s = match &self_v {
+            IrValue::Class(c) => class_name(ctx, *c),
+            IrValue::Int(i) => i.to_string(),
+            IrValue::Float(f) => f.to_string(),
+            IrValue::Bool(b) => b.to_string(),
+            IrValue::String(s) => String::from_utf8_lossy(s.as_slice()).to_string(),
+            _ => String::new(),
+        };
+        if method == "to_string" {
+            return Ok(Some(IrValue::String(StringDataIr::from_slice(
+                s.as_bytes(),
+            ))));
+        }
+        let mut hash: u32 = 2166136261;
+        for b in s.as_bytes() {
+            hash ^= *b as u32;
+            hash = hash.wrapping_mul(16777619);
+        }
+        return Ok(Some(IrValue::Int(hash as i32 as i128)));
+    }
     match (&self_v, method) {
         (
             IrValue::String(s),

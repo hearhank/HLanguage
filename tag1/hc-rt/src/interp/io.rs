@@ -2936,6 +2936,15 @@ impl Interp {
         span: &Span,
     ) -> Result<Value> {
         match field {
+            "from" => {
+                // String.from(s, alloc)：内建 String 值语义（deep copy），分配器参数忽略
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                match v {
+                    Value::String(s) => Ok(Value::String(s)),
+                    _ => Err(RtError::new("TypeError", Some(span.clone()))),
+                }
+            }
             "fromInt" => {
                 let v = self.eval(&args[0])?;
                 let v = self.deref_value(v);
