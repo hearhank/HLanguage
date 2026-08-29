@@ -2929,6 +2929,16 @@ fn host_read_file(p: &[u8]) !&[u8] {
     return try io.fs.read_file(p, alloc);
 }
 
+// S2：文件名字典序小于（插入排序用；前缀规则：短者在前）
+fn str_lt(a: &[u8], b: &[u8]) bool {
+    var mut i: usize = 0;
+    while (i < a.len and i < b.len) {
+        if (a[i] != b[i]) { return a[i] < b[i]; }
+        i += 1;
+    }
+    return a.len < b.len;
+}
+
 // 执行器（C3：表达式面；控制流 C4、函数 C5、容器 C6+ 递增）
 class Interp {
     prog: AstNode,
@@ -3004,6 +3014,65 @@ class Interp {
                     self.prog.children.append(fast.children[ci]);
                     ci += 1;
                 }
+            }
+            si += 1;
+        }
+    }
+
+    // S2：包模式（入口文件名为 main.hc）——加载同目录全部兄弟 .hc 并合并。
+    // 对齐 Rust 包加载（M1.4/Q21：目录 = 包，同包共享命名空间，无需 import）。
+    // 合并顺序 = 文件名字典序（重建式插入排序），保证自举产物字节确定（V1）。
+    fn load_siblings(self: *mut Self, dir: &[u8], entry_name: &[u8]) !void {
+        var entries = try io.fs.list_dir(dir);
+        var mut sorted = Vec<&[u8]>.init(alloc);
+        var mut i: usize = 0;
+        while (i < entries.len) {
+            var ent = entries[i];
+            if (!ent.is_dir) {
+                var nml = ent.name.as_slice();
+                if (nml.len > 3 and slice_eq(nml[(nml.len - 3)..nml.len], ".hc") and !slice_eq(nml, entry_name)) {
+                    // 重建式插入排序（避免 Vec 下标赋值）
+                    var mut p: usize = 0;
+                    while (p < sorted.len and str_lt(sorted[p], nml)) { p += 1; }
+                    var next = Vec<&[u8]>.init(alloc);
+                    var mut k: usize = 0;
+                    while (k < p) { next.append(sorted[k]); k += 1; }
+                    next.append(nml);
+                    k = p;
+                    while (k < sorted.len) { next.append(sorted[k]); k += 1; }
+                    sorted = next;
+                }
+            }
+            i += 1;
+        }
+        var mut si: usize = 0;
+        while (si < sorted.len) {
+            var nml = sorted[si];
+            // 完整路径 = dir + 文件名（已含 .hc 后缀）
+            var fp = Vec<u8>.init(alloc);
+            var mut di: usize = 0;
+            while (di < dir.len) { fp.append(dir[di]); di += 1; }
+            if (dir.len > 0 and dir[(dir.len - 1)] != '/' and dir[(dir.len - 1)] != '\\') { fp.append('/'); }
+            di = 0;
+            while (di < nml.len) { fp.append(nml[di]); di += 1; }
+            var fsrc = try io.fs.read_file(fp.as_slice(), alloc);
+            var flx: Lexer = alloc.init(Lexer{
+                src = fsrc, n = fsrc.len,
+                pos = 0, line = 1, col = 1,
+                tokens = Vec<Token>.init(alloc),
+                kw_map = build_kw_map(),
+            });
+            flx.run();
+            var fparser: Parser = alloc.init(Parser{
+                tokens = flx.tokens, pos = 0,
+                n = flx.tokens.len,
+                rev_kw_map = build_rev_kw_map(),
+            });
+            var fast = fparser.parse_program();
+            var mut ci: usize = 0;
+            while (ci < fast.children.len) {
+                self.prog.children.append(fast.children[ci]);
+                ci += 1;
             }
             si += 1;
         }
@@ -3121,6 +3190,9 @@ class Interp {
                     ok = cv.i == 1 and cv.vec.len > 0;
                 } else if (cv.kind == "err") {
                     ok = false;
+                } else if (cv.kind == "null") {
+                    // null 条件（如返回 null 的 ?T 函数）→ else；否则空载荷绑定 void（S2 lexer bug 根因）
+                    ok = false;
                 }
                 if (ok) {
                     self.env.push_scope();
@@ -3155,6 +3227,7 @@ class Interp {
                     if (cv2.kind == "opt") {
                         ok2 = cv2.i == 1 and cv2.vec.len > 0;
                     } else if (cv2.kind == "err") { ok2 = false; }
+                    else if (cv2.kind == "null") { ok2 = false; }
                     if (!ok2) { break; }
                     self.env.push_scope();
                     if (cv2.kind == "opt") {
@@ -3294,6 +3367,15 @@ class Interp {
             var t = get_prop(e.props, "value");
             if (t) |txt| { return mk_bool(slice_eq(txt, "true")); }
             return mk_bool(false);
+        }
+        if (k == "CharLit") {
+            // S2：字符字面量 = 码点整数值（value prop = lex_char 存的单字节；
+            // 多字节字符字面量 lex_char 不产出，无需处理）
+            var t = get_prop(e.props, "value");
+            if (t) |txt| {
+                if (txt.len > 0) { return mk_int(@intCast(i64, txt[0])); }
+            }
+            return mk_int(0);
         }
         if (k == "NullLit") { return mk_null(); }
         if (k == "ArrayLit") {
@@ -3775,6 +3857,10 @@ class Interp {
                         }
                     }
                     if (basev.kind == "str") {
+                        if (slice_eq(m, "as_slice")) {
+                            // S2：str.as_slice() 透传（stage2 源码风格依赖；值即切片）
+                            return basev;
+                        }
                         if (slice_eq(m, "concat")) {
                             if (e.children.len > 1) {
                                 var ov = self.eval_expr(e.children[1]);
@@ -4154,7 +4240,13 @@ fn main(args: Vec<String>) !void {
     // P7：同目录 import 加载（多文件自举链路）；主文件先置加载态供环检测
     var mdir = dir_of(path.as_slice());
     it.imports.put(stem_of(path.as_slice()), 1);
-    try it.load_imports(&ast, mdir);
+    // S2：包模式（入口 = main.hc）→ 同目录兄弟自动加载（Q21 共享命名空间，无需 import）；
+    // 单文件 → import 驱动加载（P7）
+    if (slice_eq(stem_of(path.as_slice()), "main")) {
+        try it.load_siblings(mdir, "main.hc");
+    } else {
+        try it.load_imports(&ast, mdir);
+    }
     // S1：目标程序 main 参数（launch[0]=目标程序自身路径 + 余参透传，对齐 Rust hc 约定）
     var launch = Vec<Value>.init(alloc);
     var mut lidx: usize = 1;

@@ -2848,6 +2848,61 @@ class Checker {
         }
     }
 
+    // S2：包模式（入口文件名为 main.hc）——加载同目录全部兄弟 .hc 并合并
+    //（与 interp.hc 同实现；合并顺序 = 文件名字典序，确定性）
+    fn load_siblings(self: *mut Self, node: *mut AstNode, dir: &[u8], entry_name: &[u8]) !void {
+        var entries = try io.fs.list_dir(dir);
+        var mut sorted = Vec<&[u8]>.init(alloc);
+        var mut i: usize = 0;
+        while (i < entries.len) {
+            var ent = entries[i];
+            if (!ent.is_dir) {
+                var nml = ent.name.as_slice();
+                if (nml.len > 3 and slice_eq(nml[(nml.len - 3)..nml.len], ".hc") and !slice_eq(nml, entry_name)) {
+                    var mut p: usize = 0;
+                    while (p < sorted.len and str_lt(sorted[p], nml)) { p += 1; }
+                    var next = Vec<&[u8]>.init(alloc);
+                    var mut k: usize = 0;
+                    while (k < p) { next.append(sorted[k]); k += 1; }
+                    next.append(nml);
+                    k = p;
+                    while (k < sorted.len) { next.append(sorted[k]); k += 1; }
+                    sorted = next;
+                }
+            }
+            i += 1;
+        }
+        var mut si: usize = 0;
+        while (si < sorted.len) {
+            var nml = sorted[si];
+            var fp = Vec<u8>.init(alloc);
+            var mut di: usize = 0;
+            while (di < dir.len) { fp.append(dir[di]); di += 1; }
+            if (dir.len > 0 and dir[(dir.len - 1)] != '/' and dir[(dir.len - 1)] != '\\') { fp.append('/'); }
+            di = 0;
+            while (di < nml.len) { fp.append(nml[di]); di += 1; }
+            var fsrc = try io.fs.read_file(fp.as_slice(), alloc);
+            var flx: Lexer = alloc.init(Lexer{
+                src = fsrc, n = fsrc.len,
+                pos = 0, line = 1, col = 1,
+                tokens = Vec<Token>.init(alloc),
+            });
+            flx.run();
+            var fparser: Parser = alloc.init(Parser{
+                tokens = flx.tokens, pos = 0,
+                n = flx.tokens.len,
+                rev_kw_map = build_rev_kw_map(),
+            });
+            var fast = fparser.parse_program();
+            var mut ci: usize = 0;
+            while (ci < fast.children.len) {
+                node.children.append(fast.children[ci]);
+                ci += 1;
+            }
+            si += 1;
+        }
+    }
+
     // 检查程序（两遍：收集 + 检查）
     fn check_program(self: *mut Self, prog: AstNode) void {
         // 第一遍：收集所有声明
@@ -3577,6 +3632,16 @@ fn dir_of(path: &[u8]) &[u8] {
     return path[0..last];
 }
 
+// S2：文件名字典序小于（插入排序用；与 interp.hc 同实现）
+fn str_lt(a: &[u8], b: &[u8]) bool {
+    var mut i: usize = 0;
+    while (i < a.len and i < b.len) {
+        if (a[i] != b[i]) { return a[i] < b[i]; }
+        i += 1;
+    }
+    return a.len < b.len;
+}
+
 fn stem_of(path: &[u8]) &[u8] {
     var mut start: usize = 0;
     var mut i: usize = 0;
@@ -3665,10 +3730,14 @@ fn main(args: Vec<String>) !void {
         imports = Map<&[u8], i64>.init(alloc),
     });
     checker.init(src);
-    // P7：同目录 import 加载（多文件检查）；主文件先置加载态供环检测
+    // P7：同目录 import 加载；S2：包模式（入口 = main.hc）→ 兄弟自动加载
     var mdir = dir_of(path.as_slice());
     checker.imports.put(stem_of(path.as_slice()), 1);
-    try checker.load_imports(&ast, mdir);
+    if (slice_eq(stem_of(path.as_slice()), "main")) {
+        try checker.load_siblings(&ast, mdir, "main.hc");
+    } else {
+        try checker.load_imports(&ast, mdir);
+    }
     checker.check_program(ast);
     checker.report();
 }

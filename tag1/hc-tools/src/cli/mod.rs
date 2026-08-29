@@ -194,10 +194,10 @@ pub(crate) fn run_cli() -> ExitCode {
             let build_path = Path::new(path);
             build_file(build_path, dll)
         }
-        "init" => {
-            // H1：`hc init <name>`——创建新项目骨架（build.zon + main.hc）
+        "new" | "init" => {
+            // S2：`hc new <name>`——创建新项目骨架（= hc init；build.zon + src/main.hc + docs/ + README）
             let Some(name) = args.get(2) else {
-                eprintln!("error: `hc init` requires a project name\n\n{USAGE}");
+                eprintln!("error: `hc {}` requires a project name\n\n{USAGE}", cmd);
                 return ExitCode::from(2);
             };
             init_project(name)

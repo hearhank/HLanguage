@@ -55,6 +55,8 @@
 |---|---|---|---|
 | S1 | 源码骨架：`main.hc`（读源文件参数 + 阶段调度）+ `import .{lexer,parser,...}` 结构 + 纪律自查清单入库 | interp 检查通过、空编译跑通（产出空 .hbc 不要求） | ≤1h |
 | S2 | lexer 提取移植：从内嵌副本提取为 `lexer.hc`，适配多文件（去 self-contained 假设） | 对 6621 token 自身源码与 Rust lex 零 diff（复用 K1 对照法） | 1–3h |
+
+> **S2 进展（🟡 未关）**：① `hc new <name>` 命令落地（= hc init，CLI 分派别名）；② stage2 迁移为标准 hc 项目（build.zon + src/main.hc + test/）；③ lexer 完整提取（含 dbg_escape/K1 格式 dump_tokens），**Rust 包模式下与 hc lex 逐字节一致（7/7 文件 MATCH）**；④ 提取过程补三个 stage1 interp 求值面缺口：CharLit 求值、if/while 捕获对 null 条件判 falsy、str.as_slice 透传。**未关项**：stage1 interp 类实例缺陷——类实例经函数返回 + Vec 存储后引用型字段（Vec/str）丢失、标量存活（最小复现 `stage1/k4test/probe-tok6.hc`，Rust 参考正确）——导致 stage1 interp 链路的 dump 载荷为空（`Ident("")`），S2 验收的 stage1 侧对照被阻塞；**该缺陷同时阻塞 S3–S6**（Token/AstNode 模型依赖类实例传递），下一步主攻。另一发现：Rust 包加载 M1.4 兄弟文件顶层 fn 不登记（文件私有设计），跨文件调用需 namespace+import 仪式——stage2 收敛为自包含单文件（对齐 stage1 四件套惯例），拆分待上述两项落地。`import .{sym}` 为 stage1 interp 专有扩展（Rust parser 按规范拒绝），stage2 已改用包模式自动加载。
 | S3 | parser 提取移植：`parser.hc` 多文件化，AST 节点模型对齐 stage2 子集 | 对 stage2 自身源码 parse 成功 + AST dump 对照抽查 | 1–3h |
 | S4 | semantic 裁剪：从 checker.hc 裁剪名称解析 + 签名/调用点类型检查（砍所有权/错误集推断） | 对 stage2 自身源码 0 误报 0 漏报（对照 Rust check） | 1–3h |
 | S5 | IR 模型：`IrModule/IrFunc/IrInst` class + kind 分发（按 stage2 子集圈定指令集，对照 ir_inst.rs 49 变体圈定） | 指令集清单入档（预计 ≤20 变体） | ≤1h |

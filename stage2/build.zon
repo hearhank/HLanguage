@@ -1,0 +1,14 @@
+// build.zon — stage2 包清单（H 编译器，H 实现；K5 自举闭环本体）
+//
+// 清单即数据：const build = Build{ ... }（H 数据字面量，Q26）
+//   - files：包内源码清单（src/ 目录；同包共享命名空间，Q21）
+//   - 交叉验证：hc run stage2（Rust 包加载）与
+//     hc run stage1/interp.hc stage2/src/main.hc（stage1 interp + P7 同目录 import）等价
+
+const build = Build{
+    name = "stage2",
+    version = "0.1.0",
+    kind = Kind.exe,
+    files = [ "src/main.hc", ],
+    deps = [],
+};

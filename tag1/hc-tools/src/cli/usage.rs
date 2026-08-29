@@ -15,7 +15,8 @@ USAGE:
     hc check <file.hc>         仅检查（词法/语法/装载）
     hc errors <file.hc>        输出错误码表（M2.6：错误名 ↔ 码 + 位置）
     hc build <file.hc>         编译为原生可执行（LLVM IR + zig cc）
-    hc init <name>             创建新项目骨架（build.zon + main.hc，组 H1）
+    hc new <name>              创建新项目骨架（= hc init；build.zon + src/main.hc + docs/ + README）
+    hc init <name>             创建新项目骨架（hc new 的别名）
     hc pkg add <name> [--path <dir>] [--version <ver>]
                               写本地依赖声明到 build.zon deps（组 H2）
     hc pkg publish          从当前目录发布包到本地注册中心（~/.hc/registry/，B3）
