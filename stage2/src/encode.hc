@@ -350,15 +350,6 @@ fn enc_module(m: IrModule) Vec<u8> {
     }
     i = 0;
     while (i < m.funcs.len) {
-        var mut mk = Vec<u8>.init(alloc);
-        append_int(i, &mut mk);
-        append_bytes(&mk, ":");
-        append_bytes(&mk, m.funcs[i].name);
-        append_bytes(&mk, " slots=");
-        append_int(m.funcs[i].n_slots, &mut mk);
-        append_bytes(&mk, " body=");
-        append_int(@intCast(i64, m.funcs[i].body.len), &mut mk);
-        try io.fs.write_file("stage2/test/dbg_enc.txt", mk.as_slice(), alloc);
         enc_func(&out, m.funcs[i]);
         i += 1;
     }

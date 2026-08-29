@@ -31,8 +31,11 @@ fn main(args: Vec<String>) !void {
         var mut fi: usize = 3;
         while (fi < args.len) {
             var fsrc = try io.fs.read_file(args[fi], alloc);
+            try io.fs.write_file("stage2/test/progress.txt", "read ok", alloc);
             var ftoks = lex_source(fsrc);
+            try io.fs.write_file("stage2/test/progress.txt", "lex ok", alloc);
             var fast = parse_tokens(ftoks);
+            try io.fs.write_file("stage2/test/progress.txt", "parse ok", alloc);
             var mut di: usize = 0;
             while (di < fast.children.len) {
                 node_add_child(&prog, fast.children[di]);
