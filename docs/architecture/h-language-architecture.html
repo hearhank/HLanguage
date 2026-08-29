@@ -4949,7 +4949,7 @@
       </div>
     </div>
 
-    <script id="archify-guided-views-data" type="application/json">[{"id":"pipeline","label":"Compiler pipeline","focus":["lexer","parser","semantic","ir","bytecode","llvm"],"note":"Follow source code through the full compilation pipeline."},{"id":"execution","label":"Execution modes","focus":["hc-cli","bytecode","llvm","runtime"],"note":"Tree-walking interpreter for development, LLVM native for production."},{"id":"bootstrap","label":"Self-hosting bootstrap","focus":["stage1-lexer","stage1-parser","stage1-semantic"],"note":"Stage1 H-written lexer/parser/checker — the bootstrap milestone."}]</script>
+    <script id="archify-guided-views-data" type="application/json">[{"id":"pipeline","label":"Compiler pipeline","focus":["lexer","parser","semantic","ir","bytecode","llvm"],"note":"Follow source code through the full compilation pipeline."},{"id":"execution","label":"Execution modes","focus":["hc-cli","bytecode","llvm","runtime"],"note":"Tree-walking interpreter for development, LLVM native for production."},{"id":"bootstrap","label":"Self-hosting bootstrap","focus":["stage1-lexer","stage1-parser","stage1-semantic","stage1-interp","runtime"],"note":"Stage1 H-written lexer/parser/checker/interp (K1–K4) — interp output must match the Rust reference byte-for-byte."}]</script>
 
     <div class="guided-views no-print" id="guided-views" hidden aria-label="Guided diagram views">
       <button id="guided-view-prev" type="button" aria-label="Previous guided view" title="Previous guided view ([)">&#8592;</button>
@@ -5020,7 +5020,7 @@
         <!-- Boundaries (behind everything) -->
         <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Compiler Core" x="24" y="126" width="1082" height="104" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Bootstrap Stage 1" x="28" y="226" width="534" height="104" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Bootstrap Stage 1" x="28" y="226" width="714" height="104" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="hc-cli" data-edge-to="lexer" data-edge-key="0" data-composition-points="115,110;115,150" d="M 115 110 L 115 150" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
@@ -5032,6 +5032,8 @@
         <path data-edge-from="bytecode" data-edge-to="runtime" data-edge-label="execute" data-edge-key="6" data-composition-points="835,210;835,250" d="M 835 210 L 835 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="stage1-lexer" data-edge-to="stage1-parser" data-edge-label="tokens" data-edge-key="7" data-composition-points="190,280;220,280" d="M 190 280 L 220 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="stage1-parser" data-edge-to="stage1-semantic" data-edge-label="AST" data-edge-key="8" data-composition-points="370,280;400,280" d="M 370 280 L 400 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="stage1-semantic" data-edge-to="stage1-interp" data-edge-label="eval AST" data-edge-key="9" data-composition-points="550,280;580,280" d="M 550 280 L 580 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="stage1-interp" data-edge-to="runtime" data-edge-label="stdout parity" data-edge-key="10" data-composition-points="730,280;760,280" d="M 730 280 L 760 280" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-hc-cli" data-node-id="hc-cli" data-node-label="hc CLI" tabindex="0" role="button" aria-label="Focus hc CLI, hc-tools, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="hc-tools" data-node-tag="entry point" data-node-context="Architecture component">
@@ -5165,6 +5167,19 @@
         <text data-detail="fine" x="475" y="302" class="t-external" font-size="7" text-anchor="middle">K3 done</text>
         </g>
 
+        <g id="node-stage1-interp" data-node-id="stage1-interp" data-node-label="Stage1 Interp" tabindex="0" role="button" aria-label="Focus Stage1 Interp, H-written engine, Bootstrap Stage 1" aria-pressed="false" data-node-kind="external" data-node-sublabel="H-written engine" data-node-tag="K4 done" data-node-context="Bootstrap Stage 1">
+          <title>Stage1 Interp · H-written engine · Bootstrap Stage 1 · K4 done</title>
+          <rect x="580" y="250" width="150" height="60" rx="6" class="c-mask"/>
+          <rect x="580" y="250" width="150" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(586 256) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label data-detail-anchor x="655" y="278" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Stage1 Interp</text>
+        <text data-detail="context" x="655" y="294" class="t-muted" font-size="9" text-anchor="middle">H-written engine</text>
+        <text data-detail="fine" x="655" y="302" class="t-external" font-size="7" text-anchor="middle">K4 done</text>
+        </g>
+
         <g id="node-runtime" data-node-id="runtime" data-node-label="Runtime" tabindex="0" role="button" aria-label="Focus Runtime, hc-rt interpreter, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="hc-rt interpreter" data-node-context="Architecture component">
           <title>Runtime · hc-rt interpreter · Architecture component</title>
           <rect x="760" y="250" width="150" height="60" rx="6" class="c-mask"/>
@@ -5206,6 +5221,14 @@
         <g data-detail="context" data-edge-from="stage1-parser" data-edge-to="stage1-semantic" data-edge-label="AST" data-edge-key="8">
           <rect x="370" y="314" width="30" height="14" rx="3" class="c-mask"/>
           <text x="385" y="324" class="t-muted" font-size="8" text-anchor="middle">AST</text>
+        </g>
+        <g data-detail="context" data-edge-from="stage1-semantic" data-edge-to="stage1-interp" data-edge-label="eval AST" data-edge-key="9">
+          <rect x="540.8" y="314" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="565" y="324" class="t-muted" font-size="8" text-anchor="middle">eval AST</text>
+        </g>
+        <g data-detail="context" data-edge-from="stage1-interp" data-edge-to="runtime" data-edge-label="stdout parity" data-edge-key="10">
+          <rect x="708.8" y="314" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="745" y="324" class="t-messagebus" font-size="8" text-anchor="middle">stdout parity</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5442,6 +5465,7 @@
           <li>&bull; hc run --ir — IR reference interpreter</li>
           <li>&bull; hc run &lt;file.hbc&gt; — bytecode VM (reuses run_ir)</li>
           <li>&bull; hc build — LLVM native (builtin subset)</li>
+          <li>&bull; hc run stage1/interp.hc &lt;prog&gt; — H-written engine (K4)</li>
         </ul>
       </div>
 
@@ -5453,9 +5477,10 @@
         <ul>
           <li>&bull; K1 lexer.hc done — 6621 tokens, zero diff</li>
           <li>&bull; K2 parser.hc done — self-parse ~1s</li>
-          <li>&bull; K3 checker.hc done — 11/11 tasks, 13 tests green</li>
-          <li>&bull; K4–K6 (backend / bootstrap / reproducible) pending</li>
-          <li>&bull; Rust reference kept as fallback</li>
+          <li>&bull; K3 checker.hc done — 15 tests green, three-source self-check clean</li>
+          <li>&bull; K4 interp.hc done — 10/10 corpus stdout parity, cargo gate 10 passed</li>
+          <li>&bull; K5–K6 (bootstrap closure / reproducible build) pending</li>
+          <li>&bull; Rust reference kept as parity oracle</li>
         </ul>
       </div>
 

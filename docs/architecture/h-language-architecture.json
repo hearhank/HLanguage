@@ -36,9 +36,11 @@
         "focus": [
           "stage1-lexer",
           "stage1-parser",
-          "stage1-semantic"
+          "stage1-semantic",
+          "stage1-interp",
+          "runtime"
         ],
-        "note": "Stage1 H-written lexer/parser/checker — the bootstrap milestone."
+        "note": "Stage1 H-written lexer/parser/checker/interp (K1–K4) — interp output must match the Rust reference byte-for-byte."
       }
     ]
   },
@@ -195,6 +197,19 @@
       "tag": "K3 done"
     },
     {
+      "id": "stage1-interp",
+      "type": "external",
+      "label": "Stage1 Interp",
+      "sublabel": "H-written engine",
+      "row": 2,
+      "col": 3,
+      "size": [
+        150,
+        60
+      ],
+      "tag": "K4 done"
+    },
+    {
       "id": "runtime",
       "type": "backend",
       "label": "Runtime",
@@ -227,7 +242,8 @@
       "wraps": [
         "stage1-lexer",
         "stage1-parser",
-        "stage1-semantic"
+        "stage1-semantic",
+        "stage1-interp"
       ],
       "pad": 12
     }
@@ -309,6 +325,25 @@
         385,
         324
       ]
+    },
+    {
+      "from": "stage1-semantic",
+      "to": "stage1-interp",
+      "label": "eval AST",
+      "labelAt": [
+        565,
+        324
+      ]
+    },
+    {
+      "from": "stage1-interp",
+      "to": "runtime",
+      "label": "stdout parity",
+      "variant": "dashed",
+      "labelAt": [
+        745,
+        324
+      ]
     }
   ],
   "cards": [
@@ -331,7 +366,8 @@
         "hc run — tree-walking interpreter (default, full language)",
         "hc run --ir — IR reference interpreter",
         "hc run <file.hbc> — bytecode VM (reuses run_ir)",
-        "hc build — LLVM native (builtin subset)"
+        "hc build — LLVM native (builtin subset)",
+        "hc run stage1/interp.hc <prog> — H-written engine (K4)"
       ]
     },
     {
@@ -340,9 +376,10 @@
       "items": [
         "K1 lexer.hc done — 6621 tokens, zero diff",
         "K2 parser.hc done — self-parse ~1s",
-        "K3 checker.hc done — 11/11 tasks, 13 tests green",
-        "K4–K6 (backend / bootstrap / reproducible) pending",
-        "Rust reference kept as fallback"
+        "K3 checker.hc done — 15 tests green, three-source self-check clean",
+        "K4 interp.hc done — 10/10 corpus stdout parity, cargo gate 10 passed",
+        "K5–K6 (bootstrap closure / reproducible build) pending",
+        "Rust reference kept as parity oracle"
       ]
     },
     {
