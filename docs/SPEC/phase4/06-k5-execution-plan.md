@@ -54,8 +54,6 @@
 | # | 任务 | 验收 | 预估 |
 |---|---|---|---|
 | S1 | 源码骨架：`main.hc`（读源文件参数 + 阶段调度）+ `import .{lexer,parser,...}` 结构 + 纪律自查清单入库 | interp 检查通过、空编译跑通（产出空 .hbc 不要求） | ≤1h |
-
-| S1 | 源码骨架：`main.hc`（读源文件参数 + 阶段调度）+ `import .{lexer,parser,...}` 结构 + 纪律自查清单入库 | interp 检查通过、空编译跑通（产出空 .hbc 不要求） | ≤1h |
 | S2 | lexer 提取移植：从内嵌副本提取为 `lexer.hc`，适配多文件（去 self-contained 假设） | 对 6621 token 自身源码与 Rust lex 零 diff（复用 K1 对照法） | 1–3h |
 | S3 | parser 提取移植：`parser.hc` 多文件化，AST 节点模型对齐 stage2 子集 | 对 stage2 自身源码 parse 成功 + AST dump 对照抽查 | 1–3h |
 | S4 | semantic 裁剪：从 checker.hc 裁剪名称解析 + 签名/调用点类型检查（砍所有权/错误集推断） | 对 stage2 自身源码 0 误报 0 漏报（对照 Rust check） | 1–3h |
