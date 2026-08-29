@@ -39,6 +39,11 @@ fn main(args: Vec<String>) !void {
                 di += 1;
             }
             fi += 1;
+            // S8 进度标记（interp 全链数小时无 stdout，落盘盯进度）
+            var mut mk = Vec<u8>.init(alloc);
+            append_bytes(&mk, "file ");
+            append_int(fi - 3, &mut mk);
+            try io.fs.write_file("stage2/test/progress.txt", mk.as_slice(), alloc);
         }
         // 语义检查（合并后单 Program；src 取首文件仅作诊断定位）
         var src0 = try io.fs.read_file(args[3], alloc);
@@ -55,12 +60,14 @@ fn main(args: Vec<String>) !void {
         });
         checker.init(src0);
         checker.check_program(prog);
+        try io.fs.write_file("stage2/test/progress.txt", "check ok", alloc);
         if (checker.diags.len > 0) {
             checker.report();
             return error.CheckFailed;
         }
         // lower（S6）：子集外构造响亮失败
         var l = lower_module(prog);
+        try io.fs.write_file("stage2/test/progress.txt", "lower ok", alloc);
         if (l.errs.len > 0) {
             io.print("lower failed: {} diagnostics\n", l.errs.len);
             var mut ei: usize = 0;
@@ -74,6 +81,7 @@ fn main(args: Vec<String>) !void {
         var m = lower_finish(&l);
         var bytes = enc_module(m);
         try io.fs.write_file(out_path, bytes.as_slice(), alloc);
+        try io.fs.write_file("stage2/test/progress.txt", "encode ok", alloc);
         io.print("stage2: {} files -> {} decls -> {} funcs -> {} bytes -> {}\n", args.len - 3, prog.children.len, l.funcs.len, bytes.len, out_path);
         return;
     }
