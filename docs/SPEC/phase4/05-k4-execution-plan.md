@@ -4,6 +4,7 @@
 > 执行规则：**每个任务 ≤1h**；完成即测试验证 → 更新本文档进度 → 提交 → `node .gitnexus/run.cjs analyze --index-only` 索引 → 下一任务。
 > 前置状态：K1 ✅ K2 ✅ K3 ✅；P1.5 自检崩溃已修复（`04-execution-status.md`，提交 `060aad2`）。
 > **目录约定（用户裁定）**：K4 相关代码与 `.hc` 测试/探针/语料文件一律写 `stage1/` 下（探针 `stage1/probes/`、执行语料 `stage1/exec-corpus/`、对照语料 `stage1/corpus/`）；Rust 测试 harness（`k4_interp.rs`）仍在 `tag1/hc-tools/tests/`。
+> **目录约定更新（2026-08-29 用户裁定）**：所有测试代码（对照脚本/探针 `.hc`/预期输出快照）与调试产物（`*.py`/`*.txt`/`*.chk`/`*.ast`/`*.log`）一律生成在 `stage1/k4test/` 下，**纯临时结果用后即删**（有存档价值的才保留）；K4 要完成的程序（`interp.hc`）在 `stage1/` 下；`tag1/` 此后仅作 Rust 参考实现对照基准，不再新增代码与调试产物（`.gitignore` 已加 `/tag1/*.{txt,chk,ast,py,log}` 护栏）。已入库的 `tag1/hc-tools/tests/k4_interp.rs` 维持现状作 cargo 门禁（是否迁出 `tag1/` 待 Hank 裁定，默认不动）。**清理记录（2026-08-29）**：tag1 根下 30 个历史调试产物已删（checker 输出/AST dump/grep 书签/测试日志，均未跟踪）；根目录 `cp.txt` 已删；`chain.py` 与 3 个 `probe-*.hc` 探针移入 `stage1/k4test/`。
 
 ## 目标与验收
 
@@ -93,14 +94,82 @@
 | C2 | ✅ | 下一提交 | Value 模型（class+kind 字符串分发对齐 checker 模式：int/float/bool/str/void/vec/map/obj/fnref/null；obj 用字段平行数组避 Value→Env→Value 环）+ Env 作用域栈（扁平存储 + size 回滚 + 逆序线性查找/就地赋值）；main 增 `--self-test` 自检 7 项全 ok；01 语料 parse 不受影响；interp.hc 过 checker 自检 |
 | C3 | ✅ | 下一提交 | 表达式求值落地：字面量/Ident/Unary/ Binary（短路）/赋值（`Eq`/`PlusEq`/`MinusEq`/`StarEq`/`SlashEq`，解糖 binop）+ `io.print/println`（`{}` 占位符）；`append_bytes` 补入（非内置，checker.hc 同款）；**修正 parser 副本两处求值面缺陷**：① Call 头是 `Field|field=`（非 DotCall/method）、StrLit/BoolLit prop 名为 `value`；② parse_var_decl 把 init 表达式 `parse_expr()` 丢弃未入树（已修：init 作末子节点）；**锁定两条 H 语义**（后续任务必须遵守）：切片 `==` 不可用于运行时堆子切片（props 派生值），必须逐字节 `slice_eq`（checker.hc 同款）；`@intCast` 仅收 Int（float→int 无内建），append_float 重写为无 cast 算法（10 的幂标定+逐位减法+digit_ch 比较链）；10/10 语料与真实 hc 实测基线存 k4test/；01/02 摘除 ignore（k4 2 passed/8 ignored）；回归全绿：自检 7/7、checker 查 interp OK、k3 15 项、示例门 161/0/1 |
 | C4 | ✅ | 下一提交 | 控制流落地：If/else（parse_block_or_stmt 两形态体）、While、For（vec 迭代 + payload 载荷声明）、Break/Continue（Interp.flow 信号字段传播，循环消费；块循环遇 flow 早退）；ArrayLit 求值（mk_vec）；03 摘除 ignore（k4 3 passed/7 ignored）；回归全绿：01/02 对照、checker 查 interp OK、自检 7/7 |
-| C5 | 🔴 | — | |
-| C6 | 🔴 | — | |
-| C7 | 🔴 | — | |
-| C8 | 🔴 | — | |
-| C9 | 🔴 | — | |
-| C10 | 🔴 | — | |
+| C5 | ✅ | 本次提交 | 根因 = `pi` 内置常量遮蔽（π），改名 pidx 修复；c04 已摘 ignore（4 passed/6 ignored）；01–04 对照全绿。细化见下节 |
+| C6 | 🔴 | — | 细化拆分见下节 |
+| C7 | 🔴 | — | 细化拆分见下节 |
+| C8 | 🔴 | — | 细化拆分见下节 |
+| C9 | 🔴 | — | 细化拆分见下节 |
+| C10 | 🔴 | — | 细化拆分见下节 |
 | D1 | 🔴 | — | |
 | D2 | 🔴 | — | |
+
+## 剩余任务细化拆分（2026-08-29 实测复核）
+
+> 复核方式：本地实测 `bin/hc.exe run stage1/interp.hc <corpus>` vs `hc run <corpus>` 逐文件 diff（2026-08-29）。
+> 实测结论：**01/02/03 对照 MATCH**（C3/C4 绿）；**04 崩溃**（`error.BadIndex at 3171:51`，C5 进行中未提交）；**05 输出为空**（Vec 未求值，符合预期）；AST 层无缺口（B1 扫描确认全部语料可解析，`Try`/`Unwrap`/`Orelse`/`Catch`/`ErrorLit`/`ClassLit`/`Index`+`Range` 节点齐备），剩余工作全部是求值面。
+> 每任务验收均含「对照输出与 Rust 参考完全相同」（T1 脚本 diff 逐字节一致）。
+
+### T 组：对照基建（先于一切剩余任务）
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| T1 ✅ | 对照脚本 `stage1/k4test/run-compare.bat`：遍历 `exec-corpus` 10 文件，Rust 参考 vs H interp stdout 逐文件 diff（`fc /b` 字节级），汇总 MATCH/DIFF 表，DIFF 双方输出留存 `diff-<名>-*.txt`；探针已移入 k4test | 一键运行；01–04 报 MATCH（exit 0=全 MATCH） | ≤1h |
+
+### C5 函数与递归（04）—— 进行中
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| C5.1 ✅ | 根因实为**内置常量遮蔽**：循环变量命名 `pi` 被 H 内置 π（3.14159...）遮蔽，`pi<flen` 恒 false，参数绑定静默跳过（此前误判为堆失效/成员链不稳）；改名 `pidx` + 调用入口单次取 fd 本地副本。新增 7 探针（min/id/arg/rec1/fib6/fib8/seq）全过 | 04 输出 55/120/30 与 Rust 逐字节一致 | ≤1h |
+| C5.2 ✅ | c04 摘 ignore；回归全绿（自检 7/7、checker 查 interp OK、01–03 不漂移）；过时调试产物（03/04/c03/c04/diff-*）已删 | cargo k4 4 passed/6 ignored | ≤1h |
+
+### C6 Vec/Map（05/08）
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| C6.1 | Vec 值面：Field 属性读 `.len`、方法 `.init/.append/.get`、`Index` 元素读 `v[i]` | 探针打印 3/20/30 | ≤1h |
+| C6.2 | Map 值面：`.init/.put`（同 key 覆盖）/`.get/.contains/.len` | 08 前四行输出正确 | ≤1h |
+| C6.3 | 可选值后缀：`Unwrap`（`.?`）解包 + `Orelse` 兜底（?T 值建模，Map.get/Vec.get 返回 opt） | 05/08 对照 MATCH | ≤1h |
+| C6.4 | 05/08 摘 ignore + 回归（01–04 不漂移）+ 提交 | cargo k4 6 passed/4 ignored | ≤1h |
+
+### C7 String（06）
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| C7.1 | 字符串值面：`.len` 属性、`Index` 单字节 `s[i]`（返回字节码）、`Index`+`Range` 切片 `s[a..b]`（生成新 str 值） | 06 前三行对照一致 | ≤1h |
+| C7.2 | String 内建：`concat`、`String.compare`、`String.fromInt`；str==str 核对；06 摘 ignore + 回归 + 提交 | cargo k4 7 passed/3 ignored | ≤1h |
+
+### C8 class（07）
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| C8.1 | 对象模型：`ClassLit` 求值（FieldInit 子节点求值 → 字段平行数组 obj 值，沿 C2 模式避 Value↔Env 环）+ `alloc.init(...)` 调用绑定 | 探针建对象并读字段 | ≤1h |
+| C8.2 | 方法分发 + self：run_main 扫 Class 声明建 类→方法注册表（存 prog.children 索引，标量安全）；Call head=Field(base=obj 值) 分发；方法体注册 `self` + `self.x` 读 | 探针 inc/get 生效 | ≤1h |
+| C8.3 | self 字段写：Assign/复合赋值 target=Field（`self.n += self.step`，就地写回 obj 平行数组）；07 摘 ignore + 回归 + 提交 | cargo k4 8 passed/2 ignored | ≤1h |
+
+### C9 错误路径（09）
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| C9.1 | 错误值模型：Value 增 err 形态（kind="err" 存错误名）；`ErrorLit` 求值；`return error.X` 产生 err 载荷 | 探针打印错误传播路径 | ≤1h |
+| C9.2 | try 传播 + catch 兜底：`Try` 内 Call 返回 err → flow=return 向上传播（对齐 Zig 语义）；`Catch` 左值 err → 求兜底值；09 摘 ignore + 回归 + 提交 | cargo k4 9 passed/1 ignored | ≤1h |
+
+### C10 全量验收（10）
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| C10.1 | 综合语料：10 对照 MATCH（class+Vec+Map+String+控制流+错误组合）；k4 全部摘 ignore；`cargo test --workspace` 全绿 | 10 passed/0 ignored | ≤1h |
+| C10.2 | 自检：interp.hc 过 checker 检查不崩；误报数登记本文档 | 数字入档 | ≤1h |
+
+### D 收尾
+
+| # | 任务 | 验收 | 预估 |
+|---|---|---|---|
+| D1 | 文档同步：README E7 行、`00-feature-inventory.md` §十七、`01-bootstrap-plan.md` 当前状态、stage1/README 进度表 | 文档一致；提交 | ≤1h |
+| D2 | 性能基线：10 综合语料 interp 耗时登记（K5 回归基线） | 数字入档 | ≤1h |
+
+### 依赖顺序
+
+T1 → C5.1 → C5.2 → C6.1 → C6.2 → C6.3 → C6.4 → C7.1 → C7.2 → C8.1 → C8.2 → C8.3 → C9.1 → C9.2 → C10.1 → C10.2 → D1 → D2（共 18 任务，全部 ≤1h；C6.3 可选值建模是 C9.2 的前置）
 
 ## 风险登记
 

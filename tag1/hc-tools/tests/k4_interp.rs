@@ -105,7 +105,6 @@ fn c03_control_matches_rust_reference() {
 }
 
 #[test]
-#[ignore]
 fn c04_fn_rec_matches_rust_reference() {
     assert_corpus_pair("04-fn-rec.hc");
 }

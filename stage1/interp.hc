@@ -2848,9 +2848,11 @@ fn as_f(v: Value) f64 {
 class Interp {
     prog: AstNode,
     env: Env,
-    mut flow: &[u8],   // "" 正常 | "break" | "continue"（循环消费）
+    mut flow: &[u8],   // "" 正常 | "break" | "continue"（循环消费）| "return"（函数边界消费）
+    mut retv: Value,   // return 载荷
+    fns: Map<&[u8], usize>,   // 顶层 fn 注册表（存 prog.children 索引；Map 存类实例跨 put 会被重定位损坏，标量安全）
 
-    // 找 main 并执行其体
+    // 找 main 并执行其体（先收集顶层 fn 注册表）
     fn run_main(self: *mut Self) void {
         var mut i: usize = 0;
         while (i < self.prog.children.len) {
@@ -2858,12 +2860,12 @@ class Interp {
             if (decl.kind == "Fn") {
                 var name = get_prop(decl.props, "name");
                 if (name) |nm| {
+                    self.fns.put(nm, i);
                     if (slice_eq(nm, "main") and decl.children.len > 0) {
                         var body = decl.children[decl.children.len - 1];
                         if (body.kind == "Block") {
-                            self.env.push_scope();
                             self.exec_block(body);
-                            self.env.pop_scope();
+                            if (slice_eq(self.flow, "return")) { self.flow = ""; }
                         }
                         return;
                     }
@@ -2921,9 +2923,9 @@ class Interp {
                 if (!self.truthy(cv)) { break; }
                 self.exec_sub(stmt.children[1]);
                 if (self.flow.len > 0) {
-                    var was_break = slice_eq(self.flow, "break");
-                    self.flow = "";
-                    if (was_break) { break; }
+                    if (slice_eq(self.flow, "break")) { self.flow = ""; break; }
+                    if (slice_eq(self.flow, "continue")) { self.flow = ""; continue; }
+                    break;
                 }
             }
         } else if (k == "For") {
@@ -2937,9 +2939,9 @@ class Interp {
                     self.exec_sub(stmt.children[1]);
                     self.env.pop_scope();
                     if (self.flow.len > 0) {
-                        var was_break = slice_eq(self.flow, "break");
-                        self.flow = "";
-                        if (was_break) { break; }
+                        if (slice_eq(self.flow, "break")) { self.flow = ""; break; }
+                        if (slice_eq(self.flow, "continue")) { self.flow = ""; n += 1; continue; }
+                        break;
                     }
                     n += 1;
                 }
@@ -2948,6 +2950,13 @@ class Interp {
             self.flow = "break";
         } else if (k == "Continue") {
             self.flow = "continue";
+        } else if (k == "Return") {
+            if (stmt.children.len > 0) {
+                self.retv = self.eval_expr(stmt.children[0]);
+            } else {
+                self.retv = mk_void();
+            }
+            self.flow = "return";
         }
     }
 
@@ -3124,7 +3133,7 @@ class Interp {
         return mk_void();
     }
 
-    // 调用：C3 仅内建 io.print / io.println；用户函数 C5
+    // 调用：io.print/println 内建 + 顶层用户函数（C5）
     fn eval_call(self: *mut Self, e: AstNode) Value {
         if (e.children.len == 0) { return mk_void(); }
         var head = e.children[0];
@@ -3138,8 +3147,47 @@ class Interp {
             if (slice_eq(base_name, "io")) {
                 if (method) |m| {
                     if (slice_eq(m, "print") or slice_eq(m, "println")) {
-                        self.builtin_print(e, m == "println");
+                        self.builtin_print(e, slice_eq(m, "println"));
                         return mk_void();
+                    }
+                }
+            }
+        } else if (head.kind == "Ident") {
+            var hname = get_prop(head.props, "name");
+            if (hname) |hn| {
+                if (self.fns.contains(hn)) {
+                    var fip = self.fns.get(hn);
+                    if (fip) |fi| {
+
+                        // 调用入口一次性取 fd（本地副本跨 eval 读，同 For 的 itv 模式）。
+                        // 注意：循环变量不得命名 pi——pi 是 H 内置常量（π=3.14159...），
+                        // 同名声明会被遮蔽，pi<flen 恒 false，参数绑定静默跳过（C5.1 根因）。
+                        var fd = self.prog.children[fi];
+                        var flen = fd.children.len;
+                        var cclen = e.children.len;
+                        self.env.push_scope();
+                        var mut pidx: usize = 0;
+                        var mut ai: usize = 1;
+                        while (pidx < flen) {
+                            if (ai >= cclen) { break; }
+                            var ch = fd.children[pidx];
+                            if (ch.kind != "Param") { break; }
+                            var pname = get_prop(ch.props, "name");
+                            var av = self.eval_expr(e.children[ai]);
+                            if (pname) |pn| { self.env.declare(pn, av); }
+                            pidx += 1;
+                            ai += 1;
+                        }
+                        var body = fd.children[flen - 1];
+                        self.flow = "";
+                        self.retv = mk_void();
+                        if (body.kind == "Block") {
+                            self.exec_block(body);
+                        }
+                        var out = self.retv;
+                        self.flow = "";
+                        self.env.pop_scope();
+                        return out;
                     }
                 }
             }
@@ -3293,6 +3341,8 @@ fn main(args: Vec<String>) !void {
             scope_sizes = Vec<usize>.init(alloc),
         }),
         flow = "",
+        retv = mk_void(),
+        fns = Map<&[u8], usize>.init(alloc),
     });
     it.run_main();
 }

@@ -39,3 +39,10 @@ nul
 # .claude/
 .Zed/
 .*/
+
+# 调试/测试临时产物（2026-08-29 约定）：一律生成到 stage1/k4test/，纯临时结果用后即删；tag1 仅作对照基准
+/tag1/*.txt
+/tag1/*.chk
+/tag1/*.ast
+/tag1/*.py
+/tag1/*.log
