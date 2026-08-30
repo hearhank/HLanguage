@@ -2,10 +2,11 @@
 // 对照 tag1 hc/src/ir/models/ir_inst.rs（49 变体）圈定 stage2 子集指令集（24 变体）：
 //   Const/Load/Store/Bin/Un/Jump/JumpIf/JumpIfNot/JumpIfNull/Label/
 //   Call/CallBuiltin/JumpIfErr/Return/ReturnVoid/AddrSlot/Deref/Field/StoreField/
-//   Index/StoreIndex/SliceOf/MakeClass/Unwrap/CallMethod/LoadGlobal（25 变体；StoreIndex
-//   为编码器排序表等自身代码所需）
-// 不入子集（stage2 自身源码未用，遇之响亮报错）：StorePtr/StoreIndex/MakeArr/
-//   MakeEnum/Move/MakeRange/FnRef/CallIndirect/LoadGlobal 写/迭代器/闭包/defer 系/DeepCopy。
+//   Index/StoreIndex/SliceOf/MakeClass/Unwrap/CallMethod/LoadGlobal/Move（26 变体；StoreIndex
+//   为编码器排序表等自身代码所需；Move 为 main.hc parse_tokens 的 move 返回所需，对齐
+//   tag1 IrInst::Move（opcode 29）+ execute_ir deep_copy）
+// 不入子集（stage2 自身源码未用，遇之响亮报错）：StorePtr/MakeArr/
+//   MakeEnum/MakeRange/FnRef/CallIndirect/LoadGlobal 写/迭代器/闭包/defer 系/DeepCopy。
 // 建模约定（对齐 stage2 纪律 R1/R7）：class + kind 字符串分发；字段扁平；
 //   Map 只存标量（R2）；需要顺序处一律平行 Vec（R1）。
 // ============================================================
@@ -236,6 +237,13 @@ fn ir_store_index(base: i64, index: i64, value: i64) IrInst {
     x.a = base;
     x.b = index;
     x.temp = value;
+    return x;
+}
+
+fn ir_move(temp: i64, a: i64) IrInst {
+    var x = ir_inst("Move");
+    x.temp = temp;
+    x.a = a;
     return x;
 }
 

@@ -34,6 +34,7 @@
   - T0c：产物 .hbc 中每个浮点常量的 8 字节 == Rust `f64::to_le_bytes`（cargo test 内构造期望值）；
   - 回归：`hc run stage1/checker.hc stage2/src/main.hc` = OK；K4 门禁重跑。
 - **Rust 基线**：编译+执行 ~0.2s；**超时**：×20 = 4s；**通过状态**：✅（T0a 18 行逐行一致；T0c 10 值字节对拍 bit-exact；教训：hc-rt @intCast 不接受 float 源 → 尾数改纯 f64 比较/减法逐位提取）
+- **S0 范围追加（checker 强化，2026-08-30）**：Call 被调名解析检查、Assign 目标/类型检查、Defer/Errdefer/ConstDecl body 检查（parser 修复节点丢失）、Catch/Orelse/Move/Default 遍历、type_of_expr Binary 臂修复（op 在 props 非 children）；`!optional` 求值坑确认（禁用，统一 if 解包）；lower 补 Move 指令（opcode 29，对齐 tag1）。验收：负例 3 诊断命中、stage2 自身 0 误报、K4 13 passed。
 
 ### S1 — 重产 A.hbc + fast 回归
 
@@ -66,6 +67,14 @@
 ### S5 — 跨编译器等价（取代旧 oracle 的证明目标）
 
 - **命令**：`hc run stage2/test/interp.hbc stage2/src/main.hc --emit-hbc stage2/test/A2.hbc <stage2 全部 7 源文件>`，然后 `fc /b stage2/test/A2.hbc stage2/test/A.hbc`。
+- **挂机运行（推荐）**：外层 PowerShell 逐行加时间戳并 Tee 落盘（时间戳不进自举链内，保产物确定性；脚本内置 S5 断言）：
+
+```bash
+powershell -ExecutionPolicy Bypass -File stage2\test\s5-run.ps1
+```
+
+日志落盘 `stage2/test/s5.log`，每行含绝对时刻 + 相对秒；完成后自动断言并输出 `S5 PASS: A2 == A byte-identical (N bytes)` 或首个差异偏移。
+
 - **功能描述**：interp.hbc（IR VM → interp）解释执行 stage2 编译器，编译 stage2 自身 → A2.hbc；断言与宿主链产物逐字节一致。三层等价证明（IR VM 执行 interp 解释执行编译器 ≡ Rust 直接执行编译器），证明力强于旧 oracle。
 - **Rust 基线**：宿主链 26.7s；**超时**：严格 ×20 ≈ 8.9min（预期大概率超时 FAIL——超了记录实测值，按约束 4 策略手动调长并在此表登记新值与理由）；**通过状态**：🔴
 

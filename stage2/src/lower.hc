@@ -809,7 +809,13 @@ class Lower {
             self.lo_push(ir_make_class(t, ty, names, vals));
             return t;
         }
-        if (ireq(e.kind, "Orelse") or ireq(e.kind, "Await") or ireq(e.kind, "Move") or ireq(e.kind, "Closure") or ireq(e.kind, "Dot")
+        if (ireq(e.kind, "Move")) {
+            // move X：值拷贝转移（对齐 tag1 lower_impl Expr::Move 臂 + IrInst::Move opcode 29）
+            var a = self.lo_expr(e.children[0]);
+            self.lo_push(ir_move(t, a));
+            return t;
+        }
+        if (ireq(e.kind, "Orelse") or ireq(e.kind, "Await") or ireq(e.kind, "Closure") or ireq(e.kind, "Dot")
             or ireq(e.kind, "ArrayLit") or ireq(e.kind, "TupleLit") or ireq(e.kind, "NamedLit")
             or ireq(e.kind, "IfExpr") or ireq(e.kind, "SwitchExpr") or ireq(e.kind, "Unknown")
             or ireq(e.kind, "StructType") or ireq(e.kind, "ContainerLit")) {

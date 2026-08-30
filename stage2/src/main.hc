@@ -10,9 +10,9 @@
 // 阶段 2：语法分析（S3：src/parser.hc）
 // ============================================================
 
-fn parse_tokens(toks: Vec<Token>) AstNode {
+fn parse_tokens(toks: Vec<Token>)owned AstNode {
     var p: Parser = alloc.init(Parser{ tokens = toks, pos = 0, n = toks.len, rev_kw_map = build_rev_kw_map() });
-    return p.parse_program();
+    return move p.parse_program();
 }
 
 // ============================================================
@@ -60,19 +60,9 @@ fn main(args: Vec<String>) !void {
         var src0 = try io.fs.read_file(args[3], alloc);
         io.print("[check] start: merged program, {} decls - heaviest stage, may stay silent long
 ", prog.children.len);
-        var checker: Checker = alloc.init(Checker{
-            diags = Vec<Vec<u8>>.init(alloc),
-            src = Vec<u8>.init(alloc),
-            line_starts = Vec<usize>.init(alloc),
-            scopes = Vec<ScopeEntry>.init(alloc),
-            scope_sizes = Vec<usize>.init(alloc),
-            types = Map<&[u8], SType>.init(alloc),
-            funcs = Map<&[u8], FnSig>.init(alloc),
-            current_fn_ret_is_error_union = false,
-            current_class = "",
-        });
+        var checker: Checker = make_checker();
         checker.init(src0);
-        checker.check_program(prog);
+        try checker.check_program(prog);
         io.print("[check] merged program ok ({} decls)
 ", prog.children.len);
         try io.fs.write_file("stage2/test/progress.txt", "check ok", alloc);
@@ -127,19 +117,9 @@ fn main(args: Vec<String>) !void {
     // 阶段 2：语法（S3 已落地）
     var ast = parse_tokens(toks);
     // 阶段 3：语义检查（S4：src/checker.hc，同命名空间扁平共享）
-    var checker: Checker = alloc.init(Checker{
-        diags = Vec<Vec<u8>>.init(alloc),
-        src = Vec<u8>.init(alloc),
-        line_starts = Vec<usize>.init(alloc),
-        scopes = Vec<ScopeEntry>.init(alloc),
-        scope_sizes = Vec<usize>.init(alloc),
-        types = Map<&[u8], SType>.init(alloc),
-        funcs = Map<&[u8], FnSig>.init(alloc),
-        current_fn_ret_is_error_union = false,
-        current_class = "",
-    });
+    var checker: Checker = make_checker();
     checker.init(src);
-    checker.check_program(ast);
+    try checker.check_program(ast);
     if (checker.diags.len > 0) {
         checker.report();
         return error.CheckFailed;

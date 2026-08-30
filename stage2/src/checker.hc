@@ -319,22 +319,21 @@ class Checker {
             return make_ty("unknown");
         }
         if (k == "Binary") {
-            if (expr.children.len >= 3) {
-                var op = expr.children[2].kind;
+            if (expr.children.len >= 2) {
+                var mut op: &[u8] = "";
+                if (get_prop(expr.props, "op")) |ov| { op = ov; }
                 var l = self.type_of_expr(expr.children[0]);
                 var r = self.type_of_expr(expr.children[1]);
-                // 逻辑运算符返回 bool
-                if (op == "And" or op == "Or") {
+                // 逻辑/比较运算符返回 bool
+                if (slice_eq(op, "And") or slice_eq(op, "Or")) {
                     return make_ty("bool");
                 }
-                // 比较运算符返回 bool
-                if (op == "Eq" or op == "Ne" or op == "Lt" or
-                    op == "Le" or op == "Gt" or op == "Ge") {
+                if (slice_eq(op, "Eq") or slice_eq(op, "Ne") or slice_eq(op, "Lt") or
+                    slice_eq(op, "Le") or slice_eq(op, "Gt") or slice_eq(op, "Ge")) {
                     return make_ty("bool");
                 }
-                // 算术运算符：如果任一操作数是 float，结果 float
-                if (l.kind.as_slice() == "float" or r.kind.as_slice() == "float") return make_ty("float");
-                // 否则 return comptime_int（后续会收窄）
+                // 算术运算符：任一操作数 float → float
+                if (l.kind.as_slice() == "float" or r.kind.as_slice() == "float") { return make_ty("float"); }
                 return make_ty("comptime_int");
             }
             return make_ty("unknown");
@@ -395,12 +394,13 @@ class Checker {
     }
 
     // 检查程序（两遍：收集 + 检查）
-    fn check_program(self: *mut Self, prog: AstNode) void {
+    fn check_program(self: *mut Self, prog: AstNode) !void {
         // 第一遍：收集所有声明
         io.print("[check] collect: {} decls
 ", prog.children.len);
         self.collect_program(prog);
-        // 第二遍：检查（每 10 个 decl 打心跳，嵌套解释下本阶段为小时级）
+        // 第二遍：检查（每 10 个 decl 打心跳 + 落盘——stdout 重定向为块缓冲，
+        // abort 时 stdout 全丢；progress.txt 落盘是挂机定位的唯一可靠通道）
         var mut i: usize = 0;
         while (i < prog.children.len) {
             self.check_decl(prog.children[i]);
@@ -408,6 +408,12 @@ class Checker {
             if (i % 10 == 0) {
                 io.print("[check] {}/{} decls
 ", i, prog.children.len);
+                var mut mk = Vec<u8>.init(alloc);
+                append_bytes(&mk, "check ");
+                append_int(i, &mut mk);
+                append_bytes(&mk, "/");
+                append_int(prog.children.len, &mut mk);
+                try io.fs.write_file("stage2/test/progress.txt", mk.as_slice(), alloc);
             }
         }
         io.print("[check] all {} decls checked
@@ -497,6 +503,14 @@ class Checker {
         var k = decl.kind;
         if (k == "Fn") { self.check_fn(decl); }
         else if (k == "Class") { self.check_class(decl); }
+        else if (k == "Const") {
+            // 顶层 const（含错误集别名）：值表达式内符号检查（错误集别名无 children → 无操作）
+            var mut i: usize = 0;
+            while (i < decl.children.len) {
+                self.check_expr(decl.children[i]);
+                i += 1;
+            }
+        }
         else if (k == "Namespace") {
             var mut i: usize = 0;
             while (i < decl.children.len) {
@@ -597,6 +611,12 @@ class Checker {
                 self.check_expr(stmt.children[0]);
             }
         } else if (k == "Defer" or k == "Errdefer") {
+            // defer 表达式体检查（parser 挂载 children）
+            var mut i: usize = 0;
+            while (i < stmt.children.len) {
+                self.check_expr(stmt.children[i]);
+                i += 1;
+            }
         } else if (k == "Empty" or k == "Break" or k == "Continue") {
         } else if (k == "ConstDecl") {
             var name = get_prop(stmt.props, "name");
@@ -606,6 +626,12 @@ class Checker {
                     mut_ = false,
                 };
                 self.register(n, info);
+            }
+            // 初始值表达式检查（parser 挂载 children）
+            var mut i: usize = 0;
+            while (i < stmt.children.len) {
+                self.check_expr(stmt.children[i]);
+                i += 1;
             }
         }
     }
@@ -857,9 +883,75 @@ class Checker {
                 self.check_expr(expr.children[0]);
             }
         } else if (k == "Call") {
+            // 被调名检查：Ident 形态的自由函数/内建；Field 形态（方法/限定名）1.x 收紧
+            // 注意：禁用 `!optional` 语法（求值坑）——统一用 if 解包 else 报错
+            if (expr.children.len > 0) {
+                var callee = expr.children[0];
+                if (callee.kind == "Ident") {
+                    var mut cn: &[u8] = "";
+                    if (get_prop(callee.props, "name")) |nv| { cn = nv; }
+                    if (!self.is_builtin_name(cn) and !self.types.contains(cn) and !self.funcs.contains(cn)) {
+                        var found = self.lookup(cn);
+                        if (found) |_| {
+                            // 已绑定：放行
+                        } else {
+                            var msg = Vec<u8>.init(alloc);
+                            append_bytes(&msg, "error: undefined function `");
+                            var mut j: usize = 0;
+                            while (j < cn.len) { msg.append(cn[j]); j += 1; }
+                            append_bytes(&msg, "`");
+                            self.error(msg);
+                        }
+                    }
+                } else {
+                    self.check_expr(callee);
+                }
+                var mut ci: usize = 1;
+                while (ci < expr.children.len) {
+                    self.check_expr(expr.children[ci]);
+                    ci += 1;
+                }
+            }
+        } else if (k == "Assign") {
+            // 赋值检查：目标解析 + 类型对照（mut 强制与 Rust hc check 现状不一致——登记 backlog）
+            if (expr.children.len >= 2) {
+                var target = expr.children[0];
+                self.check_expr(target);
+                self.check_expr(expr.children[1]);
+                if (target.kind == "Ident") {
+                    var name = get_prop(target.props, "name");
+                    if (name) |n| {
+                        var found = self.lookup(n);
+                        if (found) |info| {
+                            var rhs_ty = self.type_of_expr(expr.children[1]);
+                            var tk = info.ty.kind.as_slice();
+                            var rk = rhs_ty.kind.as_slice();
+                            if (tk != "unknown" and rk != "unknown") {
+                                if (!self.is_compatible(rhs_ty, info.ty)) {
+                                    var msg = Vec<u8>.init(alloc);
+                                    append_bytes(&msg, "error: type mismatch in assignment");
+                                    self.error(msg);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (k == "Catch" or k == "Orelse") {
             var mut i: usize = 0;
             while (i < expr.children.len) {
-                self.check_expr(expr.children[i]);
+                var c = expr.children[i];
+                if (c.kind == "Bind") {
+                    // catch |err| { body }：body 块逐语句检查
+                    var mut bi: usize = 0;
+                    while (bi < c.children.len) {
+                        var bc = c.children[bi];
+                        if (bc.kind == "Block") { self.check_block(bc); } else { self.check_expr(bc); }
+                        bi += 1;
+                    }
+                } else {
+                    self.check_expr(c);
+                }
                 i += 1;
             }
         } else if (k == "Field") {
@@ -872,7 +964,6 @@ class Checker {
                 self.check_expr(expr.children[i]);
                 i += 1;
             }
-        } else if (k == "Assign") {
         } else if (k == "AddrOf" or k == "Try" or k == "Await") {
             if (expr.children.len > 0) {
                 self.check_expr(expr.children[0]);
@@ -914,6 +1005,12 @@ class Checker {
                 self.check_expr(expr.children[0]);
             }
         } else if (k == "AtBuiltin") {
+            var mut i: usize = 0;
+            while (i < expr.children.len) {
+                self.check_expr(expr.children[i]);
+                i += 1;
+            }
+        } else if (k == "Move" or k == "Default") {
             var mut i: usize = 0;
             while (i < expr.children.len) {
                 self.check_expr(expr.children[i]);
@@ -996,6 +1093,21 @@ class Checker {
             }
         }
     }
+}
+
+// Checker 构造器（统一初始化字面量；S0 期间合并 main.hc 两处重复定义）
+fn make_checker() Checker {
+    return alloc.init(Checker{
+        diags = Vec<Vec<u8>>.init(alloc),
+        src = Vec<u8>.init(alloc),
+        line_starts = Vec<usize>.init(alloc),
+        scopes = Vec<ScopeEntry>.init(alloc),
+        scope_sizes = Vec<usize>.init(alloc),
+        types = Map<&[u8], SType>.init(alloc),
+        funcs = Map<&[u8], FnSig>.init(alloc),
+        current_fn_ret_is_error_union = false,
+        current_class = "",
+    });
 }
 
 // ============================================================

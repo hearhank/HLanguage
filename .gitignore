@@ -8,6 +8,7 @@ node_modules/
 *.o
 *.bin
 *.lock
+*.out
 # 库形态构建产物（C3：zig ar 静态归档 + 符号表；C4：dll 动态库 + 导入库）
 lib*.a
 *.dll

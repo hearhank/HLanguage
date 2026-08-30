@@ -1729,10 +1729,11 @@ class Parser {
             self.advance();
             var name = self.expect_ident();
             self.expect("Eq");
-            self.parse_expr();
+            var e2 = self.parse_expr();
             self.expect("Semi");
             var c = make_node("ConstDecl");
             node_add_prop(&c, "name", name);
+            node_add_child(&c, e2);
             return c;
         }
         if (k == "KwIf") {
@@ -1771,9 +1772,11 @@ class Parser {
         }
         if (k == "KwDefer") {
             self.advance();
-            self.parse_expr();
+            var e2 = self.parse_expr();
             self.expect("Semi");
-            return make_node("Defer");
+            var d = make_node("Defer");
+            node_add_child(&d, e2);
+            return d;
         }
         if (k == "KwErrdefer") {
             self.advance();

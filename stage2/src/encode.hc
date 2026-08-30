@@ -156,6 +156,11 @@ fn enc_inst(out: *mut Vec<u8>, x: IrInst) void {
         out.*.append(0);
         enc_push_u32(out, x.temp);
         enc_const(out, x.konst);
+    } else if (ireq(x.kind, "Move")) {
+        // 对齐 tag1 encode.rs IrInst::Move（opcode 29：u32 temp + u32 a）
+        out.*.append(29);
+        enc_push_u32(out, x.temp);
+        enc_push_u32(out, x.a);
     } else if (ireq(x.kind, "Load")) {
         out.*.append(1);
         enc_push_u32(out, x.temp);
