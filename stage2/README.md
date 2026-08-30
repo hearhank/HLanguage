@@ -37,7 +37,7 @@ hc lex stage2\test\smoke.hc
 | IR 模型 | src/ir.hc | ✅ S5 | IrModule/IrFunc/IrInst/IrConst class + kind 分发；指令集 25 变体（对照 ir_inst.rs 49）；无 Map（平行 Vec + 线性查） |
 | lower | src/lower.hc | ✅ S6 | AST → IrInst；对齐 tag1 lower_impl 子集语义；子集外构造响亮诊断；探针 probe_ir.hc 验证 |
 | HBC2 编码 | src/encode.hc | ✅ S7 | 魔数 HBC2/v7；字段序=decode.rs 读回序；排序确定性；**V1 达成：A.hbc == B.hbc 逐字节（304166B）** |
-| 闭环脚本 | test/bootstrap.bat | 🟡 S8 | 脚本已入库；interp 全链待跑（数小时量级，登记基线后闭环） |
+| 闭环脚本 | test/bootstrap.bat | 🟡 S8 | 脚本三模式已入库（ADR-0032 链路分级）：fast=宿主链日常门禁（已跑通）；oracle=全 H 链里程碑一次性（interp 全链待跑，登记基线后闭环）；resume=oracle 阶段级续跑 |
 | 行为验证 | — | 🔴 S9 | 待 S8 后（S9-mini 已过：编译版 --dump-ast vs Rust parse 仅 ret: 渲染差异） |
 
 ## ✅ S2 缺陷复盘（已解决，2026-08-29）
@@ -83,13 +83,27 @@ hc lex stage2\test\smoke.hc
 - **stage2 parser 类方法 = `Fn` + `method=类名` prop**（非 Rust dump 的 `Method` kind）；类字段 = `FieldDecl`。
 - **若需 `v[i] = x`**：lower 已支持 StoreIndex（第 25 号指令），自举自身代码需要它。
 
-## 一次性自举链（S8）
+## 自举闭环（S8，链路分级 ADR-0032）
+
+bootstrap.bat 三模式（从仓库根运行）：
+
+```bat
+stage2\test\bootstrap.bat          REM fast：宿主链（默认，日常门禁，~分钟级）
+stage2\test\bootstrap.bat oracle   REM 全 H 链（里程碑一次性，数小时）
+stage2\test\bootstrap.bat resume   REM 全 H 链阶段级续跑（跳过已完成的 Phase A）
+```
+
+- **fast（默认）**：宿主链产 `A.hbc` → Phase B → V1。产物 A.hbc/B.hbc。
+- **oracle**：全 H 链产 `A_oracle.hbc`（无条件重跑 Phase A）→ Phase B → V1。产物 A_oracle.hbc/B_oracle.hbc，与 fast 产物互不覆盖。
+- **resume**：同 oracle，但 `A_oracle.hbc` 已存在时跳过 Phase A（阶段级；progress.txt 的 per-file 标记仅作诊断，无文件级检查点）。
+
+全 H 链参考命令：
 
 ```bat
 set SRC=stage2\src\main.hc stage2\src\ir.hc stage2\src\lower.hc stage2\src\encode.hc stage2\src\lexer.hc stage2\src\parser.hc stage2\src\checker.hc
-hc run stage1\interp.hc stage2\src\main.hc --emit-hbc stage2\test\A.hbc %SRC%   REM interp 全链（数小时）
-hc run stage2\test\A.hbc --emit-hbc stage2\test\B.hbc %SRC%                     REM A.hbc 自编译
-fc /b stage2\test\A.hbc stage2\test\B.hbc                                        REM V1：字节级相等
+hc run stage1\interp.hc stage2\src\main.hc --emit-hbc stage2\test\A_oracle.hbc %SRC%
+hc run stage2\test\A_oracle.hbc --emit-hbc stage2\test\B_oracle.hbc %SRC%
+fc /b stage2\test\A_oracle.hbc stage2\test\B_oracle.hbc                            REM V1：字节级相等
 ```
 
-跨宿主确定性已验证（S7）：宿主编译（tree-walking 执行编译器）产物 == A.hbc 自编译产物，逐字节相等（304166 B，21s）。
+跨宿主确定性已验证（S7）：宿主链编译产物 == A.hbc 自编译产物，逐字节相等（304166 B，宿主链 21s）。全 H 链与宿主链喂给 stage2 编译器的 argv 逐元素一致（args[0]=入口路径约定对齐），产物一致性是构造上的必然；残余风险仅为宿主语义分歧点（如 @intCast 越界），正是 fc /b 要抓的对象。

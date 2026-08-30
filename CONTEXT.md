@@ -566,3 +566,13 @@ _Avoid_: 将Zed扩展与LSP服务器混淆
 **文档注释 (Doc Comment)**:
 `///` 格式的注释，用于文档生成和LSP悬停提示。支持Markdown格式。类似Rust的文档注释格式。
 _Avoid_: 使用其他格式的文档注释
+
+## 13. 自举链路术语（2026-08-30 定案，ADR-0032）
+
+**全 H 链 (Full H Chain)**:
+stage1 interp（H 写的解释器）解释执行 stage2 编译器（H 写的编译器）的三层嵌套链路。数小时量级，仅作 K5 里程碑一次性验证（登记基线 + 用真实编译负载终极验证 stage1 interp 与 Rust hc 语义一致）。
+_Avoid_: oracle 链、stage1 链路、嵌套解释链
+
+**宿主链 (Host Chain)**:
+Rust hc 以包模式直接解释执行 stage2 编译器的链路（实测 21s）。bootstrap.bat 默认 fast 模式与日常 V1 门禁所用。
+_Avoid_: tree-walking 链、包模式链路、快链

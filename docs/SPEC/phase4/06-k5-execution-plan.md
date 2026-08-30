@@ -60,7 +60,7 @@
 | S5 | IR 模型：`IrModule/IrFunc/IrInst` class + kind 分发（按 stage2 子集圈定指令集，对照 ir_inst.rs 49 变体圈定） | 指令集清单入档（预计 ≤20 变体） | ≤1h |
 | S6 | lower：AST → IrInst（变量/算术/控制流→跳转/调用/常量池） | 手写探针程序 lower 产物人工抽查 + run_ir 可加载（经 .hbc） | 1–3h |
 | S7 | HBC2 encoder：魔数 HBC2/v7/opcode 表（对照 encode.rs 子集）+ func_index 表 | S6 产物编码后 `hc run` 能 decode 回读（round-trip 抽查） | 1–3h |
-| S8 | 闭环脚本：`stage2/test/bootstrap.bat`（interp 跑 stage2 → A.hbc；hc run A.hbc → B.hbc；fc /b diff）+ 编码纪律检查清单 | 脚本一键运行 | ≤1h |
+| S8 | 闭环脚本：`stage2/test/bootstrap.bat` 三模式（ADR-0032 链路分级：fast=宿主链日常门禁；oracle=全 H 链里程碑一次性；resume=阶段级续跑）+ 编码纪律检查清单 | 脚本一键运行；fast 日常可跑；oracle 登记基线 | ≤1h |
 | S9 | 产物行为验证：A.hbc 执行输出与 stage2 源码经 Rust 编译执行输出对照 | 对照 MATCH | ≤1h |
 
 ### 组 V：验收
@@ -92,7 +92,7 @@ P1→P2→P3→P4→P5→P6→P7 → S1 → S2 → S3 → S4 → S5 → S6 → S
 | S5 IR 模型 | ✅ | 见 S5 提交 | stage2/src/ir.hc（IrModule/IrFunc/IrInst/IrConst class + kind 分发）；指令集 25 变体入档（对照 ir_inst.rs 49 变体）；无 Map（平行 Vec + 线性查，R1/R5） |
 | S6 lower | ✅ | 见 S6 提交 | stage2/src/lower.hc（lower_module：定义预收集→函数发射→组装）；语义对齐 tag1 lower_impl 子集（And/Or 短路、try=JumpIfErr+Return、if-capture=JumpIfNull+Unwrap、CallMethod {Type}.{method}、限定调用隐式环境路由、@intCast 类型位 Const Str）；类方法=Fn+method prop（stage2 parser 契约）；子集外构造响亮诊断；探针 probe_ir.hc 全指令面验证 | 
 | S7 HBC2 编码 | ✅ | 见 S7 提交 | stage2/src/encode.hc（魔数 HBC2/v7；字段序=decode.rs 读回序；func_index/错误码/枚举名排序确定性；Int=i128 LE 16 字节符号扩展）；多文件合并编译接线（--emit-hbc out in1.hc in2.hc...，单 Program 声明序合并）；**V1 达成：A.hbc == B.hbc 逐字节**（宿主编译产物 vs A.hbc 自编译产物，304166 字节，21s） |
-| S8 闭环脚本 | 🟡 | — | stage2/test/bootstrap.bat 已入库（A: interp 全链 → B: A.hbc 自编译 → fc /b）；interp 全链待跑（数小时量级，登记基线后即闭环） |
+| S8 闭环脚本 | 🟡 | 见 S8 提交 | bootstrap.bat 三模式已入库（ADR-0032）：fast=宿主链日常门禁（已跑通）；oracle=全 H 链里程碑一次性（interp 全链待跑，登记基线后即闭环）；resume=阶段级续跑 |
 | S9 行为验证 | 🔴 | — | 待 S8 后（已有 S9-mini：编译版 --dump-ast vs Rust parse 仅 ret: 渲染差异，其余逐行一致） |
 | V1–V2 | 🔴 | — | |
 

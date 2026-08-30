@@ -9,6 +9,6 @@ const build = Build{
     name = "stage2",
     version = "0.1.0",
     kind = Kind.exe,
-    files = [ "src/main.hc", "src/lexer.hc", "src/parser.hc", "src/checker.hc", ],
+    files = [ "src/main.hc", "src/ir.hc", "src/lower.hc", "src/encode.hc", "src/lexer.hc", "src/parser.hc", "src/checker.hc", ],
     deps = [],
 };

@@ -18,6 +18,9 @@ out/
 debug/
 target/
 
+# HBC2 字节码产物（bootstrap/自举验证，可由 .hc 再生成）
+*.hbc
+
 # 临时文件
 *.tmp
 *_tmp.*
