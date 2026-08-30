@@ -632,8 +632,9 @@ class Lower {
             return t;
         }
         if (ireq(e.kind, "FloatLit")) {
-            self.lo_err("lower: 浮点字面量不在子集");
-            self.lo_push(ir_const_inst(t, ir_const_void()));
+            var mut txt: &[u8] = "0.0";
+            if (get_prop(e.props, "text")) |tv| { txt = tv; }
+            self.lo_push(ir_const_inst(t, ir_const_float(lower_parse_float(txt))));
             return t;
         }
         if (ireq(e.kind, "Ident")) {
@@ -749,6 +750,36 @@ class Lower {
             self.lo_push(ir_label(done));
             return t;
         }
+        if (ireq(e.kind, "Catch")) {
+            // catch：错误值 → 处理分支；结果统一到 res_slot（对齐 tag1 lower_expr Catch 臂）
+            //   Bind 形式（catch |err| { body }）：err 值绑定进作用域；body 需以 return 结尾
+            //   （块值形式未支持——子集切片）；Default 形式（catch 默认值）：错误 → 默认表达式
+            var a = self.lo_expr(e.children[0]);
+            var l_catch = self.lo_new_label();
+            var done = self.lo_new_label();
+            var res_slot = self.lo_alloc_slot();
+            self.lo_push(ir_jump_if_err(a, l_catch));
+            self.lo_push(ir_store(res_slot, a));
+            self.lo_push(ir_jump(done));
+            self.lo_push(ir_label(l_catch));
+            var c1 = e.children[1];
+            if (ireq(c1.kind, "Bind")) {
+                var mut nm: &[u8] = "";
+                if (get_prop(c1.props, "name")) |nv| { nm = nv; }
+                var err_slot = self.lo_alloc_slot();
+                self.lo_push(ir_store(err_slot, a));
+                self.lo_push_scope();
+                self.lo_bind(nm, err_slot);
+                self.lo_stmts(c1.children[0]);
+                self.lo_pop_scope();
+            } else {
+                var h = self.lo_expr(c1.children[0]);
+                self.lo_push(ir_store(res_slot, h));
+            }
+            self.lo_push(ir_label(done));
+            self.lo_push(ir_load(t, res_slot));
+            return t;
+        }
         if (ireq(e.kind, "Call")) {
             return self.lo_call(e, t);
         }
@@ -778,8 +809,7 @@ class Lower {
             self.lo_push(ir_make_class(t, ty, names, vals));
             return t;
         }
-        if (ireq(e.kind, "Orelse") or ireq(e.kind, "Catch") or ireq(e.kind, "Await")
-            or ireq(e.kind, "Move") or ireq(e.kind, "Closure") or ireq(e.kind, "Dot")
+        if (ireq(e.kind, "Orelse") or ireq(e.kind, "Await") or ireq(e.kind, "Move") or ireq(e.kind, "Closure") or ireq(e.kind, "Dot")
             or ireq(e.kind, "ArrayLit") or ireq(e.kind, "TupleLit") or ireq(e.kind, "NamedLit")
             or ireq(e.kind, "IfExpr") or ireq(e.kind, "SwitchExpr") or ireq(e.kind, "Unknown")
             or ireq(e.kind, "StructType") or ireq(e.kind, "ContainerLit")) {
@@ -940,6 +970,29 @@ fn lower_is_type_arg_pos(name: &[u8], pos: usize) bool {
     if (ireq(name, "@atomicLoad") or ireq(name, "@atomicStore") or ireq(name, "@atomicRmw")) { return pos == 0; }
     if (ireq(name, "alloc.init") or ireq(name, "arena.init")) { return pos == 0; }
     return false;
+}
+
+// 十进制浮点文本 → f64（纯十进制切片，不含指数/下划线；逐位合成与 stage1 parse_float_text 一致）
+fn lower_parse_float(text: &[u8]) f64 {
+    var mut i: usize = 0;
+    var mut neg = false;
+    if (i < text.len and text[i] == '-') { neg = true; i += 1; }
+    var mut v: f64 = 0.0;
+    while (i < text.len and text[i] >= '0' and text[i] <= '9') {
+        v = v * 10.0 + @intCast(f64, text[i] - '0');
+        i += 1;
+    }
+    if (i < text.len and text[i] == '.') {
+        i += 1;
+        var mut scale: f64 = 0.1;
+        while (i < text.len and text[i] >= '0' and text[i] <= '9') {
+            v = v + @intCast(f64, text[i] - '0') * scale;
+            scale = scale * 0.1;
+            i += 1;
+        }
+    }
+    if (neg) { v = -v; }
+    return v;
 }
 
 fn lower_parse_int(text: &[u8]) i64 {

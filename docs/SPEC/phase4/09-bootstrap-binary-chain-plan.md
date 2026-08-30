@@ -33,33 +33,34 @@
   - T0a：浮点最小程序（字面量/四则/混合提升/比较/Neg/`+=` `*=`）→ stage2 编译 → `hc run` 执行 → stdout 逐行对照 `hc run`（Rust）；
   - T0c：产物 .hbc 中每个浮点常量的 8 字节 == Rust `f64::to_le_bytes`（cargo test 内构造期望值）；
   - 回归：`hc run stage1/checker.hc stage2/src/main.hc` = OK；K4 门禁重跑。
-- **Rust 基线**：编译+执行 ~0.2s；**超时**：×20 = 4s；**通过状态**：🔴
+- **Rust 基线**：编译+执行 ~0.2s；**超时**：×20 = 4s；**通过状态**：✅（T0a 18 行逐行一致；T0c 10 值字节对拍 bit-exact；教训：hc-rt @intCast 不接受 float 源 → 尾数改纯 f64 比较/减法逐位提取）
 
 ### S1 — 重产 A.hbc + fast 回归
 
 - **命令**：`stage2\test\bootstrap.bat`（fast）。
 - **功能描述**：含浮点支持的编译器重产 A.hbc；宿主链 V1 回归。
-- **Rust 基线**：26.7s；**超时**：×20 ≈ 8.9min；**通过状态**：🔴
+- **Rust 基线**：26.7s；**超时**：×20 ≈ 8.9min；**通过状态**：✅（V1 PASS，A==B 313,568 B）
 - **最小测试**：fast 闭环 PASS（A==B）。
 
 ### S2 — 产 interp.hbc（编译器编译解释器）
 
 - **命令**：`hc run stage2/test/A.hbc --emit-hbc stage2/test/interp.hbc stage1/interp.hc`。
 - **功能描述**：A.hbc（VM 执行的 stage2 编译器）编译 stage1 解释器。前次实测 11.3s 到 lower 失败（32 条浮点诊断）；S0 后应全通（check 66 decls 已过）。
-- **Rust 基线**：宿主链折算 26.7s；**超时**：×20 ≈ 8.9min；**通过状态**：🔴
+- **Rust 基线**：宿主链折算 26.7s；**超时**：×20 ≈ 8.9min；**通过状态**：✅（实测 11.7s，interp.hbc 243,240 B）
 - **最小测试**：interp.hbc 执行 `stage1/exec-corpus/01-arith.hc`，stdout 逐行对照 `hc run`。
+- **实施追加**：S0 后首次实测报 2 条「子集外表达式 Catch」（interp.hc 的 2 处 `catch |err| {…}`，host_read_file/host_write_file）→ 补 lower Catch 臂（JumpIfErr + res_slot + lo_bind，对齐 tag1 lower_expr Catch 臂；Bind body 需以 return 结尾——子集切片）后全通。
 
 ### S3 — 速度测定（决策门）
 
 - **命令**：`hc run stage2/test/interp.hbc <语料>` vs `hc run stage1/interp.hc <语料>`（同语料计时）。
 - **功能描述**：IR VM 执行 interp vs tree-walking 执行 interp 的耗时比值（interp.hc 在 Rust hc 上执行 01-arith = 0.126s / 04-fn-rec = 0.390s）。比值决定 interp.hbc 的定位：≥2x 推广为执行工具；<2x 降级为语义对照工具（S4/S5 照跑，仅时间预期不同）。
-- **Rust 基线**：0.055–0.057s（语料 Rust 执行）；**超时**：记录项，无阈值；**通过状态**：🔴
+- **Rust 基线**：0.055–0.057s（语料 Rust 执行）；**超时**：记录项，无阈值；**通过状态**：✅（比值 2–2.6x：01-arith 0.068s vs 0.126s；04-fn-rec 151ms vs 390ms → interp.hbc 推广为执行工具）
 
 ### S4 — interp.hbc 全语料对照
 
 - **命令**：对 `stage1/exec-corpus/01–13` 逐个：`hc run stage2/test/interp.hbc <语料>` vs `hc run <语料>`。
 - **功能描述**：编译后的解释器执行全部语料，验证 IR VM 宿主语义；stdout 逐行比较 + 计时。
-- **Rust 基线**：0.055s/个（已测）；**超时**：×20 = 1.1s/个（严格，FAIL 即记录——两层嵌套可能超，正是要暴露的问题）；**通过状态**：🔴
+- **Rust 基线**：0.055s/个（已测）；**超时**：×20 = 1.1s/个（严格，FAIL 即记录——两层嵌套可能超，正是要暴露的问题）；**通过状态**：✅（13/13 逐行 MATCH，interp.hbc 90–151ms vs Rust 77–91ms，全部在阈值内）
 - **最小测试**：k4 模板扩展的 cargo 测试（每语料一项）。
 
 ### S5 — 跨编译器等价（取代旧 oracle 的证明目标）

@@ -42,17 +42,64 @@ fn enc_push_i128_le(out: *mut Vec<u8>, v: i64) void {
     }
 }
 
+// f64 → IEEE-754 小端 8 字节（纯 H 算术分解，无 @bitCast；hc-rt @intCast 不接受 float 源，
+// 故尾数用纯 f64 比较/减法逐位提取，在 i64 域拼装）。
+// 仅支持有限正常数（自举源码浮点范围约 1e-13..1e5；次正规/inf/NaN 不入子集）。
+// 精度：归一化乘除 2 精确；v∈[1,2) 时 v-1 精确（Sterbenz）；×2^52 精确；
+// 尾数整数值 < 2^52 在 f64 整数精确区内，逐位判定（rem >= k 则减）全部精确。
+fn enc_push_f64_le(out: *mut Vec<u8>, x: f64) void {
+    if (x == 0.0) {
+        var mut z: i64 = 0;
+        while (z < 8) { out.*.append(0); z += 1; }
+        return;
+    }
+    var mut neg = false;
+    var mut v: f64 = x;
+    if (v < 0.0) { neg = true; v = -v; }
+    var mut e: i64 = 0;
+    while (v >= 2.0) { v = v / 2.0; e += 1; }
+    while (v < 1.0) { v = v * 2.0; e -= 1; }
+    var ebits: i64 = e + 1023;
+    // 尾数 52 位：m = (v-1)×2^52 是精确整数 f64；自 2^51 起逐位判定移入 i64（52 次迭代）
+    var mut mb: i64 = 0;
+    var mut rem: f64 = (v - 1.0) * 4503599627370496.0;
+    var mut k: f64 = 2251799813685248.0;
+    while (k >= 1.0) {
+        mb = mb * 2;
+        if (rem >= k) { rem = rem - k; mb += 1; }
+        k = k / 2.0;
+    }
+    var b0: i64 = mb & 0xFF;
+    var b1: i64 = (mb >> 8) & 0xFF;
+    var b2: i64 = (mb >> 16) & 0xFF;
+    var b3: i64 = (mb >> 24) & 0xFF;
+    var b4: i64 = (mb >> 32) & 0xFF;
+    var b5: i64 = (mb >> 40) & 0xFF;
+    var b6: i64 = ((mb >> 48) & 0x0F) | ((ebits & 0x0F) << 4);
+    var b7: i64 = (ebits >> 4) & 0x7F;
+    if (neg) { b7 = b7 | 0x80; }
+    out.*.append(@intCast(u8, b0));
+    out.*.append(@intCast(u8, b1));
+    out.*.append(@intCast(u8, b2));
+    out.*.append(@intCast(u8, b3));
+    out.*.append(@intCast(u8, b4));
+    out.*.append(@intCast(u8, b5));
+    out.*.append(@intCast(u8, b6));
+    out.*.append(@intCast(u8, b7));
+}
+
 // ---- 常量 / 运算符标签（对齐 opcode.rs）----
 
 fn enc_const_tag(kind: &[u8]) i64 {
     if (ireq(kind, "Int")) { return 0; }
+    if (ireq(kind, "Float")) { return 1; }
     if (ireq(kind, "Bool")) { return 2; }
     if (ireq(kind, "Str")) { return 3; }
     if (ireq(kind, "Void")) { return 4; }
     if (ireq(kind, "Null")) { return 5; }
     if (ireq(kind, "Err")) { return 6; }
     if (ireq(kind, "End")) { return 7; }
-    return 255; // 不可达：lower 不产 Float/End 之外的未知 kind
+    return 255; // 不可达：未知 kind
 }
 
 fn enc_binop_tag(op: &[u8]) i64 {
@@ -87,6 +134,8 @@ fn enc_const(out: *mut Vec<u8>, c: IrConst) void {
     out.*.append(@intCast(u8, enc_const_tag(c.kind)));
     if (ireq(c.kind, "Int")) {
         enc_push_i128_le(out, c.i);
+    } else if (ireq(c.kind, "Float")) {
+        enc_push_f64_le(out, c.f);
     } else if (ireq(c.kind, "Bool")) {
         var mut byte: i64 = 0;
         if (c.b) { byte = 1; }

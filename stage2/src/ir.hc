@@ -22,35 +22,40 @@
 // ============================================================
 
 class IrConst {
-    kind: &[u8],   // Int / Bool / Str / Void / Null / Err / End
+    kind: &[u8],   // Int / Float / Bool / Str / Void / Null / Err / End
     i: i64,
+    f: f64,
     b: bool,
     s: &[u8],
     name: &[u8],   // Err 错误名
 }
 
 fn ir_const_int(v: i64) IrConst {
-    return IrConst{ kind = "Int", i = v, b = false, s = "", name = "" };
+    return IrConst{ kind = "Int", i = v, f = 0.0, b = false, s = "", name = "" };
+}
+
+fn ir_const_float(v: f64) IrConst {
+    return IrConst{ kind = "Float", i = 0, f = v, b = false, s = "", name = "" };
 }
 
 fn ir_const_bool(v: bool) IrConst {
-    return IrConst{ kind = "Bool", i = 0, b = v, s = "", name = "" };
+    return IrConst{ kind = "Bool", i = 0, f = 0.0, b = v, s = "", name = "" };
 }
 
 fn ir_const_str(s: &[u8]) IrConst {
-    return IrConst{ kind = "Str", i = 0, b = false, s = s, name = "" };
+    return IrConst{ kind = "Str", i = 0, f = 0.0, b = false, s = s, name = "" };
 }
 
 fn ir_const_void() IrConst {
-    return IrConst{ kind = "Void", i = 0, b = false, s = "", name = "" };
+    return IrConst{ kind = "Void", i = 0, f = 0.0, b = false, s = "", name = "" };
 }
 
 fn ir_const_null() IrConst {
-    return IrConst{ kind = "Null", i = 0, b = false, s = "", name = "" };
+    return IrConst{ kind = "Null", i = 0, f = 0.0, b = false, s = "", name = "" };
 }
 
 fn ir_const_err(name: &[u8], code: i64) IrConst {
-    var c = IrConst{ kind = "Err", i = code, b = false, s = "", name = name };
+    var c = IrConst{ kind = "Err", i = code, f = 0.0, b = false, s = "", name = name };
     return c;
 }
 
