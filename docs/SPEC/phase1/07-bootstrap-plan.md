@@ -83,7 +83,7 @@ graph TD
 | M4.3 @ 内建基础集 | 编译期/转换 | `@sizeOf`/`@alignOf`/`@offsetOf`/`@typeOf`/`@intCast`/`@ptrCast`/`@alignCast`/`@compileError`/`@addWithOverflow` 等/`@intFromEnum`/`@enumFromInt`（Q-S1/Q-S6） |
 | M4.4 数据内建 | box / copy / 序列化内建 | `box(value, alloc)`（装箱）/ `copy(&x)`（深/浅复制）编译器内建；**序列化 = 内建契约**——连续类型 `to_bytes`/`from_bytes`（直映射 + `packed`/`align` 尊重）、堆类型 `to_json`/`from_json`、集合 → 字节（u64 LE 前缀） |
 | M4.5 标量接口族内建 | ICompare / INumber 族 | 内建标量自动实现 `ICompare`/`IInt`/`IUint`/`IFloat`（`i8–i128`/`isize`、`u8–u128`/`usize`、`f16–f128`）；运算符绑定（`a + b` ≡ `a.add(b)`）；String 内建实现 `ICompare` |
-| M4.6 迭代内建 | IIterable 三态 | 数组/切片/Vec/Map/Table/String 内建实现 `IIterable(*T)`/`IIterable(*mut T)`/`IIterable(o T)`；`iter()` 显式迭代器对象 |
+| M4.6 迭代内建 | IIterable 三态 | 数组/切片/Vec/Map/Table/String 内建实现 `IIterable(*T)`/`IIterable(*mut T)`/`IIterable(owned T)`；`iter()` 显式迭代器对象 |
 | M4.7 悬垂标记 | Debug 可选诊断 | 目标销毁时标记指向它的指针，访问提示带位置（编译时选项，非安全保证） |
 
 ---
@@ -244,7 +244,7 @@ graph TD
 | M4.2 | 错误码运行时表示（**M4.2 完整**，2026-08-16） | **`Value::Err { name, code }`**（码 = M2.6 表「包 ID + 包内码」，全局唯一；运行时未登记错误名动态分配——anyerror 任意码）；比较/匹配/断言走码或名；**根作用域报告带码**（`error.NotFound (0x00000000) at 1:6`）；`@panic`/`ExitType`/`io.exit` 已有；成功路径零额外负载（值枚举无 Err 开销） |
 | M4.4 | 序列化内建（**补全**，2026-08-16） | `to_bytes`/`from_bytes`（连续类型直映射、**packed/align 尊重**、集合 u64 前缀）、`to_json`/`from_json`（class/Map、**堆类型完整**）、`box` 装箱 |
 | M4.5 | 标量接口族（**补全**，2026-08-16） | 内建标量自动实现 `ICompare`/`INumber`/`IInt`/`IUint`/`IFloat`；**运算符绑定**（`a + b` ≡ `a.add(b)`）；**完整方法族**（add/sub/mul/div/neg/mod/abs/eq/lt 等）；String 内建实现 `ICompare` |
-| M4.6 | 迭代内建（**补全**，2026-08-16） | **IIterable 三态**（`IIterable(*T)` / `IIterable(*mut T)` / `IIterable(o T)`）；数组/切片/Vec/Map/Table/String 内建实现；**`iter()` 显式迭代器对象**；`filter()/map()` 立即求值链 |
+| M4.6 | 迭代内建（**补全**，2026-08-16） | **IIterable 三态**（`IIterable(*T)` / `IIterable(*mut T)` / `IIterable(owned T)`）；数组/切片/Vec/Map/Table/String 内建实现；**`iter()` 显式迭代器对象**；`filter()/map()` 立即求值链 |
 | M5.1 | mem | `Arena.init`、`arena.alloc(n)`、`alloc.alloc(n)` |
 | M5.2 | collections（**Deque 补全**，2026-08-16） | `Vec`（append/len/iter/from_bytes）、`Map`（put/get/contains/remove/len/遍历）、String 方法集（concat/split/join/find/substring/replace/as_slice/to_bytes）、**`Deque` 双端**（push_front/back、pop_front/back、front/back、get/put/remove——越界 `IndexOutOfBounds` / 空返回 null，共享 `Value::Arr` 值模型） |
 | M5.4 | io 完整（**M5.4 完整**，2026-08-16） | `io.print` 格式串；`io.fs`（open/create/read_file/read_all/write_all/append/remove/rename/list_dir/read_int/write_int + **seek/pos/read_at/write_at**）；**`io.net` TCP**（connect/listen(0 端口)/local_port/accept 阻塞/write/read(n)/read_all/shutdown/close + **u32 LE 帧读写** read_u32_le/write_u32_le）；程序环境（args/env/stdin 读一行/stdout/stderr/io.exit(ExitType, code)） |

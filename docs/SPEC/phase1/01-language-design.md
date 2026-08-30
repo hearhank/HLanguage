@@ -201,7 +201,7 @@ C 风格（花括号、分号）；标识符（变量/函数/方法/字段/参�
 - **迭代契约（2026-08-14 定案）**：接口 **`IIterable`** 按**元素访问形态**三态（泛型实例化语法与 `Vec<i32>` 一致用圆括号）：
   - `IIterable(*T)` — 只读迭代（默认 `for (x) |item|`）
   - `IIterable(*mut T)` — 可写迭代（`for (x) |mut item|`，评审 B5）
-  - `IIterable(o T)` — 拥有迭代（`for (x) |move item|`，**M4 定案：迭代器持有容器所有权——x 被 move 进迭代器、next 逐元素转移所有权、迭代后容器不可再用**；内建实现：Vec/String/Deque 逐个 pop + 转移、数组逐元素 move）
+  - `IIterable(owned T)` — 拥有迭代（`for (x) |move item|`，**M4 定案：迭代器持有容器所有权——x 被 move 进迭代器、next 逐元素转移所有权、迭代后容器不可再用**；内建实现：Vec/String/Deque 逐个 pop + 转移、数组逐元素 move）
   元素类型 T 与形态由接口方法（`next(self: *mut Self) ?T` 按对应形态）推断；内建类型（数组/切片/Vec/Map/Table/String）编译器内建实现三态
 - 标准库提供迭代器对象：`arr.iter()` — **迭代器是显式数据对象**，可传递、可组合；一次性迭代器（next 消耗状态）1.0 即可；惰性/组合子迭代留 1.x（与「无隐藏控制」张力）
 - 变换**立即求值**（TS 式）：`arr.iter().filter(...).map(...)` 每步产出新数据对象
