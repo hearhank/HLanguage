@@ -27,14 +27,22 @@ fn main(args: Vec<String>) !void {
             return error.Usage;
         }
         var out_path = args[2];
+        io.print("[emit-hbc] {} files -> {}
+", args.len - 3, out_path);
         var prog = make_node("Program");
         var mut fi: usize = 3;
         while (fi < args.len) {
             var fsrc = try io.fs.read_file(args[fi], alloc);
+            io.print("[{}/{}] {}: read ({} bytes)
+", fi - 2, args.len - 3, args[fi], fsrc.len);
             try io.fs.write_file("stage2/test/progress.txt", "read ok", alloc);
             var ftoks = lex_source(fsrc);
+            io.print("[{}/{}] {}: lex ok ({} tokens)
+", fi - 2, args.len - 3, args[fi], ftoks.len);
             try io.fs.write_file("stage2/test/progress.txt", "lex ok", alloc);
             var fast = parse_tokens(ftoks);
+            io.print("[{}/{}] {}: parse ok ({} decls)
+", fi - 2, args.len - 3, args[fi], fast.children.len);
             try io.fs.write_file("stage2/test/progress.txt", "parse ok", alloc);
             var mut di: usize = 0;
             while (di < fast.children.len) {
@@ -50,6 +58,8 @@ fn main(args: Vec<String>) !void {
         }
         // 语义检查（合并后单 Program；src 取首文件仅作诊断定位）
         var src0 = try io.fs.read_file(args[3], alloc);
+        io.print("[check] start: merged program, {} decls - heaviest stage, may stay silent long
+", prog.children.len);
         var checker: Checker = alloc.init(Checker{
             diags = Vec<Vec<u8>>.init(alloc),
             src = Vec<u8>.init(alloc),
@@ -63,13 +73,19 @@ fn main(args: Vec<String>) !void {
         });
         checker.init(src0);
         checker.check_program(prog);
+        io.print("[check] merged program ok ({} decls)
+", prog.children.len);
         try io.fs.write_file("stage2/test/progress.txt", "check ok", alloc);
         if (checker.diags.len > 0) {
             checker.report();
             return error.CheckFailed;
         }
         // lower（S6）：子集外构造响亮失败
+        io.print("[lower] start: AST -> IrInst
+");
         var l = lower_module(prog);
+        io.print("[lower] ok ({} funcs)
+", l.funcs.len);
         try io.fs.write_file("stage2/test/progress.txt", "lower ok", alloc);
         if (l.errs.len > 0) {
             io.print("lower failed: {} diagnostics\n", l.errs.len);
@@ -81,6 +97,8 @@ fn main(args: Vec<String>) !void {
             return error.LowerFailed;
         }
         // HBC2 编码（S7）落盘
+        io.print("[encode] start: HBC2 encode + write
+");
         var m = lower_finish(&l);
         var bytes = enc_module(m);
         try io.fs.write_file(out_path, bytes.as_slice(), alloc);

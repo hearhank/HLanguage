@@ -58,5 +58,6 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | `phase4/06-k5-execution-plan.md` | K5 执行计划（自举闭环 stage2：P 组求值面修复 + S 组 stage2 编译器 + S1–S9/V1–V2 验收） |
 | `phase4/07-k5-handoff.md` | K5 交接快照（P 组完成状态、S 组开工指引、门禁基线） |
 | `phase4/08-parity-commands.md` | **K1–K5 对照运行指令总表**（H vs Rust 各阶段对照命令、手动脚本、一键脚本、cargo 门禁及当前状态） |
+| `phase4/09-bootstrap-binary-chain-plan.md` | **自举产物链计划**（ADR-0033：每环编译产物执行，分步表含命令/功能/Rust 基线/H 实测/超时/通过状态，取代 06 的 S8 解释链验收路径） |
 
-相关文档：决策记录 `docs/adr/0001`–`0008`；术语表 `CONTEXT.md`；参考语言事实档案与功能比对 `RESEARCH/`（含 `h-vs-rust-comparison.md`）；review 裁定全录 `docs/review/2026-08-13-spec-examples-review.md`。
+相关文档：决策记录 `docs/adr/0001`–`0033`；术语表 `CONTEXT.md`；参考语言事实档案与功能比对 `RESEARCH/`（含 `h-vs-rust-comparison.md`）；review 裁定全录 `docs/review/2026-08-13-spec-examples-review.md`。

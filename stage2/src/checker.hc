@@ -397,13 +397,21 @@ class Checker {
     // 检查程序（两遍：收集 + 检查）
     fn check_program(self: *mut Self, prog: AstNode) void {
         // 第一遍：收集所有声明
+        io.print("[check] collect: {} decls
+", prog.children.len);
         self.collect_program(prog);
-        // 第二遍：检查
+        // 第二遍：检查（每 10 个 decl 打心跳，嵌套解释下本阶段为小时级）
         var mut i: usize = 0;
         while (i < prog.children.len) {
             self.check_decl(prog.children[i]);
             i += 1;
+            if (i % 10 == 0) {
+                io.print("[check] {}/{} decls
+", i, prog.children.len);
+            }
         }
+        io.print("[check] all {} decls checked
+", prog.children.len);
     }
 
     // ========== 收集阶段（第一遍） ==========

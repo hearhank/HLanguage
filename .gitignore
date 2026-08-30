@@ -20,6 +20,8 @@ target/
 
 # HBC2 字节码产物（bootstrap/自举验证，可由 .hc 再生成）
 *.hbc
+# 自举进度标记（运行时覆盖写，无历史价值）
+/stage2/test/progress.txt
 
 # 临时文件
 *.tmp
