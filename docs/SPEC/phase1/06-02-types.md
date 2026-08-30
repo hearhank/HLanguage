@@ -1,3 +1,4 @@
+> [!WARNING] **已废弃（2026-08-30，ADR-0034）**——本文件为历史资料，不作为实现依据。现行语法权威依据：[docs/SPEC/syntax/00-index.md](../../syntax/00-index.md)
 # H 语言规范：基础类型
 
 > 对应实现模块：07 第一块语言系统 M2 语义。扩展类型（class/枚举/元组/Table/String）见 `06-03-extended-types.md`；接口族见 `06-05-interfaces.md`。

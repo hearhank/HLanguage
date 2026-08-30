@@ -1,3 +1,4 @@
+> [!WARNING] **已废弃（2026-08-30，ADR-0034）**——本文件为历史资料，不作为实现依据。现行语法权威依据：[docs/SPEC/syntax/00-index.md](../../syntax/00-index.md)
 # H 语言规范：扩展类型（class / 枚举 / 元组 / Table / String / tree）
 
 > 对应实现模块：07 第一块语言系统 M2 语义。2026-08-14 定案（struct/class 合并 + Continuous 内部化 + 元组 + Table）。

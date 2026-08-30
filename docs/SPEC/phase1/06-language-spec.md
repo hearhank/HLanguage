@@ -1,3 +1,4 @@
+> [!WARNING] **已废弃（2026-08-30，ADR-0034）**——本文件为历史资料，不作为实现依据。现行语法权威依据：[docs/SPEC/syntax/00-index.md](../../syntax/00-index.md)
 # H 语言规范（总纲）
 
 > **语言规范初稿（Draft）**——语法参考，实作依据（M9 正式规范的前置）。按实现计划（`07-bootstrap-plan.md`）分主题拆分为独立文件（见下方索引）；术语定义以 `CONTEXT.md` 为准；设计共识见 `01-language-design.md`。

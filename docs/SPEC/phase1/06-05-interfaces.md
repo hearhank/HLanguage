@@ -1,3 +1,4 @@
+> [!WARNING] **已废弃（2026-08-30，ADR-0034）**——本文件为历史资料，不作为实现依据。现行语法权威依据：[docs/SPEC/syntax/00-index.md](../../syntax/00-index.md)
 # H 语言规范：接口、标量接口族、迭代契约、序列化内建
 
 > 对应实现模块：07 第一块语言系统 M2 语义 / M4 内建。
@@ -83,9 +84,9 @@ interface IHashCode {
 - 接口 **`IIterable`** 按**元素访问形态**三态（泛型实例化语法与 `Vec<i32>` 一致用圆括号）：
   - `IIterable(*T)` — 只读迭代（默认 `for (x) |item|`）
   - `IIterable(*mut T)` — 可写迭代（`for (x) |mut item|`，评审 B5）
-  - `IIterable(o T)` — 拥有迭代（`for (x) |move item|`，消耗元素/转移所有权）
+  - `IIterable(owned T)` — 拥有迭代（`for (x) |move item|`，消耗元素/转移所有权）
 - 元素类型 T 与形态由接口方法（`next(self: *mut Self) ?T` 按对应形态）推断；内建类型（数组/切片/Vec/Map/Table/String）编译器内建实现三态
-- **拥有迭代语义（M4 定案，2026-08-14）**：`for (x) |move item|`（`IIterable(o T)`）= **迭代器持有容器所有权**——x 被 move 进迭代器，next 逐元素转移所有权，迭代后容器不可再用；内建实现——Vec/String/Deque 逐个 pop + 转移、数组逐元素 move（引用类型元素移出）
+- **拥有迭代语义（M4 定案，2026-08-14）**：`for (x) |move item|`（`IIterable(owned T)`）= **迭代器持有容器所有权**——x 被 move 进迭代器，next 逐元素转移所有权，迭代后容器不可再用；内建实现——Vec/String/Deque 逐个 pop + 转移、数组逐元素 move（引用类型元素移出）
 - 用户类型实现迭代接口即可参与 `for`；`arr.iter()` 迭代器为**显式数据对象**（可传递/组合）；一次性迭代器 1.0 即可，惰性/组合子迭代留 1.x
 
 ## 序列化内建契约（2026-08-14 定案：序列化 = 默认接口）

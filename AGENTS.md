@@ -43,3 +43,15 @@ This project is indexed by GitNexus as **HLanguage** (7490 symbols, 25346 relati
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+# 语法规范权威来源（2026-08-30 定案）
+
+一切语言功能实现与语法检查以 `docs/SPEC/syntax/`（H 语言语法功能说明，一模块一文件）为**唯一依据**：
+
+1. **唯一依据**：功能实现、语法检查、诊断文案、示例编写均以 `docs/SPEC/syntax/` 为准。与其冲突的旧文档（`docs/SPEC/phase1/06-*` 系列、`docs/H Language.md`、`docs/native-types.md`）一律视为历史资料，不得作为实现依据。
+2. **文档先行**：修改语法行为前，先修改对应模块文档（必要时先落 ADR），再改代码；未同步文档的语法改动视为未完成。
+3. **禁止双写**：任何语法规则只在一处定义，其他位置以相对路径引用；发现重复描述立即收敛到单一来源。
+4. **状态同步**：模块文档中每个功能点带实现状态标记（✅ 已实现 / ⚠️ 部分实现 / ⏳ 未实现·目标 / ❌ 已废弃）与证据路径（tag1 测试/源码）；代码行为变化时同步更新。
+5. **对齐流程**：逐模块循环——盘点（ADR + 计划文档 + tag1 代码）→ 草案 + 待裁决清单 → 项目所有者裁决 → 定稿。自举链路（stage1/stage2）不在本规范覆盖范围。
+
+<!-- gitnexus:end -->

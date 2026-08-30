@@ -1,3 +1,4 @@
+> [!WARNING] **已废弃（2026-08-30，ADR-0034）**——本文件为历史资料，不作为实现依据。现行语法权威依据：[docs/SPEC/syntax/00-index.md](../../syntax/00-index.md)
 # H 语言规范：词法、声明、运算符、语句与控制流、测试
 
 > 对应实现模块：07 第一块语言系统 M1 前端。
@@ -107,7 +108,7 @@ while (opt) |v| { ... }           // optional 捕获（Q10 定案：空则退出
 while (e!) |v| { ... } else |err| { ... }  // error union 捕获（错误走 else 后退出）
 for (items) |item| { ... }           // 数组/切片迭代，捕获默认只读（迭代契约见 06-05）；值类型迭代自动取引用（L4：for (fib) ≡ for (&mut fib)）
 for (items) |mut item| { ... }       // 可写捕获（评审 B5 + Rust 标杆）
-for (items) |move item| { ... }      // 拥有迭代（IIterable(o T)，2026-08-14）
+for (items) |move item| { ... }      // 拥有迭代（IIterable(owned T)，2026-08-14）
 for (0..10) |i| { ... }              // 区间糖（Q29：复用 .. 记号，底层仍是 while）
 break :label / continue :label     // 带标签退出嵌套
 defer expr / errdefer expr         // 作用域退出执行；errdefer 仅错误路径；多 defer 按 LIFO（Q21：后声明先执行）

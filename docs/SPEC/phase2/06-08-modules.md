@@ -1,3 +1,4 @@
+> [!WARNING] **已废弃（2026-08-30，ADR-0034）**——本文件为历史资料，不作为实现依据。现行语法权威依据：[docs/SPEC/syntax/00-index.md](../../syntax/00-index.md)
 # H 语言规范：模块与包
 
 > 2026-08-25 重构（ADR-0026）：移除 `[module]` 特性标记，改用 `src/Modules/` 目录结构 + `IContext` IoC 容器。
