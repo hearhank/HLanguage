@@ -54,5 +54,9 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | `phase3/10-part3-execution.md` | **第三块执行细表**（计划，2026-08-18）：前置裁决、描述充分性审查、E1–E7 ≤2h 任务分解（A–K）、自举验收 |
 | `phase3/11-lsp-implementation.md` | **LSP工具实施计划**（设计完成，2026-08-22） |
 | `00-feature-inventory.md` | **功能清单**（2026-08-23）：按领域分类的全部实现功能，含完成状态标记 |
+| `phase4/05-k4-execution-plan.md` | K4 执行计划（H 版执行引擎：任务分解、对照基建、验收） |
+| `phase4/06-k5-execution-plan.md` | K5 执行计划（自举闭环 stage2：P 组求值面修复 + S 组 stage2 编译器 + S1–S9/V1–V2 验收） |
+| `phase4/07-k5-handoff.md` | K5 交接快照（P 组完成状态、S 组开工指引、门禁基线） |
+| `phase4/08-parity-commands.md` | **K1–K5 对照运行指令总表**（H vs Rust 各阶段对照命令、手动脚本、一键脚本、cargo 门禁及当前状态） |
 
 相关文档：决策记录 `docs/adr/0001`–`0008`；术语表 `CONTEXT.md`；参考语言事实档案与功能比对 `RESEARCH/`（含 `h-vs-rust-comparison.md`）；review 裁定全录 `docs/review/2026-08-13-spec-examples-review.md`。
