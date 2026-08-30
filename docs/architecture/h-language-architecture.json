@@ -31,8 +31,8 @@
         "note": "Tree-walking interpreter for development, LLVM native for production."
       },
       {
-        "id": "bootstrap",
-        "label": "Self-hosting bootstrap",
+        "id": "stage1",
+        "label": "Stage1 toolchain",
         "focus": [
           "stage1-lexer",
           "stage1-parser",
@@ -40,7 +40,19 @@
           "stage1-interp",
           "runtime"
         ],
-        "note": "Stage1 H-written lexer/parser/checker/interp (K1–K4) — interp output must match the Rust reference byte-for-byte."
+        "note": "K1–K4 complete — Rust-parity lexer/parser/checker/interp written in H."
+      },
+      {
+        "id": "bootstrap",
+        "label": "K5 bootstrap chain",
+        "focus": [
+          "stage1-interp",
+          "stage2-main",
+          "stage2-lexer",
+          "stage2-parser",
+          "stage2-checker"
+        ],
+        "note": "Stage1 interp executes the H-written stage2 compiler — S1–S3 verified, S4+ in progress."
       }
     ]
   },
@@ -52,9 +64,9 @@
     ],
     "cols": 6,
     "gapX": 30,
-    "gapY": 40,
-    "cellW": 150,
-    "cellH": 60
+    "gapY": 34,
+    "cellW": 180,
+    "cellH": 56
   },
   "components": [
     {
@@ -65,8 +77,8 @@
       "row": 0,
       "col": 0,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "entry point"
     },
@@ -78,8 +90,8 @@
       "row": 0,
       "col": 5,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "IDE support"
     },
@@ -91,8 +103,8 @@
       "row": 1,
       "col": 0,
       "size": [
-        150,
-        60
+        180,
+        56
       ]
     },
     {
@@ -103,8 +115,8 @@
       "row": 1,
       "col": 1,
       "size": [
-        150,
-        60
+        180,
+        56
       ]
     },
     {
@@ -115,8 +127,8 @@
       "row": 1,
       "col": 2,
       "size": [
-        150,
-        60
+        180,
+        56
       ]
     },
     {
@@ -127,8 +139,8 @@
       "row": 1,
       "col": 3,
       "size": [
-        150,
-        60
+        180,
+        56
       ]
     },
     {
@@ -139,8 +151,8 @@
       "row": 1,
       "col": 4,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "dev mode"
     },
@@ -152,8 +164,8 @@
       "row": 1,
       "col": 5,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "production"
     },
@@ -165,8 +177,8 @@
       "row": 2,
       "col": 0,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "K1 done"
     },
@@ -178,8 +190,8 @@
       "row": 2,
       "col": 1,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "K2 done"
     },
@@ -191,8 +203,8 @@
       "row": 2,
       "col": 2,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "K3 done"
     },
@@ -204,8 +216,8 @@
       "row": 2,
       "col": 3,
       "size": [
-        150,
-        60
+        180,
+        56
       ],
       "tag": "K4 done"
     },
@@ -217,9 +229,61 @@
       "row": 2,
       "col": 4,
       "size": [
-        150,
-        60
+        180,
+        56
       ]
+    },
+    {
+      "id": "stage2-main",
+      "type": "external",
+      "label": "Stage2 Main",
+      "sublabel": "entry dispatch",
+      "row": 4,
+      "col": 0,
+      "size": [
+        180,
+        56
+      ],
+      "tag": "S1 done"
+    },
+    {
+      "id": "stage2-lexer",
+      "type": "external",
+      "label": "Stage2 Lexer",
+      "sublabel": "H-written",
+      "row": 4,
+      "col": 1,
+      "size": [
+        180,
+        56
+      ],
+      "tag": "S2 done"
+    },
+    {
+      "id": "stage2-parser",
+      "type": "external",
+      "label": "Stage2 Parser",
+      "sublabel": "H-written",
+      "row": 4,
+      "col": 2,
+      "size": [
+        180,
+        56
+      ],
+      "tag": "S3 done"
+    },
+    {
+      "id": "stage2-checker",
+      "type": "external",
+      "label": "Stage2 Checker",
+      "sublabel": "trimmed copy",
+      "row": 4,
+      "col": 3,
+      "size": [
+        180,
+        56
+      ],
+      "tag": "S4 WIP"
     }
   ],
   "boundaries": [
@@ -246,6 +310,17 @@
         "stage1-interp"
       ],
       "pad": 12
+    },
+    {
+      "kind": "region",
+      "label": "Bootstrap Stage 2",
+      "wraps": [
+        "stage2-main",
+        "stage2-lexer",
+        "stage2-parser",
+        "stage2-checker"
+      ],
+      "pad": 12
     }
   ],
   "connections": [
@@ -265,8 +340,8 @@
       "to": "parser",
       "label": "tokens",
       "labelAt": [
-        205,
-        224
+        235,
+        210
       ]
     },
     {
@@ -274,8 +349,8 @@
       "to": "semantic",
       "label": "AST",
       "labelAt": [
-        385,
-        224
+        445,
+        210
       ]
     },
     {
@@ -283,8 +358,8 @@
       "to": "ir",
       "label": "typed AST",
       "labelAt": [
-        565,
-        224
+        655,
+        210
       ]
     },
     {
@@ -292,8 +367,8 @@
       "to": "bytecode",
       "label": "lower",
       "labelAt": [
-        745,
-        224
+        865,
+        210
       ]
     },
     {
@@ -304,8 +379,8 @@
       "fromSide": "bottom",
       "toSide": "top",
       "labelAt": [
-        835,
-        224
+        970,
+        210
       ]
     },
     {
@@ -313,8 +388,8 @@
       "to": "stage1-parser",
       "label": "tokens",
       "labelAt": [
-        205,
-        324
+        235,
+        300
       ]
     },
     {
@@ -322,8 +397,8 @@
       "to": "stage1-semantic",
       "label": "AST",
       "labelAt": [
-        385,
-        324
+        445,
+        300
       ]
     },
     {
@@ -331,8 +406,8 @@
       "to": "stage1-interp",
       "label": "eval AST",
       "labelAt": [
-        565,
-        324
+        655,
+        300
       ]
     },
     {
@@ -341,8 +416,42 @@
       "label": "stdout parity",
       "variant": "dashed",
       "labelAt": [
-        745,
-        324
+        865,
+        300
+      ]
+    },
+    {
+      "from": "stage1-interp",
+      "to": "stage2-main",
+      "label": "executes",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "stage2-main",
+      "to": "stage2-lexer",
+      "label": "source",
+      "labelAt": [
+        235,
+        480
+      ]
+    },
+    {
+      "from": "stage2-lexer",
+      "to": "stage2-parser",
+      "label": "tokens",
+      "labelAt": [
+        445,
+        480
+      ]
+    },
+    {
+      "from": "stage2-parser",
+      "to": "stage2-checker",
+      "label": "AST",
+      "labelAt": [
+        655,
+        480
       ]
     }
   ],
@@ -353,43 +462,33 @@
       "items": [
         "Source → lexer → token stream",
         "Parser builds an AST",
-        "Semantic: type checking, ownership, error-set inference",
-        "IR lowers typed AST (single semantic source)",
+        "Semantic: types, ownership (pointer move, ADR-0030), error sets",
+        "IR — single semantic source, lowers typed AST",
         "Bytecode codegen → HBC2 VM",
         "LLVM codegen → native via zig cc"
       ]
     },
     {
       "dot": "emerald",
-      "title": "Execution Modes",
+      "title": "Execution & Tooling",
       "items": [
         "hc run — tree-walking interpreter (default, full language)",
         "hc run --ir — IR reference interpreter",
         "hc run <file.hbc> — bytecode VM (reuses run_ir)",
+        "hc run <dir> — package mode, same-namespace siblings (ADR-0031)",
         "hc build — LLVM native (builtin subset)",
-        "hc run stage1/interp.hc <prog> — H-written engine (K4)"
+        "hc fmt / lint / doc / new / pkg / cc / lsp"
       ]
     },
     {
       "dot": "violet",
       "title": "Self-Hosting Bootstrap",
       "items": [
-        "K1 lexer.hc done — 6621 tokens, zero diff",
-        "K2 parser.hc done — self-parse ~1s",
-        "K3 checker.hc done — 15 tests green, three-source self-check clean",
-        "K4 interp.hc done — 10/10 corpus stdout parity, cargo gate 10 passed",
-        "K5–K6 (bootstrap closure / reproducible build) pending",
-        "Rust reference kept as parity oracle"
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "Tooling",
-      "items": [
-        "hc fmt — token-level formatting",
-        "hc lint — 9 rules",
-        "hc doc — Markdown API docs from /// comments",
-        "hc-lsp — diagnostics, completion, go-to-def, hover"
+        "Stage1 K1–K4 done — lexer/parser/checker/interp at Rust parity",
+        "K5 stage2 (H compiler in H): S1 dispatch, S2 lexer 8/8, S3 parser 9/9 ✅",
+        "S4 semantic — trimmed stage1 checker copy, in progress",
+        "S5–S7 IR model / lower / HBC2 encode pending",
+        "S8–S9 closure — A.hbc ≡ B.hbc byte-level, behavior verified"
       ]
     }
   ]
