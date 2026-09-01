@@ -76,7 +76,11 @@ impl LanguageServer for HcLspServer {
                 )),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(true),
-                    trigger_characters: Some(vec![".".to_string()]),
+                    trigger_characters: Some(vec![
+                        ".".to_string(),
+                        "@".to_string(),
+                        "[".to_string(),
+                    ]),
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
                     completion_item: None,
@@ -87,7 +91,7 @@ impl LanguageServer for HcLspServer {
             },
             server_info: Some(ServerInfo {
                 name: "hc-lsp".to_string(),
-                version: Some("0.1.0".to_string()),
+                version: Some("0.2.0".to_string()),
             }),
         })
     }
@@ -348,19 +352,42 @@ impl LanguageServer for HcLspServer {
             let col = position.character as usize;
             let chars: Vec<char> = line.chars().collect();
 
+            // Find the plain prefix at the cursor (identifier chars only)
+            let mut start = col.min(chars.len());
+            while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+                start -= 1;
+            }
+            let prefix: String = chars[start..col.min(chars.len())].iter().collect();
+
+            // `@` context (13-builtins.md): `@na` → builtin completions
+            if start > 0 && chars[start - 1] == '@' {
+                let completions = self.completion_engine.get_builtin_completions(&prefix);
+                return Ok(Some(CompletionResponse::Array(completions)));
+            }
+
+            // `[` context (04 §4.9): `[In` → attribute snippets
+            if start > 0 && chars[start - 1] == '[' {
+                let mut completions = self.completion_engine.get_attribute_completions(&prefix);
+                // [test(...) is the dominant use — also allow keywords as fallback
+                completions.extend(self.completion_engine.get_keyword_completions(&prefix));
+                return Ok(Some(CompletionResponse::Array(completions)));
+            }
+
             // Check for dot before cursor
             if col > 0 && col <= chars.len() && chars[col - 1] == '.' {
                 // Find the namespace prefix before the dot
-                let mut start = col - 1;
+                let mut ns_start = col - 1;
                 // Skip the dot
-                if start > 0 {
-                    start -= 1;
+                if ns_start > 0 {
+                    ns_start -= 1;
                 }
                 // Find start of namespace name
-                while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
-                    start -= 1;
+                while ns_start > 0
+                    && (chars[ns_start - 1].is_alphanumeric() || chars[ns_start - 1] == '_')
+                {
+                    ns_start -= 1;
                 }
-                let namespace: String = chars[start..col - 1].iter().collect();
+                let namespace: String = chars[ns_start..col - 1].iter().collect();
 
                 // Get dot-qualified completions
                 let completions = self
@@ -370,19 +397,30 @@ impl LanguageServer for HcLspServer {
                 return Ok(Some(CompletionResponse::Array(completions)));
             }
 
-            // Find prefix at cursor position
-            let mut start = col.min(chars.len());
-            while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
-                start -= 1;
+            // Type-position heuristic (03 §3.1): prefix right after ':' or '<'
+            // → builtin types first, then keywords
+            let mut ws_back = start;
+            while ws_back > 0 && chars[ws_back - 1].is_whitespace() {
+                ws_back -= 1;
             }
-
-            // Extract prefix
-            let prefix: String = chars[start..col.min(chars.len())].iter().collect();
+            let in_type_position =
+                ws_back > 0 && (chars[ws_back - 1] == ':' || chars[ws_back - 1] == '<');
 
             // Get completions
-            let completions = self
-                .completion_engine
-                .get_completions(current_table, &prefix);
+            let completions = if in_type_position {
+                let mut c = self.completion_engine.get_type_completions(&prefix);
+                c.extend(self.completion_engine.get_keyword_completions(&prefix));
+                if let Some(table) = current_table {
+                    c.extend(
+                        self.completion_engine
+                            .get_symbol_completions(table, &prefix),
+                    );
+                }
+                c
+            } else {
+                self.completion_engine
+                    .get_completions(current_table, &prefix)
+            };
 
             return Ok(Some(CompletionResponse::Array(completions)));
         }
