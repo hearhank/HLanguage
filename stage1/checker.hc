@@ -19,33 +19,33 @@ import H.std.{io};
 // ============================================================
 
 fn is_digit(b: u8) bool {
-    return b >= '0' and b <= '9';
+    return b >= '0' && b <= '9';
 }
 fn is_hex(b: u8) bool {
-    return is_digit(b) or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F');
+    return is_digit(b) || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F');
 }
 fn is_bin(b: u8) bool {
-    return b == '0' or b == '1';
+    return b == '0' || b == '1';
 }
 fn is_oct(b: u8) bool {
-    return b >= '0' and b <= '7';
+    return b >= '0' && b <= '7';
 }
 fn is_alpha(b: u8) bool {
-    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
+    return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z');
 }
 fn is_alnum(b: u8) bool {
-    return is_digit(b) or is_alpha(b);
+    return is_digit(b) || is_alpha(b);
 }
 fn is_ident_start(b: u8) bool {
-    return is_alpha(b) or b == '_';
+    return is_alpha(b) || b == '_';
 }
 fn is_ident_cont(b: u8) bool {
-    if (is_alnum(b) or b == '_') return true;
-    if (b >= 0xE4 and b <= 0xE9) return true;
+    if (is_alnum(b) || b == '_') return true;
+    if (b >= 0xE4 && b <= 0xE9) return true;
     return false;
 }
 fn is_ws(b: u8) bool {
-    return b == 0x20 or b == 0x09 or b == 0x0A or b == 0x0D or b == 0x0B or b == 0x0C;
+    return b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D || b == 0x0B || b == 0x0C;
 }
 fn utf8_width(b: u8) i32 {
     if (b < 0x80) return 1;
@@ -55,8 +55,8 @@ fn utf8_width(b: u8) i32 {
 }
 fn hexval(b: u8) i32 {
     if (is_digit(b)) return @intCast(i32, b) - '0';
-    if (b >= 'a' and b <= 'f') return @intCast(i32, b) - 'a' + 10;
-    if (b >= 'A' and b <= 'F') return @intCast(i32, b) - 'A' + 10;
+    if (b >= 'a' && b <= 'f') return @intCast(i32, b) - 'a' + 10;
+    if (b >= 'A' && b <= 'F') return @intCast(i32, b) - 'A' + 10;
     return -1;
 }
 fn vec_from_slice(s: &[u8]) Vec<u8> {
@@ -93,7 +93,7 @@ fn append_bytes(msg: *mut Vec<u8>, s: &[u8]) void {
 
 fn build_rev_kw_map() Map<&[u8], &[u8]> {
     var m = Map<&[u8], &[u8]>.init(alloc);
-    m.put("KwAnd", "and");
+    m.put("KwAnd", "&&");
     m.put("KwAnytype", "anytype");
     m.put("KwAsync", "async");
     m.put("KwAwait", "await");
@@ -120,7 +120,7 @@ fn build_rev_kw_map() Map<&[u8], &[u8]> {
     m.put("KwMut", "mut");
     m.put("KwNamespace", "namespace");
     m.put("KwNull", "null");
-    m.put("KwOr", "or");
+    m.put("KwOr", "||");
     m.put("KwOrelse", "orelse");
     m.put("KwOwned", "owned");
     m.put("KwPub", "pub");
@@ -128,7 +128,6 @@ fn build_rev_kw_map() Map<&[u8], &[u8]> {
     m.put("KwScript", "script");
     m.put("KwSpawn", "spawn");
     m.put("KwSwitch", "switch");
-    m.put("KwTree", "tree");
     m.put("KwTrue", "true");
     m.put("KwTry", "try");
     m.put("KwType", "type");
@@ -165,11 +164,10 @@ class Lexer {
 
     fn kw_of(self: *mut Self, name: &[u8]) ?&[u8] {
         var len = name.len;
-        if (len >= 2 and len <= 9) {
+        if (len >= 2 && len <= 9) {
             if (len == 2) {
                 if (slice_eq(name, "fn")) return "KwFn";
                 if (slice_eq(name, "if")) return "KwIf";
-                if (slice_eq(name, "or")) return "KwOr";
                 return null;
             }
             if (len == 3) {
@@ -177,14 +175,12 @@ class Lexer {
                 if (slice_eq(name, "for")) return "KwFor";
                 if (slice_eq(name, "pub")) return "KwPub";
                 if (slice_eq(name, "mut")) return "KwMut";
-                if (slice_eq(name, "and")) return "KwAnd";
                 if (slice_eq(name, "try")) return "KwTry";
                 return null;
             }
             if (len == 4) {
                 if (slice_eq(name, "else")) return "KwElse";
                 if (slice_eq(name, "enum")) return "KwEnum";
-                if (slice_eq(name, "tree")) return "KwTree";
                 if (slice_eq(name, "move")) return "KwMove";
                 if (slice_eq(name, "type")) return "KwType";
                 if (slice_eq(name, "void")) return "KwVoid";
@@ -291,7 +287,7 @@ class Lexer {
             } else if (c == '@') {
                 self.bump();
                 var s2 = self.pos;
-                while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+                while (self.pos < self.n && is_ident_cont(self.src[self.pos])) { self.bump(); }
                 var txt = vec_from_slice(self.src[s2..self.pos]);
                 self.push_token("AtBuiltin", txt, start);
             } else {
@@ -306,14 +302,14 @@ class Lexer {
             var mut c = self.src[self.pos];
             if (is_ws(c)) {
                 self.bump();
-            } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
-                while (self.pos < self.n and self.src[self.pos] != '\n') { self.bump(); }
-            } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '*') {
+            } else if (c == '/' && self.pos + 1 < self.n && self.src[self.pos + 1] == '/') {
+                while (self.pos < self.n && self.src[self.pos] != '\n') { self.bump(); }
+            } else if (c == '/' && self.pos + 1 < self.n && self.src[self.pos + 1] == '*') {
                 self.bump();
                 self.bump();
                 while (true) {
                     if (self.pos >= self.n) { return; }
-                    if (self.src[self.pos] == '*' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
+                    if (self.src[self.pos] == '*' && self.pos + 1 < self.n && self.src[self.pos + 1] == '/') {
                         self.bump();
                         self.bump();
                         break;
@@ -328,7 +324,7 @@ class Lexer {
 
     fn lex_ident(self: *mut Self, start: usize) void {
         var s2 = self.pos;
-        while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+        while (self.pos < self.n && is_ident_cont(self.src[self.pos])) { self.bump(); }
         var name = self.src[s2..self.pos];
         var kw = self.kw_of(name);
         if (kw) |k| {
@@ -342,32 +338,32 @@ class Lexer {
     fn lex_number(self: *mut Self, start: usize) void {
         var buf = Vec<u8>.init(alloc);
         var mut is_float = false;
-        if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
+        if (self.src[self.pos] == '0' && self.pos + 1 < self.n) {
             var mut c1 = self.src[self.pos + 1];
-            if (c1 == 'x' or c1 == 'X') {
+            if (c1 == 'x' || c1 == 'X') {
                 buf.append('0'); buf.append('x');
                 self.bump(); self.bump();
-                while (self.pos < self.n and (is_hex(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_hex(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
                 self.finish_number(start, "Int", buf);
                 return;
             }
-            if (c1 == 'b' or c1 == 'B') {
+            if (c1 == 'b' || c1 == 'B') {
                 buf.append('0'); buf.append('b');
                 self.bump(); self.bump();
-                while (self.pos < self.n and (is_bin(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_bin(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
                 self.finish_number(start, "Int", buf);
                 return;
             }
-            if (c1 == 'o' or c1 == 'O') {
+            if (c1 == 'o' || c1 == 'O') {
                 buf.append('0'); buf.append('o');
                 self.bump(); self.bump();
-                while (self.pos < self.n and (is_oct(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_oct(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
@@ -377,14 +373,14 @@ class Lexer {
         }
         while (self.pos < self.n) {
             var mut c = self.src[self.pos];
-            if (is_digit(c) or c == '_') {
+            if (is_digit(c) || c == '_') {
                 buf.append(c);
                 self.bump();
-            } else if (c == '.' and self.pos + 1 < self.n and is_digit(self.src[self.pos + 1])) {
+            } else if (c == '.' && self.pos + 1 < self.n && is_digit(self.src[self.pos + 1])) {
                 is_float = true;
                 buf.append('.');
                 self.bump();
-                while (self.pos < self.n and (is_digit(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_digit(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
@@ -394,17 +390,17 @@ class Lexer {
         }
         if (self.pos < self.n) {
             var mut c = self.src[self.pos];
-            if ((c == 'e' or c == 'E') and self.pos + 1 < self.n) {
+            if ((c == 'e' || c == 'E') && self.pos + 1 < self.n) {
                 var mut c2 = self.src[self.pos + 1];
-                if (is_digit(c2) or c2 == '+' or c2 == '-') {
+                if (is_digit(c2) || c2 == '+' || c2 == '-') {
                     is_float = true;
                     buf.append('e');
                     self.bump();
-                    if (self.pos < self.n and (self.src[self.pos] == '+' or self.src[self.pos] == '-')) {
+                    if (self.pos < self.n && (self.src[self.pos] == '+' || self.src[self.pos] == '-')) {
                         buf.append(self.src[self.pos]);
                         self.bump();
                     }
-                    while (self.pos < self.n and (is_digit(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                    while (self.pos < self.n && (is_digit(self.src[self.pos]) || self.src[self.pos] == '_')) {
                         buf.append(self.src[self.pos]);
                         self.bump();
                     }
@@ -416,18 +412,18 @@ class Lexer {
     }
 
     fn is_suffix_cont(self: *mut Self, b: u8) bool {
-        return is_digit(b) or is_alpha(b) or (b >= 0xE4 and b <= 0xE9);
+        return is_digit(b) || is_alpha(b) || (b >= 0xE4 && b <= 0xE9);
     }
 
     fn detect_suffix(self: *mut Self) ?&[u8] {
         if (self.pos < self.n) {
             var mut c = self.src[self.pos];
-            if (c == 'i' or c == 'u' or c == 'f') {
+            if (c == 'i' || c == 'u' || c == 'f') {
                 var mut j = self.pos;
-                while (j < self.n and self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
+                while (j < self.n && self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
                 var mut suf = self.src[self.pos..j];
                 if (suf.len >= 2) {
-                    var ok = is_digit(self.src[self.pos + 1]) or suf == "isize" or suf == "usize";
+                    var ok = is_digit(self.src[self.pos + 1]) || suf == "isize" || suf == "usize";
                     if (ok) return suf;
                 }
             }
@@ -453,13 +449,13 @@ class Lexer {
 
     fn lex_string(self: *mut Self, start: usize) void {
         self.bump();
-        if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
+        if (self.pos + 1 < self.n && self.src[self.pos] == '"' && self.src[self.pos + 1] == '"') {
             self.bump();
             self.bump();
             var content = Vec<u8>.init(alloc);
             while (true) {
                 if (self.pos >= self.n) { return; }
-                if (self.src[self.pos] == '"' and self.pos + 2 < self.n and self.src[self.pos + 1] == '"' and self.src[self.pos + 2] == '"') {
+                if (self.src[self.pos] == '"' && self.pos + 2 < self.n && self.src[self.pos + 1] == '"' && self.src[self.pos + 2] == '"') {
                     self.bump(); self.bump(); self.bump();
                     break;
                 }
@@ -496,7 +492,7 @@ class Lexer {
                     var mut hi: i32 = -1; var mut lo: i32 = -1;
                     if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                     if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
-                    if (hi >= 0 and lo >= 0) {
+                    if (hi >= 0 && lo >= 0) {
                         var byte: i32 = hi * 16 + lo;
                         if (byte < 0x80) { content.append(@intCast(u8, byte)); }
                         else {
@@ -567,7 +563,7 @@ class Lexer {
                 var mut hi: i32 = -1; var mut lo: i32 = -1;
                 if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                 if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
-                if (hi >= 0 and lo >= 0) { val = hi * 16 + lo; }
+                if (hi >= 0 && lo >= 0) { val = hi * 16 + lo; }
             }
         } else {
             if (self.src[self.pos] >= 0x80) { return; }
@@ -595,62 +591,62 @@ class Lexer {
         else if (c == ';') { self.push_simple("Semi", start); }
         else if (c == ',') { self.push_simple("Comma", start); }
         else if (c == '.') {
-            if (self.pos < self.n and self.src[self.pos] == '.') { self.bump(); self.push_simple("DotDot", start); }
-            else if (self.pos < self.n and self.src[self.pos] == '*') { self.bump(); self.push_simple("DotStar", start); }
+            if (self.pos < self.n && self.src[self.pos] == '.') { self.bump(); self.push_simple("DotDot", start); }
+            else if (self.pos < self.n && self.src[self.pos] == '*') { self.bump(); self.push_simple("DotStar", start); }
             else { self.push_simple("Dot", start); }
         }
         else if (c == ':') { self.push_simple("Colon", start); }
         else if (c == '=') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("EqEq", start); }
-            else if (self.pos < self.n and self.src[self.pos] == '>') { self.bump(); self.push_simple("FatArrow", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("EqEq", start); }
+            else if (self.pos < self.n && self.src[self.pos] == '>') { self.bump(); self.push_simple("FatArrow", start); }
             else { self.push_simple("Eq", start); }
         }
         else if (c == '!') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("Ne", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("Ne", start); }
             else { self.push_simple("Bang", start); }
         }
         else if (c == '<') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("Le", start); }
-            else if (self.pos < self.n and self.src[self.pos] == '<') { self.bump(); self.push_simple("Shl", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("Le", start); }
+            else if (self.pos < self.n && self.src[self.pos] == '<') { self.bump(); self.push_simple("Shl", start); }
             else { self.push_simple("Lt", start); }
         }
         else if (c == '>') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("Ge", start); }
-            else if (self.pos < self.n and self.src[self.pos] == '>') { self.bump(); self.push_simple("Shr", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("Ge", start); }
+            else if (self.pos < self.n && self.src[self.pos] == '>') { self.bump(); self.push_simple("Shr", start); }
             else { self.push_simple("Gt", start); }
         }
         else if (c == '+') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("PlusEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("PlusEq", start); }
             else { self.push_simple("Plus", start); }
         }
         else if (c == '-') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("MinusEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("MinusEq", start); }
             else { self.push_simple("Minus", start); }
         }
         else if (c == '*') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("StarEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("StarEq", start); }
             else { self.push_simple("Star", start); }
         }
         else if (c == '/') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("SlashEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("SlashEq", start); }
             else { self.push_simple("Slash", start); }
         }
         else if (c == '%') {
-            if (self.pos < self.n and self.src[self.pos] == '%') { self.bump(); self.push_simple("PercentPercent", start); }
+            if (self.pos < self.n && self.src[self.pos] == '%') { self.bump(); self.push_simple("PercentPercent", start); }
             else { self.push_simple("Percent", start); }
         }
         else if (c == '&') {
-            if (self.pos < self.n and self.src[self.pos] == '&') { self.bump(); self.push_simple("KwAnd", start); }
-            else if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("AmpEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '&') { self.bump(); self.push_simple("KwAnd", start); }
+            else if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("AmpEq", start); }
             else { self.push_simple("Amp", start); }
         }
         else if (c == '|') {
-            if (self.pos < self.n and self.src[self.pos] == '|') { self.bump(); self.push_simple("PipePipe", start); }
-            else if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("PipeEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '|') { self.bump(); self.push_simple("PipePipe", start); }
+            else if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("PipeEq", start); }
             else { self.push_simple("Pipe", start); }
         }
         else if (c == '^') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.push_simple("CaretEq", start); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.push_simple("CaretEq", start); }
             else { self.push_simple("Caret", start); }
         }
         else if (c == '~') { self.push_simple("Tilde", start); }
@@ -731,23 +727,23 @@ fn get_prop(props: &[u8], key: &[u8]) ?&[u8] {
                 if (props[i + j] != key[j]) { match_key = false; break; }
                 j += 1;
             }
-            if (match_key and props[i + key.len] == '=') {
+            if (match_key && props[i + key.len] == '=') {
                 var mut val_start = i + key.len + 1;
                 var mut skip_quote = false;
-                if (val_start < n and props[val_start] == '"') {
+                if (val_start < n && props[val_start] == '"') {
                     skip_quote = true;
                     val_start += 1;
                 }
                 var mut val_end = val_start;
                 while (val_end < n) {
-                    if (skip_quote and props[val_end] == '"') { break; }
-                    if (!skip_quote and props[val_end] == '|') { break; }
+                    if (skip_quote && props[val_end] == '"') { break; }
+                    if (!skip_quote && props[val_end] == '|') { break; }
                     val_end += 1;
                 }
                 return props[val_start..val_end];
             }
         }
-        while (i < n and props[i] != '|') { i += 1; }
+        while (i < n && props[i] != '|') { i += 1; }
     }
     return null;
 }
@@ -781,12 +777,12 @@ class Parser {
     }
 
     // 判定 `Ident<` 是否为泛型实参（匹配 `>` 后跟 . ( { 时为真；否则视为小于号）
-    // 遇语句边界（; { } and or if/while/for/return 等）即判定非泛型，避免跨语句误扫；
+    // 遇语句边界（; { } && || if/while/for/return 等）即判定非泛型，避免跨语句误扫；
     // Shr（>>）在深度 ≥2 时视为嵌套泛型闭合
     fn generic_args_ahead(self: *mut Self) bool {
         var mut i: usize = self.pos + 1;
         var mut depth: usize = 1;
-        while (i < self.n and depth > 0) {
+        while (i < self.n && depth > 0) {
             var k2 = self.tokens[i].kind;
             if (k2 == "Lt") { depth += 1; }
             else if (k2 == "Gt") { depth -= 1; }
@@ -794,13 +790,13 @@ class Parser {
                 if (depth < 2) { return false; }
                 depth -= 2;
             }
-            else if (k2 == "Semi" or k2 == "LBrace" or k2 == "RBrace" or k2 == "KwAnd" or k2 == "KwOr" or k2 == "KwIf" or k2 == "KwWhile" or k2 == "KwFor" or k2 == "KwReturn" or k2 == "KwFn" or k2 == "KwClass") { return false; }
+            else if (k2 == "Semi" || k2 == "LBrace" || k2 == "RBrace" || k2 == "KwAnd" || k2 == "KwOr" || k2 == "KwIf" || k2 == "KwWhile" || k2 == "KwFor" || k2 == "KwReturn" || k2 == "KwFn" || k2 == "KwClass") { return false; }
             i += 1;
         }
         if (depth != 0) { return false; }
         if (i >= self.n) { return false; }
         var nk = self.tokens[i].kind;
-        return nk == "Dot" or nk == "LParen" or nk == "LBrace";
+        return nk == "Dot" || nk == "LParen" || nk == "LBrace";
     }
 
     fn peek_text(self: *mut Self) &[u8] {
@@ -914,7 +910,7 @@ class Parser {
             self.advance();
             return self.finish_fn_decl(traits, is_pub, false, is_export);
         }
-        if (k == "KwClass" or k == "KwTree") {
+        if (k == "KwClass") {
             self.advance();
             return self.parse_class(is_pub);
         }
@@ -937,7 +933,7 @@ class Parser {
             var ns = make_node("Namespace");
             node_add_prop(&ns, "name", name);
             if (is_pub) { node_add_prop(&ns, "pub", "true"); }
-            while (!self.at("RBrace") and !self.at("Eof")) {
+            while (!self.at("RBrace") && !self.at("Eof")) {
                 var d = self.parse_decl();
                 node_add_child(&ns, d);
             }
@@ -953,13 +949,13 @@ class Parser {
             if (self.at("LBrace")) {
                 self.advance();
                 has_syms = true;
-                while (!self.at("RBrace") and !self.at("Eof")) {
+                while (!self.at("RBrace") && !self.at("Eof")) {
                     var sname = self.expect_name_or_keyword();
                     // P7：记录选择符号（逗号分隔），供同目录文件加载
                     var mut j2: usize = 0;
                     while (j2 < sname.len) { syms.append(sname[j2]); j2 += 1; }
                     syms.append(',');
-                    if (self.at("Ident") and self.peek_text() == "as") {
+                    if (self.at("Ident") && self.peek_text() == "as") {
                         self.advance();
                         var _a = self.expect_ident();
                     }
@@ -969,7 +965,7 @@ class Parser {
                 self.expect("RBrace");
             }
             var mut alias: ?&[u8] = null;
-            if (self.at("Ident") and self.peek_text() == "as") {
+            if (self.at("Ident") && self.peek_text() == "as") {
                 self.advance();
                 alias = self.expect_ident();
             }
@@ -979,7 +975,7 @@ class Parser {
             if (has_syms) {
                 // 去掉尾逗号后存入 syms prop（空选择集不存）
                 var body2 = syms.as_slice();
-                if (body2.len > 0 and body2[body2.len - 1] == ',') {
+                if (body2.len > 0 && body2[body2.len - 1] == ',') {
                     node_add_prop(&u, "syms", body2[0..body2.len - 1]);
                 } else if (body2.len > 0) {
                     node_add_prop(&u, "syms", body2);
@@ -1053,10 +1049,10 @@ class Parser {
         var c = make_node("Const");
         node_add_prop(&c, "name", name);
         if (is_pub) { node_add_prop(&c, "pub", "true"); }
-        if (self.at("Ident") and self.peek_text() == "error" and self.peek_n(1) == "LBrace") {
+        if (self.at("Ident") && self.peek_text() == "error" && self.peek_n(1) == "LBrace") {
             self.advance();
             self.advance();
-            while (!self.at("RBrace") and !self.at("Eof")) {
+            while (!self.at("RBrace") && !self.at("Eof")) {
                 self.expect_ident();
                 if (self.at("Comma")) { self.advance(); }
             }
@@ -1086,7 +1082,7 @@ class Parser {
         }
         if (self.at("Lt")) {
             self.advance();
-            while (!self.at("Gt") and !self.at("Eof")) {
+            while (!self.at("Gt") && !self.at("Eof")) {
                 self.expect_ident();
                 if (self.at("Comma")) { self.advance(); }
             }
@@ -1105,7 +1101,7 @@ class Parser {
         if (self.at("Bang")) {
             self.advance();
             node_add_prop(&f, "ret_union", "true");
-            if (self.at("Ident") or self.at("KwVoid")) {
+            if (self.at("Ident") || self.at("KwVoid")) {
                 var mut ret_ty = self.peek_text();
                 self.advance();
                 var r = make_node("ret:");
@@ -1118,7 +1114,7 @@ class Parser {
             } else {
                 self.parse_type();
             }
-        } else if (self.at("KwVoid") or self.at("Ident")) {
+        } else if (self.at("KwVoid") || self.at("Ident")) {
             var mut ret_ty = self.peek_text();
             // 关键字（如 void）的 text 为空，直接用关键字名
             if (ret_ty.len == 0) {
@@ -1133,14 +1129,14 @@ class Parser {
                 k += 1;
             }
             node_add_child(&f, r);
-        } else if (!self.at("LBrace") and !self.at("Semi") and !self.at("Eof")) {
+        } else if (!self.at("LBrace") && !self.at("Semi") && !self.at("Eof")) {
             // 复杂类型（如 ?&[u8]、*[4]u8 等）：仅消费 token
             self.parse_type();
         }
         // where 子句
         if (self.at("KwWhere")) {
             self.advance();
-            while (!self.at("LBrace") and !self.at("Semi") and !self.at("Eof")) {
+            while (!self.at("LBrace") && !self.at("Semi") && !self.at("Eof")) {
                 self.parse_type();
                 if (self.at("Comma")) { self.advance(); }
                 else { break; }
@@ -1176,7 +1172,7 @@ class Parser {
         // 返回类型
         if (self.at("Bang")) {
             self.advance();
-            if (self.at("Ident") or self.at("KwVoid")) {
+            if (self.at("Ident") || self.at("KwVoid")) {
                 var mut ret_ty = self.peek_text();
                 self.advance();
                 self.consume_type_args();
@@ -1190,7 +1186,7 @@ class Parser {
             } else {
                 self.parse_type();
             }
-        } else if (self.at("KwVoid") or self.at("Ident")) {
+        } else if (self.at("KwVoid") || self.at("Ident")) {
             var ret_ty = self.peek_text();
             self.advance();
             var r = make_node("ret:");
@@ -1215,7 +1211,7 @@ class Parser {
         var p = make_node("Param");
         node_add_prop(&p, "name", name);
         if (is_mut) { node_add_prop(&p, "mut", "true"); }
-        if (self.at("Ident") or self.at("KwVoid")) {
+        if (self.at("Ident") || self.at("KwVoid")) {
             var ty = self.peek_text();
             self.advance();
             if (ty.len > 0) {
@@ -1226,7 +1222,7 @@ class Parser {
             // 泛型实参仅消费：Type(T1,T2) / Type<T1,T2>
             if (self.at("LParen")) {
                 self.advance();
-                while (!self.at("RParen") and !self.at("Eof")) {
+                while (!self.at("RParen") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -1235,7 +1231,7 @@ class Parser {
             }
             if (self.at("Lt")) {
                 self.advance();
-                while (!self.at("Gt") and !self.at("Eof")) {
+                while (!self.at("Gt") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -1260,7 +1256,7 @@ class Parser {
         if (is_pub) { node_add_prop(&cls, "pub", "true"); }
         if (self.at("LParen")) {
             self.advance();
-            while (!self.at("RParen") and !self.at("Eof")) {
+            while (!self.at("RParen") && !self.at("Eof")) {
                 self.parse_type();
                 if (self.at("Comma")) { self.advance(); }
                 else { break; }
@@ -1271,8 +1267,8 @@ class Parser {
             self.parse_trait();
         }
         self.expect("LBrace");
-        while (!self.at("RBrace") and !self.at("Eof")) {
-            if (self.at("KwFn") or self.at("LBracket") or (self.at("KwPub") and self.peek_n(1) == "KwFn")) {
+        while (!self.at("RBrace") && !self.at("Eof")) {
+            if (self.at("KwFn") || self.at("LBracket") || (self.at("KwPub") && self.peek_n(1) == "KwFn")) {
                 var m = self.parse_method(name);
                 node_add_child(&cls, m);
             } else {
@@ -1305,7 +1301,7 @@ class Parser {
             // 泛型实参仅消费：Type(T1,T2) / Type<T1,T2>
             if (self.at("LParen")) {
                 self.advance();
-                while (!self.at("RParen") and !self.at("Eof")) {
+                while (!self.at("RParen") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -1314,7 +1310,7 @@ class Parser {
             }
             if (self.at("Lt")) {
                 self.advance();
-                while (!self.at("Gt") and !self.at("Eof")) {
+                while (!self.at("Gt") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -1325,7 +1321,7 @@ class Parser {
             self.parse_type();
         }
         // 分隔容错：逗号/分号均可
-        if (self.at("Comma") or self.at("Semi")) { self.advance(); }
+        if (self.at("Comma") || self.at("Semi")) { self.advance(); }
         return f;
     }
 
@@ -1349,7 +1345,7 @@ class Parser {
         node_add_prop(&e, "name", name);
         if (is_pub) { node_add_prop(&e, "pub", "true"); }
         self.expect("LBrace");
-        while (!self.at("RBrace") and !self.at("Eof")) {
+        while (!self.at("RBrace") && !self.at("Eof")) {
             var vname = self.expect_ident();
             var v = make_node("Variant");
             node_add_prop(&v, "name", vname);
@@ -1371,7 +1367,7 @@ class Parser {
         node_add_prop(&u, "name", name);
         if (is_pub) { node_add_prop(&u, "pub", "true"); }
         self.expect("LBrace");
-        while (!self.at("RBrace") and !self.at("Eof")) {
+        while (!self.at("RBrace") && !self.at("Eof")) {
             var fname = self.expect_ident();
             self.expect("Colon");
             self.parse_type();
@@ -1387,7 +1383,7 @@ class Parser {
         node_add_prop(&iface, "name", name);
         if (is_pub) { node_add_prop(&iface, "pub", "true"); }
         self.expect("LBrace");
-        while (!self.at("RBrace") and !self.at("Eof")) {
+        while (!self.at("RBrace") && !self.at("Eof")) {
             self.expect("KwFn");
             var mname = self.expect_ident();
             self.expect("LParen");
@@ -1402,7 +1398,7 @@ class Parser {
             if (self.at("Bang")) {
                 self.advance();
                 self.parse_type();
-            } else if (self.at("KwVoid") or self.at("Ident")) {
+            } else if (self.at("KwVoid") || self.at("Ident")) {
                 self.advance();
             }
             self.expect("Semi");
@@ -1487,7 +1483,7 @@ class Parser {
             self.advance();
             if (self.at("LParen")) {
                 self.advance();
-                while (!self.at("RParen") and !self.at("Eof")) {
+                while (!self.at("RParen") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -1496,7 +1492,7 @@ class Parser {
             }
             if (self.at("Lt")) {
                 self.advance();
-                while (!self.at("Gt") and !self.at("Eof")) {
+                while (!self.at("Gt") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -1510,7 +1506,7 @@ class Parser {
             self.parse_type();
         } else if (self.at("LParen")) {
             self.advance();
-            while (!self.at("RParen") and !self.at("Eof")) {
+            while (!self.at("RParen") && !self.at("Eof")) {
                 self.parse_type();
                 if (self.at("Comma")) { self.advance(); }
                 else { break; }
@@ -1543,7 +1539,7 @@ class Parser {
         // `{` 缺失时返回空块且不消费（防失控吞并；无括号体由 parse_block_or_stmt 包装）
         if (!self.at("LBrace")) { return b; }
         self.advance();
-        while (!self.at("RBrace") and !self.at("Eof")) {
+        while (!self.at("RBrace") && !self.at("Eof")) {
             var stmt = self.parse_stmt();
             node_add_child(&b, stmt);
         }
@@ -1564,7 +1560,7 @@ class Parser {
     fn consume_type_args(self: *mut Self) void {
         if (self.at("LParen")) {
             self.advance();
-            while (!self.at("RParen") and !self.at("Eof")) {
+            while (!self.at("RParen") && !self.at("Eof")) {
                 self.parse_type();
                 if (self.at("Comma")) { self.advance(); }
                 else { break; }
@@ -1573,7 +1569,7 @@ class Parser {
         }
         if (self.at("Lt")) {
             self.advance();
-            while (!self.at("Gt") and !self.at("Eof")) {
+            while (!self.at("Gt") && !self.at("Eof")) {
                 self.parse_type();
                 if (self.at("Comma")) { self.advance(); }
                 else { break; }
@@ -1586,7 +1582,7 @@ class Parser {
         if (self.at("Colon")) {
             self.advance();
             if (self.at("Ident")) { self.advance(); }
-            if (self.at("KwWhile") or self.at("KwFor")) { }
+            if (self.at("KwWhile") || self.at("KwFor")) { }
         }
         var k = self.peek();
         if (k == "LBrace") {
@@ -1672,7 +1668,7 @@ class Parser {
         if (is_mut) { node_add_prop(&v, "mut", "true"); }
         if (self.at("Colon")) {
             self.advance();
-            if (self.at("Ident") or self.at("KwVoid")) {
+            if (self.at("Ident") || self.at("KwVoid")) {
                 var ty = self.peek_text();
                 self.advance();
                 // 存储类型名作为子节点，kind 直接设为类型名
@@ -1746,7 +1742,7 @@ class Parser {
             self.expect("Pipe");
         }
         // step 子句
-        if (self.at("Colon") and self.peek_n(1) == "LParen") {
+        if (self.at("Colon") && self.peek_n(1) == "LParen") {
             self.advance();
             self.expect("LParen");
             self.parse_expr();
@@ -1785,7 +1781,7 @@ class Parser {
         node_add_child(&sn, subj);
         self.expect("RParen");
         self.expect("LBrace");
-        while (!self.at("RBrace") and !self.at("Eof")) {
+        while (!self.at("RBrace") && !self.at("Eof")) {
             var arm = self.parse_switch_arm();
             node_add_child(&sn, arm);
         }
@@ -1795,7 +1791,7 @@ class Parser {
 
     fn parse_switch_arm(self: *mut Self) AstNode {
         var arm = make_node("SwitchArm");
-        while (!self.at("FatArrow") and !self.at("RBrace") and !self.at("Eof")) {
+        while (!self.at("FatArrow") && !self.at("RBrace") && !self.at("Eof")) {
             var pat = self.parse_switch_pattern();
             node_add_child(&arm, pat);
             if (self.at("Comma")) { self.advance(); break; }
@@ -1869,7 +1865,7 @@ class Parser {
 
     fn parse_or(self: *mut Self) AstNode {
         var mut l = self.parse_and();
-        while (self.at("KwOr") or self.at("PipePipe")) {
+        while (self.at("KwOr") || self.at("PipePipe")) {
             self.advance();
             var r = self.parse_and();
             var b = make_node("Binary");
@@ -1915,7 +1911,7 @@ class Parser {
     fn parse_comparison(self: *mut Self) AstNode {
         var mut l = self.parse_bitor();
         var cmp_op = self.peek();
-        if (cmp_op == "EqEq" or cmp_op == "Ne" or cmp_op == "Lt" or cmp_op == "Le" or cmp_op == "Gt" or cmp_op == "Ge") {
+        if (cmp_op == "EqEq" || cmp_op == "Ne" || cmp_op == "Lt" || cmp_op == "Le" || cmp_op == "Gt" || cmp_op == "Ge") {
             self.advance();
             var r = self.parse_bitor();
             var b = make_node("Binary");
@@ -1977,7 +1973,7 @@ class Parser {
         var mut l = self.parse_addsub();
         while (true) {
             var opname = self.peek();
-            if (opname == "Shl" or opname == "Shr") {
+            if (opname == "Shl" || opname == "Shr") {
                 self.advance();
                 var r = self.parse_addsub();
                 var b = make_node("Binary");
@@ -1995,7 +1991,7 @@ class Parser {
         var mut l = self.parse_muldiv();
         while (true) {
             var opname = self.peek();
-            if (opname == "Plus" or opname == "Minus") {
+            if (opname == "Plus" || opname == "Minus") {
                 self.advance();
                 var r = self.parse_muldiv();
                 var b = make_node("Binary");
@@ -2013,7 +2009,7 @@ class Parser {
         var mut l = self.parse_unary();
         while (true) {
             var opname = self.peek();
-            if (opname == "Star" or opname == "Slash" or opname == "Percent" or opname == "PercentPercent") {
+            if (opname == "Star" || opname == "Slash" || opname == "Percent" || opname == "PercentPercent") {
                 self.advance();
                 var r = self.parse_unary();
                 var b = make_node("Binary");
@@ -2095,7 +2091,7 @@ class Parser {
         }
         if (k == "KwMove") {
             self.advance();
-            if (self.at("Pipe") or (self.at("KwMut") and self.peek_n(1) == "Pipe")) {
+            if (self.at("Pipe") || (self.at("KwMut") && self.peek_n(1) == "Pipe")) {
                 return self.parse_closure();
             }
             var mut e = self.parse_unary();
@@ -2278,7 +2274,7 @@ class Parser {
                 self.advance();
                 var cl = make_node("ClassLit");
                 quoted_add_prop(&cl, "name", name);
-                while (!self.at("RBrace") and !self.at("Eof")) {
+                while (!self.at("RBrace") && !self.at("Eof")) {
                     var fname = self.expect_name_or_keyword();
                     var fi = make_node("FieldInit");
                     quoted_add_prop(&fi, "name", fname);
@@ -2295,9 +2291,9 @@ class Parser {
                 return cl;
             }
             // 泛型类型表达式：Vec<u8>.init(...) / Vec<Vec<u8>>.init（仅当匹配 `>` 后跟 . ( { 时消费，避免误吞小于号）
-            if (self.at("Lt") and self.generic_args_ahead()) {
+            if (self.at("Lt") && self.generic_args_ahead()) {
                 self.advance();
-                while (!self.at("Gt") and !self.at("Shr") and !self.at("Eof")) {
+                while (!self.at("Gt") && !self.at("Shr") && !self.at("Eof")) {
                     self.parse_type();
                     if (self.at("Comma")) { self.advance(); }
                     else { break; }
@@ -2351,7 +2347,7 @@ class Parser {
             node_add_child(&switch_expr, subj);
             self.expect("RParen");
             self.expect("LBrace");
-            while (!self.at("RBrace") and !self.at("Eof")) {
+            while (!self.at("RBrace") && !self.at("Eof")) {
                 var arm = self.parse_switch_arm();
                 node_add_child(&switch_expr, arm);
             }
@@ -2580,15 +2576,15 @@ class Checker {
         if (name == "usize") return make_ty("usize");
         if (name == "comptime_int") return make_ty("comptime_int");
         // 内建浮点类型
-        if (name == "f16" or name == "f32" or name == "f64" or name == "f128") return make_ty("float");
+        if (name == "f16" || name == "f32" || name == "f64" || name == "f128") return make_ty("float");
         // 内建其他类型
         if (name == "bool") return make_ty("bool");
         if (name == "void") return make_ty("void");
         if (name == "String") return make_ty("str");
-        if (name == "type" or name == "anytype") return make_ty("type");
+        if (name == "type" || name == "anytype") return make_ty("type");
         // 内建集合类型
-        if (name == "Vec" or name == "Deque" or name == "Map" or name == "Table") return make_ty(name);
-        if (name == "Allocator" or name == "ExitType") return make_ty(name);
+        if (name == "Vec" || name == "Deque" || name == "Map" || name == "Table") return make_ty(name);
+        if (name == "Allocator" || name == "ExitType") return make_ty(name);
         if (name == "Future") return make_ty(name);
         // 在类型注册表中查找
         if (self.types.contains(name)) {
@@ -2596,7 +2592,7 @@ class Checker {
             if (t) |tt| { return tt; }
         }
         // 大写开头 → 泛型参数
-        if (name.len > 0 and name[0] >= 'A' and name[0] <= 'Z') {
+        if (name.len > 0 && name[0] >= 'A' && name[0] <= 'Z') {
             return make_ty("generic");
         }
         // 未知类型
@@ -2635,12 +2631,12 @@ class Checker {
         var ek = expect_ty.kind.as_slice();
         // comptime_int 兼容任何整数类型
         if (vk == "comptime_int") {
-            if (ek == "i8" or ek == "i16" or
-                ek == "i32" or ek == "i64" or
-                ek == "i128" or ek == "isize" or
-                ek == "u8" or ek == "u16" or
-                ek == "u32" or ek == "u64" or
-                ek == "u128" or ek == "usize" or
+            if (ek == "i8" || ek == "i16" ||
+                ek == "i32" || ek == "i64" ||
+                ek == "i128" || ek == "isize" ||
+                ek == "u8" || ek == "u16" ||
+                ek == "u32" || ek == "u64" ||
+                ek == "u128" || ek == "usize" ||
                 ek == "comptime_int") return true;
         }
         // 相同类型
@@ -2652,8 +2648,8 @@ class Checker {
     fn infer_source(self: *mut Self, expr: AstNode) AllocSource {
         var k = expr.kind;
         // 字面量 = 无所有权
-        if (k == "IntLit" or k == "FloatLit" or k == "BoolLit" or
-            k == "StrLit" or k == "CharLit" or k == "NullLit" or k == "VoidLit") {
+        if (k == "IntLit" || k == "FloatLit" || k == "BoolLit" ||
+            k == "StrLit" || k == "CharLit" || k == "NullLit" || k == "VoidLit") {
             return AllocSource.None;
         }
         // 数组字面量 = 堆分配
@@ -2702,7 +2698,7 @@ class Checker {
                 if (self.funcs.contains(n)) { return make_ty("fn"); }
                 // 内建名称
                 if (self.is_builtin_name(n)) {
-                    if (n == "true" or n == "false") return make_ty("bool");
+                    if (n == "true" || n == "false") return make_ty("bool");
                     if (n == "null") return make_ty("null");
                     if (n == "void") return make_ty("void");
                     // 其他内建名（alloc, io 等）→ unknown
@@ -2716,16 +2712,16 @@ class Checker {
                 var l = self.type_of_expr(expr.children[0]);
                 var r = self.type_of_expr(expr.children[1]);
                 // 逻辑运算符返回 bool
-                if (op == "And" or op == "Or") {
+                if (op == "And" || op == "Or") {
                     return make_ty("bool");
                 }
                 // 比较运算符返回 bool
-                if (op == "Eq" or op == "Ne" or op == "Lt" or
-                    op == "Le" or op == "Gt" or op == "Ge") {
+                if (op == "Eq" || op == "Ne" || op == "Lt" ||
+                    op == "Le" || op == "Gt" || op == "Ge") {
                     return make_ty("bool");
                 }
                 // 算术运算符：如果任一操作数是 float，结果 float
-                if (l.kind.as_slice() == "float" or r.kind.as_slice() == "float") return make_ty("float");
+                if (l.kind.as_slice() == "float" || r.kind.as_slice() == "float") return make_ty("float");
                 // 否则 return comptime_int（后续会收窄）
                 return make_ty("comptime_int");
             }
@@ -2750,8 +2746,8 @@ class Checker {
                             if (sig) |s| { return s.ret_type; }
                         }
                         // 内建函数
-                        if (n == "expect" or n == "expect_eq") return make_ty("void");
-                        if (n == "@intCast" or n == "@floatCast") return make_ty("unknown");
+                        if (n == "expect" || n == "expect_eq") return make_ty("void");
+                        if (n == "@intCast" || n == "@floatCast") return make_ty("unknown");
                     }
                 }
             }
@@ -2802,7 +2798,7 @@ class Checker {
                             var mut a: usize = 0;
                             var mut b: usize = 0;
                             while (b <= syms.len) {
-                                if (b == syms.len or syms[b] == ',') {
+                                if (b == syms.len || syms[b] == ',') {
                                     if (b > a) { syms_list.append(syms[a..b]); }
                                     b += 1;
                                     a = b;
@@ -2858,9 +2854,9 @@ class Checker {
             var ent = entries[i];
             if (!ent.is_dir) {
                 var nml = ent.name.as_slice();
-                if (nml.len > 3 and slice_eq(nml[(nml.len - 3)..nml.len], ".hc") and !slice_eq(nml, entry_name)) {
+                if (nml.len > 3 && slice_eq(nml[(nml.len - 3)..nml.len], ".hc") && !slice_eq(nml, entry_name)) {
                     var mut p: usize = 0;
-                    while (p < sorted.len and str_lt(sorted[p], nml)) { p += 1; }
+                    while (p < sorted.len && str_lt(sorted[p], nml)) { p += 1; }
                     var next = Vec<&[u8]>.init(alloc);
                     var mut k: usize = 0;
                     while (k < p) { next.append(sorted[k]); k += 1; }
@@ -2878,7 +2874,7 @@ class Checker {
             var fp = Vec<u8>.init(alloc);
             var mut di: usize = 0;
             while (di < dir.len) { fp.append(dir[di]); di += 1; }
-            if (dir.len > 0 and dir[(dir.len - 1)] != '/' and dir[(dir.len - 1)] != '\\') { fp.append('/'); }
+            if (dir.len > 0 && dir[(dir.len - 1)] != '/' && dir[(dir.len - 1)] != '\\') { fp.append('/'); }
             di = 0;
             while (di < nml.len) { fp.append(nml[di]); di += 1; }
             var fsrc = try io.fs.read_file(fp.as_slice(), alloc);
@@ -3099,8 +3095,8 @@ class Checker {
             if (stmt.children.len > 0) {
                 self.check_expr(stmt.children[0]);
             }
-        } else if (k == "Defer" or k == "Errdefer") {
-        } else if (k == "Empty" or k == "Break" or k == "Continue") {
+        } else if (k == "Defer" || k == "Errdefer") {
+        } else if (k == "Empty" || k == "Break" || k == "Continue") {
         } else if (k == "ConstDecl") {
             var name = get_prop(stmt.props, "name");
             if (name) |n| {
@@ -3123,7 +3119,7 @@ class Checker {
             var first = stmt.children[0];
             var candidate = self.ty_of(first.kind);
             var ck = candidate.kind.as_slice();
-            if (ck != "unknown" and ck != "generic") {
+            if (ck != "unknown" && ck != "generic") {
                 ty = candidate;
             }
         }
@@ -3135,7 +3131,7 @@ class Checker {
             var first = stmt.children[0];
             var candidate = self.ty_of(first.kind);
             var ck = candidate.kind.as_slice();
-            if (ck == "unknown" or ck == "generic") {
+            if (ck == "unknown" || ck == "generic") {
                 has_init = true;
             }
         }
@@ -3145,7 +3141,7 @@ class Checker {
         if (m) |_| { is_mut = true; }
         // 推断分配来源
         var mut source = AllocSource.Unknown;
-        if (has_init and stmt.children.len > 0) {
+        if (has_init && stmt.children.len > 0) {
             var last_idx = stmt.children.len - 1;
             source = self.infer_source(stmt.children[last_idx]);
         }
@@ -3160,11 +3156,11 @@ class Checker {
             self.moved.remove(n);
         }
         // 检查初始值表达式类型（初始值是最后一个子节点）
-        if (has_init and stmt.children.len > 0) {
+        if (has_init && stmt.children.len > 0) {
             var last_idx = stmt.children.len - 1;
             var init_expr = stmt.children[last_idx];
             // 检查 move 操作
-            if (init_expr.kind == "Move" and init_expr.children.len > 0) {
+            if (init_expr.kind == "Move" && init_expr.children.len > 0) {
                 var inner = init_expr.children[0];
                 if (inner.kind == "Ident") {
                     var name = get_prop(inner.props, "name");
@@ -3195,7 +3191,7 @@ class Checker {
             var init_type = self.type_of_expr(init_expr);
             var tk = ty.kind.as_slice();
             var ik = init_type.kind.as_slice();
-            if (tk != "unknown" and ik != "unknown") {
+            if (tk != "unknown" && ik != "unknown") {
                 if (!self.is_compatible(init_type, ty)) {
                     var msg = Vec<u8>.init(alloc);
                     msg.append('t'); msg.append('y'); msg.append('p'); msg.append('e');
@@ -3338,7 +3334,7 @@ class Checker {
             var expr = stmt.children[0];
             self.check_expr(expr);
             // 检查是否返回局部变量引用（引用逃逸检测）
-            if (expr.kind == "AddrOf" and expr.children.len > 0) {
+            if (expr.kind == "AddrOf" && expr.children.len > 0) {
                 var inner = expr.children[0];
                 if (inner.kind == "Ident") {
                     var name = get_prop(inner.props, "name");
@@ -3357,7 +3353,7 @@ class Checker {
                 }
             }
             // 检查是否返回错误字面量但函数没有声明错误联合返回类型
-            if (expr.kind == "Field" and expr.children.len > 0) {
+            if (expr.kind == "Field" && expr.children.len > 0) {
                 var base = expr.children[0];
                 if (base.kind == "Ident") {
                     var name = get_prop(base.props, "name");
@@ -3439,7 +3435,7 @@ class Checker {
                             var found = self.lookup(n);
                             if (found) |info| {
                                 // 可写形态（&mut / 裸别名）要求 `mut`
-                                if (move_mut and !info.mut_) {
+                                if (move_mut && !info.mut_) {
                                     var msg = Vec<u8>.init(alloc);
                                     append_bytes(&msg, "error: cannot move `");
                                     append_bytes(&msg, n);
@@ -3474,7 +3470,7 @@ class Checker {
                 self.check_expr(tgt);
                 self.check_expr(expr.children[1]);
             }
-        } else if (k == "AddrOf" or k == "Try" or k == "Await") {
+        } else if (k == "AddrOf" || k == "Try" || k == "Await") {
             if (expr.children.len > 0) {
                 self.check_expr(expr.children[0]);
             }
@@ -3561,22 +3557,22 @@ class Checker {
 
     // 判断是否为内建名称（使用 slice_eq 避免 &[u8] 指针比较问题）
     fn is_builtin_name(self: *mut Self, name: &[u8]) bool {
-        if (slice_eq(name, "alloc") or slice_eq(name, "page_allocator")) return true;
-        if (slice_eq(name, "io") or slice_eq(name, "stdout") or slice_eq(name, "stderr")) return true;
-        if (slice_eq(name, "true") or slice_eq(name, "false") or slice_eq(name, "null") or slice_eq(name, "void")) return true;
+        if (slice_eq(name, "alloc") || slice_eq(name, "page_allocator")) return true;
+        if (slice_eq(name, "io") || slice_eq(name, "stdout") || slice_eq(name, "stderr")) return true;
+        if (slice_eq(name, "true") || slice_eq(name, "false") || slice_eq(name, "null") || slice_eq(name, "void")) return true;
         if (slice_eq(name, "pi")) return true;
-        if (slice_eq(name, "Vec") or slice_eq(name, "Deque") or slice_eq(name, "Map") or slice_eq(name, "Table")) return true;
-        if (slice_eq(name, "String") or slice_eq(name, "Allocator") or slice_eq(name, "ExitType")) return true;
-        if (slice_eq(name, "Pipe") or slice_eq(name, "Tee") or slice_eq(name, "Funnel") or slice_eq(name, "Hub")) return true;
-        if (slice_eq(name, "i8") or slice_eq(name, "i16") or slice_eq(name, "i32") or slice_eq(name, "i64") or slice_eq(name, "i128")) return true;
-        if (slice_eq(name, "u8") or slice_eq(name, "u16") or slice_eq(name, "u32") or slice_eq(name, "u64") or slice_eq(name, "u128")) return true;
-        if (slice_eq(name, "isize") or slice_eq(name, "usize")) return true;
-        if (slice_eq(name, "f16") or slice_eq(name, "f32") or slice_eq(name, "f64") or slice_eq(name, "f128")) return true;
-        if (slice_eq(name, "bool") or slice_eq(name, "void")) return true;
-        if (slice_eq(name, "comptime_int") or slice_eq(name, "comptime_float")) return true;
-        if (slice_eq(name, "type") or slice_eq(name, "anytype")) return true;
+        if (slice_eq(name, "Vec") || slice_eq(name, "Deque") || slice_eq(name, "Map") || slice_eq(name, "Table")) return true;
+        if (slice_eq(name, "String") || slice_eq(name, "Allocator") || slice_eq(name, "ExitType")) return true;
+        if (slice_eq(name, "Pipe") || slice_eq(name, "Tee") || slice_eq(name, "Funnel") || slice_eq(name, "Hub")) return true;
+        if (slice_eq(name, "i8") || slice_eq(name, "i16") || slice_eq(name, "i32") || slice_eq(name, "i64") || slice_eq(name, "i128")) return true;
+        if (slice_eq(name, "u8") || slice_eq(name, "u16") || slice_eq(name, "u32") || slice_eq(name, "u64") || slice_eq(name, "u128")) return true;
+        if (slice_eq(name, "isize") || slice_eq(name, "usize")) return true;
+        if (slice_eq(name, "f16") || slice_eq(name, "f32") || slice_eq(name, "f64") || slice_eq(name, "f128")) return true;
+        if (slice_eq(name, "bool") || slice_eq(name, "void")) return true;
+        if (slice_eq(name, "comptime_int") || slice_eq(name, "comptime_float")) return true;
+        if (slice_eq(name, "type") || slice_eq(name, "anytype")) return true;
         if (slice_eq(name, "Future")) return true;
-        if (slice_eq(name, "expect") or slice_eq(name, "expect_eq")) return true;
+        if (slice_eq(name, "expect") || slice_eq(name, "expect_eq")) return true;
         if (slice_eq(name, "error")) return true;
         return false;
     }
@@ -3626,7 +3622,7 @@ fn dir_of(path: &[u8]) &[u8] {
     var mut last: usize = 0;
     var mut i: usize = 0;
     while (i < path.len) {
-        if (path[i] == '/' or path[i] == '\\') { last = i + 1; }
+        if (path[i] == '/' || path[i] == '\\') { last = i + 1; }
         i += 1;
     }
     return path[0..last];
@@ -3635,7 +3631,7 @@ fn dir_of(path: &[u8]) &[u8] {
 // S2：文件名字典序小于（插入排序用；与 interp.hc 同实现）
 fn str_lt(a: &[u8], b: &[u8]) bool {
     var mut i: usize = 0;
-    while (i < a.len and i < b.len) {
+    while (i < a.len && i < b.len) {
         if (a[i] != b[i]) { return a[i] < b[i]; }
         i += 1;
     }
@@ -3647,10 +3643,10 @@ fn stem_of(path: &[u8]) &[u8] {
     var mut i: usize = 0;
     var mut end: usize = path.len;
     while (i < path.len) {
-        if (path[i] == '/' or path[i] == '\\') { start = i + 1; }
+        if (path[i] == '/' || path[i] == '\\') { start = i + 1; }
         i += 1;
     }
-    if (path.len >= 3 and path[path.len - 3] == '.' and path[path.len - 2] == 'h' and path[path.len - 1] == 'c') {
+    if (path.len >= 3 && path[path.len - 3] == '.' && path[path.len - 2] == 'h' && path[path.len - 1] == 'c') {
         end = path.len - 3;
     }
     return path[start..end];
@@ -3660,7 +3656,7 @@ fn join_path(dir: &[u8], name: &[u8]) Vec<u8> {
     var out = Vec<u8>.init(alloc);
     var mut i: usize = 0;
     while (i < dir.len) { out.append(dir[i]); i += 1; }
-    if (dir.len > 0 and dir[dir.len - 1] != '/' and dir[dir.len - 1] != '\\') {
+    if (dir.len > 0 && dir[dir.len - 1] != '/' && dir[dir.len - 1] != '\\') {
         out.append('/');
     }
     i = 0;
@@ -3673,7 +3669,7 @@ fn join_path(dir: &[u8], name: &[u8]) Vec<u8> {
 
 fn main(args: Vec<String>) !void {
     // --dump-ast 调试模式：args[1] 为模式开关（args[0] 是程序自身路径）
-    if (args.len >= 3 and args[1].as_slice() == "--dump-ast") {
+    if (args.len >= 3 && args[1].as_slice() == "--dump-ast") {
         var mut dsrc = try io.fs.read_file(args[2], alloc);
         var dkw = build_rev_kw_map();
         var dlx: Lexer = alloc.init(Lexer{

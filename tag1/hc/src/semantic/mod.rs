@@ -196,6 +196,8 @@ struct ThreadState {
     bound: bool,
     /// 已 `detach()`（运行点 = 调用处，引用在该作用域内存活 → 允许）
     detached: bool,
+    /// backlog #14③：句柄已被 join()/detach() 消耗——之后使用 = 编译错误
+    consumed: bool,
     /// 捕获的局部引用（`&local`/`&local.f`/`&local[i]` 根变量名 + 位置）——
     /// 线程逃逸（未 join 作用域退出 → 根回收运行到程序结束）时局部已死 → 悬垂，编译错误
     local_refs: Vec<(String, Span)>,

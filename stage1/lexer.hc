@@ -12,7 +12,7 @@ import H.std.{io};
 // 已复刻的保真细节：
 //   - span line/col = token 消费后的 END 位置（下一 token 起点），非 token 起点
 //   - 列/行按 Unicode 字符计数（utf8_width，非字节）
-//   - 45 关键字（struct → KwClass 合并；`&&` 亦 KwAnd；and → KwAnd）
+//   - 45 关键字（struct → KwClass 合并；`&&` 亦 KwAnd；&& → KwAnd）
 //   - 数字前缀 0x/0b/0o 与浮点指数归一化为小写（0XFF → "0xff"、3E5 → "3e5"）；
 //     前缀后无数字也成 token（0x）、0o8 拆两个、1.5.6 整体 Float、0x1.8p3 拆解
 //   - 惰性宽度后缀：整体形如 iN/uN/fN/isize/usize 才消费，否则数字止步、余下另成 ident；
@@ -31,36 +31,36 @@ import H.std.{io};
 // ============================================================
 
 fn is_digit(b: u8) bool {
-    return b >= '0' and b <= '9';
+    return b >= '0' && b <= '9';
 }
 fn is_hex(b: u8) bool {
-    return is_digit(b) or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F');
+    return is_digit(b) || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F');
 }
 fn is_bin(b: u8) bool {
-    return b == '0' or b == '1';
+    return b == '0' || b == '1';
 }
 fn is_oct(b: u8) bool {
-    return b >= '0' and b <= '7';
+    return b >= '0' && b <= '7';
 }
 fn is_alpha(b: u8) bool {
-    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
+    return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z');
 }
 fn is_alnum(b: u8) bool {
-    return is_digit(b) or is_alpha(b);
+    return is_digit(b) || is_alpha(b);
 }
 fn is_ident_start(b: u8) bool {
-    return is_alpha(b) or b == '_';
+    return is_alpha(b) || b == '_';
 }
 fn is_ident_cont(b: u8) bool {
-    if (is_alnum(b) or b == '_') return true;
+    if (is_alnum(b) || b == '_') return true;
     // 非 ASCII 首字节：仅 CJK 表意文字（U+4E00–U+9FFF = E4–E9 首字节）视为字母数字，
     // 与 Rust `is_alphanumeric()` 一致；全角标点（U+FF00 区 = EF 首字节）不算。
     // 近似：CJK 扩展 A（U+3400–U+4DBF）与扩展 B+（F0+）未纳入，语料不涉及。
-    if (b >= 0xE4 and b <= 0xE9) return true;
+    if (b >= 0xE4 && b <= 0xE9) return true;
     return false;
 }
 fn is_ws(b: u8) bool {
-    return b == 0x20 or b == 0x09 or b == 0x0A or b == 0x0D or b == 0x0B or b == 0x0C;
+    return b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D || b == 0x0B || b == 0x0C;
 }
 // UTF-8 字符宽度（按首字节）；与 Rust `char.len_utf8()` 对齐，col 按字符计数
 fn utf8_width(b: u8) i32 {
@@ -71,8 +71,8 @@ fn utf8_width(b: u8) i32 {
 }
 fn hexval(b: u8) i32 {
     if (is_digit(b)) return @intCast(i32, b) - '0';
-    if (b >= 'a' and b <= 'f') return @intCast(i32, b) - 'a' + 10;
-    if (b >= 'A' and b <= 'F') return @intCast(i32, b) - 'A' + 10;
+    if (b >= 'a' && b <= 'f') return @intCast(i32, b) - 'a' + 10;
+    if (b >= 'A' && b <= 'F') return @intCast(i32, b) - 'A' + 10;
     return -1;
 }
 
@@ -96,7 +96,6 @@ fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "struct") return "KwStruct";
     if (name == "enum") return "KwEnum";
     if (name == "union") return "KwUnion";
-    if (name == "tree") return "KwTree";
     if (name == "interface") return "KwInterface";
     if (name == "where") return "KwWhere";
     if (name == "namespace") return "KwNamespace";
@@ -107,8 +106,6 @@ fn kw_of(name: &[u8]) ?&[u8] {
     if (name == "owned") return "KwOwned";
     if (name == "move") return "KwMove";
     if (name == "mut") return "KwMut";
-    if (name == "and") return "KwAnd";
-    if (name == "or") return "KwOr";
     if (name == "try") return "KwTry";
     if (name == "catch") return "KwCatch";
     if (name == "orelse") return "KwOrelse";
@@ -127,14 +124,14 @@ fn kw_of(name: &[u8]) ?&[u8] {
 }
 
 // 解码 content[i] 处的完整码点（i 必须在字符起始；content 恒为合法 UTF-8）
-fn cp_at(content: Vec<u8>, i: i32) i32 {
-    var b0: i32 = @intCast(i32, content[i]);
+fn cp_at(content: *Vec<u8>, i: i32) i32 {
+    var b0: i32 = @intCast(i32, content.*[i]);
     if (b0 < 0x80) return b0;
-    var b1: i32 = @intCast(i32, content[i + 1]);
+    var b1: i32 = @intCast(i32, content.*[i + 1]);
     if (b0 < 0xE0) return (b0 & 0x1F) * 64 + (b1 & 0x3F);
-    var b2: i32 = @intCast(i32, content[i + 2]);
+    var b2: i32 = @intCast(i32, content.*[i + 2]);
     if (b0 < 0xF0) return (b0 & 0x0F) * 4096 + (b1 & 0x3F) * 64 + (b2 & 0x3F);
-    var b3: i32 = @intCast(i32, content[i + 3]);
+    var b3: i32 = @intCast(i32, content.*[i + 3]);
     return (b0 & 0x07) * 262144 + (b1 & 0x3F) * 4096 + (b2 & 0x3F) * 64 + (b3 & 0x3F);
 }
 
@@ -142,33 +139,33 @@ fn cp_at(content: Vec<u8>, i: i32) i32 {
 // 格式符（ZWSP/ZWJ/bidi/LS/PS/WJ 等）、变体选择符、BOM、非字符、私用区。
 // 探针实证：U+115F/1160、U+3164、U+FFA0、U+FFFC/FFFD 可打印（不在排除表）。
 fn is_printable(cp: i32) bool {
-    if (cp >= 0x20 and cp <= 0x7E) return true;
+    if (cp >= 0x20 && cp <= 0x7E) return true;
     if (cp <= 0x1F) return false;                          // C0（\t\r\n 已在主循环特判）
-    if (cp >= 0x7F and cp <= 0xA0) return false;           // DEL + C1 + NBSP
+    if (cp >= 0x7F && cp <= 0xA0) return false;           // DEL + C1 + NBSP
     if (cp == 0x00AD) return false;                        // 软连字符
     if (cp == 0x034F) return false;                        // 组合字素连接符
     if (cp == 0x061C) return false;                        // 阿拉伯字母标记
-    if (cp == 0x17B4 or cp == 0x17B5) return false;
+    if (cp == 0x17B4 || cp == 0x17B5) return false;
     if (cp == 0x180E) return false;                        // 蒙古元音分隔符
-    if (cp >= 0x200B and cp <= 0x200F) return false;       // ZWSP/ZWNJ/ZWJ/LRM/RLM
-    if (cp >= 0x2028 and cp <= 0x202E) return false;       // LS/PS/双向控制
-    if (cp >= 0x2060 and cp <= 0x2064) return false;       // WJ/隐形运算符
-    if (cp >= 0x206A and cp <= 0x206F) return false;
-    if (cp >= 0xFE00 and cp <= 0xFE0F) return false;       // 变体选择符
+    if (cp >= 0x200B && cp <= 0x200F) return false;       // ZWSP/ZWNJ/ZWJ/LRM/RLM
+    if (cp >= 0x2028 && cp <= 0x202E) return false;       // LS/PS/双向控制
+    if (cp >= 0x2060 && cp <= 0x2064) return false;       // WJ/隐形运算符
+    if (cp >= 0x206A && cp <= 0x206F) return false;
+    if (cp >= 0xFE00 && cp <= 0xFE0F) return false;       // 变体选择符
     if (cp == 0xFEFF) return false;                        // BOM
-    if (cp >= 0xFFF0 and cp <= 0xFFFB) return false;       // 特殊（FFFC/FFFD 可打印）
-    if (cp >= 0xFDD0 and cp <= 0xFDEF) return false;       // 非字符
-    if (cp >= 0xE000 and cp <= 0xF8FF) return false;       // BMP 私用区
-    if (cp >= 0x1BCA0 and cp <= 0x1BCA3) return false;
-    if (cp >= 0x1D173 and cp <= 0x1D17A) return false;
-    if (cp >= 0xE0000 and cp <= 0xE0FFF) return false;     // 标签区
-    if (cp >= 0xF0000 and cp <= 0x10FFFF) return false;    // 15/16 平面私用区
+    if (cp >= 0xFFF0 && cp <= 0xFFFB) return false;       // 特殊（FFFC/FFFD 可打印）
+    if (cp >= 0xFDD0 && cp <= 0xFDEF) return false;       // 非字符
+    if (cp >= 0xE000 && cp <= 0xF8FF) return false;       // BMP 私用区
+    if (cp >= 0x1BCA0 && cp <= 0x1BCA3) return false;
+    if (cp >= 0x1D173 && cp <= 0x1D17A) return false;
+    if (cp >= 0xE0000 && cp <= 0xE0FFF) return false;     // 标签区
+    if (cp >= 0xF0000 && cp <= 0x10FFFF) return false;    // 15/16 平面私用区
     return true;
 }
 
 // 追加 `\u{hex}`（hex 小写无前导零，对齐 Rust escape_unicode）
-fn append_unicode_escape(var mut out: Vec<u8>, cp: i32) void {
-    out.append('\\'); out.append('u'); out.append('{');
+fn append_unicode_escape(out: *mut Vec<u8>, cp: i32) void {
+    out.*.append('\\'); out.*.append('u'); out.*.append('{');
     var digits = "0123456789abcdef";
     var mut sh: i32 = 0;
     var mut tmp: i32 = cp;
@@ -176,20 +173,20 @@ fn append_unicode_escape(var mut out: Vec<u8>, cp: i32) void {
     while (sh >= 0) {
         var idx = (cp >> sh) & 0xF;
         var d = digits[idx..(idx + 1)];
-        out.append(d[0]);
+        out.*.append(d[0]);
         sh -= 4;
     }
-    out.append('}');
+    out.*.append('}');
 }
 
 // Rust Debug 输出：字符串内容转义（`\n`/`\r`/`\t`/`\"`/`\\`/`\0`/不可打印 → `\u{..}`）
-fn dbg_escape(content: Vec<u8>) Vec<u8> {
-    var out = Vec<u8>.init(alloc);
-    var n: i32 = @intCast(i32, content.len);
+fn dbg_escape(content: *Vec<u8>)owned Vec<u8> {
+    var mut out:owned Vec<u8> = Vec<u8>.init(alloc);
+    var n: i32 = @intCast(i32, content.*.len);
     var mut i: i32 = 0;
     while (i < n) {
         var mut cp = cp_at(content, i);
-        var w = utf8_width(content[i]);
+        var w = utf8_width(content.*[i]);
         if (cp == 0x09) { out.append('\\'); out.append('t'); }
         else if (cp == 0x0A) { out.append('\\'); out.append('n'); }
         else if (cp == 0x0D) { out.append('\\'); out.append('r'); }
@@ -198,12 +195,12 @@ fn dbg_escape(content: Vec<u8>) Vec<u8> {
         else if (cp == 0x00) { out.append('\\'); out.append('0'); }
         else if (is_printable(cp)) {
             var mut j: i32 = 0;
-            while (j < w) { out.append(content[i + j]); j += 1; }
+            while (j < w) { out.append(content.*[i + j]); j += 1; }
         }
-        else { append_unicode_escape(out, cp); }
+        else { append_unicode_escape(&mut out, cp); }
         i += w;
     }
-    return out;
+    return move out;
 }
 
 class Lexer {
@@ -224,31 +221,31 @@ class Lexer {
     }
 
     // 追加一个完整字符（含多字节 UTF-8）到内容缓冲并前进
-    fn append_char(self: *mut Self, var mut content: Vec<u8>) void {
+    fn append_char(self: *mut Self, content: *mut Vec<u8>) void {
         var w = utf8_width(self.src[self.pos]);
         var mut k: i32 = 0;
         while (k < w) {
-            content.append(self.src[self.pos + k]);
+            content.*.append(self.src[self.pos + k]);
             k += 1;
         }
         self.bump();
     }
 
-    fn emit_simple(self: *mut Self, start: usize, kind: &[u8]) void {
+    fn emit_simple(self: * Self, start: usize, kind: &[u8]) void {
         io.print("{} {} {} {} {}\n", start, self.pos, self.line, self.col, kind);
     }
 
-    fn emit_slice_payload(self: *mut Self, start: usize, kind: &[u8], payload: &[u8]) void {
+    fn emit_slice_payload(self: * Self, start: usize, kind: &[u8], payload: &[u8]) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", payload);
     }
 
-    fn emit_error(self: *mut Self, start: usize, msg: &[u8]) void {
+    fn emit_error(self: * Self, start: usize, msg: &[u8]) void {
         io.print("{} {} {} {} Error(\"", start, self.pos, self.line, self.col);
         io.print("{}\")\n", msg);
     }
 
-    fn emit_content(self: *mut Self, start: usize, kind: &[u8], content: Vec<u8>) void {
+    fn emit_content(self: * Self, start: usize, kind: &[u8], content: *Vec<u8>) void {
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         var esc = dbg_escape(content);
         var s = esc.as_slice();
@@ -275,7 +272,7 @@ class Lexer {
             } else if (c == '@') {
                 self.bump();
                 var s2 = self.pos;
-                while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+                while (self.pos < self.n && is_ident_cont(self.src[self.pos])) { self.bump(); }
                 self.emit_slice_payload(start, "AtBuiltin", self.src[s2..self.pos]);
             } else {
                 self.lex_punct(start);
@@ -289,24 +286,32 @@ class Lexer {
             var mut c = self.src[self.pos];
             if (is_ws(c)) {
                 self.bump();
-            } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
+            } else if (c == '/' && self.pos + 1 < self.n && self.src[self.pos + 1] == '/') {
                 // 行注释（含 /// 文档注释，语法上等价）
-                while (self.pos < self.n and self.src[self.pos] != '\n') { self.bump(); }
-            } else if (c == '/' and self.pos + 1 < self.n and self.src[self.pos + 1] == '*') {
+                while (self.pos < self.n && self.src[self.pos] != '\n') { self.bump(); }
+            } else if (c == '/' && self.pos + 1 < self.n && self.src[self.pos + 1] == '*') {
                 self.bump();
                 self.bump();
+                // D10（ADR-0037）：块注释嵌套（/* 递增、*/ 递减，计数配对；与 Rust 版同步）
+                var mut depth: i32 = 1;
                 while (true) {
                     if (self.pos >= self.n) {
                         // 未闭合块注释：Error（span=EOF 位置）+ 随后 run() 补 Eof
                         self.emit_error(self.pos, "unterminated block comment");
                         return;
                     }
-                    if (self.src[self.pos] == '*' and self.pos + 1 < self.n and self.src[self.pos + 1] == '/') {
+                    if (self.src[self.pos] == '/' && self.pos + 1 < self.n && self.src[self.pos + 1] == '*') {
                         self.bump();
                         self.bump();
-                        break;
+                        depth += 1;
+                    } else if (self.src[self.pos] == '*' && self.pos + 1 < self.n && self.src[self.pos + 1] == '/') {
+                        self.bump();
+                        self.bump();
+                        depth -= 1;
+                        if (depth == 0) { break; }
+                    } else {
+                        self.bump();
                     }
-                    self.bump();
                 }
             } else {
                 return;
@@ -316,7 +321,7 @@ class Lexer {
 
     fn lex_ident(self: *mut Self, start: usize) void {
         var s2 = self.pos;
-        while (self.pos < self.n and is_ident_cont(self.src[self.pos])) { self.bump(); }
+        while (self.pos < self.n && is_ident_cont(self.src[self.pos])) { self.bump(); }
         var name = self.src[s2..self.pos];
         var kw = kw_of(name);
         if (kw) |k| {
@@ -330,50 +335,63 @@ class Lexer {
         var buf = Vec<u8>.init(alloc);
         var mut is_float = false;
         // 前缀 0x/0b/0o
-        if (self.src[self.pos] == '0' and self.pos + 1 < self.n) {
+        if (self.src[self.pos] == '0' && self.pos + 1 < self.n) {
             var mut c1 = self.src[self.pos + 1];
-            if (c1 == 'x' or c1 == 'X') {
+            if (c1 == 'x' || c1 == 'X') {
                 buf.append('0'); buf.append('x');
                 self.bump(); self.bump();
-                while (self.pos < self.n and (is_hex(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_hex(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
-                self.finish_number(start, "Int", buf);
+                // D12（ADR-0037）：前缀后无有效数字位 → 词法报错（与 Rust 版同步）
+                if (buf.len == 2) {
+                    self.emit_error(start, "invalid hex literal: expected digits after 0x");
+                    return;
+                }
+                self.finish_number(start, "Int", &mut buf);
                 return;
             }
-            if (c1 == 'b' or c1 == 'B') {
+            if (c1 == 'b' || c1 == 'B') {
                 buf.append('0'); buf.append('b');
                 self.bump(); self.bump();
-                while (self.pos < self.n and (is_bin(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_bin(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
-                self.finish_number(start, "Int", buf);
+                if (buf.len == 2) {
+                    self.emit_error(start, "invalid binary literal: expected digits after 0b");
+                    return;
+                }
+                self.finish_number(start, "Int", &mut buf);
                 return;
             }
-            if (c1 == 'o' or c1 == 'O') {
+            if (c1 == 'o' || c1 == 'O') {
                 buf.append('0'); buf.append('o');
                 self.bump(); self.bump();
-                while (self.pos < self.n and (is_oct(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_oct(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
-                self.finish_number(start, "Int", buf);
+                if (buf.len == 2) {
+                    self.emit_error(start, "invalid octal literal: expected digits after 0o");
+                    return;
+                }
+                self.finish_number(start, "Int", &mut buf);
                 return;
             }
         }
         // 十进制 / 浮点
         while (self.pos < self.n) {
             var mut c = self.src[self.pos];
-            if (is_digit(c) or c == '_') {
+            if (is_digit(c) || c == '_') {
                 buf.append(c);
                 self.bump();
-            } else if (c == '.' and self.pos + 1 < self.n and is_digit(self.src[self.pos + 1])) {
+            } else if (c == '.' && self.pos + 1 < self.n && is_digit(self.src[self.pos + 1])) {
                 is_float = true;
                 buf.append('.');
                 self.bump();
-                while (self.pos < self.n and (is_digit(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                while (self.pos < self.n && (is_digit(self.src[self.pos]) || self.src[self.pos] == '_')) {
                     buf.append(self.src[self.pos]);
                     self.bump();
                 }
@@ -384,42 +402,42 @@ class Lexer {
         // 指数（e/E → 归一化小写 e）
         if (self.pos < self.n) {
             var mut c = self.src[self.pos];
-            if ((c == 'e' or c == 'E') and self.pos + 1 < self.n) {
+            if ((c == 'e' || c == 'E') && self.pos + 1 < self.n) {
                 var mut c2 = self.src[self.pos + 1];
-                if (is_digit(c2) or c2 == '+' or c2 == '-') {
+                if (is_digit(c2) || c2 == '+' || c2 == '-') {
                     is_float = true;
                     buf.append('e');
                     self.bump();
-                    if (self.pos < self.n and (self.src[self.pos] == '+' or self.src[self.pos] == '-')) {
+                    if (self.pos < self.n && (self.src[self.pos] == '+' || self.src[self.pos] == '-')) {
                         buf.append(self.src[self.pos]);
                         self.bump();
                     }
-                    while (self.pos < self.n and (is_digit(self.src[self.pos]) or self.src[self.pos] == '_')) {
+                    while (self.pos < self.n && (is_digit(self.src[self.pos]) || self.src[self.pos] == '_')) {
                         buf.append(self.src[self.pos]);
                         self.bump();
                     }
                 }
             }
         }
-        if (is_float) { self.finish_number(start, "Float", buf); }
-        else { self.finish_number(start, "Int", buf); }
+        if (is_float) { self.finish_number(start, "Float", &mut buf); }
+        else { self.finish_number(start, "Int", &mut buf); }
     }
 
     // Rust maybe_suffix 收集：is_ascii_digit() || is_alphabetic()（CJK 表意文字近似 E4–E9；`_` 不含）
     fn is_suffix_cont(self: *mut Self, b: u8) bool {
-        return is_digit(b) or is_alpha(b) or (b >= 0xE4 and b <= 0xE9);
+        return is_digit(b) || is_alpha(b) || (b >= 0xE4 && b <= 0xE9);
     }
 
     fn detect_suffix(self: *mut Self) ?&[u8] {
         if (self.pos < self.n) {
             var mut c = self.src[self.pos];
-            if (c == 'i' or c == 'u' or c == 'f') {
+            if (c == 'i' || c == 'u' || c == 'f') {
                 var mut j = self.pos;
-                while (j < self.n and self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
+                while (j < self.n && self.is_suffix_cont(self.src[j])) { j += utf8_width(self.src[j]); }
                 var mut suf = self.src[self.pos..j];
                 var slen: i32 = @intCast(i32, suf.len);
                 if (slen >= 2) {
-                    var ok = is_digit(self.src[self.pos + 1]) or suf == "isize" or suf == "usize";
+                    var ok = is_digit(self.src[self.pos + 1]) || suf == "isize" || suf == "usize";
                     if (ok) return suf;
                 }
             }
@@ -427,7 +445,7 @@ class Lexer {
         return null;
     }
 
-    fn finish_number(self: *mut Self, start: usize, kind: &[u8], var mut buf: Vec<u8>) void {
+    fn finish_number(self: *mut Self, start: usize, kind: &[u8], buf: *mut Vec<u8>) void {
         // 惰性宽度后缀
         if (self.pos < self.n) {
             var suf = self.detect_suffix();
@@ -435,13 +453,13 @@ class Lexer {
                 var slen: i32 = @intCast(i32, s.len);
                 var mut k: i32 = 0;
                 while (k < slen) {
-                    buf.append(s[k]);
+                    buf.*.append(s[k]);
                     self.bump();
                     k += 1;
                 }
             }
         }
-        var s = buf.as_slice();
+        var s = buf.*.as_slice();
         io.print("{} {} {} {} {}(\"", start, self.pos, self.line, self.col, kind);
         io.print("{}\")\n", s);
     }
@@ -449,7 +467,7 @@ class Lexer {
     fn lex_string(self: *mut Self, start: usize) void {
         self.bump();  // 开引号
         // 原始多行字符串 """..."""
-        if (self.pos + 1 < self.n and self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
+        if (self.pos + 1 < self.n && self.src[self.pos] == '"' && self.src[self.pos + 1] == '"') {
             self.bump();
             self.bump();
             var content = Vec<u8>.init(alloc);
@@ -458,15 +476,15 @@ class Lexer {
                     self.emit_error(start, "unterminated raw string");
                     return;
                 }
-                if (self.src[self.pos] == '"' and self.pos + 2 < self.n and self.src[self.pos + 1] == '"' and self.src[self.pos + 2] == '"') {
+                if (self.src[self.pos] == '"' && self.pos + 2 < self.n && self.src[self.pos + 1] == '"' && self.src[self.pos + 2] == '"') {
                     self.bump();
                     self.bump();
                     self.bump();
                     break;
                 }
-                self.append_char(content);
+                self.append_char(&mut content);
             }
-            self.emit_content(start, "RawStr", content);
+            self.emit_content(start, "RawStr", &content);
             return;
         }
         // 普通字符串
@@ -499,7 +517,7 @@ class Lexer {
                     var mut lo: i32 = -1;
                     if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                     if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
-                    if (hi < 0 or lo < 0) {
+                    if (hi < 0 || lo < 0) {
                         self.emit_error(start, "invalid \\\\x escape");
                         return;
                     }
@@ -537,7 +555,7 @@ class Lexer {
                         self.emit_error(start, "invalid \\\\u escape");
                         return;
                     }
-                    if (v > 0x10FFFF or (v >= 0xD800 and v <= 0xDFFF)) {
+                    if (v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)) {
                         self.emit_error(start, "\\\\u escape out of range");
                         return;
                     }
@@ -565,10 +583,10 @@ class Lexer {
                 }
             }
             else {
-                self.append_char(content);
+                self.append_char(&mut content);
             }
         }
-        self.emit_content(start, "Str", content);
+        self.emit_content(start, "Str", &content);
     }
 
     fn lex_char(self: *mut Self, start: usize) void {
@@ -596,23 +614,61 @@ class Lexer {
                 var mut lo: i32 = -1;
                 if (self.pos < self.n) { hi = hexval(self.src[self.pos]); self.bump(); }
                 if (self.pos < self.n) { lo = hexval(self.src[self.pos]); self.bump(); }
-                if (hi < 0 or lo < 0) {
+                if (hi < 0 || lo < 0) {
                     self.emit_error(start, "invalid \\\\x escape in char");
                     return;
                 }
                 val = hi * 16 + lo;
+            }
+            else if (c == 'u') {
+                // D11（ADR-0037）：\u{...} Unicode 码点转义
+                if (self.pos >= self.n || self.src[self.pos] != '{') {
+                    self.emit_error(start, "invalid \\\\u escape in char");
+                    return;
+                }
+                self.bump();
+                var mut v: i32 = 0;
+                var mut bad = false;
+                while (true) {
+                    if (self.pos >= self.n) { bad = true; break; }
+                    var mut ch = self.src[self.pos];
+                    self.bump();
+                    if (ch == '}') { break; }
+                    var d: i32 = @intCast(i32, hexval(ch));
+                    if (d < 0) { bad = true; break; }
+                    v = v * 16 + d;
+                }
+                if (bad || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)) {
+                    self.emit_error(start, "invalid \\\\u escape in char");
+                    return;
+                }
+                val = v;
             }
             else {
                 self.emit_error(start, "invalid escape in char literal");
                 return;
             }
         } else {
-            if (self.src[self.pos] >= 0x80) {
-                self.emit_error(start, "char literal must be a single ASCII byte");
-                return;
+            // D11（ADR-0037）：非 ASCII 字符 = UTF-8 解码出码点（不再报单字节错误）
+            var b0: i32 = @intCast(i32, self.src[self.pos]);
+            if (b0 >= 0x80) {
+                var w = utf8_width(self.src[self.pos]);
+                var b1: i32 = if (self.pos + 1 < self.n) @intCast(i32, self.src[self.pos + 1]) else 0;
+                var b2: i32 = if (self.pos + 2 < self.n) @intCast(i32, self.src[self.pos + 2]) else 0;
+                var b3: i32 = if (self.pos + 3 < self.n) @intCast(i32, self.src[self.pos + 3]) else 0;
+                if (w == 2) {
+                    val = (b0 & 0x1F) * 64 + (b1 & 0x3F);
+                } else if (w == 3) {
+                    val = (b0 & 0x0F) * 4096 + (b1 & 0x3F) * 64 + (b2 & 0x3F);
+                } else {
+                    val = (b0 & 0x07) * 262144 + (b1 & 0x3F) * 4096 + (b2 & 0x3F) * 64 + (b3 & 0x3F);
+                }
+                // bump 按字符宽度前进（utf8_width），一次即越过整个多字节序列
+                self.bump();
+            } else {
+                val = b0;
+                self.bump();
             }
-            val = @intCast(i32, self.src[self.pos]);
-            self.bump();
         }
         // 读闭引号：与 Rust 一致，总是消费下一个字符再判定
         if (self.pos >= self.n) {
@@ -640,62 +696,62 @@ class Lexer {
         else if (c == ';') { self.emit_simple(start, "Semi"); }
         else if (c == ',') { self.emit_simple(start, "Comma"); }
         else if (c == '.') {
-            if (self.pos < self.n and self.src[self.pos] == '.') { self.bump(); self.emit_simple(start, "DotDot"); }
-            else if (self.pos < self.n and self.src[self.pos] == '*') { self.bump(); self.emit_simple(start, "DotStar"); }
+            if (self.pos < self.n && self.src[self.pos] == '.') { self.bump(); self.emit_simple(start, "DotDot"); }
+            else if (self.pos < self.n && self.src[self.pos] == '*') { self.bump(); self.emit_simple(start, "DotStar"); }
             else { self.emit_simple(start, "Dot"); }
         }
         else if (c == ':') { self.emit_simple(start, "Colon"); }
         else if (c == '=') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "EqEq"); }
-            else if (self.pos < self.n and self.src[self.pos] == '>') { self.bump(); self.emit_simple(start, "FatArrow"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "EqEq"); }
+            else if (self.pos < self.n && self.src[self.pos] == '>') { self.bump(); self.emit_simple(start, "FatArrow"); }
             else { self.emit_simple(start, "Eq"); }
         }
         else if (c == '!') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "Ne"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "Ne"); }
             else { self.emit_simple(start, "Bang"); }
         }
         else if (c == '<') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "Le"); }
-            else if (self.pos < self.n and self.src[self.pos] == '<') { self.bump(); self.emit_simple(start, "Shl"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "Le"); }
+            else if (self.pos < self.n && self.src[self.pos] == '<') { self.bump(); self.emit_simple(start, "Shl"); }
             else { self.emit_simple(start, "Lt"); }
         }
         else if (c == '>') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "Ge"); }
-            else if (self.pos < self.n and self.src[self.pos] == '>') { self.bump(); self.emit_simple(start, "Shr"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "Ge"); }
+            else if (self.pos < self.n && self.src[self.pos] == '>') { self.bump(); self.emit_simple(start, "Shr"); }
             else { self.emit_simple(start, "Gt"); }
         }
         else if (c == '+') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "PlusEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "PlusEq"); }
             else { self.emit_simple(start, "Plus"); }
         }
         else if (c == '-') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "MinusEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "MinusEq"); }
             else { self.emit_simple(start, "Minus"); }
         }
         else if (c == '*') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "StarEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "StarEq"); }
             else { self.emit_simple(start, "Star"); }
         }
         else if (c == '/') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "SlashEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "SlashEq"); }
             else { self.emit_simple(start, "Slash"); }
         }
         else if (c == '%') {
-            if (self.pos < self.n and self.src[self.pos] == '%') { self.bump(); self.emit_simple(start, "PercentPercent"); }
+            if (self.pos < self.n && self.src[self.pos] == '%') { self.bump(); self.emit_simple(start, "PercentPercent"); }
             else { self.emit_simple(start, "Percent"); }
         }
         else if (c == '&') {
-            if (self.pos < self.n and self.src[self.pos] == '&') { self.bump(); self.emit_simple(start, "KwAnd"); }
-            else if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "AmpEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '&') { self.bump(); self.emit_simple(start, "AndAnd"); }
+            else if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "AmpEq"); }
             else { self.emit_simple(start, "Amp"); }
         }
         else if (c == '|') {
-            if (self.pos < self.n and self.src[self.pos] == '|') { self.bump(); self.emit_simple(start, "PipePipe"); }
-            else if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "PipeEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '|') { self.bump(); self.emit_simple(start, "PipePipe"); }
+            else if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "PipeEq"); }
             else { self.emit_simple(start, "Pipe"); }
         }
         else if (c == '^') {
-            if (self.pos < self.n and self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "CaretEq"); }
+            if (self.pos < self.n && self.src[self.pos] == '=') { self.bump(); self.emit_simple(start, "CaretEq"); }
             else { self.emit_simple(start, "Caret"); }
         }
         else if (c == '~') { self.emit_simple(start, "Tilde"); }
@@ -709,10 +765,14 @@ class Lexer {
     }
 }
 
-fn main(args:Vec<String>) !void {
+fn main(owned args:Vec<String>) !void {
+    defer args.deinit();
     var mut path = args[0];
     if (args.len >= 2) { path = args[1]; }
     var mut src = try io.fs.read_file(path, alloc);
     var lx: Lexer = alloc.init(Lexer{ src = src, n = @intCast(i32, src.len), pos = 0, line = 1, col = 1 });
+    defer lx.deinit();
     lx.run();
+
+    alloc.leak_report();
 }

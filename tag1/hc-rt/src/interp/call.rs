@@ -1459,6 +1459,28 @@ impl Interp {
                 Ok(Some(Value::str_bytes(out)))
             }
             (Value::Alloc, "deinit") => Ok(Some(Value::Void)),
+            // K1/ADR-0036 + backlog #14①：alloc.destroy(x)——alloc.init/alloc.alloc 的
+            // 配对显式销毁（ADR-0035 显式销毁形式定为 `alloc.destroy(x)`）。
+            // Bytes：注销最早一条同尺寸活跃泄漏记录（alloc.alloc(n) 配对）；
+            // Class/Arr（Rc 共享）：所有权标记，值随最后一个引用消亡；其余 no-op。
+            (Value::Alloc, "destroy") => {
+                if args.len() != 1 {
+                    return Err(RtError::new("ArityMismatch", Some(span.clone())));
+                }
+                let v = self.eval(&args[0])?;
+                let v = self.deref_value(v);
+                if let Value::Bytes(data) = v {
+                    let n = data.borrow().len();
+                    let mut tracker = self.alloc_tracker.borrow_mut();
+                    if let Some(pos) = tracker
+                        .iter()
+                        .position(|r| r.size == n && r.weak.upgrade().is_some())
+                    {
+                        tracker.remove(pos);
+                    }
+                }
+                Ok(Some(Value::Void))
+            }
             // G5/§8.3 Debug 泄漏检测：断言无泄漏——有活跃分配则返回错误
             (Value::Alloc, "assert_no_leaks") => {
                 let leaks: Vec<String> = self

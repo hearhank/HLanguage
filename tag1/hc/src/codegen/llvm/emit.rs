@@ -57,6 +57,7 @@ pub(crate) fn type_to_string(ty: &Type) -> String {
         Type::ComptimeInt(_) => "comptime_int".to_string(),
         Type::Infer => "infer".to_string(),
         Type::Owned(inner) => type_to_string(inner),
+        Type::MutValue(inner) => format!("mut {}", type_to_string(inner)),
     }
 }
 

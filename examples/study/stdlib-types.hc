@@ -82,11 +82,11 @@ class CounterClass {
 // ============================================================
 
 fn safe_div(x: i32, y: i32) bool {
-    return (y != 0) and (x / y > 0);
+    return (y != 0) && (x / y > 0);
 }
 
 fn early_return(x: i32) bool {
-    return (x >= 0) or (1 / x > 0);
+    return (x >= 0) || (1 / x > 0);
 }
 
 fn dist(a: *Point, b: *Point) f64 {
@@ -96,7 +96,7 @@ fn dist(a: *Point, b: *Point) f64 {
 }
 
 fn sum_arr(s: &[i32]) i32 {
-    var total = 0;
+    var mut total = 0;
     for (s) |v| {
         total += v;
     }
@@ -104,7 +104,7 @@ fn sum_arr(s: &[i32]) i32 {
 }
 
 fn sum_slice(s: &[i32]) i32 {
-    var total = 0;
+    var mut total = 0;
     for (s) |item| {
         total += item;
     }
@@ -153,7 +153,7 @@ fn classify(err: ParseError) &[u8] {
 }
 
 fn sum<T>(items: &[T]) T where T: INumber {
-    var total = items[0];
+    var mut total = items[0];
     for (items[1..]) |v| {
         total = total.add(v);
     }
@@ -292,10 +292,10 @@ fn cube(x: i32) i32 {
 }
 
 [Test] fn integer_comparison_chain() !void {
-    try expect(1 < 2 and 2 < 3 and 3 < 4);
-    try expect(4 > 3 and 3 > 2 and 2 > 1);
-    try expect(1 <= 1 and 2 <= 3);
-    try expect(3 >= 3 and 2 >= 1);
+    try expect(1 < 2 && 2 < 3 && 3 < 4);
+    try expect(4 > 3 && 3 > 2 && 2 > 1);
+    try expect(1 <= 1 && 2 <= 3);
+    try expect(3 >= 3 && 2 >= 1);
     try expect_eq(1 == 1, true);
     try expect_eq(1 != 2, true);
 }
@@ -303,7 +303,7 @@ fn cube(x: i32) i32 {
 [Test] fn integer_mixed_operations() !void {
     var a: i32 = 10;
     var b: i32 = 3;
-    var sum = a + b;
+    var mut sum = a + b;
     var diff = a - b;
     var prod = a * b;
     var quot = a / b;
@@ -322,22 +322,22 @@ fn cube(x: i32) i32 {
 [Test] fn float_type_f32() !void {
     var pi: f32 = 3.14159;
     var half: f32 = 0.5;
-    try expect(pi > 3.14 and pi < 3.15);
+    try expect(pi > 3.14 && pi < 3.15);
     try expect(half == 0.5);
     var prod = pi * half;
-    try expect(prod > 1.5707 and prod < 1.5709);
+    try expect(prod > 1.5707 && prod < 1.5709);
 }
 
 [Test] fn float_type_f64() !void {
     var pi: f64 = 3.14159265358979;
     var area = pi * 2.0 * 2.0;
-    try expect(area > 12.56 and area < 12.57);
+    try expect(area > 12.56 && area < 12.57);
     try expect_eq(pi + pi, 2.0 * pi);
 }
 
 [Test] fn float_suffix_literals() !void {
-    try expect(3.14 > 3.13 and 3.14 < 3.15);
-    try expect(3.1415926535 > 3.14159 and 3.1415926535 < 3.14160);
+    try expect(3.14 > 3.13 && 3.14 < 3.15);
+    try expect(3.1415926535 > 3.14159 && 3.1415926535 < 3.14160);
 }
 
 [Test] fn float_arithmetic_chain() !void {
@@ -361,8 +361,8 @@ fn cube(x: i32) i32 {
 [Test] fn float_scientific_notation() !void {
     var big = 1.5e9;
     var small = 2.5e-4;
-    try expect(big > 1.49e9 and big < 1.51e9);
-    try expect(small > 2.4e-4 and small < 2.6e-4);
+    try expect(big > 1.49e9 && big < 1.51e9);
+    try expect(small > 2.4e-4 && small < 2.6e-4);
 }
 
 [Test] fn float_comparison_with_tolerance() !void {
@@ -381,10 +381,10 @@ fn cube(x: i32) i32 {
     var f: bool = false;
     try expect(t);
     try expect(!f);
-    try expect(t and t);
-    try expect(!(t and f));
-    try expect(t or f);
-    try expect(!(f or f));
+    try expect(t && t);
+    try expect(!(t && f));
+    try expect(t || f);
+    try expect(!(f || f));
 }
 
 [Test] fn bool_short_circuit_and() !void {
@@ -406,7 +406,7 @@ fn cube(x: i32) i32 {
     try expect(!!true);
     try expect((1 > 0) == true);
     try expect((1 < 0) == false);
-    try expect((1 == 1) and (2 != 3));
+    try expect((1 == 1) && (2 != 3));
 }
 
 // ============================================================
@@ -443,7 +443,7 @@ fn cube(x: i32) i32 {
 
 [Test] fn array_iteration() !void {
     var arr = [1, 2, 3, 4, 5];
-    var sum = 0;
+    var mut sum = 0;
     for (arr) |v| {
         sum += v;
     }
@@ -463,8 +463,8 @@ fn cube(x: i32) i32 {
 [Test] fn array_of_floats() !void {
     var arr = [1.5, 2.5, 3.5];
     try expect_eq(arr.len, 3);
-    try expect(arr[0] > 1.4 and arr[0] < 1.6);
-    try expect(arr[2] > 3.4 and arr[2] < 3.6);
+    try expect(arr[0] > 1.4 && arr[0] < 1.6);
+    try expect(arr[2] > 3.4 && arr[2] < 3.6);
 }
 
 [Test] fn array_sum_helper() !void {
@@ -607,7 +607,7 @@ fn cube(x: i32) i32 {
     var p = Point{x = 1.0, y = 2.0};
     var q = Point{x = 4.0, y = 6.0};
     var d = dist(p, q);
-    try expect(d > 4.99 and d < 5.01);
+    try expect(d > 4.99 && d < 5.01);
 }
 
 [Test] fn struct_value_copy() !void {
@@ -675,7 +675,7 @@ fn cube(x: i32) i32 {
         Value.float => |f| f,
         Value.none => 0.0,
     };
-    try expect(label > 3.13 and label < 3.15);
+    try expect(label > 3.13 && label < 3.15);
 }
 
 [Test] fn enum_payloadless_constant_form() !void {
@@ -837,7 +837,7 @@ fn cube(x: i32) i32 {
     v.append(10);
     v.append(20);
     v.append(30);
-    var sum = 0;
+    var mut sum = 0;
     for (v) |item| {
         sum += item;
     }
@@ -859,7 +859,7 @@ fn cube(x: i32) i32 {
 
 [Test] fn vec_multiple_appends() !void {
     var v = Vec<i32>.init(alloc);
-    var i: i32 = 0;
+    var mut i: i32 = 0;
     while (i < 100) {
         v.append(i);
         i += 1;
@@ -950,7 +950,7 @@ fn cube(x: i32) i32 {
     m.put("a", 1);
     m.put("b", 2);
     m.put("c", 3);
-    var total = 0;
+    var mut total = 0;
     for (m) |kv| {
         total += kv.value;
     }
@@ -1014,7 +1014,7 @@ fn cube(x: i32) i32 {
 }
 
 [Test] fn function_variable() !void {
-    var f: Fn1<i32> i32 = square;
+    var mut f: Fn1<i32> i32 = square;
     try expect_eq(f(4), 16);
     f = cube;
     try expect_eq(f(2), 8);
@@ -1129,7 +1129,7 @@ fn cube(x: i32) i32 {
 
 [Test] fn builtin_for_loop_readonly() !void {
     var arr = [2, 4, 6, 8];
-    var sum = 0;
+    var mut sum = 0;
     for (arr) |n| {
         sum += n;
     }
@@ -1149,7 +1149,7 @@ fn cube(x: i32) i32 {
 [Test] fn for_loop_over_slice() !void {
     var arr = [5, 10, 15];
     var s: &[i32] = &arr[0..3];
-    var sum = 0;
+    var mut sum = 0;
     for (s) |v| {
         sum += v;
     }
@@ -1161,7 +1161,7 @@ fn cube(x: i32) i32 {
     v.append(3);
     v.append(6);
     v.append(9);
-    var sum = 0;
+    var mut sum = 0;
     for (v) |item| {
         sum += item;
     }
@@ -1172,7 +1172,7 @@ fn cube(x: i32) i32 {
     var m = Map<&[u8], i32>.init(alloc);
     m.put("a", 1);
     m.put("b", 2);
-    var count = 0;
+    var mut count = 0;
     for (m) |_| {
         count += 1;
     }

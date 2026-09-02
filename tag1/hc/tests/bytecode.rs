@@ -34,7 +34,7 @@ fn scalar_arith_and_compare() {
         run_bc(src, "add", &[IrValue::Int(2), IrValue::Int(3)]).unwrap(),
         IrValue::Int(5)
     );
-    let src = "fn cmp(a: i32, b: i32) bool { return a < b and b <= 3; }";
+    let src = "fn cmp(a: i32, b: i32) bool { return a < b && b <= 3; }";
     assert_consistent(src, "cmp", &[IrValue::Int(1), IrValue::Int(3)]);
 }
 
@@ -45,8 +45,8 @@ fn expect_bad() bool {
     expect(false);
     return true;
 }
-fn and_sc() bool { return false and expect_bad(); }
-fn or_sc() bool { return true or expect_bad(); }
+fn and_sc() bool { return false && expect_bad(); }
+fn or_sc() bool { return true || expect_bad(); }
 "#;
     assert_consistent(src, "and_sc", &[]);
     assert_consistent(src, "or_sc", &[]);

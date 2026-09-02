@@ -11,5 +11,5 @@ pub enum IrPattern {
     Int(i128),
     Float(f64),
     Str(String),
-    Char(u8),
+    Char(u32),
 }

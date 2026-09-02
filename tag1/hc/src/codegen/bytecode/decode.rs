@@ -461,7 +461,7 @@ fn decode_pattern(r: &mut Reader) -> Result<IrPattern, String> {
         2 => IrPattern::Int(r.i128()?),
         3 => IrPattern::Float(r.f64()?),
         4 => IrPattern::Str(r.str()?),
-        5 => IrPattern::Char(r.u8()?),
+        5 => IrPattern::Char(r.u32()?),
         _ => return Err(format!("未知 switch 模式 tag {tag}")),
     })
 }

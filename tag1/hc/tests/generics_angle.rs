@@ -49,7 +49,7 @@ fn generics_angle_parse() {
     // 比较运算符仍正常
     try_parse(
         "comparison",
-        "fn cmp(a: i32, b: i32) bool { return a < b and b <= 3; }\n",
+        "fn cmp(a: i32, b: i32) bool { return a < b && b <= 3; }\n",
     );
     // FnN
     try_parse(

@@ -125,6 +125,8 @@ impl Checker {
             },
             Type::Infer => SType::Infer,
             Type::Owned(inner) => self.ty_of(inner),
+            // K1/ADR-0036：mut T 可写值形态——权限标注非类型身份，同型解析
+            Type::MutValue(inner) => self.ty_of(inner),
         }
     }
 

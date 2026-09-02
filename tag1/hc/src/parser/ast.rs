@@ -234,6 +234,9 @@ pub struct Param {
     pub default: Option<Expr>,
     pub span: Span,
     pub mut_: bool,
+    /// K1/ADR-0036：`owned` 名称前缀（`owned args: *mut Vec<String>`）——
+    /// 参数位置拥有标注（与 var 声明的类型前缀 `owned T` 两位置两语法）
+    pub owned: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +245,8 @@ pub struct FieldDecl {
     pub ty: Type,
     /// 跨包导出（Q3：属性默认私有，`pub` 显式导出）
     pub pub_: bool,
+    /// K1/ADR-0036：`owned` 名称前缀（`pub owned x: *mut T`）——字段拥有标注
+    pub owned: bool,
     /// 字段级特性（如 `[Align(n)]`）
     pub traits: Vec<Trait>,
     /// 字段默认值（如 `x: i32 = 42`）
@@ -294,6 +299,9 @@ pub enum Type {
     Infer,
     /// 所有权标注包装：o T（仅记录形态）
     Owned(Box<Type>),
+    /// K1/ADR-0036：可写值形态 `mut T`（类型位置的 mut）——必定拥有。
+    /// 权限标注非类型身份：strip() 后与 T 同型（签名比较不区分）
+    MutValue(Box<Type>),
 }
 
 impl Type {
@@ -304,6 +312,7 @@ impl Type {
     pub fn strip(&self) -> &Type {
         match self {
             Type::Owned(inner) => inner.strip(),
+            Type::MutValue(inner) => inner.strip(),
             other => other,
         }
     }
@@ -415,7 +424,7 @@ pub enum SwitchPattern {
     Int(String),
     Float(String),
     Str(String),
-    Char(u8),
+    Char(u32),
     /// 穷举检查用（tag1：不强制穷举）
     Else,
 }
@@ -437,7 +446,7 @@ pub enum Expr {
         raw: bool,
         span: Span,
     },
-    CharLit(u8, Span),
+    CharLit(u32, Span),
     BoolLit(bool, Span),
     NullLit(Span),
     VoidLit(Span),
@@ -885,5 +894,6 @@ pub fn fmt_type_debug(t: &Type) -> String {
         Type::ComptimeInt(n) => format!("comptime_int({})", n),
         Type::Infer => "_infer_".to_string(),
         Type::Owned(inner) => format!("o {}", fmt_type_debug(inner)),
+        Type::MutValue(inner) => format!("mut {}", fmt_type_debug(inner)),
     }
 }

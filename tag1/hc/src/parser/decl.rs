@@ -125,7 +125,7 @@ impl Parser {
                 self.advance();
                 self.parse_struct(start, traits, is_pub)
             }
-            TokenKind::KwClass | TokenKind::KwTree => {
+            TokenKind::KwClass => {
                 if is_export {
                     return Err(
                         self.error_at("`export` only applies to `fn`/`async fn` declarations (K5)")
@@ -698,6 +698,14 @@ impl Parser {
             } else {
                 false
             };
+            // K1/ADR-0036：owned 名称前缀（`owned args: *mut Vec<String>`）——
+            // 参数位置拥有标注，在名称前（var 声明保持类型前缀形态，两位置两语法）
+            let owned = if self.at(&TokenKind::KwOwned) {
+                self.advance();
+                true
+            } else {
+                false
+            };
             let name = self.expect_ident()?;
             self.expect(&TokenKind::Colon, "`:` after parameter name")?;
             let ty = self.parse_type()?;
@@ -713,6 +721,7 @@ impl Parser {
                 default,
                 span: start,
                 mut_,
+                owned,
             });
             if self.at(&TokenKind::Comma) {
                 self.advance();

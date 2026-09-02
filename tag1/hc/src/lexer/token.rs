@@ -39,7 +39,8 @@ pub enum TokenKind {
     Float(String),
     Str(String),    // 已解码（去引号、处理转义）
     RawStr(String), // """...""" 已去包裹
-    Char(u8),
+    /// 字符字面量：Unicode 标量码点（D11，ADR-0037；定型 = comptime_int）
+    Char(u32),
 
     // 关键字
     KwVar,
@@ -60,7 +61,6 @@ pub enum TokenKind {
     KwStruct,
     KwEnum,
     KwUnion,
-    KwTree,
     KwInterface,
     KwWhere,
     KwNamespace,
@@ -70,8 +70,8 @@ pub enum TokenKind {
     KwOwned,
     KwMove,
     KwMut,
-    KwAnd,
-    KwOr,
+    /// 逻辑与（D9，ADR-0037：`&&` 为本体，不再词法重写为 `and`）
+    AndAnd,
     KwTry,
     KwCatch,
     KwOrelse,

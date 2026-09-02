@@ -232,7 +232,7 @@ fn bump() i32 {
 fn main() i32 {
     var a = bump();
     var b = bump();
-    if (a != 101 or b != 102) { return 1; }
+    if (a != 101 || b != 102) { return 1; }
     if (counter != 2) { return 1; }
     return 0;
 }
@@ -271,7 +271,7 @@ fn bump() i32 {
 fn main() i32 {
     var a = bump();
     var b = bump();
-    if (a != 1 or b != 2) { return 1; }
+    if (a != 1 || b != 2) { return 1; }
     if (counter != 2) { return 1; }
     var r = &counter;
     if (r.* != 2) { return 1; }
@@ -288,11 +288,11 @@ fn string_literal_and_compare() {
         eprintln!("SKIP: zig cc 不可用");
         return;
     }
-    // 字符串字面量 + 相等比较 + 短路 and（切片内）
+    // 字符串字面量 + 相等比较 + 短路 &&（切片内）
     let src = r#"
 fn main() i32 {
     var a = "hi";
-    if (a == "hi" and 1 + 1 == 2) { return 0; }
+    if (a == "hi" && 1 + 1 == 2) { return 0; }
     return 1;
 }
 "#;
@@ -341,7 +341,7 @@ class Point {
 }
 fn main() i32 {
     var p = Point{ x = 1, y = 2 };
-    if (p.x != 1 or p.y != 2) { return 1; }
+    if (p.x != 1 || p.y != 2) { return 1; }
     p.y = 5;
     if (p.y != 5) { return 2; }
     if (p != Point{ x = 1, y = 5 }) { return 3; }
@@ -363,7 +363,7 @@ fn aggregate_array_index_and_store_native() {
     let src = r#"
 fn main() i32 {
     var mut a = [10, 20, 30];
-    if (a[0] != 10 or a[2] != 30) { return 1; }
+    if (a[0] != 10 || a[2] != 30) { return 1; }
     a[1] = 99;
     if (a[1] != 99) { return 2; }
     if (a == [10, 20, 30]) { return 3; }
@@ -408,7 +408,7 @@ fn aggregate_slice_view_and_alias_native() {
 fn main() i32 {
     var mut arr = [1, 2, 3, 4, 5];
     var sub = arr[1..4];
-    if (sub.len != 3 or sub[0] != 2 or sub[2] != 4) { return 1; }
+    if (sub.len != 3 || sub[0] != 2 || sub[2] != 4) { return 1; }
     arr[1] = 99;
     if (sub[0] != 99) { return 2; }
     return 0;
@@ -429,7 +429,7 @@ fn aggregate_slice_store_native() {
 fn main() i32 {
     var mut arr = [1, 2, 3, 4, 5];
     arr[1..3] = [20, 30];
-    if (arr[1] != 20 or arr[2] != 30 or arr.len != 5) { return 1; }
+    if (arr[1] != 20 || arr[2] != 30 || arr.len != 5) { return 1; }
     return 0;
 }
 "#;
@@ -450,7 +450,7 @@ fn divmod(a: i32, b: i32) (i32, i32) {
 }
 fn main() i32 {
     var (q, r) = divmod(10, 3);
-    if (q != 3 or r != 1) { return 1; }
+    if (q != 3 || r != 1) { return 1; }
     return 0;
 }
 "#;
@@ -472,7 +472,7 @@ fn main() i32 {
     a.append(2);
     a.append(3);
     var b = move a;
-    if (b.len != 3 or b[1] != 2) { return 1; }
+    if (b.len != 3 || b[1] != 2) { return 1; }
     return 0;
 }
 "#;
@@ -632,7 +632,7 @@ fn phase3_for_arr_mut_writeback_native() {
 fn main() i32 {
     var a = [1, 2, 3];
     for (a) |mut x| { x += 1; }
-    if (a[0] != 2 or a[1] != 3 or a[2] != 4) { return 1; }
+    if (a[0] != 2 || a[1] != 3 || a[2] != 4) { return 1; }
     return 0;
 }
 "#;
@@ -652,7 +652,7 @@ fn main() i32 {
     var arr = [10, 20, 30, 40];
     var sub = arr[1..3];
     for (sub) |mut x| { x = x + 1; }
-    if (arr[1] != 21 or arr[2] != 31) { return 1; }
+    if (arr[1] != 21 || arr[2] != 31) { return 1; }
     return 0;
 }
 "#;
@@ -929,9 +929,9 @@ fn tree_vec_field_append_recursion_native() {
     // 递归段错误（31-class/46-recursion 原生崩溃）。修复：LoadGlobal("Vec")
     // 每次合成新空容器（对齐 run_ir implicit_env_value）。
     let st = compile_tests_and_run(
-        "tree Node {\n\
+        "class Node {\n\
              value: i32,\n\
-             children: Vec<Node>,
+             children: Vec<Node>,\n\
              fn total(self: *Self) i32 {\n\
                  var mut sum = self.value;\n\
                  for (self.children) |child| {\n\
@@ -940,11 +940,11 @@ fn tree_vec_field_append_recursion_native() {
                  return sum;\n\
              }\n\
          }\n\
-         [test] fn tree_recursive_composition() !void {
-             var root: Node = Node.new(1, alloc);
-             root.children.append(Node.new(2, alloc));
-             root.children.append(Node.new(3, alloc));
-             try expect_eq(root.total(), 6);
+         [test] fn tree_recursive_composition() !void {\n\
+             var root: Node = Node.new(1, alloc);\n\
+             root.children.append(Node.new(2, alloc));\n\
+             root.children.append(Node.new(3, alloc));\n\
+             try expect_eq(root.total(), 6);\n\
          }\n",
     );
     assert!(st.success(), "树 + Vec.append + 递归 total 原生应退出 0");

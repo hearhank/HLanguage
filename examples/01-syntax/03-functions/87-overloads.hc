@@ -80,7 +80,7 @@ fn main() !void {
     var i: i32 = parse("42");
     var f: f64 = parse("3.14");
     try expect_eq(i, 42);
-    try expect(f > 3.13 and f < 3.15);
+    try expect(f > 3.13 && f < 3.15);
 }
 
 [Test] fn optional_args() !void {

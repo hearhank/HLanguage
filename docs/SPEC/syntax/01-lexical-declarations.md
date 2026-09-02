@@ -32,20 +32,22 @@ var 数据 = 1;      // Unicode 标识符合法（实现按 Unicode 字母接受
 
 ### 1.2.1 关键字清单（冻结）
 
-- 规则：以下 **45** 个词为关键字，不可作标识符。按组列出（与实现逐字核对；含已废弃但词法保留的 `script`）：
+- 规则：以下 **42** 个词为关键字，不可作标识符。按组列出（与实现逐字核对；含已废弃但词法保留的 `script`）：
 
 | 组 | 关键字 |
 |---|---|
 | 声明 | `var` `const` `fn` `global` |
 | 控制流 | `if` `else` `while` `for` `break` `continue` `return` `switch` `defer` `errdefer` |
-| 类型构造 | `class` `struct` `enum` `union` `tree` `interface` `where` |
+| 类型构造 | `class` `struct` `enum` `union` `interface` `where` |
 | 模块 | `namespace` `import` `pub` `export` |
 | 所有权 | `owned` `move` `mut` |
-| 操作 | `and` `or` `try` `catch` `orelse` |
+| 操作 | `try` `catch` `orelse` |
 | 元编程 | `script` `comptime` `anytype` `type` |
 | 并发 | `async` `await` `spawn` |
 | 外部接口 | `extern` |
 | 字面量 | `void` `null` `true` `false` |
+
+> 修订（D9/D13，ADR-0037 2026-08-31）：`and`/`or` 移除（逻辑运算符 = `&&`/`\|\|`，Rust 语法为正）；`tree` 移除（连预留都不保留）。原 45 → 42。
 
 - 状态：✅ 已实现（词法层；个别关键字的**声明级**行为见下）
 - 证据：`tag1/hc/src/lexer/mod.rs` `lex_ident_or_keyword`（42 项逐一对应）
@@ -62,12 +64,13 @@ var 数据 = 1;      // Unicode 标识符合法（实现按 Unicode 字母接受
 | `owned` | 仅作为**类型前缀**合法（§1.9）；`move` 仅作为**表达式前缀**合法（见 `07-ownership-memory.md`） | ✅ |
 | `test` | **不是关键字**——测试 = `[test(...)]` 特性标注（`12-testing.md`） | ✅ |
 
-### 1.2.2 `and`/`or` 的符号别名 `&&`/`||`
+### 1.2.2 逻辑运算符 `&&`/`\|\|`
 
-- 规则：`&&` 词法上直接产出 `and` 关键字（`lexer/mod.rs` L560-563）；`||` 在**表达式位置**由 `parse_or` 接受为逻辑或（`expr.rs` L11）——两者与关键字形态完全对称。
-- `||` 的另一身份：**错误集联合**仅存在于 `const E = A \|\| B;` 特例（`parse_const` 文本特判，先于表达式解析）与类型位置（归 `08-errors.md` 裁决）。
-- 状态：✅ 已实现（未见于旧文档，属补录）
-- **定位（裁决 D2 + E1，2026-08-30）**：`&&`/`\|\|` = 兼容别名；**规范代码风格用 `and`/`or`**（linter 提示规则归工具链）。
+- 规则：**`&&` = 逻辑与、`\|\|` = 逻辑或**（token `AndAnd`/`PipePipe`，Rust 语法为正——修订 D9，ADR-0037 2026-08-31）。`and`/`or` **不再是关键字**（变普通标识符）。
+- `\|\|` 的另一身份：**错误集联合**仅存在于 `const E = A \|\| B;` 特例（`parse_const` 文本特判，先于表达式解析）与类型位置（归 `08-errors.md` 裁决）。
+- `&&` 不是双引用——H 无 `&&T` 形态（取址的取址不支持；需要时单独立项）。
+- 状态：✅ 已实现
+- 证据：`lexer/mod.rs` `lex_punct`（`&&`→`AndAnd`、`\|\|`→`PipePipe`）；`parser/expr.rs` `parse_and`/`parse_or`
 
 ### 1.2.3 内建函数前缀 `@`
 
@@ -79,15 +82,15 @@ var 数据 = 1;      // Unicode 标识符合法（实现按 Unicode 字母接受
 
 - 规则：
   - `//` 行注释；`///` 文档注释——**词法上与行注释等价**，与声明的关联由文档生成器/LSP 处理（`///` 必须紧贴声明上方才有关联意义，该规则归 `11` 工具链，非词法）。
-  - `/* */` 块注释，**不嵌套**（首个 `*/` 即闭合）。
+  - `/* */` 块注释，**支持嵌套**（`/*` 递增、`*/` 递减，计数配对闭合——修订 D10，ADR-0037 2026-08-31）。
   - 错误：未闭合块注释 → 诊断 `unterminated block comment`。
 - 状态：✅ 已实现
-- 证据：`tag1/hc/src/lexer/mod.rs` `skip_ws_and_comments`（L94-116：无嵌套计数）
+- 证据：`tag1/hc/src/lexer/mod.rs` `skip_ws_and_comments`（嵌套深度计数）；`stage1/lexer.hc` `skip_ws`（H 版同步）
 
 ```hc
 // 行注释
 /// 文档注释（关联下一声明）
-/* 块注释 /* 这样写 /* 不会被当作嵌套 */ —— 外层已在第一个 */ 处闭合 */
+/* 块注释 /* 现在可以嵌套 */ 里层闭合后外层继续 */
 ```
 
 ## 1.4 数字字面量
@@ -96,7 +99,7 @@ var 数据 = 1;      // Unicode 标识符合法（实现按 Unicode 字母接受
 
 - 规则：
   - 十进制：`0-9` 组合；`_` 作分隔符（任意位置）。
-  - 进制前缀：`0x`/`0X`（十六进制）、`0b`/`0B`（二进制）、`0o`/`0O`（八进制）；前缀后跟对应进制数字与 `_`；非法数字位在前缀模式下不被消费（如 `0x` 后无十六进制位 → 词法为 Int `0` + Ident `x`，后续报语义错）。
+  - **进制前缀**：`0x`/`0X`（十六进制）、`0b`/`0B`（二进制）、`0o`/`0O`（八进制）；前缀后跟对应进制数字与 `_`；**前缀后无有效数字位 → 词法诊断直接报错**（`invalid hex literal` / `invalid binary literal` / `invalid octal literal`——修订 D12，ADR-0037 2026-08-31；参考 Rust/Zig 词法报错，不再产出 `Int(0)` + Ident 的延迟错误）。
   - **宽度后缀（可选）**：`i8`…`i128`、`u8`…`u128`、`isize`、`usize`——如 `42i32`、`255u8`。带后缀 = 定宽字面量；不带 = comptime_int（使用处定型，超范围编译期报错，见 `03-types.md`）。
 - 状态：✅ 已实现（宽度后缀为**旧文档漏记补录**）
 - 证据：`tag1/hc/src/lexer/mod.rs` `lex_number`（L187-238）+ `maybe_suffix`（L297-325）
@@ -129,15 +132,17 @@ var z = 2.0f64;
 
 ## 1.5 字符字面量
 
-- 规则：`'x'` 单引号包裹**单个 ASCII 字节**（token 携带 `u8`）；转义支持 `\n` `\r` `\t` `\\` `\'` `\xNN`；**不支持 `\u{...}`**；非 ASCII 字符 → 诊断 `char literal must be a single ASCII byte`；未闭合 → `char literal must be closed with '`。
+- 规则：`'x'` 单引号包裹**单个 Unicode 标量字符**——支持直接书写非 ASCII 字符（`'中'`）与 `\u{...}` 转义（`'\u{4E2D}'`）；转义集合 `\n` `\r` `\t` `\\` `\'` `\xNN` `\u{...}`；token 携带 **u32 码点**。未闭合 → `char literal must be closed with '`；空字面量/超一个标量 → 词法诊断。
+- **定型**：字符字面量 = **comptime_int**（码点值；Zig 式），ASCII 场景行为不变（赋给 `u8` 零迁移）；非 ASCII 码点赋给 `u8` 超范围编译期报错，用 `i32` 或字符串表达。显式 `char` 类型 = 后续提案（修订 D11，ADR-0037 2026-08-31；取代 D1「单 ASCII 字节」限定）。
 - 状态：✅ 已实现
-- 证据：`tag1/hc/src/lexer/mod.rs` `lex_char`（L409-445）
-- **类型裁决（D1，2026-08-30）**：字符字面量 = 单字节（u8）字面量；旧 Q5「comptime_int 惰性宽度」表述废弃；非 ASCII 内容用字符串（`\u{...}`）或显式码点整数字面量。语义层定型规则由 `03-types.md` 定义。
+- 证据：`tag1/hc/src/lexer/mod.rs` `lex_char`（u32 码点 + `\u{...}`）；`semantic/infer.rs` `Expr::CharLit` → comptime_int；`stage1/lexer.hc` `lex_char`（H 版同步）
 
 ```hc
 var nl = '\n';
-var hex = '\x41';     // 'A'
-// 错误示例：var bad = '中';   → 诊断：char literal must be a single ASCII byte
+var a  = 'A';        // comptime_int = 65；赋给 u8/i32 均可
+var zh = '中';       // comptime_int = 0x4E2D（20013）
+var esc = '\u{1F600}'; // 码点 128512
+// 赋给 u8：'中' → 编译期报错（超 u8 范围）
 ```
 
 ## 1.6 字符串字面量
@@ -211,16 +216,17 @@ var doc = """
 
 - 规则：`var [mut] 名称 [: 类型] [= 初始化表达式];`
   - `mut`：可写修饰；**缺省 = 只读**（ADR-0005 R1 定案，Rust 标杆）。
-  - **类型注解**：当前必须显式（`var x: i32 = 5`）——变量类型推断 = ⏸ 自举后高级功能（裁决 H1，2026-08-30，见 `03` §3.9）；实现当前允许省略，规范收紧后补诊断。
-  - 初始化表达式在**语法层**可省略（先声明后赋值形态是否合法由语义层裁决，`03-types.md`）。
-- 状态：⚠️ 规范已定（注解必填诊断待补）
-- 证据：`tag1/hc/src/parser/stmt.rs` `parse_var_decl`（L131-187）；裁决 H1
+  - **类型推断 ✅（修订 D8，ADR-0037 2026-08-31；取代 H1「注解必填」排期）**：类型注解可省略，从初始化表达式推断（`declared.or(init_ty)`）；**仅无法推断时报诊断**（无初始化器且无注解 → `cannot infer type; add an explicit type annotation`）。函数参数/返回类型仍必须显式（与 Rust 一致）；`global` 有初始化器可推断，无初始化器（零值）必须显式标注。
+  - 初始化表达式在**语法层**可省略（先声明后赋值 = 需显式标注类型）。
+- 状态：✅ 已实现
+- 证据：`tag1/hc/src/parser/stmt.rs` `parse_var_decl`（ty 可选）；`semantic/check.rs` check_stmt VarDecl（`var_ty = declared.or(init_ty)` + 无法推断诊断）；裁决 D8
 
 ```hc
 var x: i32 = 5;        // 全写
-var y = x;             // 类型推断
-var mut z: i32 = 0;    // 可写
-var w;                 // 语法可解析；合法性由语义层裁决（03-types.md）
+var y = x;             // ✅ 推断（init 为 i32）
+var mut z = 0;         // ✅ 推断 + 可写
+var w;                 // ✋ 诊断：cannot infer type; add an explicit type annotation
+var items = Vec<u8>.init(alloc);   // ✅ 推断为 Vec<u8>
 ```
 
 ### 1.9.2 所有权类型形态 `owned T`
@@ -244,15 +250,14 @@ var mut q: owned *mut = alloc.init(Person);          // ✅ *mut 推断（owned 
 ### 1.9.3 元组解构声明
 
 - 规则：`var [mut] (名称, 名称, ...) = 表达式;`；元素位可用 `_` 忽略；右侧为元组/多值返回。
-- 状态：✅ 已实现（含实现缺陷，见待裁决 D6）
-- 证据：`tag1/hc/src/parser/stmt.rs` L138-165
+- 状态：✅ 前期目标达成（D14，ADR-0037 2026-08-31）：**元组解构 + 函数多返回值解构**可用；全场景（赋值左侧、参数位、match 等）保留 ⏳。D6 的「解构不支持 `mut`」不变。
+- 证据：`tag1/hc/src/parser/stmt.rs` `parse_var_decl` 元组分支（`_` 忽略位）；D14
 
 ```hc
-var (a, b) = pair();      // a、b 分别绑定
+var (a, b) = pair();      // a、b 分别绑定（含函数多返回值）
 var (x, _) = pair();      // 忽略第二元素
+var mut (m, n) = pair();  // ✋ 诊断：解构声明不支持 mut（D6）
 ```
-
-- **裁决（D6，2026-08-30）**：元组解构 = 元组命名，**元组只读，不支持 `mut` 标注**；`var mut (a, b) = t;` → 报诊断「解构声明不支持 `mut`」。当前实现静默忽略 `mut`（`parse_var_decl` 解析后未使用），改为报错 → 记入 `00-index.md` 实现待对齐清单 #1。
 
 ## 1.10 常量声明 `const`
 
@@ -301,14 +306,16 @@ const AnyErr = ParseErr || IoErr;                     // 错误集联合
 | 块注释明确不嵌套；`///` 明确与行注释词法等价 | 实现 `skip_ws_and_comments` |
 | 元组解构、`_` 忽略绑定归入变量声明小节（旧散落在 06-总纲速查） | 禁止双写原则 |
 | 裁决落定：D1 字符 = 单字节 / D2 `&&` 兼容别名 / D3 删除 `owned` 全推断形态 / D4 `global` 零值初始化 / D6 解构只读无 `mut` / D7 `_` 通用化列为 ⏳ | 项目所有者裁决（2026-08-30，见 §1.14） |
+| **ADR-0037（2026-08-31）八项修订**：D8 局部推断为正（取代 H1 排期） / D9 逻辑运算符 Rust 化（`&&`/`\|\|` 为本体，`and`/`or` 移除，取代 D2） / D10 块注释嵌套 / D11 字符字面量 Unicode 码点化（修订 D1） / D12 数字空前缀词法报错 / D13 `tree` 关键字移除（取代 G2） / D14 解构前期范围定案 / D15 f32 真实宽度 + `f16` 移除（修订 F1，实现专项） | ADR-0037 + 项目所有者裁决（2026-08-31，见 §1.14） |
 
 ## 1.14 裁决记录（2026-08-30，项目所有者）
 
 | # | 条目 | 裁决 | 影响 |
 |---|---|---|---|
-| D1 | 字符字面量语义类型 | **按实现**——单 ASCII 字节（u8）；旧 Q5「comptime_int 惰性宽度」废弃 | §1.5、`03-types.md` |
-| D2 | `&&` 别名定位 | **兼容别名**；规范风格用 `and`；`\|\|` 身份由 E1 修正（`02` §2.20） | §1.2.2 |
+| D1 | 字符字面量语义类型 | ~~按实现——单 ASCII 字节（u8）~~ **修订 D11（ADR-0037）**：Unicode 标量码点（token u32），定型维持 comptime_int | §1.5、`03-types.md` |
+| D2 | `&&` 别名定位 | ~~兼容别名；规范风格用 `and`~~ **修订 D9（ADR-0037）**：`&&`/`\|\|` 为本体，`and`/`or` 移除 | §1.2.2 |
 | D3 | `var mut x: owned = t;` 形态 | **删除** | §1.9.2 |
 | D4 | `global` 无初始化器 | **允许**——零值初始化 | §1.11、`03-types.md`、backlog #2 |
 | D6 | 解构声明的 `mut` | **不支持 `mut`**——元组命名、元组只读；出现即报诊断 | §1.9.3、backlog #1 |
-| D7 | `_` 通用忽略绑定 | **扩展为 ⏳ 目标** | §1.1.2 |
+| D7 | `_` 通用忽略绑定 | **扩展为 ⏳ 目标**（前期：解构内 `_` ✅） | §1.1.2 |
+| D8–D15 | 词法与声明八项修订 | 见 ADR-0037（2026-08-31）：推断 / `&&`/`\|\|` / 嵌套注释 / 字符码点 / 数字报错 / `tree` 移除 / 解构范围 / f32 宽度 | 全文 |

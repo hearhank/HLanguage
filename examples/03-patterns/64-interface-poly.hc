@@ -58,8 +58,8 @@ fn main() !void {
 [Test] fn static_path_monomorphization() !void {
     var rect = Rect{w = 3.0, h = 4.0};
     var circ = Circle{r = 2.0};
-    try expect(describe(&rect) > 11.99 and describe(&rect) < 12.01);
-    try expect(describe(&circ) > 12.56 and describe(&circ) < 12.57);
+    try expect(describe(&rect) > 11.99 && describe(&rect) < 12.01);
+    try expect(describe(&circ) > 12.56 && describe(&circ) < 12.57);
 }
 
 [Test] fn heterogeneous_boxing() !void {
@@ -70,5 +70,5 @@ fn main() !void {
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);
-    try expect(total > 24.55 and total < 24.57);   // 12 + 4π ≈ 24.566
+    try expect(total > 24.55 && total < 24.57);   // 12 + 4π ≈ 24.566
 }

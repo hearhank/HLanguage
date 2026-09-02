@@ -22,7 +22,7 @@ class Counter {
     }
 }
 
-tree Node {                              // 递归组合
+class Node {                              // 递归组合
     value: i32,
     children: Vec<Node>,                 // 组合：子节点
 

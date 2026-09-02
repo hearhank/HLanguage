@@ -45,7 +45,7 @@ fn str_filter_map() {
     var upper = s.map(|b| b - 32).to_array();
     try expect_eq(upper.len, 4);
     try expect_eq(upper[0], 65);
-    var digits = s.filter(|b| b >= 48 and b <= 57).to_array();
+    var digits = s.filter(|b| b >= 48 && b <= 57).to_array();
     try expect_eq(digits.len, 2);
     try expect_eq(digits[0], 49);
 }

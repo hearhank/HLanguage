@@ -566,7 +566,7 @@
 | `redundant_ne_true` | `x != true` 可简化为 `!x` | ✅ |
 | `simplifiable_if_else` | `if x { true } else { false }` 可简化为 `x` | ✅ |
 | `simplifiable_construct` | 可简化类型构造 | ✅ |
-| `upper_case_abbr` | 全大写缩写命名警告 | ✅ |
+| `upper_case_abbr` | 全大写缩写命名警告（仅 snake_case 分段完全匹配；子串不构成缩写，如 `is_ident_start`/`utf8_width`/`dbg_escape` 不报；`id`、`utf8/utf16/utf32` 不在缩写表内） | ✅ |
 | `// lint-off` | 行内 lint 禁用 | ✅ |
 
 ### 12.4 文档生成器

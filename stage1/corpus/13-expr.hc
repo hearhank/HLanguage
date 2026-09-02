@@ -13,7 +13,7 @@ fn compare(x: i32, y: i32) bool {
     return eq;
 }
 fn logic(a: bool, b: bool) bool {
-    var r: bool = a and b;
-    var s: bool = a or b;
+    var r: bool = a && b;
+    var s: bool = a || b;
     return r;
 }

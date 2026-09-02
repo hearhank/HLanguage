@@ -31,5 +31,5 @@ fn main() !void {
 [Test] fn comptime_branch() !void {
     try expect_eq(max_value(3, 7), 7);
     var m = max_value(2.5, 1.5);
-    try expect(m > 2.49 and m < 2.51);
+    try expect(m > 2.49 && m < 2.51);
 }

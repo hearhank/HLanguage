@@ -27,7 +27,7 @@ fn main() !void {
     var entries = try io.fs.list_dir(&dir, alloc);
     var mut total = 0;
     for (entries) |entry| {
-        if (!entry.is_dir and entry.name.ends_with(".hc")) {
+        if (!entry.is_dir && entry.name.ends_with(".hc")) {
             total += try search_file(&io, entry.name, needle);
         }
     }

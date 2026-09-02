@@ -12,7 +12,7 @@
   - 成员两类：**方法**（`fn` 完整签名：泛型参数表/参数/返回/where/体；**默认公开**）与**字段**（`[pub] name: Type,`——**默认私有**，`pub` 显式导出，Q3）。
   - 字段**无默认值**（默认值为 struct 专属，§4.2）；冒号后接口列表 = 接口实现声明（契约见 `06-interfaces.md`）。
   - **字段不支持名称前 `mut` 标注**（裁决 G3，2026-08-30：`mut` 是**变量声明**的可写标注；字段可写性经**类型形态 `mut T`** 表达——K1/ADR-0036，所有权语义 → `07` §7.1.1）。class/struct/union 三处实现当前静默忽略字段 `mut` → 改报诊断，见 backlog #8。
-  - **字段修饰**：`[pub] [owned] 名称: 类型`——`owned` 名称前缀（K1/ADR-0036，所有权语义 → `07` §7.1.1）；实现待补 → backlog #16。
+  - **字段修饰**：`[pub] [owned] 名称: 类型`——`owned` 名称前缀（K1/ADR-0036，所有权语义 → `07` §7.1.1）；**✅ 已落地（2026-08-31）**，值类型 + owned = 编译错误（`semantic/check.rs` check_decl）。
   - ❌ `[continuous]` 特性已删除（ADR-0022 §10 Q21/Q22）——实现未注册该处理器（注册表仅 pad/module/align/test/extension），使用即报未知特性错误。
 - 状态：✅ 已实现（[continuous] ❌ 按定案移除）
 - 证据：`type_decl.rs` `parse_class`（L9-88）；`decl.rs` `register_system_trait_handlers`（L51-57，无 continuous）

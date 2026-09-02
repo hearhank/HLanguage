@@ -29,7 +29,7 @@ fn main() !void {
 [Test] fn float_arithmetic() !void {
     var pi: f64 = 3.14159;
     var area = pi * 0.5 * 0.5;
-    try expect(area > 0.78 and area < 0.79);
+    try expect(area > 0.78 && area < 0.79);
 }
 
 [Test] fn special_values() !void {

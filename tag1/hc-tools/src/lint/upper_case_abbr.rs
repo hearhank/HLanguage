@@ -11,28 +11,31 @@ use super::rules::find_rule;
 
 /// 常见应全大写的缩写
 const ABBREVIATIONS: &[&str] = &[
-    "json", "html", "http", "https", "url", "uri", "id", "db", "csv", "xml", "yaml", "toml", "ini",
-    "ssh", "ftp", "smtp", "imap", "pop", "tcp", "udp", "ip", "dns", "dhcp", "ssl", "tls", "api",
-    "cli", "gui", "ui", "ux", "os", "io", "math", "regex", "uuid", "sha", "md5", "aes", "rsa",
-    "ecdsa", "jwt", "oauth", "ldap", "sql", "orm", "rpc", "grpc", "rest", "soap", "html", "css",
-    "png", "jpg", "gif", "svg", "pdf", "txt", "rtf", "async", "sync", "mutex", "sem", "fifo",
-    "lifo", "mime", "base64", "ascii", "utf8", "utf16", "utf32", "ansi", "ebcdic",
+    // 不含 id（恒等函数/后缀通用词）、utf8/utf16/utf32（带数字编码名通行小写）
+    "json", "html", "http", "https", "url", "uri", "db", "csv", "xml", "yaml", "toml", "ini", "ssh",
+    "ftp", "smtp", "imap", "pop", "tcp", "udp", "ip", "dns", "dhcp", "ssl", "tls", "api", "cli",
+    "gui", "ui", "ux", "os", "io", "math", "regex", "uuid", "sha", "md5", "aes", "rsa", "ecdsa",
+    "jwt", "oauth", "ldap", "sql", "orm", "rpc", "grpc", "rest", "soap", "html", "css", "png",
+    "jpg", "gif", "svg", "pdf", "txt", "rtf", "async", "sync", "mutex", "sem", "fifo", "lifo",
+    "mime", "base64", "ascii", "ansi", "ebcdic",
 ];
 
-/// 检查标识符中是否包含应全大写的缩写
+/// 检查标识符中是否包含应全大写的缩写。
+/// 只在 snake_case 分段上做完全匹配（不区分大小写），避免子串误报：
+/// `is_ident_start` 中的 "id"、`utf8_width` 中的 "id"、`dbg_escape` 中的 "db" 均不是缩写。
 fn check_abbr(name: &str) -> Vec<(usize, &'static str)> {
     let mut results = Vec::new();
-    let lower = name.to_lowercase();
-    for &abbr in ABBREVIATIONS {
-        if let Some(pos) = lower.find(abbr) {
-            // 检查缩写部分是否确实为小写（非全大写）
-            let actual = &name[pos..pos + abbr.len()];
+    let mut pos = 0;
+    for segment in name.split('_') {
+        let seg_lower = segment.to_lowercase();
+        if let Some(&abbr) = ABBREVIATIONS.iter().find(|&&a| a == seg_lower) {
+            // 检查该段是否确实含小写字符（已是全大写则跳过）
+            let actual = &name[pos..pos + segment.len()];
             if actual.chars().any(|c| c.is_lowercase()) {
-                // 确认不是全大写
-                let _upper: String = abbr.to_uppercase();
                 results.push((pos, abbr));
             }
         }
+        pos += segment.len() + 1;
     }
     results
 }

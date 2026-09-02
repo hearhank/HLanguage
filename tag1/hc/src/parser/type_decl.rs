@@ -51,7 +51,14 @@ impl Parser {
                     span: mspan,
                 });
             } else {
-                // 字段：name: Type,（可带 mut 前缀——属性无所有权标注，Q3/H5）
+                // 字段：name: Type,（可带 mut 前缀——属性无所有权标注，Q3/H5）；
+                // K1/ADR-0036：owned 名称前缀（`pub owned x: *mut T`）
+                let owned = if self.at(&TokenKind::KwOwned) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 if self.at(&TokenKind::KwMut) {
                     self.advance();
                 }
@@ -63,6 +70,7 @@ impl Parser {
                     name: fname,
                     ty: fty,
                     pub_: member_pub,
+                    owned,
                     traits: vec![],
                     default: None,
                     span: fstart,
@@ -111,6 +119,13 @@ impl Parser {
             } else {
                 false
             };
+            // K1/ADR-0036：owned 名称前缀（与 class 一致）
+            let owned = if self.at(&TokenKind::KwOwned) {
+                self.advance();
+                true
+            } else {
+                false
+            };
             // 字段：支持 `mut` 前缀（与 class 一致）
             if self.at(&TokenKind::KwMut) {
                 self.advance();
@@ -130,6 +145,7 @@ impl Parser {
                 name: fname,
                 ty: fty,
                 pub_: member_pub,
+                owned,
                 span: fstart,
                 traits: field_traits,
                 default,
@@ -216,6 +232,13 @@ impl Parser {
             } else {
                 false
             };
+            // K1/ADR-0036：owned 名称前缀（与 class 一致）
+            let owned = if self.at(&TokenKind::KwOwned) {
+                self.advance();
+                true
+            } else {
+                false
+            };
             if self.at(&TokenKind::KwMut) {
                 self.advance();
             }
@@ -227,6 +250,7 @@ impl Parser {
                 name: fname,
                 ty: fty,
                 pub_: member_pub,
+                owned,
                 traits: vec![],
                 default: None,
                 span: fstart,

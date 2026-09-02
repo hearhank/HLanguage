@@ -8,7 +8,7 @@ use crate::token::TokenKind;
 impl Parser {
     pub(crate) fn parse_or(&mut self) -> Result<Expr, Diagnostic> {
         let mut l = self.parse_and()?;
-        while self.at(&TokenKind::KwOr) || self.at(&TokenKind::PipePipe) {
+        while self.at(&TokenKind::PipePipe) {
             let op = self.advance();
             let r = self.parse_and()?;
             let span = l.span().merge(&r.span());
@@ -20,7 +20,7 @@ impl Parser {
 
     pub(crate) fn parse_and(&mut self) -> Result<Expr, Diagnostic> {
         let mut l = self.parse_range()?;
-        while self.at(&TokenKind::KwAnd) {
+        while self.at(&TokenKind::AndAnd) {
             self.advance();
             let r = self.parse_range()?;
             let span = l.span().merge(&r.span());

@@ -12,7 +12,7 @@ fn fib(n: i32) i32 {
     return fib(n - 1) + fib(n - 2);
 }
 
-tree Node {
+class Node {
     value: i32,
     children: Vec<Node>,
 

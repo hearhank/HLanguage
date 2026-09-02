@@ -272,7 +272,8 @@ fn collect_refs_in_type(ty: &Type, refs: &mut Vec<String>) {
         Type::Ptr(inner, _)
         | Type::Slice(inner, _)
         | Type::Optional(inner)
-        | Type::Owned(inner) => {
+        | Type::Owned(inner)
+        | Type::MutValue(inner) => {
             collect_refs_in_type(inner, refs);
         }
         Type::ErrorUnion(_, inner) => {

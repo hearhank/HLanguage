@@ -128,6 +128,7 @@ pub fn render_type(t: &Type) -> String {
         Type::ComptimeInt(v) => format!("{v}"),
         Type::Infer => "_".to_string(),
         Type::Owned(inner) => format!("o {}", render_type(inner)),
+        Type::MutValue(inner) => format!("mut {}", render_type(inner)),
     }
 }
 

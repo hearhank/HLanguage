@@ -319,6 +319,7 @@ pub(crate) fn fmt_type_str(t: &Type) -> String {
         Type::Array(n, inner) => format!("[{n}]{}", fmt_type_str(inner)),
         Type::Infer => "_".to_string(),
         Type::Owned(inner) => fmt_type_str(inner),
+        Type::MutValue(inner) => format!("mut {}", fmt_type_str(inner)),
     }
 }
 
@@ -671,7 +672,8 @@ pub(crate) fn type_has_generic(t: &Type) -> bool {
         Type::Ptr(inner, _)
         | Type::Slice(inner, _)
         | Type::Optional(inner)
-        | Type::Owned(inner) => type_has_generic(inner),
+        | Type::Owned(inner)
+        | Type::MutValue(inner) => type_has_generic(inner),
         Type::Tuple(items) => items.iter().any(type_has_generic),
         _ => false,
     }

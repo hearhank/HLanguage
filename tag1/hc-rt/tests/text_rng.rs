@@ -204,7 +204,7 @@ fn rng_float_range() {
     var mut i = 0;
     while (i < 100) {
         var f = io.rng.float();
-        try expect(f >= 0.0 and f < 1.0);
+        try expect(f >= 0.0 && f < 1.0);
         i += 1;
     }
 }
@@ -224,12 +224,12 @@ fn timezone_components_format() {
     var comp = io.time.components(ts);
     try expect(comp.year >= 2026);
     try expect(comp.year < 2100);
-    try expect(comp.month >= 1 and comp.month <= 12);
-    try expect(comp.day >= 1 and comp.day <= 31);
-    try expect(comp.hour >= 0 and comp.hour <= 23);
-    try expect(comp.min >= 0 and comp.min <= 59);
-    try expect(comp.sec >= 0 and comp.sec <= 59);
-    try expect(comp.ms >= 0 and comp.ms <= 999);
+    try expect(comp.month >= 1 && comp.month <= 12);
+    try expect(comp.day >= 1 && comp.day <= 31);
+    try expect(comp.hour >= 0 && comp.hour <= 23);
+    try expect(comp.min >= 0 && comp.min <= 59);
+    try expect(comp.sec >= 0 && comp.sec <= 59);
+    try expect(comp.ms >= 0 && comp.ms <= 999);
 
     // 测试格式化
     var fmt = io.time.format(ts);

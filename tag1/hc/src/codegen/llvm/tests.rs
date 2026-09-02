@@ -275,7 +275,7 @@ mod tests {
             var s = "abc";
             var a = [1, 2, 3];
             var v = boxed(7).?;
-            if (p.x == s.len and a[0] == v) { return 1; }
+            if (p.x == s.len && a[0] == v) { return 1; }
             return 0; }"#,
         );
         for line in ll.lines() {

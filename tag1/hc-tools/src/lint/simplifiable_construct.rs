@@ -309,7 +309,8 @@ fn check_type_simplifiable_in_type(
         Type::Ptr(inner, _)
         | Type::Slice(inner, _)
         | Type::Optional(inner)
-        | Type::Owned(inner) => {
+        | Type::Owned(inner)
+        | Type::MutValue(inner) => {
             check_type_simplifiable_in_type(inner, _source, disabled, _fix, rule, diags);
         }
         Type::ErrorUnion(_, inner) => {

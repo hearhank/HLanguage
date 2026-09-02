@@ -103,8 +103,8 @@ fn arith_and_compare() {
     expect_eq(20 / 3, 6);
     expect_eq(20 % 3, 2);
     expect_neq(1 + 1, 3);
-    expect(10 > 5 and 5 <= 5);
-    expect(!false or 1 < 0);
+    expect(10 > 5 && 5 <= 5);
+    expect(!false || 1 < 0);
 }
 "#,
     );
@@ -120,12 +120,12 @@ fn expect_bad() bool {
     return true;
 }
 [test] fn and_short_circuits() void {
-    if (false and expect_bad()) {
+    if (false && expect_bad()) {
         expect(false);
     }
 }
 [test] fn or_short_circuits() void {
-    if (true or expect_bad()) {
+    if (true || expect_bad()) {
         expect(true);
     }
 }
@@ -138,12 +138,12 @@ fn expect_bad() bool {
     return true;
 }
 [test] fn and_short_circuits() void {
-    if (false and expect_bad()) {
+    if (false && expect_bad()) {
         expect(false);
     }
 }
 [test] fn and_eager_fails() void {
-    if (true and expect_bad()) {
+    if (true && expect_bad()) {
         expect(false);
     }
 }
@@ -2084,7 +2084,7 @@ fn max_value(a: anytype, b: anytype) anytype {
 }
 [test] fn anytype_runtime_fn() void {
     expect_eq(max_value(3, 7), 7);
-    expect(max_value(2.5, 1.5) > 2.49 and max_value(2.5, 1.5) < 2.51);
+    expect(max_value(2.5, 1.5) > 2.49 && max_value(2.5, 1.5) < 2.51);
 }
 "#,
     );

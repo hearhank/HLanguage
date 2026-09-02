@@ -20,10 +20,11 @@
 - 规则：
   - 参数形态：`[var [mut]] [owned] 名称: 类型 [= 默认值]`——**`owned` 修饰参数名（名称前，K1/ADR-0036）**；所有权语义按形态判定（`T`/`mut T` 必定拥有、`*T`/`*mut T` 借用、值类型 + owned = 编译错误）→ **`07` §7.1.1**。
   - **可选参数**：尾部、默认值 = **编译期常量表达式**（ADR-0009）；调用点缺失尾参自动补齐。
-  - `var [mut]` 前缀：输出参数形态（如 `var mut out: Vec<u8>`）——语法 ✅；可写性语义（ADR-0027 容器读写权限 = 变量绑定）归 `07-ownership-memory.md` 核对。
+  - `var [mut]` 前缀：输出参数形态（如 `var mut out: Vec<u8>`）——语法 ✅；**推荐写法为指针形态**（可写 `out: *mut T`，只读 `v: *T`，K1/ADR-0036）。
+  - **`owned` 名称前缀 ✅（backlog #16 已落地，2026-08-31）**：`owned args: *mut Vec<String>`——参数位置拥有标注（var 声明保持类型前缀形态，两位置两语法）；值类型 + owned = 编译错误。
   - 参数类型**必须显式**（推断不适用于参数，`03` §3.9）。
-- 状态：⚠️ `owned` 名称前缀待实现（backlog #16）；其余 ✅
-- 证据：`parse_params`（L682-727，var mut 前缀 L688-700、默认值 L704-709）；`ir/models/ir_func.rs`（ADR-0009）；裁决 K1 + ADR-0036
+- 状态：⚠️ `owned` 名称前缀的 defer 义务规则待裁决；其余 ✅（owned 前缀/mut T 形态已于 2026-08-31 落地）
+- 证据：`parse_params`（L682-727，var mut 前缀 L688-700、默认值 L704-709、owned 前缀）；`ir/models/ir_func.rs`（ADR-0009）；裁决 K1 + ADR-0036；`hc/tests/frontend.rs` k1_* 组
 
 ```hc
 fn add(a: i32, b: i32 = 0) i32 { return a + b; }

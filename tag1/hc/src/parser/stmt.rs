@@ -135,8 +135,11 @@ impl Parser {
         } else {
             false
         };
-        // 元组解构：var (a, b) = f();
+        // 元组解构：var (a, b) = f();（D6：不支持 mut——出现即报诊断，backlog #1）
         if self.at(&TokenKind::LParen) {
+            if mut_ {
+                return Err(self.error_at("解构声明不支持 `mut`（D6：元组命名、元组只读）"));
+            }
             self.advance();
             let mut names = Vec::new();
             loop {

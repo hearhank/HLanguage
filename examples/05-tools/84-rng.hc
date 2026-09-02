@@ -43,6 +43,6 @@ fn main() !void {
     var rng: Rng = Rng.new(1);
     for (0..100) |_| {
         var v = rng.between(1, 7);
-        try expect(v >= 1 and v <= 6);
+        try expect(v >= 1 && v <= 6);
     }
 }

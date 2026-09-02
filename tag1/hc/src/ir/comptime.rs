@@ -111,6 +111,7 @@ pub fn type_key(t: &ast::Type) -> String {
         ast::Type::ComptimeInt(v) => format!("{v}"),
         ast::Type::Infer => "anytype".to_string(),
         ast::Type::Owned(inner) => type_key(inner),
+        ast::Type::MutValue(inner) => format!("mut {}", type_key(inner)),
     }
 }
 
@@ -138,6 +139,7 @@ pub fn subst(ty: &ast::Type, bindings: &HashMap<String, ast::Type>) -> ast::Type
         ast::Type::ComptimeInt(v) => ast::Type::ComptimeInt(*v),
         ast::Type::Infer => ast::Type::Infer,
         ast::Type::Owned(inner) => ast::Type::Owned(Box::new(subst(inner, bindings))),
+        ast::Type::MutValue(inner) => ast::Type::MutValue(Box::new(subst(inner, bindings))),
     }
 }
 
@@ -190,6 +192,9 @@ pub fn map_type_apps(
         ast::Type::ComptimeInt(v) => Ok(ast::Type::ComptimeInt(*v)),
         ast::Type::Infer => Ok(ast::Type::Infer),
         ast::Type::Owned(inner) => Ok(ast::Type::Owned(Box::new(map_type_apps(inner, resolve)?))),
+        ast::Type::MutValue(inner) => Ok(ast::Type::MutValue(Box::new(map_type_apps(
+            inner, resolve,
+        )?))),
     }
 }
 
@@ -290,6 +295,7 @@ pub fn instantiate(
                     name: fname.clone(),
                     ty: subst(fty, &bindings),
                     pub_: false,
+                    owned: false,
                     traits: vec![],
                     default: None,
                     span: span.clone(),

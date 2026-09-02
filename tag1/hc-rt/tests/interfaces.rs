@@ -107,7 +107,7 @@ class Rect: IShape {
 }
 [test] fn t() !void {
     var r = Rect{ w = 3.0, h = 4.0 };
-    try expect(r.area() > 11.99 and r.area() < 12.01);
+    try expect(r.area() > 11.99 && r.area() < 12.01);
 }
 "#,
     );
@@ -158,7 +158,7 @@ fn describe(shape: *T) f32 where T: IShape {
 }
 [test] fn t() !void {
     var r = Rect{ w = 3.0, h = 4.0 };
-    try expect(describe(&r) > 11.99 and describe(&r) < 12.01);
+    try expect(describe(&r) > 11.99 && describe(&r) < 12.01);
 }
 "#,
     );

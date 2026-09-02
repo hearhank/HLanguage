@@ -94,6 +94,8 @@ impl<'a> Lexer<'a> {
                 Some('/') if self.peek2() == Some('*') => {
                     self.bump();
                     self.bump();
+                    // D10（ADR-0037）：块注释支持嵌套（/* 递增、*/ 递减，计数配对）
+                    let mut depth = 1usize;
                     loop {
                         match self.peek() {
                             None => {
@@ -103,10 +105,18 @@ impl<'a> Lexer<'a> {
                                 });
                                 return;
                             }
+                            Some('/') if self.peek2() == Some('*') => {
+                                self.bump();
+                                self.bump();
+                                depth += 1;
+                            }
                             Some('*') if self.peek2() == Some('/') => {
                                 self.bump();
                                 self.bump();
-                                break;
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
                             }
                             _ => {
                                 self.bump();
@@ -140,7 +150,7 @@ impl<'a> Lexer<'a> {
             "struct" => TokenKind::KwStruct,
             "enum" => TokenKind::KwEnum,
             "union" => TokenKind::KwUnion, // K1（ADR-0014）：无标签 union——字段内存重叠、无判别标签
-            "tree" => TokenKind::KwTree,
+            // D13（ADR-0037）：`tree` 关键字已移除——现为普通标识符
             "interface" => TokenKind::KwInterface,
             "where" => TokenKind::KwWhere,
             "namespace" => TokenKind::KwNamespace,
@@ -150,8 +160,7 @@ impl<'a> Lexer<'a> {
             "owned" => TokenKind::KwOwned,
             "move" => TokenKind::KwMove,
             "mut" => TokenKind::KwMut,
-            "and" => TokenKind::KwAnd,
-            "or" => TokenKind::KwOr,
+            // D9（ADR-0037）：`and`/`or` 关键字已移除——逻辑运算符 = && / ||
             "try" => TokenKind::KwTry,
             "catch" => TokenKind::KwCatch,
             "orelse" => TokenKind::KwOrelse,
@@ -200,6 +209,10 @@ impl<'a> Lexer<'a> {
                             break;
                         }
                     }
+                    // D12（ADR-0037）：前缀后无有效数字位 → 词法直接报错（参考 Rust/Zig）
+                    if s == "0x" {
+                        return TokenKind::Error("invalid hex literal: expected digits after 0x");
+                    }
                     self.maybe_suffix(&mut s);
                     return TokenKind::Int(s);
                 }
@@ -215,6 +228,11 @@ impl<'a> Lexer<'a> {
                             break;
                         }
                     }
+                    if s == "0b" {
+                        return TokenKind::Error(
+                            "invalid binary literal: expected digits after 0b",
+                        );
+                    }
                     self.maybe_suffix(&mut s);
                     return TokenKind::Int(s);
                 }
@@ -229,6 +247,9 @@ impl<'a> Lexer<'a> {
                         } else {
                             break;
                         }
+                    }
+                    if s == "0o" {
+                        return TokenKind::Error("invalid octal literal: expected digits after 0o");
                     }
                     self.maybe_suffix(&mut s);
                     return TokenKind::Int(s);
@@ -408,40 +429,56 @@ impl<'a> Lexer<'a> {
 
     fn lex_char(&mut self) -> TokenKind {
         self.bump(); // 开引号
-        let byte = match self.peek() {
+                     // D11（ADR-0037）：字符字面量 = 单个 Unicode 标量（token 携带 u32 码点；
+                     // 语义定型维持 comptime_int）——支持 \u{...} 转义与直接书写非 ASCII 字符
+        let code: u32 = match self.peek() {
             None => return TokenKind::Error("unterminated char literal"),
             Some('\\') => {
                 self.bump();
                 let c = self.bump();
                 match c {
-                    Some('n') => b'\n',
-                    Some('r') => b'\r',
-                    Some('t') => b'\t',
-                    Some('\\') => b'\\',
-                    Some('\'') => b'\'',
+                    Some('n') => '\n' as u32,
+                    Some('r') => '\r' as u32,
+                    Some('t') => '\t' as u32,
+                    Some('\\') => '\\' as u32,
+                    Some('\'') => 0x27,
                     Some('x') => {
                         let hi = self.bump().and_then(|c| c.to_digit(16));
                         let lo = self.bump().and_then(|c| c.to_digit(16));
                         match (hi, lo) {
-                            (Some(h), Some(l)) => (h * 16 + l) as u8,
+                            (Some(h), Some(l)) => h * 16 + l,
                             _ => return TokenKind::Error("invalid \\x escape in char"),
                         }
+                    }
+                    Some('u') => {
+                        if self.bump() != Some('{') {
+                            return TokenKind::Error("invalid \\u escape in char");
+                        }
+                        let mut v: u32 = 0;
+                        loop {
+                            match self.bump() {
+                                Some('}') => break,
+                                Some(c) => match c.to_digit(16) {
+                                    Some(d) => v = v * 16 + d,
+                                    None => return TokenKind::Error("invalid \\u escape in char"),
+                                },
+                                None => return TokenKind::Error("invalid \\u escape in char"),
+                            }
+                        }
+                        v
                     }
                     _ => return TokenKind::Error("invalid escape in char literal"),
                 }
             }
             Some(c) => {
-                if c.len_utf8() > 1 {
-                    return TokenKind::Error("char literal must be a single ASCII byte");
-                }
                 self.bump();
-                c as u8
+                c as u32
             }
         };
         if self.bump() != Some('\'') {
             return TokenKind::Error("char literal must be closed with '");
         }
-        TokenKind::Char(byte)
+        TokenKind::Char(code)
     }
 
     fn lex_punct(&mut self) -> TokenKind {
@@ -560,7 +597,7 @@ impl<'a> Lexer<'a> {
             '&' => {
                 if self.peek() == Some('&') {
                     self.bump();
-                    TokenKind::KwAnd // 兼容 && 写作 and 的别名
+                    TokenKind::AndAnd // D9（ADR-0037）：逻辑与本体（不再重写为 and）
                 } else if self.peek() == Some('=') {
                     self.bump();
                     TokenKind::AmpEq

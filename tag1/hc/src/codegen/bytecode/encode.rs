@@ -163,6 +163,8 @@ fn encode_type(out: &mut Vec<u8>, t: &Type) {
             out.push(8);
             encode_type(out, inner);
         }
+        // K1/ADR-0036：mut T 可写值形态——权限标注非类型身份，按 inner 编码
+        Type::MutValue(inner) => encode_type(out, inner),
         // comptime_int 字面量（组 D：类型实参位置；不落 IR，防御性编码/解码对称）
         Type::ComptimeInt(v) => {
             out.push(9);
@@ -540,7 +542,8 @@ fn encode_pattern(out: &mut Vec<u8>, pat: &IrPattern) {
         }
         IrPattern::Char(c) => {
             out.push(5);
-            out.push(*c);
+            // D11（ADR-0037）：char 码点 u32（LE 4 字节，格式升级与 decode 对称）
+            out.extend_from_slice(&c.to_le_bytes());
         }
     }
 }

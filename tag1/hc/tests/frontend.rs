@@ -49,7 +49,7 @@ fn lex_strings_and_comments() {
         .any(|t| matches!(&t.kind, TokenKind::RawStr(s) if s == "raw")));
     assert!(toks
         .iter()
-        .any(|t| matches!(&t.kind, TokenKind::Char(b) if *b == b'x')));
+        .any(|t| matches!(&t.kind, TokenKind::Char(b) if *b == 'x' as u32)));
     // 注释不产生 token（除 EOF）
     assert_eq!(toks.last().map(|t| &t.kind), Some(&TokenKind::Eof));
 }
@@ -531,7 +531,133 @@ fn m24_return_owned_param_must_move() {
 #[test]
 fn m24_return_global_ref_ok() {
     // 返回 global 引用 → 合法（global 归根作用域，比函数长命）
-    check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\n[test] fn t() !void {}\n");
+    check_clean("global g: i32 = 1;\nfn f() *i32 {\n    return &g;\n}\n");
+}
+
+// ---------- K1/ADR-0036：owned 名称前缀 + mut T 形态（backlog #16） ----------
+
+#[test]
+fn k1_owned_name_prefix_pointer_ok() {
+    // owned 名称前缀 + 指针形态 → 合法；体内可 move 转移
+    check_clean(
+        "fn take(owned v: *mut Vec<u8>) i32 {\n    return 1;\n}\n\n[Test] fn t() !void {}\n",
+    );
+}
+
+#[test]
+fn k1_main_owned_args_signature_ok() {
+    // ADR-0036 决策 3：main 入口签名 owned args: *mut Vec<String>
+    check_clean("fn main(owned args: *mut Vec<String>) !void {}\n");
+}
+
+#[test]
+fn k1_owned_value_type_param_rejected() {
+    // 值类型 + owned → 编译错误（栈/连续类型无所有权，ADR-0025 规则 4）
+    check_has_error(
+        "fn f(owned x: i32) void {}\n",
+        "value type has no ownership",
+    );
+}
+
+#[test]
+fn k1_owned_value_type_field_rejected() {
+    // 字段 owned + 值类型 → 编译错误；指针字段合法
+    check_has_error(
+        "class C { owned x: i32 }\n[Test] fn t() !void {}\n",
+        "value type has no ownership",
+    );
+    check_clean("class C { owned p: *Vec<u8> }\n[Test] fn t() !void {}\n");
+}
+
+#[test]
+fn k1_mut_value_type_form() {
+    // mut T 类型形态（可写值形态，必定拥有）：引用类型合法；值类型报错
+    check_clean("fn f(v: mut Vec<u8>) void {}\n[Test] fn t() !void {}\n");
+    check_has_error("fn f(x: mut i32) void {}\n", "value type has no ownership");
+}
+
+// ---------- backlog #14①：alloc.destroy 配对显式销毁 ----------
+
+#[test]
+fn b14_alloc_destroy_semantics_ok() {
+    // alloc.destroy(x)：显式销毁调用形态被语义接受（运行时配对行为由探针/k 系对拍覆盖）
+    check_clean(
+        "fn f() void {\n    var bytes = alloc.alloc(8);\n    alloc.destroy(bytes);\n}\n[Test] fn t() !void {}\n",
+    );
+}
+
+// ---------- backlog #14②：字段赋值 move 形态 ----------
+
+#[test]
+fn b14_field_assign_move_ok_then_frozen() {
+    // `doc.tag = move &mut tag;` 拥有转移对接字段 → 合法；转移后源变量冻结
+    let src = r#"class D { tag: String, }
+fn f(owned doc: *mut D) void {
+    var mut tag: owned String = String.from("x", alloc);
+    doc.*.tag = move &mut tag;
+    io.print("{}", doc.*.tag);
+}
+[Test] fn t() !void {}
+"#;
+    check_clean(src);
+    let src2 = r#"class D { tag: String, }
+fn f(owned doc: *mut D) void {
+    var mut tag: owned String = String.from("x", alloc);
+    doc.*.tag = move &mut tag;
+    io.print("{}", tag);
+}
+[Test] fn t() !void {}
+"#;
+    check_has_error(src2, "use of moved variable `tag`");
+}
+
+// ---------- backlog #14③：join/detach 消耗线程句柄 ----------
+
+#[test]
+fn b14_double_join_rejected() {
+    // join 消耗句柄：重复 join → 编译错误
+    check_has_error(
+        "fn f() void {\n    \
+        var th = spawn(add, 1, 2);\n    \
+        var r = try th.join();\n    \
+        var r2 = try th.join();\n}\n\
+        fn add(a: i32, b: i32) i32 { return a + b; }\n[Test] fn t() !void {}\n",
+        "already consumed",
+    );
+}
+
+#[test]
+fn b14_join_then_status_query_ok() {
+    // join 后 is_done() 状态查询 → 合法（生态惯用模式，不拦截）
+    check_clean(
+        r#"fn f() !void {
+    var th = spawn(add, 1, 2);
+    var r = try th.join();
+    io.print("{}", th.is_done());
+}
+fn add(a: i32, b: i32) i32 { return a + b; }
+[Test] fn t() !void {}
+"#,
+    );
+}
+
+// ---------- backlog #14④：AllocSource 门控固化 ----------
+
+#[test]
+fn b14_arena_and_global_move_rejected() {
+    // ADR-0030 决策 4：Arena 分配 / global 变量禁止 move（归属归 Arena/根作用域）
+    check_has_error(
+        "fn f(a: *Arena) void {\n    \
+        var mut v = arena.alloc(8);\n    \
+        take(move &mut v);\n}\n\
+        fn take(owned p: *Vec<u8>) void {}\n[Test] fn t() !void {}\n",
+        "cannot move",
+    );
+    check_has_error(
+        "global g: i32 = 1;\nfn f() void {\n    take(move g);\n}\n\
+        fn take(owned x: i32) void {}\n[Test] fn t() !void {}\n",
+        "cannot move",
+    );
 }
 
 // ---------- K1 无标签 union（ADR-0014）语义 ----------
@@ -1039,4 +1165,75 @@ fn a1_sem_extern_fn_no_body_error() {
         "extern fn 语义检查不应报错: {:?}",
         errors.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
+}
+
+
+// ---------- ADR-0037：D8-D13 词法与声明修订 ----------
+
+#[test]
+fn d8_local_inference_ok() {
+    // D8：局部推断为正——注解可省略，从初始化器推断
+    check_clean("fn f() i32 { var x = 5; var mut y = x; return y; }");
+}
+
+#[test]
+fn d8_inference_failure_reported() {
+    // 无法推断（无注解无初始化器）→ 诊断
+    check_has_error(
+        "fn f() void { var w; }",
+        "cannot infer type",
+    );
+}
+
+#[test]
+fn d9_logical_ops_rust_syntax() {
+    // D9：&&/|| 为本体（and/or 关键字已移除，'and' 现为普通标识符）
+    check_clean("fn f(a: bool, b: bool) bool { return a && b || !a; }");
+    check_clean("fn and(or: i32) i32 { return or; }"); // and/or 可作标识符
+}
+
+#[test]
+fn d9_and_or_no_longer_keywords() {
+    // 'and'/'or' 独立出现 = 标识符（不再是关键字）——解析为两个 Ident 的非法表达式，
+    // 但词法上不再是 Keyword token：直接验证声明失败信息不含 keyword 误认
+    let toks = hc::lexer::lex("a and b");
+    assert!(matches!(
+        &toks[1].kind,
+        TokenKind::Ident(n) if n == "and"
+    ));
+}
+
+#[test]
+fn d10_nested_block_comments() {
+    // D10：块注释嵌套——内层 */ 不提前闭合
+    let toks = hc::lexer::lex("/* a /* b */ c */ fn f() void {}");
+    assert!(toks.iter().any(|t| matches!(t.kind, TokenKind::KwFn)));
+}
+
+#[test]
+fn d11_char_unicode_codepoint() {
+    // D11：非 ASCII / \u{...} → 码点字面量（comptime_int 定型）
+    let toks = hc::lexer::lex("var zh = '中'; var esc = '\\u{4E2D}';");
+    assert!(toks
+        .iter()
+        .any(|t| matches!(&t.kind, TokenKind::Char(c) if *c == 0x4E2D)));
+    check_clean("fn f() i32 { var zh = '中'; return zh; }");
+    // 超 u8 范围的码点赋给 u8 → 编译期报错
+    check_has_error(
+        "fn f() void { var b: u8 = '中'; }",
+        "out of range",
+    );
+}
+
+#[test]
+fn d12_prefix_digit_error() {
+    // D12：空前缀 → 词法 Error token
+    let toks = hc::lexer::lex("var a = 0x;");
+    assert!(toks
+        .iter()
+        .any(|t| matches!(&t.kind, TokenKind::Error(m) if m.contains("invalid hex"))));
+    let toks2 = hc::lexer::lex("var a = 0o8;");
+    assert!(toks2
+        .iter()
+        .any(|t| matches!(&t.kind, TokenKind::Error(m) if m.contains("invalid octal"))));
 }

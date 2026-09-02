@@ -10,6 +10,17 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 - **实现语言**：Rust（初始实现，零外部依赖），见 `docs/adr/0002-initial-compiler-in-rust.md`
 - **核心承诺**：双模式一致 —— 脚本模式与编译模式共享同一语义源，禁止后端私语义
 
+## 语言特色
+
+1. **熟悉的语法** —— 取 Zig 与 Rust 的长处：`fn` / `defer` / `errdefer` / `comptime` / `@内建`（Zig）；`mut` 缺省只读、宽度后缀、`\u{...}` 转义、`&&`/`||`（Rust）。无 `->`、无 `::`，路径用 `.`。
+2. **重要的语义决策都是显式的** —— 无异常、无宏、无隐式内存分配；资源释放 `defer`、错误传播 `!T` + `try`/`catch`、所有权转移 `owned`/`move`、接口实现 `class: I`，全部写在代码里。隐式白名单仅两项：局部变量类型推断与字面量惰性宽度定型。
+3. **明确的所有权标注与转移** —— `owned` 标注拥有、`move` 显式转移、`*mut` 可写借用，写在函数签名与调用点；`defer` + `alloc.destroy(x)` 显式释放；无 GC、无 RAII 魔法，销毁责任一目了然。
+4. **基于接口的编程** —— 接口是编译期功能契约：**不能实例化**，只能被类型显式实现（`class Rect: IShape`）或作为泛型约束（`where T: IShape`，静态单态化为主）；异构场景用接口胖指针（`*IShape`）动态分发。接口可继承接口。
+5. **类型不能继承，只能组合** —— 具体类型（class/struct）不可继承，复用只通过**组合**（显式字段包含）与**接口契约**两条路。
+6. **模块即封闭边界（context）** —— 模块 = `src/Modules/` 下的一个目录，是封闭、可自我运行的功能单元：对外只暴露 context 结构体与接口定义；模块内直接创建外部类型 = 编译错误；模块间只有两条正交通道——`import`（符号引用/API 面）与 `context`（IoC 依赖注入，AppContext→ModuleContext 层级委托，背靠 Arena）。
+
+> 6 的设计定案见 ADR-0026（IoC 容器已实现，目录约定强制检查随模块系统落地）；各特色的术语定义见 [`CONTEXT.md`](CONTEXT.md)。
+
 ## 当前状态
 
 | 项 | 状态 |
@@ -17,8 +28,8 @@ H 是一门**以数据为中心**、同时支持**系统编程与脚本编程**�
 | **第一部分「最小功能集」（M0–M7）** | ✅ **已完成**（`tag1/` 垂直切片，2026-08-17），**不自举** |
 | 语言系统（M0–M4） | ✅ 已完成：前端 / 语义 / 双后端 / 运行时与内建 |
 | 最小外围（M5–M7） | ✅ 已完成：最小标准库 / 测试基建 / 工具链最小 |
-| 测试 | `cargo test --workspace` **1000+ 项全绿**（2026-08-25，含新增 chan/mutex/scheduler 测试） |
-| 示例回归 | 解释模式 **147 passed / 0 failed / 1 skipped**（全部转绿） |
+| 测试 | `cargo test --workspace` **1148 项全绿**（2026-08-31，含 chan/mutex/scheduler/所有权/词法修订回归测试） |
+| 示例回归 | 解释模式 **147 passed / 0 failed / 1 skipped**（全部转绿）；示例 **96 例** |
 | 原生交叉验证 | 编译模式 **57 项 mismatch**（21 Unsupported + 31 运行时 + 3 其他；未实现原生内建以 `error.*` 响亮中止） |
 | **第三块（E1–E7）** | 🟡 推进中 —— **E1 元编程 / E2 并发与异步 / E3 标准库扩展 / E4 系统编程 / E5 工具链扩展已全部落地**；**E6 语言扩展部分落地**；**E7 自举 K1–K4 ✅（lexer/parser/语义/执行引擎），K5–K6 待实现** |
 | CI | 每次 push/PR 运行完整示例套件回归门（`tag1/scripts/check-examples.sh`） |
@@ -98,7 +109,7 @@ flowchart LR
 | `hc test` | `test/` | 测试收集与运行（含 `--mode=compile` 交叉验证） |
 | `hc build` | `build/` | 原生编译（LLVM + zig cc） |
 | `hc fmt` | `fmt/` | 代码格式化（token 级重排 + AST 保真 + `--check`） |
-| `hc lint` | `lint/` | 静态检查（9 规则 + `--json`） |
+| `hc lint` | `lint/` | 静态检查（6 规则 L001–L006 + `--json` + `--fix` 接口） |
 | `hc doc` | `doc/` | 文档生成（Markdown + 索引页） |
 | `hc pkg` | `pkg/` | 包管理（add / publish） |
 | `hc init` | `project/` | 项目骨架初始化 |
@@ -170,7 +181,7 @@ flowchart LR
 | E4 系统编程 | 系统编程特性（K1–K11） | ✅ 已落地：K1 无标签 union / K2 volatile / K4 @ptrFromInt·@intFromPtr / K5 export fn + `extern fn` 外部函数声明，K3 asm / K6 freestanding / K7–K11 1.x |
 | E5 工具链扩展 | LSP / 格式化 / lint / 文档生成 / 项目脚手架 / 包注册中心 | ✅ 已落地：hc fmt（token 级重排 + AST 保真 + --check）/ hc lint（9 规则 + --json）/ hc doc（Markdown 生成 + 索引页）/ hc lsp（诊断推送 + 自动补全 + 跳转定义 + 悬停提示 + 文档注释）/ hc init 脚手架 / hc cc C 互操作编译 / hc pkg add/publish；B7 质量工具完整（LSP/格式化/lint 集）已完成；Zed 编辑器扩展（Tree-sitter 语法高亮 + LSP 集成）；包注册中心正式版 1.x |
 | E6 语言扩展 | 惰性迭代、switch 守卫、开放问题裁决、吃狗粮反馈 | 🟡 部分落地：switch 守卫已实施（模式+if 守卫+穷举检查）；开放问题裁决已定案（ADR-0016/0017）；C5 内建泛型嵌套具体化已实施；C6 格式串 comptime 校验已实施；惰性迭代（A7）已落地；吃狗粮反馈待自举阶段 |
-| E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 推进中：K1 H版 lexer ✅（6621 token 零 diff），K2 H版 parser 🟢 性能已优化（解析自身 ~1s，较原 60s+ 提升 ~60x，8 项语料对照通过），K3 H版语义分析 ✅ 已完成（11/11 任务，15 项对照测试全部通过，覆盖名称解析/类型检查/所有权分析含引用逃逸/错误集分析/类型错误检测），K4 H版执行引擎 ✅ 已完成（10/10 执行语料与 Rust 参考逐字节一致，cargo 门禁 10 passed），K5–K6 待实现 |
+| E7 自举 | 用 H 写编译器（stage1 → stage2），规范一致性交叉验证 | ⏳ 推进中：K1 H版 lexer ✅（零 diff），K2 H版 parser 🟢 性能已优化（解析自身 ~1s，较原 60s+ 提升 ~60x，8 项语料对照通过），K3 H版语义分析 ✅ 已完成（11/11 任务，15 项对照测试全部通过），K4 H版执行引擎 ✅ 已完成（10/10 执行语料与 Rust 参考逐字节一致），K5–K6 待实现。**词法现代化（ADR-0037，2026-08-31）**：局部推断 / `&&`/`||` 本体化 / 嵌套注释 / 字符码点化 / 数字字面量报错 / `tree` 移除——双侧已同步对拍 |
 
 ### 里程碑节点
 

@@ -20,7 +20,7 @@ fn scalar_arith_and_compare() {
         run(src, "add", &[IrValue::Int(2), IrValue::Int(3)]).unwrap(),
         IrValue::Int(5)
     );
-    let src = "fn cmp(a: i32, b: i32) bool { return a < b and b <= 3; }";
+    let src = "fn cmp(a: i32, b: i32) bool { return a < b && b <= 3; }";
     assert_eq!(
         run(src, "cmp", &[IrValue::Int(1), IrValue::Int(3)]).unwrap(),
         IrValue::Bool(true)
@@ -29,20 +29,20 @@ fn scalar_arith_and_compare() {
 
 #[test]
 fn short_circuit_and_or() {
-    // and 左假 / or 左真 → 不求值右侧（右侧 expect(false) 若被求值则 AssertFailed）
+    // && 左假 / || 左真 → 不求值右侧（右侧 expect(false) 若被求值则 AssertFailed）
     let src = r#"
 fn expect_bad() bool {
     expect(false);
     return true;
 }
-fn and_sc() bool { return false and expect_bad(); }
-fn or_sc() bool { return true or expect_bad(); }
+fn and_sc() bool { return false && expect_bad(); }
+fn or_sc() bool { return true || expect_bad(); }
 "#;
     assert_eq!(run(src, "and_sc", &[]).unwrap(), IrValue::Bool(false));
     assert_eq!(run(src, "or_sc", &[]).unwrap(), IrValue::Bool(true));
     // 非短路路径：右侧被求值 → AssertFailed
     let src2 =
-        "fn eb() bool { expect(false); return true; }\nfn f() bool { return true and eb(); }";
+        "fn eb() bool { expect(false); return true; }\nfn f() bool { return true && eb(); }";
     let e = run(src2, "f", &[]).unwrap_err();
     assert_eq!(e.name, "AssertFailed");
 }
@@ -1439,7 +1439,7 @@ fn t() i32 {
     shapes.append(box(rect, alloc));
     shapes.append(box(circ, alloc));
     var total = total_area(&shapes);
-    if (total < 24.55 or total > 24.57) { return 1; }
+    if (total < 24.55 || total > 24.57) { return 1; }
     return 0;
 }
 "#;

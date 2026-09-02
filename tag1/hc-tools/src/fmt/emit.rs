@@ -290,7 +290,6 @@ impl<'a> Fmt<'a> {
             | TokenKind::KwStruct
             | TokenKind::KwEnum
             | TokenKind::KwUnion
-            | TokenKind::KwTree
             | TokenKind::KwInterface
             | TokenKind::KwNamespace => {
                 self.emit_word(text);
@@ -318,8 +317,7 @@ impl<'a> Fmt<'a> {
             | TokenKind::KwOwned
             | TokenKind::KwMove
             | TokenKind::KwMut
-            | TokenKind::KwAnd
-            | TokenKind::KwOr
+            | TokenKind::AndAnd
             | TokenKind::KwTry
             | TokenKind::KwCatch
             | TokenKind::KwOrelse

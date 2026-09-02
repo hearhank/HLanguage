@@ -520,6 +520,14 @@ impl BodyEmitter {
             self.call_alloc_init(args, temp, slot_consts, strings);
             return;
         }
+        // K1/ADR-0036 + backlog #14①：alloc.destroy(x)——显式销毁（ADR-0035 形式）。
+        // LLVM 无 GC/字节级 free 挂钩——销毁为所有权语义标记，运行时 no-op（返回 Void）
+        if name == "alloc.destroy" {
+            let res = self.r();
+            self.emit(format!("{res} = load %Value, %Value* @.void_value"));
+            self.emit(format!("store %Value {res}, %Value* %sp.{temp}"));
+            return;
+        }
         if name == "Vec.init" {
             // Vec.init(alloc) / Vec.init(alloc, arr) — 对齐 call_builtin 处理
             if args.len() >= 2 {

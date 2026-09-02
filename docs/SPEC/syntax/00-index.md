@@ -95,7 +95,7 @@
 | 2 | `01` §1.11（D4） | `global` 无初始化器的零值初始化语义——实现验证 + 语义规则落地（随 `03-types.md`） |
 | 3 | `02` §2.9（E2） | 裸 `?` 后缀仍解析为 Unwrap → 改报诊断「optional 解包请用 `.?`」 |
 | 4 | `02` §2.2.1（`**` 新特性，设计已定案） | 幂运算符 `**` 实现：lexer token + parser 右结合层 + INumber.pow 绑定 + 溢出按模式 + comptime 折叠 |
-| 5 | `03` §3.2.2（F1） | f16/f32 真实宽度实现（语义 FloatWidth + IR/VM 算术 + LLVM + 字面量定型）；f128 名字移除 |
+| 5 | `03` §3.2.2（**D15，ADR-0037**） | **f32 真实宽度实现**（语义 FloatWidth 划分、IR/VM 算术、LLVM、字面量定型）；**`f16` 词法后缀移除并报诊断**；`f128` 名字移除 |
 | 6 | `04` §4.8（ADR-0015） | Table 密封构造 `init_with` 实现 + C1 行视图/单元格写修复状态核对 |
 | 7 | `04` §4.7（G1） | String 改造为 `&[u8]` 别名、栈上分配（消除 64 字节内联缓冲与静默截断；截断先行改诊断） |
 | 8 | `04` §4.1（G3） | class/struct/union 字段 `mut` 前缀静默忽略 → 改报诊断「字段不支持 `mut` 标注」 |
@@ -104,9 +104,9 @@
 | 11 | `05` §5.10（H2） | 内联函数 `[Inline]`：全部调用点编译期展开（递归不适用；与所有权/作用域销毁的展开语义待定） |
 | 12 | `06` §6.4（I1） | bool 序比较现状放行 → 改报错（bool/char 不实现 ICompare 序） |
 | 13 | `06` §6.5（I1） | IToString 默认合成补 bool（`"true"`/`"false"`）与 char（单字符字符串） |
-| 14 | `07` §7.8（已知缺口组） | ① alloc 配对 destroy（**box 显式销毁形式随此定，J1/ADR-0035**）；② 字段赋值不触发 move 检查；③ join/detach 不触发 move 检查；④ NonArena 自动跟踪回退后的 AllocSource 判定补全 |
+| ~~14~~ ✅ 2026-08-31 | `07` §7.8（已知缺口组） | ① alloc 配对 destroy（`alloc.destroy(x)`，box 显式销毁形式随之定，J1/ADR-0035）；② 字段赋值 move 检查（`doc.tag = move &mut tag;`）；③ join/detach 消耗句柄（重复调用报错，is_done 状态查询放行）；④ AllocSource 门控固化（Arena/global/值类型禁 move 测试佐证）——测试：`hc/tests/frontend.rs` b14_* 组 |
 | 15 | `07` §7.6（J1/ADR-0035） | box 实现改造：返回 `owned T` + 接收变量 owned 标注检查 + **移除帧级 Boxed 作用域自动释放集** |
-| 16 | `07` §7.1.1（K1/ADR-0036） | 参数/字段 `owned` 名称前缀 + `mut T` 类型形态 + 值类型 + owned 诊断 + main 签名改 `owned args: *mut Vec<String>`（三后端） |
+| ~~16~~ ✅ 2026-08-31 | `07` §7.1.1（K1/ADR-0036） | 参数/字段 `owned` 名称前缀 + `mut T` 类型形态 + 值类型 + owned 诊断 + main 签名 `owned args: *mut Vec<String>`（IR/LLVM 双路）——测试：`hc/tests/frontend.rs` k1_* 组 |
 | 17 | `10` §10.1（C5-①，ADR-0018） | 内建泛型外层嵌套具体化 `Vec<List<i32>>` 退化裸名 `Vec` → 按定案行为修复（= `Vec<List<@i32>>`） |
 | 18 | `12` §12.4（Q-T2） | 原生（LLVM）测试 runner 逐测试续跑：断言失败即 abort → 改为记录失败继续 |
 | 19 | `12` §12.5（Q-T5） | `hc test --release` 第三档实现（Release 正常路径子集；CLI 现仅 interpret\|compile） |

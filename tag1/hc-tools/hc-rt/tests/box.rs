@@ -86,7 +86,7 @@ fn box_interface_dispatch() {
              shapes.append(box(rect, alloc));
              shapes.append(box(circ, alloc));\n\
              var total = total_area(&shapes);\n\
-             try expect(total > 24.55 and total < 24.57);\n\
+             try expect(total > 24.55 && total < 24.57);\n\
          }\n",
     );
 }

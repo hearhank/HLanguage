@@ -28,5 +28,5 @@ fn main() !void {
     try expect_eq(bin, 10);
     try expect_eq(oct, 15);
     try expect_eq(big, 1000000);
-    try expect(sci > 1.49e9 and sci < 1.51e9);
+    try expect(sci > 1.49e9 && sci < 1.51e9);
 }

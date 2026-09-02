@@ -73,6 +73,13 @@ impl Parser {
             let inner = self.parse_type()?;
             return Ok(Type::Owned(Box::new(inner)));
         }
+        // mut T（K1/ADR-0036：可写值形态，类型位置的 mut）——*mut T 的 Star 分支先行，
+        // 此处仅拦截裸 mut 开头的类型形态
+        if self.at(&TokenKind::KwMut) {
+            self.advance();
+            let inner = self.parse_type()?;
+            return Ok(Type::MutValue(Box::new(inner)));
+        }
         // *T / *mut T
         if self.at(&TokenKind::Star) {
             self.advance();

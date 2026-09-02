@@ -36,16 +36,8 @@ impl Checker {
             Expr::NullLit(..) => SType::Optional(Box::new(SType::Unknown)),
             Expr::VoidLit(..) => SType::Void,
             Expr::Ident(name, span) => {
-                // ADR-0030：use-after-move 冻结——move 后使用原变量编译错误
-                if self.moved.contains(name) {
-                    self.diags.push(Diagnostic::error(
-                        span.clone(),
-                        format!(
-                            "use of moved variable `{name}`; \
-                             assign to it again to revive"
-                        ),
-                    ));
-                }
+                // ADR-0030 + backlog #14③：use-after-move 冻结 / 线程句柄消耗检查
+                self.check_var_use_frozen(name, span, scopes);
                 match self.lookup_var_ty(name, scopes) {
                     Some(t) => t,
                     None => SType::Unknown,
@@ -135,6 +127,9 @@ impl Checker {
                 // 实例访问（v1.append / p2.x / self.count）：parse_primary 把变量成员的第一个 `.` 解析为 Dot
                 if let Expr::Ident(n, _) = base.as_ref() {
                     if self.var_exists(n, scopes) {
+                        // ADR-0030 + backlog #14③：Dot base 与 Ident 同受冻结检查
+                        // （th.join() 的 th 走此臂——consumed/moved 不可绕过）
+                        self.check_var_use_frozen(n, span, scopes);
                         let bt = self.lookup_var_ty(n, scopes);
                         if let Some(t) = &bt {
                             let dt = self.deref_member(t); // 自动解引用（A3）
@@ -1400,6 +1395,24 @@ impl Checker {
                 if let Expr::Ident(n, _) = base.as_ref() {
                     // 实例方法调用（v1.append(1) 被 parse_primary 解析为 Dot）：先查变量
                     if self.var_exists(n, scopes) {
+                        // ADR-0030：方法调用的接收者同样受 use-after-move 冻结检查
+                        // （check_call 不经 expr_ty(Dot)）
+                        self.check_var_use_frozen(n, span, scopes);
+                        // backlog #14③：join()/detach() 消耗句柄——重复调用 = 编译错误
+                        // （首次调用时 consumed 尚未置位：track 在求值后置位）
+                        if let Some(info) = scopes.iter().rev().find_map(|s| s.get(n)) {
+                            if let Some(ts) = &info.thread {
+                                if ts.consumed && matches!(field.as_str(), "join" | "detach") {
+                                    self.diags.push(Diagnostic::error(
+                                        span.clone(),
+                                        format!(
+                                            "thread `{n}` already consumed by join()/detach(): \
+                                             the handle cannot be joined or detached again"
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
                         let bt = self.lookup_var_ty(n, scopes);
                         let dt = bt.as_ref().map(|t| self.deref_member(t).clone());
                         let method_sigs = match &dt {
@@ -1583,6 +1596,7 @@ impl Checker {
         let ts = ThreadState {
             bound: false,
             detached: false,
+            consumed: false,
             local_refs,
         };
         let _ = span;
@@ -1650,8 +1664,16 @@ impl Checker {
                         if let Some(ts) = &mut info.thread {
                             if self.conditional_depth == 0 {
                                 match field {
-                                    "join" => ts.bound = true,
-                                    "detach" => ts.detached = true,
+                                    "join" => {
+                                        ts.bound = true;
+                                        // backlog #14③：join 消耗句柄
+                                        ts.consumed = true;
+                                    }
+                                    "detach" => {
+                                        ts.detached = true;
+                                        // backlog #14③：detach 消耗句柄
+                                        ts.consumed = true;
+                                    }
                                     _ => {}
                                 }
                             }
@@ -2730,6 +2752,34 @@ impl Checker {
         }
     }
 
+    /// K1/ADR-0036：`owned` 标注的合法载体——引用类型（class/集合）或指针/切片形态。
+    /// 值类型（标量/struct/Str/数组/元组）无所有权 → owned 标注诊断
+    pub(crate) fn owned_eligible_st(&self, t: &SType) -> bool {
+        match t {
+            SType::Ptr(_, _) | SType::Slice(_) => true,
+            SType::Named(n, _) => is_collection(n) || self.type_is_ref_st(t),
+            _ => false,
+        }
+    }
+
+    /// ADR-0030：变量使用点冻结检查（Ident 直引与 Dot base 共用）——
+    /// use-after-move：move 后使用原变量编译错误。
+    /// （backlog #14③ 的 join/detach 消耗检查在方法分派处精准拦截重复 join/detach，
+    ///   不拦截 is_done() 等状态查询——生态惯用模式 join 后查状态）
+    pub(crate) fn check_var_use_frozen(
+        &mut self,
+        name: &str,
+        span: &Span,
+        scopes: &[HashMap<String, VarInfo>],
+    ) {
+        if self.moved.contains(name) {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("use of moved variable `{name}`; assign to it again to revive"),
+            ));
+        }
+    }
+
     pub(crate) fn check_int_width_st(&mut self, ty: &SType, text: &str, span: &Span) {
         let width = match ty {
             SType::Int { width } => *width,
@@ -2781,6 +2831,11 @@ impl Checker {
         let Ok(v) = i128::from_str_radix(digits, radix) else {
             return; // 非法字面量由运行时/解析层处理
         };
+        self.check_int_width_value(width, v, span);
+    }
+
+    /// 整数值 → 定宽范围检查（D11：CharLit 码点与 IntLit 文本共用）
+    pub(crate) fn check_int_width_value(&mut self, width: IntWidth, v: i128, span: &Span) {
         let (min, max) = match width {
             IntWidth::I8 => (i8::MIN as i128, i8::MAX as i128),
             IntWidth::I16 => (i16::MIN as i128, i16::MAX as i128),
@@ -2800,7 +2855,7 @@ impl Checker {
             self.diags.push(Diagnostic::error(
                 span.clone(),
                 format!(
-                    "integer literal `{text}` out of range for `{}` ({v} ∉ [{min}, {max}])",
+                    "integer literal `{v}` out of range for `{}` ({v} ∉ [{min}, {max}])",
                     width_name(width)
                 ),
             ));

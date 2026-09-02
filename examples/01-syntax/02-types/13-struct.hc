@@ -55,7 +55,7 @@ fn main() !void {
     var q: Point = Point{x = 4.0, y = 6.0};
     var d1 = dist(p, q);
     var d2 = dist(p, q);
-    try expect(d1 > 4.99 and d1 < 5.01);
+    try expect(d1 > 4.99 && d1 < 5.01);
     try expect_eq(d1 == d2, true);
 }
 

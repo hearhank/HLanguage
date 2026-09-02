@@ -564,6 +564,7 @@ fn format_type(ty: &Type) -> String {
         Type::ComptimeInt(n) => format!("{}", n),
         Type::Infer => "_".to_string(),
         Type::Owned(inner) => format!("o {}", format_type(inner)),
+        Type::MutValue(inner) => format!("mut {}", format_type(inner)),
     }
 }
 

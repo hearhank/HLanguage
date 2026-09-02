@@ -46,6 +46,25 @@ impl Checker {
                 scopes.push(HashMap::new());
                 for p in params {
                     let st = self.ty_of(&p.ty);
+                    // K1/ADR-0036：参数位置拥有形态——owned 名称前缀 / mut T 类型形态。
+                    // 值类型无所有权 → 编译错误；拥有参数登记历史集（体内可 move 转移）。
+                    // defer 义务不强制（规范 ⚠️ 未定：main 注入参数无释放点——待裁决）。
+                    // 类型前缀 `owned T`（旧形态，m24 测试在用）保持既有行为不动。
+                    let param_owned = p.owned || matches!(p.ty, Type::MutValue(_));
+                    if param_owned && !self.owned_eligible_st(&st) {
+                        self.diags.push(Diagnostic::error(
+                            p.span.clone(),
+                            format!(
+                                "parameter `{}` of value type `{}` cannot be `owned`: \
+                                 value type has no ownership (K1/ADR-0036)",
+                                p.name,
+                                st.name()
+                            ),
+                        ));
+                    }
+                    if param_owned {
+                        self.owned_ever.insert(p.name.clone());
+                    }
                     scopes.last_mut().unwrap().insert(
                         p.name.clone(),
                         VarInfo {
@@ -121,6 +140,18 @@ impl Checker {
                 // C5-2：无限大小类型检测——检测值嵌入自引用/互递归（无间接层）
                 for f in fields {
                     let ft = self.ty_of(&f.ty);
+                    // K1/ADR-0036：字段 owned 名称前缀——值类型无所有权 → 编译错误
+                    if f.owned && !self.owned_eligible_st(&ft) {
+                        self.diags.push(Diagnostic::error(
+                            f.span.clone(),
+                            format!(
+                                "field `{}` of value type `{}` cannot be `owned`: \
+                                 value type has no ownership (K1/ADR-0036)",
+                                f.name,
+                                ft.name()
+                            ),
+                        ));
+                    }
                     let mut path = vec![name.clone()];
                     if let Some(cycle) = self.detect_type_cycle(name, &mut path, &ft) {
                         self.diags.push(Diagnostic::error(
@@ -187,6 +218,27 @@ impl Checker {
                     }
                 }
                 let _ = name;
+            }
+            Decl::Struct { name, fields, .. } | Decl::Union { name, fields, .. } => {
+                // K1/ADR-0036：字段 owned 名称前缀——struct/union 均为值类型载体，
+                // owned 字段 + 值类型 = 编译错误（union 字段仅标量，owned 必错）
+                let _ = name;
+                for f in fields {
+                    if f.owned {
+                        let ft = self.ty_of(&f.ty);
+                        if !self.owned_eligible_st(&ft) {
+                            self.diags.push(Diagnostic::error(
+                                f.span.clone(),
+                                format!(
+                                    "field `{}` of value type `{}` cannot be `owned`: \
+                                     value type has no ownership (K1/ADR-0036)",
+                                    f.name,
+                                    ft.name()
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
             Decl::Namespace { decls, .. } => {
                 for inner in decls {
@@ -312,6 +364,16 @@ impl Checker {
                 mut_: var_mut,
                 ..
             } => {
+                // D8（ADR-0037）：局部推断为正——无注解且无初始化器 = 无法推断 → 诊断
+                if ty.is_none() && init.is_none() {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "cannot infer type for `{name}`; add an explicit type annotation \
+                             or an initializer (D8/ADR-0037)"
+                        ),
+                    ));
+                }
                 let declared = ty.as_ref().map(|t| self.ty_of(t));
                 // G3：spawn 初始化 → spawn_capture_info 提取 Thread(T) + 捕获分类
                 // （Q18/Q19 静态检查）；普通初始化走 expr_ty。
@@ -331,11 +393,19 @@ impl Checker {
                     self.track_thread_method(e, scopes);
                 }
                 // 惰性宽度定型：var x: u8 = 256（期望类型已知时检查字面量范围）
-                if let (Some(SType::Int { width: w }), Some(Expr::IntLit { text, .. })) =
-                    (declared.as_ref(), init)
+                // D11（ADR-0037）：CharLit 码点同样受限——'中' → u8 超范围编译期报错
+                if let (Some(SType::Int { width: w }), Some(init_expr)) = (declared.as_ref(), init)
                 {
                     if !matches!(w, IntWidth::Comptime) {
-                        self.check_int_width_st(declared.as_ref().unwrap(), text, span);
+                        match init_expr {
+                            Expr::IntLit { text, .. } => {
+                                self.check_int_width_st(declared.as_ref().unwrap(), text, span);
+                            }
+                            Expr::CharLit(code, cspan) => {
+                                self.check_int_width_value(*w, *code as i128, cspan);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 // 期望类型兼容检查（可精确判定时）
@@ -411,7 +481,18 @@ impl Checker {
                 }
                 let target_ty = self.expr_ty(target, scopes, None);
                 let value_ty = self.expr_ty(value, scopes, target_ty.as_ref());
-                self.check_assignable(&target_ty, &value_ty, span, "assignment");
+                // K1/ADR-0036 + backlog #14②：拥有转移实参（move &t / move &mut t）以
+                // 指针为载体，对接拥有形态目标（字段/变量）时解包一层指针再比对
+                // （`doc.tag = move &mut tag;`——冻结登记已由 Move 求值完成；
+                //   这里只做类型推导，不得二次求值 inner——会误触 use-after-move）
+                let value_ty_eff = match value.as_ref() {
+                    Expr::Move(..) => value_ty.as_ref().map(|t| match t {
+                        SType::Ptr(inner, _) => (**inner).clone(),
+                        other => other.clone(),
+                    }),
+                    _ => value_ty.clone(),
+                };
+                self.check_assignable(&target_ty, &value_ty_eff, span, "assignment");
                 // 2026-08-25：写只读变量 → 编译错误（须 `mut` 声明）
                 self.check_mut_write(target, scopes, span);
                 // ADR-0030：对已 move 变量重新赋值 → 复活
@@ -444,8 +525,6 @@ impl Checker {
                 }
             }
             Stmt::Expr(e) => {
-                // G3 Q18：线程 join/detach 语句位置跟踪
-                self.track_thread_method(e, scopes);
                 // 2026-08-25：扫描表达式中的 move 操作 → 标记对应 owned 变量
                 let mut moved = Vec::new();
                 Self::collect_move_targets(e, &mut moved);
@@ -453,6 +532,9 @@ impl Checker {
                     self.mark_moved(name);
                 }
                 let _ = self.expr_ty(e, scopes, None);
+                // G3 Q18：线程 join/detach 语句位置跟踪（consumed 置位在求值后——
+                // 同一语句的 base Ident 求值不得误报 use-after-join，backlog #14③）
+                self.track_thread_method(e, scopes);
             }
             Stmt::If(ifs) => {
                 let ct = self.expr_ty(&ifs.cond, scopes, None);

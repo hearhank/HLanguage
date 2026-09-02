@@ -299,6 +299,31 @@ pub(crate) fn call_alloc_method_ir(
             }
             Ok(Some(str_bytes_val(out)))
         }
+        // K1/ADR-0036 + backlog #14①：alloc.destroy(x)——alloc.init 的配对显式销毁
+        // （ADR-0035：box/拥有对象的显式销毁形式随之定为 `alloc.destroy(x)`）。
+        // 销毁 = 目标 cell 置 Void 占位（释放语义；后续使用得 Void，不做悬垂追踪）；
+        // 字节级分配（alloc.alloc(n)）配对注销 tracker 最早一条同尺寸记录。
+        "destroy" => {
+            if args.is_empty() {
+                return Err(IrError::msg("ArityMismatch", "alloc.destroy expects 1 arg"));
+            }
+            let destroyed = deref_value(ctx, &args[0]).clone();
+            match destroyed {
+                IrValue::Class(h) | IrValue::Arr(h) => {
+                    if let Some(cell) = ctx.cells.get_mut(h) {
+                        *cell = Cell::Value(IrValue::Void);
+                    }
+                }
+                IrValue::String(s) => {
+                    let n = s.as_slice().len();
+                    if let Some(pos) = ctx.alloc_tracker.iter().position(|(sz, _)| *sz == n) {
+                        ctx.alloc_tracker.remove(pos);
+                    }
+                }
+                _ => {}
+            }
+            Ok(Some(IrValue::Void))
+        }
         "deinit" => Ok(Some(IrValue::Void)),
         // G5/§8.3 Debug 泄漏检测：断言无泄漏——有活跃分配则返回错误
         "assert_no_leaks" => {
